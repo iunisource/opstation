@@ -593,6 +593,24 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     html.window.open(url, '_blank');
   }
 
+  Widget _wrapOrRow(bool narrow, List<Widget> kids) => narrow
+      ? Wrap(alignment: WrapAlignment.end, crossAxisAlignment: WrapCrossAlignment.center, spacing: 4, runSpacing: 6, children: kids)
+      : Row(children: kids);
+  Widget _titleBox(bool narrow, Widget child) => narrow ? SizedBox(width: double.infinity, child: child) : Expanded(child: child);
+  Widget _flexOrNot(bool expand, Widget child) => expand ? Expanded(child: child) : child;
+  Widget _flexOrBox(bool expand, double width, Widget child) => expand ? Expanded(child: child) : SizedBox(width: width, child: child);
+
+  Widget _jvDateField(bool editable) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    const Text('Date *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+    const SizedBox(height: 4),
+    InkWell(onTap: !editable ? null : () async {
+      final d = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime(2100));
+      if (d != null) setState(() { _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d); });
+    }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(border: Border.all(color: const Color(0xFFBDBDBD)), borderRadius: BorderRadius.circular(6)),
+      child: Row(children: [const Icon(Icons.calendar_today, size: 13, color: AppTheme.textSecondary), const SizedBox(width: 6), Text(DateFormat('dd MMM yyyy').format(_date), style: const TextStyle(fontSize: 13))]))),
+  ]);
+
   @override Widget build(BuildContext context) {
     final fmt = const MoneyFmt();
     final access = ref.watch(accessSyncProvider);
@@ -606,8 +624,10 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       return matchesQuery('${v['entry_number'] ?? ''} ${v['description'] ?? ''}', _listSearch);
     }).toList();
 
+    // Phone: the list and the voucher take turns on the full screen.
+    final narrow = MediaQuery.of(context).size.width < 720;
     return Container(color: AppTheme.background, child: Row(children: [
-      if (_drawerOpen) Container(width: 300,
+      if (_drawerOpen) Container(width: narrow ? MediaQuery.of(context).size.width : 300,
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10,10,10,8),
@@ -618,7 +638,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 if (!accessReady) const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 else if (canAdd) ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero),
-                  onPressed: _newVoucher),
+                  onPressed: () { _newVoucher(); if (narrow) setState(() => _drawerOpen = false); }),
               ]),
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search JVs...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
@@ -630,7 +650,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 final v = vsRows[i]; final sel = _current?['id'] == v['id']; final posted = v['status'] == 'posted';
                 return GestureDetector(
                   onSecondaryTapDown: (d) => _showCtxMenu(d.globalPosition, v),
-                  child: InkWell(onTap: () => _loadVoucher(v), child: Container(
+                  child: InkWell(onTap: () { _loadVoucher(v); if (narrow) setState(() => _drawerOpen = false); }, child: Container(
                     color: sel ? AppTheme.primary.withOpacity(0.07) : null,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -647,15 +667,17 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               }))),
         ])),
 
-      Expanded(child: Column(children: [
-        Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      if (!(narrow && _drawerOpen)) Expanded(child: Column(children: [
+        Container(padding: EdgeInsets.symmetric(horizontal: narrow ? 8 : 16, vertical: 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+          child: _wrapOrRow(narrow, [
+            _titleBox(narrow, Row(children: [
+            IconButton(icon: Icon(narrow ? Icons.list : (_drawerOpen ? Icons.chevron_left : Icons.chevron_right), size: 18), tooltip: narrow ? 'All vouchers' : null, onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_current?['entry_number'] as String? ?? 'New Journal Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ConstrainedBox(constraints: BoxConstraints(maxWidth: narrow ? MediaQuery.of(context).size.width - 80 : 420), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_current?['entry_number'] as String? ?? 'New Journal Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
               if (_current != null) Text(_isLocked ? '🔒 Posted & Locked' : '✏️ Draft', style: TextStyle(fontSize: 10, color: _isLocked ? Colors.green : Colors.orange, fontWeight: FontWeight.w600)),
+            ])),
             ])),
             if (_current != null) IconButton(icon: const Icon(Icons.history_outlined, size: 20), onPressed: _showAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
@@ -691,26 +713,26 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               SizedBox(height: 10),
               Text('Checking access...', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ]))
-          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            SizedBox(width: 160, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          : SingleChildScrollView(padding: EdgeInsets.all(narrow ? 10 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Flex(direction: narrow ? Axis.vertical : Axis.horizontal, crossAxisAlignment: narrow ? CrossAxisAlignment.stretch : CrossAxisAlignment.end, children: [
+            if (narrow) Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Voucher No.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(_current?['entry_number'] as String? ?? '(auto)', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+              ])),
+              Expanded(child: _jvDateField(editable)),
+            ]),
+            if (narrow) const SizedBox(height: 10),
+            if (!narrow) SizedBox(width: 160, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Voucher No.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
               Text(_current?['entry_number'] as String? ?? '(auto)', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppTheme.primary)),
             ])),
-            const SizedBox(width: 20),
-            SizedBox(width: 170, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Date *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              InkWell(onTap: !editable ? null : () async {
-                final d = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2020), lastDate: DateTime(2100));
-                if (d != null) setState(() { _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d); });
-              }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(border: Border.all(color: const Color(0xFFBDBDBD)), borderRadius: BorderRadius.circular(6)),
-                child: Row(children: [const Icon(Icons.calendar_today, size: 13, color: AppTheme.textSecondary), const SizedBox(width: 6), Text(DateFormat('dd MMM yyyy').format(_date), style: const TextStyle(fontSize: 13))]))),
-            ])),
-            const SizedBox(width: 20),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (!narrow) const SizedBox(width: 20),
+            if (!narrow) SizedBox(width: 170, child: _jvDateField(editable)),
+            if (!narrow) const SizedBox(width: 20),
+            _flexOrNot(!narrow, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Narration', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
               TextField(controller: _narCtrl, enabled: editable,
@@ -722,7 +744,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
           const SizedBox(height: 20),
           if (_loadingMaster) const Padding(padding: EdgeInsets.only(bottom: 10), child: Row(children: [SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 8), Text('Loading accounts...', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))])),
           Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)), child: Column(children: [
-            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            if (!narrow) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
               child: const Row(children: [
                 SizedBox(width: 30, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
@@ -752,12 +774,12 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 border: const Border(top: BorderSide(color: AppTheme.border)),
                 borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10))),
               child: Row(children: [
-                const Expanded(child: SizedBox()),
-                SizedBox(width: 120, child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                if (!narrow) const Expanded(child: SizedBox()),
+                _flexOrBox(narrow, 120, Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   const Text('Total Dr', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   Text(fmt.format(_totalDr), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800))])),
                 const SizedBox(width: 16),
-                SizedBox(width: 120, child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                _flexOrBox(narrow, 120, Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   const Text('Total Cr', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                   Text(fmt.format(_totalCr), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800))])),
                 SizedBox(width: 46, child: Center(child: _totalDr > 0
@@ -771,8 +793,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.red.shade200)),
               child: Row(children: [
                 Icon(Icons.warning_amber_rounded, size: 16, color: Colors.red.shade700), const SizedBox(width: 10),
-                Text('Difference: ' + fmt.format((_totalDr - _totalCr).abs()) + ' — must be 0 to post',
-                  style: TextStyle(fontSize: 12, color: Colors.red.shade700, fontWeight: FontWeight.w600)),
+                Expanded(child: Text('Difference: ' + fmt.format((_totalDr - _totalCr).abs()) + ' — must be 0 to post',
+                  style: TextStyle(fontSize: 12, color: Colors.red.shade700, fontWeight: FontWeight.w600))),
               ]))),
           if (_jvApproveFlow && _current != null && _current?['approval_status'] == 'pending' && !_isLocked) ...[
             const SizedBox(height: 16),
@@ -885,12 +907,8 @@ class _JvLineWidgetState extends State<_JvLineWidget> {
   @override Widget build(BuildContext context) {
     final filtered = widget.filterFn(_q);
     final l = widget.line;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 30, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${widget.lineNum}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
-        Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    final narrow = MediaQuery.of(context).size.width < 720;
+    final account = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           TextField(controller: _accCtrl, focusNode: _accFocus, enabled: !widget.locked,
             decoration: InputDecoration(hintText: 'Search account, supplier, customer...', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
               border: OutlineInputBorder(borderSide: BorderSide(color: l.accountId != null ? Colors.green : const Color(0xFFE0E0E0))),
@@ -912,16 +930,14 @@ class _JvLineWidgetState extends State<_JvLineWidget> {
                 Expanded(child: Tooltip(message: a['label'] as String? ?? '', waitDuration: const Duration(milliseconds: 400), child: Text(a['label'] as String? ?? '', style: const TextStyle(fontSize: 12), softWrap: true, maxLines: 2, overflow: TextOverflow.ellipsis))),
               ])));
             }).toList())),
-        ])),
-        const SizedBox(width: 8),
-        Expanded(flex: 3, child: TextField(controller: l.descCtrl, focusNode: _descFocus, enabled: !widget.locked,
+        ]);
+    final note = TextField(controller: l.descCtrl, focusNode: _descFocus, enabled: !widget.locked,
           decoration: const InputDecoration(hintText: 'Note', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
           style: const TextStyle(fontSize: 12), textInputAction: TextInputAction.next,
-          onSubmitted: (_) => _debitFocus.requestFocus())),
-        const SizedBox(width: 8),
-        SizedBox(width: 120, child: TextField(controller: l.debitCtrl, focusNode: _debitFocus, enabled: !widget.locked, textAlign: TextAlign.right,
+          onSubmitted: (_) => _debitFocus.requestFocus());
+    final debit = TextField(controller: l.debitCtrl, focusNode: _debitFocus, enabled: !widget.locked, textAlign: TextAlign.right,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
           decoration: InputDecoration(hintText: '—', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
@@ -930,9 +946,8 @@ class _JvLineWidgetState extends State<_JvLineWidget> {
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: l.debit > 0 ? Colors.blue.shade300 : const Color(0xFFE0E0E0)))),
           style: const TextStyle(fontSize: 12),
           onChanged: (v) { if (v.isNotEmpty && (double.tryParse(v) ?? 0) > 0) l.creditCtrl.clear(); widget.onChanged(); },
-          onSubmitted: (_) => widget.onNextLine())),
-        const SizedBox(width: 8),
-        SizedBox(width: 120, child: TextField(controller: l.creditCtrl, focusNode: _creditFocus, enabled: !widget.locked, textAlign: TextAlign.right,
+          onSubmitted: (_) => widget.onNextLine());
+    final credit = TextField(controller: l.creditCtrl, focusNode: _creditFocus, enabled: !widget.locked, textAlign: TextAlign.right,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
           decoration: InputDecoration(hintText: '—', isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
@@ -941,10 +956,47 @@ class _JvLineWidgetState extends State<_JvLineWidget> {
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: l.credit > 0 ? Colors.orange.shade300 : const Color(0xFFE0E0E0)))),
           style: const TextStyle(fontSize: 12),
           onChanged: (v) { if (v.isNotEmpty && (double.tryParse(v) ?? 0) > 0) l.debitCtrl.clear(); widget.onChanged(); },
-          onSubmitted: (_) => widget.onNextLine())),
-        SizedBox(width: 30, child: widget.locked ? const SizedBox() : IconButton(
+          onSubmitted: (_) => widget.onNextLine());
+    final remove = SizedBox(width: 30, child: widget.locked ? const SizedBox() : IconButton(
           icon: const Icon(Icons.close, size: 14, color: Colors.red), onPressed: widget.onRemove,
-          padding: EdgeInsets.zero, visualDensity: VisualDensity.compact)),
+          padding: EdgeInsets.zero, visualDensity: VisualDensity.compact));
+    Widget lbl(String t) => Padding(padding: const EdgeInsets.only(bottom: 2),
+        child: Text(t, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)));
+    if (narrow) {
+      // Phone: one card per line — account, note, then Dr / Cr side by side.
+      return Container(
+        padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.6)))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(width: 22, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${widget.lineNum}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+            Expanded(child: account),
+            remove,
+          ]),
+          const SizedBox(height: 6),
+          Padding(padding: const EdgeInsets.only(left: 22, right: 30), child: note),
+          const SizedBox(height: 6),
+          Padding(padding: const EdgeInsets.only(left: 22, right: 30), child: Row(children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [lbl('Debit (Dr)'), debit])),
+            const SizedBox(width: 8),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [lbl('Credit (Cr)'), credit])),
+          ])),
+        ]),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(width: 30, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${widget.lineNum}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+        Expanded(flex: 5, child: account),
+        const SizedBox(width: 8),
+        Expanded(flex: 3, child: note),
+        const SizedBox(width: 8),
+        SizedBox(width: 120, child: debit),
+        const SizedBox(width: 8),
+        SizedBox(width: 120, child: credit),
+        remove,
       ]),
     );
   }
