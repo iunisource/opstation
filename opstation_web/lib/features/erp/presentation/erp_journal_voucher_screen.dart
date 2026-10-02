@@ -52,6 +52,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   bool _jvApproveFlow = false;   // org.jv_approve_flow: BLOCKING approval before posting
   bool _superviseBusy = false;
   String _statusFilter = 'all'; // all | draft | pending | posted
+  final Set<String> _sel = {};   // ticked JVs for bulk approve / supervise
+  bool _bulkBusy = false;
   String _supFilter = 'all';    // all | yes | no
   String? _pendingFocusId;
   int _auditSeq = 0;
@@ -489,6 +491,129 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     } catch (_) {}
   }
 
+  // ── Bulk actions (admins): approve pending JVs when the approval flow is on,
+  // supervise posted JVs when the supervision flow is on. ──────────────────
+  bool _isPendingJv(Map v) => v['status'] != 'posted' && v['approval_status'] == 'pending';
+  bool _isSupPendingJv(Map v) => v['status'] == 'posted' && v['supervised_at'] == null;
+
+  Future<void> _auditMany(List<String> ids, String action, String notes) async {
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name ?? '';
+    try {
+      await Supabase.instance.client.from('jv_audit_trail').insert([
+        for (final id in ids)
+          {
+            'id': 'aud_${action}_${DateTime.now().microsecondsSinceEpoch}_${_auditSeq++}',
+            'entry_id': id, 'action': action, 'performed_by': userId, 'performed_by_name': userName,
+            'performed_at': DateTime.now().toUtc().toIso8601String(), 'notes': notes,
+          }
+      ]);
+    } catch (_) {/* audit is best-effort */}
+  }
+
+  Future<bool> _confirmBulk(String title, String body, String button) async {
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(title), content: Text(body),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: Text(button)),
+      ],
+    ));
+    return ok == true;
+  }
+
+  /// Approve & post pending JVs. Each one is checked for balanced, non-zero
+  /// lines first; unbalanced ones are skipped and reported.
+  Future<void> _bulkApprove({Set<String>? onlyIds}) async {
+    if (!_isAdmin || !_jvApproveFlow || _bulkBusy) return;
+    final ids = _vouchers.where(_isPendingJv).map((v) => v['id'] as String)
+        .where((id) => onlyIds == null || onlyIds.contains(id)).toList();
+    if (ids.isEmpty) { _snack('Nothing pending approval'); return; }
+    if (!await _confirmBulk(onlyIds == null ? 'Approve all pending?' : 'Approve selected?',
+        'Approve and post ${ids.length} journal voucher(s) to the ledger? Any JV whose debits and credits do not match is skipped.',
+        'Approve & post ${ids.length}')) return;
+    setState(() => _bulkBusy = true);
+    final client = Supabase.instance.client;
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final ok = <String>[]; final skipped = <String>[];
+    try {
+      final lines = await client.from('journal_lines').select('entry_id, debit, credit').inFilter('entry_id', ids);
+      final dr = <String, double>{}, cr = <String, double>{};
+      for (final l in (lines as List)) {
+        final e = '${l['entry_id']}';
+        dr[e] = (dr[e] ?? 0) + ((l['debit'] as num?)?.toDouble() ?? 0);
+        cr[e] = (cr[e] ?? 0) + ((l['credit'] as num?)?.toDouble() ?? 0);
+      }
+      for (final id in ids) {
+        final d = dr[id] ?? 0, c = cr[id] ?? 0;
+        if (d > 0 && (d - c).abs() < 0.005) { ok.add(id); } else { skipped.add(id); }
+      }
+      for (var i = 0; i < ok.length; i += 100) {
+        final chunk = ok.sublist(i, i + 100 > ok.length ? ok.length : i + 100);
+        await client.from('journal_entries').update({
+          'status': 'posted', 'approval_status': 'approved',
+          'approved_by': userId, 'approved_by_name': userName, 'approved_at': now,
+        }).inFilter('id', chunk);
+      }
+      if (ok.isNotEmpty) await _auditMany(ok, 'posted', 'Bulk approved & posted by ${userName ?? 'admin'}');
+      final numbers = {for (final v in _vouchers) v['id']: v['entry_number']};
+      _snack('Approved & posted ${ok.length}'
+          '${skipped.isEmpty ? '' : ' · skipped ${skipped.length} unbalanced: ${skipped.map((i) => numbers[i] ?? i).join(', ')}'}');
+    } catch (e) { _snack(friendlyError('Bulk approve failed', e)); }
+    _sel.removeAll(ok);
+    await _loadVouchers();
+    if (_current != null && ok.contains(_current!['id'])) {
+      try {
+        final u = await client.from('journal_entries').select().eq('id', _current!['id'] as String).single();
+        if (mounted) setState(() { _current = u; _status = 'posted'; });
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _bulkBusy = false);
+  }
+
+  /// Mark posted JVs as supervised (review mark only; ledger unaffected).
+  Future<void> _bulkSupervise({Set<String>? onlyIds}) async {
+    if (!_isAdmin || !_jvSuperviseFlow || _bulkBusy) return;
+    final ids = _vouchers.where(_isSupPendingJv).map((v) => v['id'] as String)
+        .where((id) => onlyIds == null || onlyIds.contains(id)).toList();
+    if (ids.isEmpty) { _snack('Nothing pending supervision'); return; }
+    if (!await _confirmBulk(onlyIds == null ? 'Supervise all pending?' : 'Supervise selected?',
+        'Mark ${ids.length} posted journal voucher(s) as supervised? This is a review mark only — it does not change the ledger.',
+        'Supervise ${ids.length}')) return;
+    setState(() => _bulkBusy = true);
+    final client = Supabase.instance.client;
+    final userId = ref.read(currentUserProvider)?.id;
+    final userName = ref.read(currentUserProvider)?.name;
+    final now = DateTime.now().toUtc().toIso8601String();
+    String? sigUrl; String? stampUrl;
+    try { final u = await client.from('users').select('signature_url').eq('id', userId ?? '').maybeSingle(); sigUrl = u?['signature_url'] as String?; } catch (_) {}
+    try { final st = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.stamp_url').maybeSingle(); stampUrl = st?['value'] as String?; } catch (_) {}
+    try {
+      for (var i = 0; i < ids.length; i += 100) {
+        final chunk = ids.sublist(i, i + 100 > ids.length ? ids.length : i + 100);
+        await client.from('journal_entries').update({
+          'supervised_by': userId, 'supervised_at': now, 'supervised_by_name': userName,
+          'supervised_signature_url': sigUrl, 'supervised_stamp_url': stampUrl,
+        }).inFilter('id', chunk);
+      }
+      await _auditMany(ids, 'supervised', 'Bulk supervised by ${userName ?? 'admin'}');
+      final idset = ids.toSet();
+      if (mounted) setState(() {
+        for (final v in _vouchers) {
+          if (idset.contains(v['id'])) { v['supervised_at'] = now; v['supervised_by'] = userId; v['supervised_by_name'] = userName; }
+        }
+        if (_current != null && idset.contains(_current!['id'])) {
+          _current!['supervised_at'] = now; _current!['supervised_by'] = userId; _current!['supervised_by_name'] = userName;
+        }
+        _sel.removeAll(ids);
+      });
+      _snack('Supervised ${ids.length} JV(s)');
+    } catch (e) { _snack(friendlyError('Bulk supervise failed', e)); }
+    if (mounted) setState(() => _bulkBusy = false);
+  }
+
   Future<void> _logAudit(String action, {String? notes}) async {
     if (_current == null) return;
     final userId = ref.read(currentUserProvider)?.id;
@@ -601,6 +726,31 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     html.window.open(url, '_blank');
   }
 
+  List<Widget> _bulkButtons(int pendingCount, int supPending) {
+    if (!_isAdmin) return const [];
+    final selPending = _vouchers.where((v) => _sel.contains(v['id']) && _isPendingJv(v)).map((v) => v['id'] as String).toSet();
+    final selSup = _vouchers.where((v) => _sel.contains(v['id']) && _isSupPendingJv(v)).map((v) => v['id'] as String).toSet();
+    Widget outlined(String label, IconData icon, VoidCallback onTap) => Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: SizedBox(width: double.infinity, child: OutlinedButton.icon(
+        onPressed: _bulkBusy ? null : onTap,
+        icon: _bulkBusy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : Icon(icon, size: 16),
+        label: Text(label, style: const TextStyle(fontSize: 12)))));
+    Widget filled(String label, IconData icon, VoidCallback onTap) => Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: SizedBox(width: double.infinity, child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+        onPressed: _bulkBusy ? null : onTap,
+        icon: Icon(icon, size: 16),
+        label: Text(label, style: const TextStyle(fontSize: 12)))));
+    return [
+      if (_jvApproveFlow && pendingCount > 0) outlined('Approve all pending ($pendingCount)', Icons.done_all, () => _bulkApprove()),
+      if (_jvApproveFlow && selPending.isNotEmpty) filled('Approve selected (${selPending.length})', Icons.playlist_add_check, () => _bulkApprove(onlyIds: selPending)),
+      if (_jvSuperviseFlow && supPending > 0) outlined('Supervise all pending ($supPending)', Icons.verified_user_outlined, () => _bulkSupervise()),
+      if (_jvSuperviseFlow && selSup.isNotEmpty) filled('Supervise selected (${selSup.length})', Icons.playlist_add_check, () => _bulkSupervise(onlyIds: selSup)),
+    ];
+  }
+
   Widget _wrapOrRow(bool narrow, List<Widget> kids) => narrow
       ? Wrap(alignment: WrapAlignment.end, crossAxisAlignment: WrapCrossAlignment.center, spacing: 4, runSpacing: 6, children: kids)
       : Row(children: kids);
@@ -620,6 +770,15 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   ]);
 
   @override Widget build(BuildContext context) {
+    // Branch toggle: reload the list for the new branch and start a fresh JV so
+    // one from the previous branch is never edited / posted under the new one.
+    ref.listen(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) {
+        _sel.clear();
+        _newVoucher();
+        _loadVouchers();
+      }
+    });
     final fmt = const MoneyFmt();
     final access = ref.watch(accessSyncProvider);
     final accessReady = access != null && access.role != null;
@@ -700,6 +859,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                   ])),
                 ]),
               ],
+              ..._bulkButtons(pendingCount, supPending),
             ])),
           Expanded(child: _loadingList ? const Center(child: BrandSpinner())
             : filtered.isEmpty ? const Center(child: BranchEmptyHint('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
@@ -712,6 +872,19 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
+                        if (_isAdmin && ((_jvApproveFlow && _isPendingJv(v)) || (_jvSuperviseFlow && _isSupPendingJv(v)))) ...[
+                          InkWell(
+                            onTap: () => setState(() {
+                              final id = v['id'] as String;
+                              if (!_sel.remove(id)) _sel.add(id);
+                            }),
+                            child: Tooltip(
+                              message: _isPendingJv(v) ? 'Tick to approve' : 'Tick to supervise',
+                              child: Icon(_sel.contains(v['id']) ? Icons.check_box : Icons.check_box_outline_blank,
+                                  size: 16, color: _sel.contains(v['id']) ? AppTheme.primary : Colors.orange)),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
                         Expanded(child: Text(v['entry_number'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
                         if (_jvSuperviseFlow && posted) ...[
                           v['supervised_at'] != null
