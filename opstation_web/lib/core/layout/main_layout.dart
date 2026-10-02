@@ -374,6 +374,42 @@ final paPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Journal Vouchers awaiting action: unapproved (org.jv_approve_flow) and/or
+// unsupervised (org.jv_supervise_flow). Admins only — they are the ones who act.
+// Zero when both flows are off. Drives the Journal Vouchers + Financials badges.
+final jvPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin ||
+      user.role == WebUserRole.superAdmin;
+  if (!isAdmin) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfgRows = await client.from('app_config').select('key,value')
+        .eq('org_id', user.orgId!)
+        .inFilter('key', ['org.jv_approve_flow', 'org.jv_supervise_flow']);
+    final cfgM = {for (final r in cfgRows as List) r['key'] as String: (r['value']?.toString() ?? '')};
+    final approveOn = cfgM['org.jv_approve_flow'] == 'true';
+    final superviseOn = cfgM['org.jv_supervise_flow'] == 'true';
+    if (!approveOn && !superviseOn) return 0;
+    var total = 0;
+    if (approveOn) {
+      final res = await client.from('journal_entries').select('id')
+          .eq('org_id', user.orgId!).eq('reference_type', 'jv')
+          .neq('status', 'posted').eq('approval_status', 'pending');
+      total += (res as List).length;
+    }
+    if (superviseOn) {
+      final res = await client.from('journal_entries').select('id')
+          .eq('org_id', user.orgId!).eq('reference_type', 'jv')
+          .eq('status', 'posted').filter('supervised_at', 'is', null);
+      total += (res as List).length;
+    }
+    return total;
+  } catch (_) { return 0; }
+});
+
 /// Invoices awaiting admin review (review_status = 'pending'), gated by the
 /// org.doc_review_flow toggle. One provider per invoice type so each menu item
 /// gets its own badge; the parent menu sums them. Invalidated by the invoice
@@ -1056,6 +1092,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final poPending = (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
       (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0);
   final paPending = ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0;
+  final jvPending = ref.watch(jvPendingCountProvider).valueOrNull ?? 0;
   final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;
   final grnPendingInvoice = ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0;
   final priReviewPending = ref.watch(priReviewPendingProvider).valueOrNull ?? 0;
@@ -1271,7 +1308,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/chart-of-accounts')) _menuItem(context, 'Chart of Accounts',  Icons.account_tree_outlined,    '/erp/chart-of-accounts',          location),
     ];
     final finVouchers = <Widget>[
-      if (show('/financials/journal-vouchers')) _menuItem(context, 'Journal Vouchers',   Icons.edit_note_outlined,          '/financials/journal-vouchers',    location),
+      if (show('/financials/journal-vouchers')) _menuItem(context, 'Journal Vouchers',   Icons.edit_note_outlined,          '/financials/journal-vouchers',    location, badge: jvPending),
       if (show('/financials/opening-journal')) _menuItem(context, 'Opening Journal', Icons.flag_outlined, '/financials/opening-journal', location),
       if (show('/erp/payment-vouchers')) _menuItem(context, 'Payment Vouchers', Icons.receipt_long_outlined, '/erp/payment-vouchers', location),
       if (show('/erp/receipt-vouchers')) _menuItem(context, 'Receipt Vouchers', Icons.payments_outlined,     '/erp/receipt-vouchers',      location),
@@ -1354,7 +1391,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
           ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/payment-advice', '/financials/cash-book'],
-          _trimDividers(financialItems), badge: paPending),
+          _trimDividers(financialItems), badge: paPending + jvPending),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending + leavePending),

@@ -268,6 +268,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final bid = _branchId; if (bid != null) q = q.eq('branch_id', bid);
       final rows = await q.order('created_at', ascending: false).limit(200);
       if (mounted) setState(() { _vouchers = List<Map<String,dynamic>>.from(rows); _loadingList = false; });
+      ref.invalidate(jvPendingCountProvider); // keep the nav badge in step
     } catch (e) { if (mounted) setState(() => _loadingList = false); }
   }
 
