@@ -51,6 +51,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   bool _jvSuperviseFlow = false; // org.jv_supervise_flow: docs + non-blocking supervise
   bool _jvApproveFlow = false;   // org.jv_approve_flow: BLOCKING approval before posting
   bool _superviseBusy = false;
+  String _statusFilter = 'all'; // all | draft | pending | posted
+  String _supFilter = 'all';    // all | yes | no
   String? _pendingFocusId;
   int _auditSeq = 0;
 
@@ -129,6 +131,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         _current!['supervised_by'] = userId; _current!['supervised_at'] = now;
         _current!['supervised_by_name'] = userName;
       });
+      for (final v in _vouchers) {
+        if (v['id'] == id) { v['supervised_at'] = now; v['supervised_by'] = userId; v['supervised_by_name'] = userName; }
+      }
       _snack('Marked as supervised');
     } catch (e) { _snack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
@@ -145,6 +150,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       if (mounted) setState(() {
         _current!['supervised_by'] = null; _current!['supervised_at'] = null; _current!['supervised_by_name'] = null;
       });
+      for (final v in _vouchers) {
+        if (v['id'] == id) { v['supervised_at'] = null; v['supervised_by'] = null; v['supervised_by_name'] = null; }
+      }
       _snack('Supervision cleared');
     } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
@@ -620,9 +628,39 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     final canDeleteJv = access?.canDelete() ?? false;
     final canWrite = _current == null ? canAdd : (canAdd || canEdit);
     final editable = !_isLocked && canWrite;
-    final filtered = _listSearch.isEmpty ? _vouchers : _vouchers.where((v) {
-      return matchesQuery('${v['entry_number'] ?? ''} ${v['description'] ?? ''}', _listSearch);
+    bool isPending(Map v) => v['status'] != 'posted' && v['approval_status'] == 'pending';
+    final filtered = _vouchers.where((v) {
+      if (_listSearch.isNotEmpty && !matchesQuery('${v['entry_number'] ?? ''} ${v['description'] ?? ''}', _listSearch)) return false;
+      final posted = v['status'] == 'posted';
+      switch (_statusFilter) {
+        case 'draft': if (posted || isPending(v)) return false; break;
+        case 'pending': if (!isPending(v)) return false; break;
+        case 'posted': if (!posted) return false; break;
+      }
+      if (_jvSuperviseFlow && _supFilter != 'all') {
+        final sup = v['supervised_at'] != null;
+        if (_supFilter == 'yes' ? !sup : (sup || !posted)) return false;
+      }
+      return true;
     }).toList();
+    final pendingCount = _vouchers.where(isPending).length;
+    final supPending = _vouchers.where((v) => v['status'] == 'posted' && v['supervised_at'] == null).length;
+    Widget chip(String label, String value, String current, ValueChanged<String> onTap, {int count = 0}) {
+      final active = value == current;
+      return GestureDetector(onTap: () => setState(() => onTap(value)), child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+        decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: active ? AppTheme.primary : AppTheme.border)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
+          if (count > 0) ...[
+            const SizedBox(width: 4),
+            Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(color: active ? Colors.white.withOpacity(0.25) : Colors.orange, borderRadius: BorderRadius.circular(8)),
+              child: Text('$count', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.white))),
+          ],
+        ])));
+    }
 
     // Phone: the list and the voucher take turns on the full screen.
     final narrow = MediaQuery.of(context).size.width < 720;
@@ -643,6 +681,25 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search JVs...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
                 onChanged: (v) => setState(() => _listSearch = v)),
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerLeft, child: Wrap(spacing: 5, runSpacing: 5, children: [
+                chip('All', 'all', _statusFilter, (v) => _statusFilter = v),
+                chip('Draft', 'draft', _statusFilter, (v) => _statusFilter = v),
+                if (_jvApproveFlow) chip('Pending approval', 'pending', _statusFilter, (v) => _statusFilter = v, count: pendingCount),
+                chip('Posted', 'posted', _statusFilter, (v) => _statusFilter = v),
+              ])),
+              if (_jvSuperviseFlow) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Text('Supervision', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                  const SizedBox(width: 6),
+                  Expanded(child: Wrap(spacing: 5, runSpacing: 5, children: [
+                    chip('All', 'all', _supFilter, (v) => _supFilter = v),
+                    chip('Supervised', 'yes', _supFilter, (v) => _supFilter = v),
+                    chip('Pending', 'no', _supFilter, (v) => _supFilter = v, count: supPending),
+                  ])),
+                ]),
+              ],
             ])),
           Expanded(child: _loadingList ? const Center(child: BrandSpinner())
             : filtered.isEmpty ? const Center(child: BranchEmptyHint('No vouchers', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
@@ -656,9 +713,21 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
                         Expanded(child: Text(v['entry_number'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(color: (posted ? Colors.green : Colors.orange).withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
-                          child: Text(posted ? 'Posted' : 'Draft', style: TextStyle(fontSize: 9, color: posted ? Colors.green : Colors.orange, fontWeight: FontWeight.w700))),
+                        if (_jvSuperviseFlow && posted) ...[
+                          v['supervised_at'] != null
+                              ? Tooltip(message: 'Supervised${v['supervised_by_name'] != null ? ' by ${v['supervised_by_name']}' : ''}',
+                                  child: const Icon(Icons.verified_user, size: 13, color: Colors.green))
+                              : const Tooltip(message: 'Awaiting supervision',
+                                  child: Icon(Icons.verified_user_outlined, size: 13, color: Colors.orange)),
+                          const SizedBox(width: 4),
+                        ],
+                        Builder(builder: (_) {
+                          final pend = isPending(v);
+                          final c = posted ? Colors.green : (pend ? Colors.deepOrange : Colors.orange);
+                          return Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
+                            child: Text(posted ? 'Posted' : (pend ? 'Pending approval' : 'Draft'), style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700)));
+                        }),
                       ]),
                       Text(v['entry_date'] as String? ?? '', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                       Text(v['description'] as String? ?? '', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
