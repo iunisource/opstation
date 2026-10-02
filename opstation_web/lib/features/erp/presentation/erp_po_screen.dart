@@ -45,6 +45,37 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _showStockConsumption = false;
   bool _showFgStock = false; // org.po_fg_stock — finished-goods stock per raw line
   Map<String, Map<String, dynamic>> _lineMetrics = {};
+  Map<String, String> _branchNames = {};
+
+  String _q(double v) => v.toStringAsFixed(v % 1 == 0 ? 0 : 1);
+
+  /// Small list of stock per branch for one product (tap on "All branches").
+  void _showBranchStock(String productName, Map<String, double> byBranch) {
+    final thisBranch = '${_detail['branch_id'] ?? ''}';
+    final entries = byBranch.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final total = byBranch.values.fold<double>(0, (a, b) => a + b);
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: Text(productName, style: const TextStyle(fontSize: 15)),
+      content: SizedBox(width: 340, child: Column(mainAxisSize: MainAxisSize.min, children: [
+        for (final e in entries)
+          Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
+            Expanded(child: Text(_branchNames[e.key] ?? e.key,
+                style: TextStyle(fontSize: 13, fontWeight: e.key == thisBranch ? FontWeight.w700 : FontWeight.w400))),
+            if (e.key == thisBranch)
+              const Padding(padding: EdgeInsets.only(right: 8),
+                  child: Text('this PO', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+            Text(_q(e.value), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                color: e.value < 0 ? AppTheme.danger : AppTheme.textPrimary)),
+          ])),
+        const Divider(),
+        Row(children: [
+          const Expanded(child: Text('All branches', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+          Text(_q(total), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+        ]),
+      ])),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+    ));
+  }
   bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
   bool _listLoading = true;
   bool _detailLoading = false;
@@ -343,6 +374,23 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
               };
             }
           } catch (_) {}
+          // Stock in every branch (subtle "All branches" hint on each line).
+          try {
+            final rows = await client.from('inventory_stock')
+                .select('product_id, branch_id, quantity')
+                .eq('org_id', _orgId ?? '').inFilter('product_id', pids).limit(20000);
+            final br = await client.from('branches').select('id, name').eq('org_id', _orgId ?? '');
+            _branchNames = {for (final b in br as List) '${b['id']}': (b['name'] as String?) ?? ''};
+            for (final r in rows as List) {
+              final q = (r['quantity'] as num?)?.toDouble() ?? 0;
+              if (q == 0) continue;
+              final m = metrics.putIfAbsent(r['product_id'] as String, () => {});
+              final byBranch = (m['by_branch'] as Map<String, double>?) ?? <String, double>{};
+              final bid = '${r['branch_id']}';
+              byBranch[bid] = (byBranch[bid] ?? 0) + q;
+              m['by_branch'] = byBranch;
+            }
+          } catch (_) {/* best-effort */}
         }
       }
       // ── Finished-goods stock per raw line (BOM reverse lookup) ────────────
@@ -1276,9 +1324,30 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                         // rather than a misleading zero.
                       }
                       if (parts.isEmpty) return const SizedBox.shrink();
-                      return Padding(padding: const EdgeInsets.only(top: 2), child: Text(
-                        parts.join('  ·  '),
-                        style: const TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600)));
+                      // Subtle multi-branch hint: only when other branches hold stock.
+                      final byBranch = m?['by_branch'] as Map<String, double>?;
+                      final allTotal = byBranch?.values.fold<double>(0, (a, b) => a + b);
+                      final here = (m?['on_hand'] as double?) ?? 0;
+                      final showAll = _showStockConsumption && byBranch != null && byBranch.isNotEmpty
+                          && (allTotal! - here).abs() > 0.0001;
+                      return Padding(padding: const EdgeInsets.only(top: 2), child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center, children: [
+                        Text(parts.join('  ·  '),
+                          style: const TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                        if (showAll) ...[
+                          const Text('  ·  ', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                          Tooltip(
+                            message: 'Stock in each branch',
+                            child: InkWell(
+                              onTap: () => _showBranchStock('${it['products']?['name'] ?? 'Product'}', byBranch),
+                              child: Text('All branches: ${_q(allTotal)}',
+                                style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary,
+                                    fontWeight: FontWeight.w600, decoration: TextDecoration.underline,
+                                    decorationStyle: TextDecorationStyle.dotted)),
+                            ),
+                          ),
+                        ],
+                      ]));
                     }),
                   ])),
                   Expanded(flex: 2, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
