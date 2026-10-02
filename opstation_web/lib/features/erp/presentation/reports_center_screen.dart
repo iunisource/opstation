@@ -33,6 +33,7 @@ const List<_Cat> _kCatalog = [
   _Cat('Sales & Customers', Icons.trending_up, [
     _Card('Sales Report', '/erp/sales-report', Icons.assessment_outlined, 'Sales by product, customer or period'),
     _Card('Sale vs Recovery', '/erp/sale-vs-recovery', Icons.compare_arrows_outlined, 'Sales, recoveries & receivables by salesman and market'),
+    _Card('Collection Report', '/reports/collections', Icons.payments_outlined, 'Market collections by salesperson, route or customer — booked vs field'),
     _Card('Sales Dashboard', '/erp/sales-dashboard', Icons.space_dashboard_outlined, 'Headline sales KPIs at a glance'),
     _Card('Customer Ledger', '/erp/customer-ledger', Icons.menu_book_outlined, 'Every transaction for a customer'),
     _Card('Customer Aging', '/erp/customer-aging', Icons.hourglass_bottom_outlined, 'Receivables by age bucket'),

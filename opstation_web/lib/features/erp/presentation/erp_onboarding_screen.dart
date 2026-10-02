@@ -222,6 +222,7 @@ const List<_GuideSection> _kGuide = [
     'Reports (quick index)',
     'Standalone reports gathered in the Reports Center. Remember that most modules above also carry their own built-in reports - aging, ledgers, dashboards, stock value and so on.',
     [
+      _GuideItem('Collection Report', 'Money collected from the market for any period - by salesperson, route or customer - with booked receipts side by side with what the field app recorded.'),
       _GuideItem('Margin Report', 'Profit margin sliced by sale, item or customer, so you can see what actually makes money.'),
       _GuideItem('Skipped Receipts Report', 'Deliveries or dispatches that never got a receipt/collection booked against them - loose ends to close.'),
       _GuideItem('Module reports', 'For anything else, check the Inventory, Purchasing, Sales, POS, Manufacturing and Financials sections - each has its own dedicated reports.'),
@@ -397,6 +398,7 @@ const Map<String, String> _routeByName = {
   'Files': '/operations/files',
   'Reports Center': '/reports/center',
   'Margin Report': '/reports/margin',
+  'Collection Report': '/reports/collections',
   'Customer Balance Report': '/erp/customer-balance-report',
   'Supplier Balance Report': '/erp/supplier-balance-report',
   'Skipped Receipts Report': '/reports/skipped-receipts',

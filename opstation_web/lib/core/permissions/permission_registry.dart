@@ -117,6 +117,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('supplier_aging', 'Supplier Aging', PermKind.report, '/erp/supplier-aging', module: 'purchase'),
     PermItem('margin_report', 'Margin Report', PermKind.report, '/reports/margin', module: 'sales'),
     PermItem('skipped_receipts_report', 'Skipped Receipts Report', PermKind.report, '/reports/skipped-receipts', module: 'sales'),
+    PermItem('collection_report', 'Collection Report', PermKind.report, '/reports/collections', module: 'sales'),
     // Report Builder and Files are cross-cutting tools, not tied to a single
     // licensable module — left permission-gated only.
     // Reports Center is the browsable gallery landing; grant it to let a user

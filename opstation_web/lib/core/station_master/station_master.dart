@@ -723,6 +723,7 @@ const List<_Feature> _features = [
   _Feature('PDC Voucher', 'Financials', '/erp/pdc-voucher', ['pdc', 'post dated cheque', 'cheque']),
   // Reports
   _Feature('Margin Report', 'Reports', '/reports/margin', ['margin']),
+  _Feature('Collection Report', 'Reports', '/reports/collections', ['collection report', 'collections', 'market collection', 'recovery report']),
   _Feature('Reports Center', 'Reports', '/reports/center', ['reports center', 'report builder', 'reports']),
   _Feature('Skipped Receipts Report', 'Reports', '/reports/skipped-receipts', ['skipped receipt', 'skipped receipts']),
   // HR
