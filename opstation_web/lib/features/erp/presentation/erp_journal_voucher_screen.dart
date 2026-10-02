@@ -692,9 +692,56 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         if (n.isNotEmpty) { postedBy = n; break; }
       }
     }
-    final postedLine = rawPostedAt != null
-        ? 'Posted by: ${postedBy.isNotEmpty ? postedBy : '—'}<br><span style="color:#888;font-weight:400">$postedInfo</span>'
-        : 'Posted: _______________';
+    String esc(String? v) => (v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    String when(dynamic iso) {
+      final d = DateTime.tryParse('${iso ?? ''}');
+      return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+    }
+    // Footprints: whatever has happened by the time this is printed.
+    String preparedBy = '';
+    for (final e in _auditTrail.reversed) {
+      if ((e['action'] as String? ?? '') == 'created') {
+        preparedBy = (e['performed_by_name'] as String? ?? '').trim();
+        if (preparedBy.isNotEmpty) break;
+      }
+    }
+    final c = _current!;
+    final approvedBy = (c['approved_by_name'] as String?)?.trim();
+    final approved = approvedBy != null && approvedBy.isNotEmpty && c['approval_status'] == 'approved';
+    final supBy = (c['supervised_by_name'] as String?)?.trim();
+    final supervised = c['supervised_at'] != null;
+    String block(String label, String who, String at, {String? sig, String? stamp, bool done = true}) =>
+        '<div class="fp${done ? '' : ' pending'}">'
+        '${sig != null && sig.isNotEmpty ? '<img class="sig" src="${esc(sig)}">' : '<div class="sig-space"></div>'}'
+        '<div class="line"></div><b>${esc(who)}</b><span>$label${at.isEmpty ? '' : ' · ${esc(at)}'}</span>'
+        '${stamp != null && stamp.isNotEmpty ? '<img class="stamp" src="${esc(stamp)}">' : ''}</div>';
+    final footprints = [
+      block('Prepared by', preparedBy.isNotEmpty ? preparedBy : ' ', when(c['created_at'])),
+      if (_jvApproveFlow || approved)
+        approved
+            ? block('Approved by', approvedBy ?? '', when(c['approved_at']))
+            : block('Approved by', ' ', c['approval_status'] == 'pending' ? 'awaiting approval' : '', done: false),
+      rawPostedAt != null || _status == 'posted'
+          ? block('Posted by', postedBy.isNotEmpty ? postedBy : (approved ? (approvedBy ?? '—') : '—'), when(rawPostedAt))
+          : block('Posted by', ' ', 'not posted yet', done: false),
+      if (_jvSuperviseFlow || supervised)
+        supervised
+            ? block('Supervised by', supBy?.isNotEmpty == true ? supBy! : '—', when(c['supervised_at']),
+                sig: c['supervised_signature_url'] as String?, stamp: c['supervised_stamp_url'] as String?)
+            : block('Supervised by', ' ', 'awaiting supervision', done: false),
+    ].join();
+    final postedLine = footprints;
+    // Same green trust badge as on screen (shield ✓ + who · when).
+    const shield = '<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px;margin-right:6px"><path fill="#2f855a" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>';
+    String badge(String text) => '<span class="trust">$shield${esc(text)}</span>';
+    String day(dynamic iso) {
+      final d = DateTime.tryParse('${iso ?? ''}');
+      return d == null ? '' : DateFormat('d MMM yyyy').format(d.toLocal());
+    }
+    final badges = [
+      if (approved) badge('Approved by $approvedBy · ${day(c['approved_at'])}'),
+      if (supervised) badge('Supervised${supBy?.isNotEmpty == true ? ' by $supBy' : ''} · ${day(c['supervised_at'])}'),
+    ].join();
     final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Journal Voucher</title><style>@page{margin:0}
       body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:20px;color:#2d3748}
       h2{text-align:center;color:#1a56db;margin-bottom:4px;letter-spacing:.5px}
@@ -707,6 +754,17 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       .total{font-weight:700}.num{text-align:right}
       .meta td{border:none;font-size:11px;padding:1px 10px 1px 0}
       .footer{margin-top:40px;display:flex;justify-content:space-between;font-size:12px;line-height:1.5}
+      .fps{margin-top:36px;display:flex;gap:18px}
+      .trusts{margin:8px 0 2px;display:flex;flex-wrap:wrap;gap:8px}
+      .trust{display:inline-flex;align-items:center;padding:5px 12px;border-radius:8px;background:rgba(56,161,105,.08);border:1px solid rgba(56,161,105,.35);color:#2f855a;font-size:12px;font-weight:600;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .fp{flex:1;position:relative;font-size:11.5px;line-height:1.45}
+      .fp .line{border-top:1px solid #718096;margin-bottom:4px}
+      .fp b{display:block;font-size:12.5px;color:#1a202c;min-height:16px}
+      .fp span{color:#718096}
+      .fp.pending b{color:#a0aec0}
+      .fp .sig{height:42px;max-width:150px;object-fit:contain;display:block}
+      .fp .sig-space{height:42px}
+      .fp .stamp{position:absolute;right:4px;top:-6px;height:58px;opacity:.85}
       @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
     </style></head><body>
     <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">Print</button></div>
@@ -716,10 +774,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       <td><b>Date:</b> ${DateFormat('dd MMM yyyy').format(_date)}</td>
       <td><b>Status:</b> ${_status.toUpperCase()}</td>
     </tr><tr><td colspan="3"><b>Narration:</b> ${_narCtrl.text}</td></tr></table>
+    ${badges.isEmpty ? '' : '<div class="trusts">$badges</div>'}
     <table class="grid"><thead><tr><th style="width:30px">#</th><th>Account</th><th>Description</th><th class="num" style="width:120px">Debit</th><th class="num" style="width:120px">Credit</th></tr></thead><tbody>
     ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td class="num">${e.value.debit > 0 ? money(e.value.debit) : ''}</td><td class="num">${e.value.credit > 0 ? money(e.value.credit) : ''}</td></tr>').join()}
     </tbody><tfoot><tr><td colspan="3" class="total num">Total:</td><td class="total num">${money(_totalDr)}</td><td class="total num">${money(_totalCr)}</td></tr></tfoot></table>
-    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>$postedLine</div></div>
+    <div class="fps">$postedLine</div>
     </body></html>''';
     final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
