@@ -630,7 +630,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       final supervised = r['supervised_at'] != null;
       final matchSup = !_superviseEnabled || _supFilter == 'all'
           || (_supFilter == 'yes' && supervised)
-          || (_supFilter == 'no' && !supervised);
+          || (_supFilter == 'no' && !supervised && r['is_voided'] != true && st != 'draft');
       return matchSearch && matchStatus && matchSup;
     }).toList();
     return Container(decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))), child: Column(children: [
@@ -657,7 +657,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           Expanded(child: Wrap(spacing: 6, runSpacing: 6, children: [
             _GrnFilterTab(label: 'All', value: 'all', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
             _GrnFilterTab(label: 'Supervised', value: 'yes', current: _supFilter, onTap: (v) => setState(() => _supFilter = v)),
-            _GrnFilterTab(label: 'Pending', value: 'no', current: _supFilter, count: _grns.where((r) => r['supervised_at'] == null && (r['status'] as String? ?? 'draft') != 'draft').length, onTap: (v) => setState(() => _supFilter = v)),
+            _GrnFilterTab(label: 'Pending', value: 'no', current: _supFilter, count: _grns.where((r) => r['supervised_at'] == null && r['is_voided'] != true && (r['status'] as String? ?? 'draft') != 'draft').length, onTap: (v) => setState(() => _supFilter = v)),
           ])),
         ])),
       ],
@@ -723,7 +723,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
               const SizedBox(width: 8),
             ],
             if (_superviseEnabled && _isAdmin) ...[
-              if (_detail['supervised_at'] == null)
+              if (_detail['supervised_at'] == null && _detail['is_voided'] != true)
                 OutlinedButton.icon(
                   icon: _superviseBusy
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
