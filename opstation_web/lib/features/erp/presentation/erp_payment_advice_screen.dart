@@ -152,7 +152,52 @@ class _ErpPaymentAdviceScreenState
   @override
   void initState() {
     super.initState();
-    _loadAll().then((_) => _openFocused());
+    _loadAll().then((_) { _openFocused(); _listenRealtime(); });
+  }
+
+  // ── Live updates: list statuses + the open advice's status refresh the
+  // moment anyone approves / rejects / edits, with no page reload. ─────────
+  RealtimeChannel? _rt;
+  Timer? _rtDebounce;
+
+  void _listenRealtime() {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null || _rt != null) return;
+    _rt = _db.channel('pa_live_$orgId').onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'payment_advices',
+      filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
+      callback: (_) {
+        _rtDebounce?.cancel();
+        _rtDebounce = Timer(const Duration(milliseconds: 400), _refreshLive);
+      },
+    ).subscribe();
+  }
+
+  Future<void> _refreshLive() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null || !mounted) return;
+    try {
+      final fresh = List<Map<String, dynamic>>.from(await _loadAdvicesWithRetry(orgId));
+      if (!mounted) return;
+      setState(() {
+        _advices = fresh;
+        // Keep the open advice's header (status, approver, footprints) current.
+        // Lines are left alone so nothing typed is lost.
+        final cur = _current;
+        if (cur != null) {
+          for (final a in fresh) {
+            if (a['id'] == cur['id']) {
+              cur
+                ..clear()
+                ..addAll(a);
+              break;
+            }
+          }
+        }
+      });
+    } catch (_) {/* next event or a manual refresh will catch up */}
   }
 
   bool _focusDone = false;
@@ -185,6 +230,9 @@ class _ErpPaymentAdviceScreenState
 
   @override
   void dispose() {
+    _rtDebounce?.cancel();
+    final rt = _rt;
+    if (rt != null) _db.removeChannel(rt);
     for (final l in _lines) {
       l.dispose();
     }
