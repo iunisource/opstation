@@ -42,8 +42,21 @@ class PushService {
       {required String orgId, required String userId}) async {
     if (!isSupported) return 'This browser does not support notifications.';
     try {
-      final res = await jsu.promiseToFuture<dynamic>(
-          jsu.callMethod(html.window, 'opstationPushSubscribe', [vapidPublicKey]));
+      dynamic res;
+      try {
+        res = await jsu.promiseToFuture<dynamic>(
+            jsu.callMethod(html.window, 'opstationPushSubscribe', [vapidPublicKey]));
+      } catch (e) {
+        // "Registration failed - push service error" is often a stale or
+        // half-made subscription: drop it and try once more.
+        if (!e.toString().contains('push service') && !e.toString().contains('AbortError')) rethrow;
+        try {
+          await jsu.promiseToFuture<dynamic>(jsu.callMethod(html.window, 'opstationPushUnsubscribe', []));
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 800));
+        res = await jsu.promiseToFuture<dynamic>(
+            jsu.callMethod(html.window, 'opstationPushSubscribe', [vapidPublicKey]));
+      }
       final m = json.decode(res as String) as Map<String, dynamic>;
       final endpoint = m['endpoint'] as String;
       await Supabase.instance.client.from('push_subscriptions').upsert({
@@ -61,6 +74,11 @@ class PushService {
       final s = e.toString();
       if (s.contains('denied')) return 'Allow notifications for this site, then try again.';
       if (s.contains('unsupported')) return 'This browser does not support notifications.';
+      if (s.contains('push service') || s.contains('AbortError')) {
+        return 'This phone could not reach the browser\'s push service. Use Google Chrome (not a "lite", Mi or '
+            'Samsung browser), make sure Google Play Services is up to date, turn off battery saver / data saver and any '
+            'VPN, then try again. In Brave: Settings → Privacy → turn on "Use Google services for push messaging".';
+      }
       return 'Failed: $e';
     }
   }
