@@ -523,8 +523,8 @@ final productSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
-// BOMs still awaiting supervision (org.bom_supervise_flow). Shown only to the
-// people who can supervise: admins / master admins + org.bom_supervisor_users.
+// BOM supervision counter (org.bom_supervise_flow): supervisors see BOMs waiting
+// for a check; a creator sees their own BOMs that were rejected and need fixing.
 final bomSupervisePendingProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
@@ -536,15 +536,25 @@ final bomSupervisePendingProvider = FutureProvider<int>((ref) async {
         .inFilter('key', ['org.bom_supervise_flow', 'org.bom_supervisor_users']);
     final cfgM = {for (final r in cfgRows as List) r['key'] as String: (r['value']?.toString() ?? '')};
     if (cfgM['org.bom_supervise_flow'] != 'true') return 0;
-    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin ||
-        user.role == WebUserRole.superAdmin;
-    final extraIds = (cfgM['org.bom_supervisor_users'] ?? '')
+    // Only the supervisors picked in Admin Settings (admins are not included by default).
+    final supervisorIds = (cfgM['org.bom_supervisor_users'] ?? '')
         .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
-    if (!isAdmin && !extraIds.contains(user.id)) return 0;
-    final res = await client.from('bom_headers').select('id')
-        .eq('org_id', user.orgId!)
-        .filter('supervised_at', 'is', null);
-    return (res as List).length;
+    var total = 0;
+    // Supervisors: BOMs waiting for a check (not rejected — those are with the creator).
+    if (supervisorIds.contains(user.id)) {
+      final res = await client.from('bom_headers').select('id')
+          .eq('org_id', user.orgId!)
+          .filter('supervised_at', 'is', null)
+          .filter('rejected_at', 'is', null);
+      total += (res as List).length;
+    }
+    // Creators: their own BOMs that were rejected and need fixing.
+    final mine = await client.from('bom_headers').select('id')
+        .eq('org_id', user.orgId!).eq('created_by', user.id)
+        .filter('supervised_at', 'is', null)
+        .not('rejected_at', 'is', null);
+    total += (mine as List).length;
+    return total;
   } catch (_) { return 0; }
 });
 

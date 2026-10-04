@@ -506,12 +506,14 @@ const List<_AdminToggle> _toggles = [
     'When ON, every new BOM needs a supervisor\'s check: a "Supervise" action '
         'appears on the BOM, a Pending filter and multi-select "Supervise selected" '
         'on the BOM list, and a pendency counter on Manufacturing → Product Assembly '
-        '(BOM) — shown only to the people who can supervise. Supervision is '
+        '(BOM) — shown only to the people who can supervise. A supervisor can also '
+        'Reject a BOM with a reason: it goes back to its creator (who then sees the '
+        'counter) to fix and "Save & resend". Supervision is '
         'NON-BLOCKING — the BOM can be used in production straight away; this only '
         'records that it was checked. Existing BOMs were auto-supervised, so only '
-        'BOMs created from now on appear. Admins and master admins can always '
-        'supervise; use the user picker below to also allow specific non-admin users.',
-    users: _UsersField('org.bom_supervisor_users', 'Extra users allowed to supervise BOMs'),
+        'BOMs created from now on appear. Only the users picked below can supervise '
+        '(admins are not included automatically — add them here if they should).',
+    users: _UsersField('org.bom_supervisor_users', 'BOM supervisors'),
   ),
   _AdminToggle(
     'org.do_supervise_flow',
