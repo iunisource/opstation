@@ -837,7 +837,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
                     onPressed: _supBusy ? null : () => _confirmSupervise([_current!['id'] as String]),
                   ),
-                ),
+                )
               else
                 Container(
                   margin: const EdgeInsets.only(right: 6),
