@@ -444,25 +444,76 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     final sheet = excel[sheetName];
     final def = excel.getDefaultSheet();
     if (def != null && def != sheetName) excel.delete(def);
-    // Customer-facing: heading + timestamp only, no margin/source/scope.
-    if (org.isNotEmpty) sheet.appendRow([xls.TextCellValue(org)]);
-    sheet.appendRow([xls.TextCellValue(_title)]);
-    sheet.appendRow([xls.TextCellValue('Generated: $stamp')]);
-    sheet.appendRow([xls.TextCellValue('')]);
-    sheet.appendRow([
-      xls.TextCellValue('Sr.#'), xls.TextCellValue('SKU'),
-      xls.TextCellValue('Product Name'), xls.TextCellValue('UOM'), xls.TextCellValue('Rate'),
-    ]);
+
+    // Same customer-facing content as the PDF (heading, org, timestamp, table) —
+    // styled to match it. No margin / cost source / scope (confidential).
+    xls.ExcelColor c(String hex) => xls.ExcelColor.fromHexString(hex);
+    final thin = xls.Border(borderStyle: xls.BorderStyle.Thin, borderColorHex: c('#CBD5E1'));
+    final head = xls.Border(borderStyle: xls.BorderStyle.Thin, borderColorHex: c('#1E3A8A'));
+    xls.CellIndex at(int col, int row) => xls.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: row);
+    const lastCol = 4; // A..E
+
+    final orgStyle = xls.CellStyle(bold: true, fontSize: 11, fontColorHex: c('#475569'));
+    final titleStyle = xls.CellStyle(bold: true, fontSize: 18, fontColorHex: c('#1E3A8A'));
+    final stampStyle = xls.CellStyle(italic: true, fontSize: 9, fontColorHex: c('#64748B'));
+    final hdrStyle = xls.CellStyle(
+      bold: true, fontSize: 10, fontColorHex: c('#FFFFFF'), backgroundColorHex: c('#1E3A8A'),
+      horizontalAlign: xls.HorizontalAlign.Center, verticalAlign: xls.VerticalAlign.Center,
+      leftBorder: head, rightBorder: head, topBorder: head, bottomBorder: head,
+    );
+    xls.CellStyle body({bool zebra = false, xls.HorizontalAlign align = xls.HorizontalAlign.Left,
+        bool bold = false, bool money = false}) => xls.CellStyle(
+          fontSize: 10, bold: bold,
+          backgroundColorHex: zebra ? c('#F1F5F9') : c('#FFFFFF'),
+          horizontalAlign: align, verticalAlign: xls.VerticalAlign.Center,
+          leftBorder: thin, rightBorder: thin, topBorder: thin, bottomBorder: thin,
+          numberFormat: money ? xls.NumFormat.standard_4 : xls.NumFormat.standard_0,
+        );
+
+    var r = 0;
+    if (org.isNotEmpty) {
+      sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue(org));
+      sheet.cell(at(0, r)).cellStyle = orgStyle;
+      r++;
+    }
+    sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue(_title));
+    sheet.cell(at(0, r)).cellStyle = titleStyle;
+    sheet.setRowHeight(r, 28);
+    r++;
+    sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue('Generated: $stamp'));
+    sheet.cell(at(0, r)).cellStyle = stampStyle;
+    r += 2; // blank spacer row
+
+    const headers = ['Sr.#', 'SKU', 'Product Name', 'UOM', 'Rate'];
+    for (var i = 0; i < headers.length; i++) {
+      sheet.updateCell(at(i, r), xls.TextCellValue(headers[i]), cellStyle: hdrStyle);
+    }
+    sheet.setRowHeight(r, 22);
+    r++;
+
     for (var i = 0; i < rows.length; i++) {
       final p = rows[i];
-      sheet.appendRow([
-        xls.IntCellValue(i + 1),
-        xls.TextCellValue(p.sku),
-        xls.TextCellValue(p.name),
-        xls.TextCellValue(p.uom),
-        xls.DoubleCellValue(double.parse(_rate(p).toStringAsFixed(2))),
-      ]);
+      final z = i.isOdd;
+      sheet.updateCell(at(0, r), xls.IntCellValue(i + 1), cellStyle: body(zebra: z, align: xls.HorizontalAlign.Center));
+      sheet.updateCell(at(1, r), xls.TextCellValue(p.sku), cellStyle: body(zebra: z));
+      sheet.updateCell(at(2, r), xls.TextCellValue(p.name), cellStyle: body(zebra: z));
+      sheet.updateCell(at(3, r), xls.TextCellValue(p.uom), cellStyle: body(zebra: z, align: xls.HorizontalAlign.Center));
+      sheet.updateCell(at(4, r), xls.DoubleCellValue(double.parse(_rate(p).toStringAsFixed(2))),
+          cellStyle: body(zebra: z, align: xls.HorizontalAlign.Right, bold: true, money: true));
+      r++;
     }
+
+    r++;
+    sheet.merge(at(0, r), at(lastCol, r),
+        customValue: xls.TextCellValue('${rows.length} item${rows.length == 1 ? '' : 's'}'));
+    sheet.cell(at(0, r)).cellStyle = stampStyle;
+
+    sheet.setColumnWidth(0, 7);
+    sheet.setColumnWidth(1, 14);
+    sheet.setColumnWidth(2, 52);
+    sheet.setColumnWidth(3, 9);
+    sheet.setColumnWidth(4, 15);
+
     excel.save(fileName: '${_title.toLowerCase().replaceAll(' ', '-')}-${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx');
   }
 
