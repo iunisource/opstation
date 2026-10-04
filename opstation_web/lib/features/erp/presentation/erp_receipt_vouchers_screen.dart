@@ -12,6 +12,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../widgets/opening_date_guard.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
@@ -212,6 +213,9 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     if (post && validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0)) <= 0) { _snack('Voucher total must be greater than zero to post'); return; }
     final orgId = _orgId; final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
         final userName = ref.read(currentUserProvider)?.name ?? '';
+    // Posting a receipt dated before the opening balance date: warn first.
+    if (post && !await confirmPreOpeningDate(context, orgId: orgId, date: _voucherDate, doc: 'receipt')) return;
+    if (!mounted) return;
     setState(() => _saving = true);
     SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
     try {

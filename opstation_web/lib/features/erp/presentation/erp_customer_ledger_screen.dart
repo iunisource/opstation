@@ -240,6 +240,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         // a voided draft still showed as an owed debit, inflating the balance
         // (e.g. two voided SIs adding 24,200 to a real 12,100).
         if (si['is_voided'] == true) continue;
+        // A draft (unlocked) invoice hasn't been posted to the books yet, so it
+        // isn't owed — leave it out, or the ledger disagrees with the balances.
+        if (si.containsKey('is_locked') && si['is_locked'] != true) continue;
         final total = ((si['total'] ?? si['total_amount'] ?? si['grand_total'] ?? si['net_amount']) as num?)?.toDouble() ?? 0;
         final vno = ((si['invoice_number'] ?? si['voucher_number'] ?? si['si_number'] ?? '') as String);
         final date = extractDate(si as Map, const ['voucher_date', 'invoice_date', 'si_date', 'date', 'posted_at', 'created_at']);

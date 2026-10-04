@@ -13,6 +13,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../widgets/opening_date_guard.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
@@ -3785,7 +3786,15 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   // Direct save + lock (used when the review flow is OFF). Locking fires the
   // COGS/GL post trigger (si_cogs_autopost).
+  /// Warn before posting an invoice dated before the opening balance date.
+  Future<bool> _preOpeningOk() async {
+    final d = DateTime.tryParse('${_detail['voucher_date'] ?? ''}');
+    if (d == null) return true;
+    return confirmPreOpeningDate(context, orgId: ref.read(currentUserProvider)?.orgId, date: d, doc: 'sales invoice');
+  }
+
   Future<void> _saveDiscounts() async {
+    if (!await _preOpeningOk()) return;
     try {
       final (subtotal, discountTotal) = await _writeItemDiscounts();
       await Supabase.instance.client.from('sales_invoices').update({
@@ -3826,6 +3835,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   // records the reviewer + snapshots their signature and the org stamp.
   Future<void> _approveAndPost() async {
     if (!_isAdmin) { _showSnack('Only admins can approve'); return; }
+    if (!await _preOpeningOk()) return;
+    if (!mounted) return;
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Approve & post invoice?'),
       content: const Text('This posts the invoice (locks it and books COGS to the ledger) and records you as the reviewer. This cannot be undone by non-admins.'),
