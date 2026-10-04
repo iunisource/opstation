@@ -42,12 +42,16 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
   final Set<String> _fSales = {};
   final Set<String> _fRoutes = {};
   final Set<String> _fGroups = {};
+  final Set<String> _fCusts = {};
+  bool _detailed = false; // Summary (salesman × market) or Detailed (per customer)
 
   // Reference data.
   bool _loadingMeta = true;
   List<_Opt> _salesOpts = [];
   List<_Opt> _routeOpts = [];
   List<_Opt> _groupOpts = [];
+  List<_Opt> _custOpts = [];
+  final Map<String, String> _custName = {}; // customer -> shop name
   final Map<String, String> _routeName = {};
   final Map<String, String> _userName = {};
   final Map<String, Set<String>> _routeToSales = {}; // route -> user ids
@@ -58,6 +62,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
   bool _running = false;
   bool _hasRun = false;
   List<Map<String, dynamic>> _rows = [];
+  bool _ranDetailed = false; // the mode the current results were built in
   Map<String, double> _total = {};
   int _sortCol = 0;
   bool _sortAsc = true;
@@ -135,13 +140,16 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
         }
       }
 
-      final custs = await _all(() => c.from('customers').select('id, group_name').eq('org_id', orgId));
+      final custs = await _all(() => c.from('customers').select('id, group_name, shop_name').eq('org_id', orgId));
       _custGroup.clear();
+      _custName.clear();
       final groups = <String>{};
       for (final r in custs) {
         final g = (r['group_name'] as String?)?.trim() ?? '';
         _custGroup[r['id'] as String] = g;
         if (g.isNotEmpty) groups.add(g);
+        final n = (r['shop_name'] as String?)?.trim() ?? '';
+        _custName[r['id'] as String] = n.isEmpty ? '(customer)' : n;
       }
 
       if (!mounted) return;
@@ -150,6 +158,8 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
           ..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
         _routeOpts = [for (final r in routes) _Opt(r['id'] as String, _routeName[r['id']]!)];
         _groupOpts = [for (final g in (groups.toList()..sort())) _Opt(g, g)];
+        _custOpts = [for (final e in _custName.entries) _Opt(e.key, e.value)]
+          ..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
         _loadingMeta = false;
       });
     } catch (e) {
@@ -180,7 +190,9 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
         };
       }
 
-      bool groupOk(String cid) => _fGroups.isEmpty || _fGroups.contains(_custGroup[cid] ?? '');
+      bool groupOk(String cid) =>
+          (_fGroups.isEmpty || _fGroups.contains(_custGroup[cid] ?? '')) &&
+          (_fCusts.isEmpty || _fCusts.contains(cid));
 
       // Build Salesman × Market buckets.
       final buckets = <String, Map<String, dynamic>>{}; // key -> {sp, route, custs}
@@ -216,6 +228,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
         add(_unassigned, _unassigned, loose);
       }
 
+      final detailed = _detailed;
       final rows = <Map<String, dynamic>>[];
       final everyone = <String>{};
       for (final b in buckets.values) {
@@ -224,21 +237,43 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
         final active = t.values.any((v) => v.abs() >= 0.005);
         if (!active) continue;
         everyone.addAll(custs);
-        rows.add({
-          'salesman': b['sp'] == _unassigned ? 'Unassigned' : (_userName[b['sp']] ?? b['sp']),
-          'market': b['route'] == _unassigned ? 'No route' : (_routeName[b['route']] ?? b['route']),
-          'customers': custs.where((c) => fig.containsKey(c)).length,
-          ...t,
-        });
+        final salesman = b['sp'] == _unassigned ? 'Unassigned' : (_userName[b['sp']] ?? b['sp']);
+        final market = b['route'] == _unassigned ? 'No route' : (_routeName[b['route']] ?? b['route']);
+        if (!detailed) {
+          rows.add({
+            'salesman': salesman,
+            'market': market,
+            'customers': custs.where((c) => fig.containsKey(c)).length,
+            ...t,
+          });
+          continue;
+        }
+        // Detailed: one row per customer with activity in this salesman × market.
+        for (final cid in custs) {
+          final f = fig[cid];
+          if (f == null || !f.values.any((v) => v.abs() >= 0.005)) continue;
+          rows.add({
+            'salesman': salesman,
+            'market': market,
+            'customer': _custName[cid] ?? '(customer)',
+            'group': '$salesman|$market',
+            'opening': f['opening'] ?? 0.0, 'sale': f['sale'] ?? 0.0, 'recovery': f['recovery'] ?? 0.0,
+            'journal': f['journal'] ?? 0.0, 'closing': f['closing'] ?? 0.0,
+          });
+        }
       }
       rows.sort((a, b) {
-        final s = (a['salesman'] as String).toLowerCase().compareTo((b['salesman'] as String).toLowerCase());
-        return s != 0 ? s : (a['market'] as String).toLowerCase().compareTo((b['market'] as String).toLowerCase());
+        var s = (a['salesman'] as String).toLowerCase().compareTo((b['salesman'] as String).toLowerCase());
+        if (s != 0) return s;
+        s = (a['market'] as String).toLowerCase().compareTo((b['market'] as String).toLowerCase());
+        if (s != 0 || !detailed) return s;
+        return (a['customer'] as String).toLowerCase().compareTo((b['customer'] as String).toLowerCase());
       });
 
       if (!mounted) return;
       setState(() {
         _rows = rows;
+        _ranDetailed = detailed;
         _total = _sum(everyone, fig);
         _hasRun = true;
         _running = false;
@@ -275,12 +310,23 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
   static String _p(double v) => v.abs() < 0.05 ? '0' : '${v.toStringAsFixed(1)}%';
 
   // ── Visible rows (search + sort) ─────────────────────────────────────
-  static const _cols = [
+  static const _sCols = [
     'Sr #', 'Salesman', 'Market', 'Sale', 'Recovery', 'Recovery/Sale %',
     'Journal Entries', 'Opening Balance', 'Closing Balance', 'Recovery/Receivable %',
   ];
+  static const _dCols = [
+    'Sr #', 'Salesman', 'Market', 'Customer', 'Sale', 'Recovery', 'Recovery/Sale %',
+    'Journal Entries', 'Opening Balance', 'Closing Balance', 'Recovery/Receivable %',
+  ];
+  List<String> get _cols => _ranDetailed ? _dCols : _sCols;
+  int get _numFrom => _ranDetailed ? 4 : 3; // first numeric column
 
   Object _sortVal(Map<String, dynamic> r, int col, int idx) {
+    // Detailed has an extra Customer column at 3; map it back onto summary indexes.
+    if (_ranDetailed) {
+      if (col == 3) return ((r['customer'] as String?) ?? '').toLowerCase();
+      if (col > 3) col -= 1;
+    }
     switch (col) {
       case 1: return (r['salesman'] as String).toLowerCase();
       case 2: return (r['market'] as String).toLowerCase();
@@ -299,7 +345,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
     final list = <Map<String, dynamic>>[];
     for (var i = 0; i < _rows.length; i++) {
       final r = _rows[i];
-      if (_search.isNotEmpty && !matchesQuery('${r['salesman']} ${r['market']}', _search)) continue;
+      if (_search.isNotEmpty && !matchesQuery('${r['salesman']} ${r['market']} ${r['customer'] ?? ''}', _search)) continue;
       list.add({...r, '_i': i});
     }
     list.sort((a, b) {
@@ -321,11 +367,14 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
     return '${DateFormat('dd/MM/yyyy').format(_from)} to ${DateFormat('dd/MM/yyyy').format(_to)}'
         '  •  Salesman: ${names(_fSales, _salesOpts)}'
         '  •  Market: ${names(_fRoutes, _routeOpts)}'
-        '  •  Customer Group: ${names(_fGroups, _groupOpts)}';
+        '  •  Customer Group: ${names(_fGroups, _groupOpts)}'
+        '  •  Customer: ${_fCusts.isEmpty ? 'All' : _fCusts.length > 5 ? '${_fCusts.length} selected' : names(_fCusts, _custOpts)}'
+        '  •  ${_ranDetailed ? 'Detailed' : 'Summary'}';
   }
 
   List<String> _cells(Map<String, dynamic> r, int sr) => [
         '$sr', '${r['salesman']}', '${r['market']}',
+        if (_ranDetailed) '${r['customer'] ?? ''}',
         money(r['sale'] as double), money(r['recovery'] as double), _p(_rsPct(r)),
         money(r['journal'] as double), money(r['opening'] as double), money(r['closing'] as double),
         _p(_rrPct(r)),
@@ -333,6 +382,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
 
   List<String> get _totalCells => [
         '', 'Total', '',
+        if (_ranDetailed) '',
         money(_total['sale']), money(_total['recovery']), _p(_rsPct(_total)),
         money(_total['journal']), money(_total['opening']), money(_total['closing']),
         _p(_rrPct(_total)),
@@ -346,6 +396,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
       final r = rows[i];
       sb.writeln([
         i + 1, r['salesman'], r['market'],
+        if (_ranDetailed) r['customer'],
         (r['sale'] as double).toStringAsFixed(2), (r['recovery'] as double).toStringAsFixed(2),
         _rsPct(r).toStringAsFixed(1), (r['journal'] as double).toStringAsFixed(2),
         (r['opening'] as double).toStringAsFixed(2), (r['closing'] as double).toStringAsFixed(2),
@@ -355,6 +406,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
     if (_search.isEmpty) {
       sb.writeln([
         '', 'Total', '',
+        if (_ranDetailed) '',
         _total['sale']!.toStringAsFixed(2), _total['recovery']!.toStringAsFixed(2),
         _rsPct(_total).toStringAsFixed(1), _total['journal']!.toStringAsFixed(2),
         _total['opening']!.toStringAsFixed(2), _total['closing']!.toStringAsFixed(2),
@@ -370,32 +422,124 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
     html.Url.revokeObjectUrl(url);
   }
 
+  /// Detailed view in its natural order (no search, default sort): rows with a
+  /// subtotal line after each Salesman × Market group. Subtotal rows carry
+  /// '_sub': true and no Sr #.
+  bool get _showSubtotals => _ranDetailed && _search.isEmpty && _sortCol == 0 && _sortAsc;
+
+  List<Map<String, dynamic>> _withSubtotals(List<Map<String, dynamic>> rows) {
+    if (!_showSubtotals) return rows;
+    final out = <Map<String, dynamic>>[];
+    Map<String, dynamic>? acc;
+    void flush() {
+      if (acc != null) out.add(acc!);
+      acc = null;
+    }
+    for (final r in rows) {
+      if (acc != null && acc!['group'] != r['group']) flush();
+      acc ??= {
+        '_sub': true, 'group': r['group'], 'salesman': r['salesman'], 'market': r['market'],
+        'customer': '', 'opening': 0.0, 'sale': 0.0, 'recovery': 0.0, 'journal': 0.0, 'closing': 0.0, 'n': 0,
+      };
+      for (final k in const ['opening', 'sale', 'recovery', 'journal', 'closing']) {
+        acc![k] = (acc![k] as double) + (r[k] as double);
+      }
+      acc!['n'] = (acc!['n'] as int) + 1;
+      out.add(r);
+    }
+    flush();
+    return out;
+  }
+
+  List<String> _subCells(Map<String, dynamic> r) => [
+        '', 'Subtotal', '${r['market']}', '${r['n']} customer${r['n'] == 1 ? '' : 's'}',
+        money(r['sale'] as double), money(r['recovery'] as double), _p(_rsPct(r)),
+        money(r['journal'] as double), money(r['opening'] as double), money(r['closing'] as double),
+        _p(_rrPct(r)),
+      ];
+
+  /// Pairs each row with its Sr # (subtotal rows don't take a number).
+  List<(Map<String, dynamic>, int)> _numbered(List<Map<String, dynamic>> rows) {
+    var n = 0;
+    return [for (final r in rows) (r, r['_sub'] == true ? 0 : ++n)];
+  }
+
+  void _reset() {
+    final now = DateTime.now();
+    setState(() {
+      _from = DateTime(now.year, now.month, 1);
+      _to = now;
+      _fSales.clear();
+      _fRoutes.clear();
+      _fGroups.clear();
+      _fCusts.clear();
+      _detailed = false;
+      _rows = [];
+      _total = {};
+      _hasRun = false;
+      _search = '';
+    });
+  }
+
   String _esc(String s) =>
       s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
   void _exportPdf() {
-    final rows = _visible;
+    final rows = _withSubtotals(_visible);
+    final cols = _cols;
+    final nf = _numFrom;
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
     final b = StringBuffer();
     b.write('<!doctype html><html><head><meta charset="utf-8"><title>Sale vs Recovery</title>');
-    b.write('<style>@page{size:A4 landscape;margin:12mm}body{font-family:Arial,Helvetica,sans-serif;margin:18px;color:#1a1a1a}'
-        'h1{font-size:18px;margin:0 0 4px}.meta{font-size:12px;color:#555;margin-bottom:12px}'
-        'table{border-collapse:collapse;width:100%;font-size:11px}'
-        'th,td{border:1px solid #ddd;padding:5px 6px}th{background:#000;color:#fff;text-align:left}'
-        'td.num,th.num{text-align:right}tr.total td{font-weight:700;background:#f3f4f6}'
-        '.foot{margin-top:14px;font-size:11px;color:#666}'
-        '.no-print{margin-bottom:12px}@media print{.no-print{display:none}}</style></head><body>');
-    b.write('<div class="no-print"><button onclick="window.print()">&#x1F5A8; Print / Save as PDF</button></div>');
-    b.write('<h1>Sale vs Recovery</h1><div class="meta">${_esc(_filterSummary())}</div>');
+    b.write('<style>@page{size:A4 landscape;margin:10mm 10mm 12mm}'
+        '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}'
+        'body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;margin:0;color:#0f172a}'
+        '.band{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1e3a8a;padding-bottom:8px;margin-bottom:8px}'
+        '.org{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:#475569;font-weight:700}'
+        'h1{font-size:20px;margin:2px 0 0;color:#1e3a8a}'
+        '.per{text-align:right;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#64748b}'
+        '.per b{display:block;font-size:13px;letter-spacing:0;text-transform:none;color:#0f172a}'
+        '.meta{font-size:10px;color:#475569;margin-bottom:10px}'
+        '.kpis{display:flex;gap:8px;margin-bottom:10px}.kpi{flex:1;border:1px solid #e2e8f0;border-radius:6px;padding:6px 10px}'
+        '.kpi .l{font-size:8px;letter-spacing:.8px;text-transform:uppercase;color:#64748b;font-weight:700}'
+        '.kpi .v{font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}'
+        'table{border-collapse:collapse;width:100%;font-size:10px}thead{display:table-header-group}'
+        'th{background:#1e3a8a;color:#fff;text-align:left;padding:6px;font-size:9px;letter-spacing:.4px}'
+        'td{padding:5px 6px;border-bottom:1px solid #eef1f6}tr{break-inside:avoid}'
+        'tbody tr:nth-child(even) td{background:#fafbfd}'
+        'td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}'
+        'tr.sub td{background:#eef2ff!important;font-weight:700;border-bottom:1.5px solid #c7d2fe}'
+        'tr.total td{font-weight:800;background:#e0e7ff!important;border-top:2px solid #1e3a8a}'
+        '.foot{margin-top:12px;font-size:9px;color:#64748b;display:flex;justify-content:space-between}'
+        '.sign{display:flex;gap:40px;margin-top:36px;break-inside:avoid}'
+        '.sign div{flex:1;border-top:1px solid #94a3b8;padding-top:4px;font-size:9px;color:#475569;text-align:center}'
+        '</style></head><body>');
+    final df = DateFormat('d MMM yyyy');
+    b.write('<div class="band"><div><div class="org">${_esc(org)}</div><h1>Sale vs Recovery${_ranDetailed ? ' — Detailed' : ''}</h1></div>'
+        '<div class="per">Period<b>${df.format(_from)} – ${df.format(_to)}</b></div></div>');
+    b.write('<div class="meta">${_esc(_filterSummary())}</div>');
+    if (_total.isNotEmpty) {
+      String k(String l, String v) => '<div class="kpi"><div class="l">$l</div><div class="v">$v</div></div>';
+      b.write('<div class="kpis">'
+          '${k('Opening balance', money(_total['opening']))}'
+          '${k('Sale', money(_total['sale']))}'
+          '${k('Recovery', money(_total['recovery']))}'
+          '${k('Recovery / Sale', _p(_rsPct(_total)))}'
+          '${k('Closing balance', money(_total['closing']))}'
+          '</div>');
+    }
     b.write('<table><thead><tr>');
-    for (var i = 0; i < _cols.length; i++) {
-      b.write('<th${i >= 3 ? ' class="num"' : ''}>${_esc(_cols[i])}</th>');
+    for (var i = 0; i < cols.length; i++) {
+      b.write('<th${i >= nf ? ' class="num"' : ''}>${_esc(cols[i])}</th>');
     }
     b.write('</tr></thead><tbody>');
-    for (var i = 0; i < rows.length; i++) {
-      final c = _cells(rows[i], i + 1);
-      b.write('<tr>');
+    var sr = 0;
+    for (final r in rows) {
+      final sub = r['_sub'] == true;
+      final c = sub ? _subCells(r) : _cells(r, ++sr);
+      b.write(sub ? '<tr class="sub">' : '<tr>');
       for (var j = 0; j < c.length; j++) {
-        b.write('<td${j >= 3 ? ' class="num"' : ''}>${_esc(c[j])}</td>');
+        b.write('<td${j >= nf ? ' class="num"' : ''}>${_esc(c[j])}</td>');
       }
       b.write('</tr>');
     }
@@ -403,17 +547,33 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
       final c = _totalCells;
       b.write('<tr class="total">');
       for (var j = 0; j < c.length; j++) {
-        b.write('<td${j >= 3 ? ' class="num"' : ''}>${_esc(c[j])}</td>');
+        b.write('<td${j >= nf ? ' class="num"' : ''}>${_esc(c[j])}</td>');
       }
       b.write('</tr>');
     }
     b.write('</tbody></table>');
-    b.write('<div class="foot">Total counts each customer once (a customer on two markets appears in both rows).'
-        ' &nbsp;•&nbsp; Created by ${_esc(_userLabel.isEmpty ? '—' : _userLabel)}'
-        ' &nbsp;•&nbsp; ${DateFormat('d MMM yyyy, HH:mm').format(DateTime.now())}</div>');
+    b.write('<div class="sign"><div>Prepared by${_userLabel.isEmpty ? '' : ' — ${_esc(_userLabel)}'}</div><div>Checked by</div><div>Approved by</div></div>');
+    b.write('<div class="foot"><span>Total counts each customer once (a customer on two markets appears in both rows).'
+        ' Recovery/Receivable % = Recovery ÷ (Opening + Sale).</span>'
+        '<span>Printed ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}</span></div>');
     b.write('</body></html>');
-    final blob = html.Blob([b.toString()], 'text/html;charset=utf-8');
-    html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+    final doc = b.toString();
+    try {
+      html.document.getElementById('ops-print-frame')?.remove();
+      final frame = html.IFrameElement()
+        ..id = 'ops-print-frame'
+        ..style.position = 'fixed'
+        ..style.left = '-9999px'
+        ..style.width = '0'
+        ..style.height = '0'
+        ..style.border = '0';
+      frame.srcdoc = doc.replaceFirst('</body>',
+          '<script>window.onload=function(){setTimeout(function(){try{window.focus();window.print();}catch(e){}},350);};</script></body>');
+      html.document.body!.append(frame);
+    } catch (_) {
+      final blob = html.Blob([doc], 'text/html;charset=utf-8');
+      html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
+    }
   }
 
   // ── UI ────────────────────────────────────────────────────────────────
@@ -596,6 +756,17 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
         _multi('Salesperson', _salesOpts, _fSales),
         _multi('Route / Market', _routeOpts, _fRoutes),
         _multi('Customer Group', _groupOpts, _fGroups),
+        _multi('Customer', _custOpts, _fCusts),
+        _labelled('Report', 230, SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(value: false, label: Text('Summary', style: TextStyle(fontSize: 12))),
+            ButtonSegment(value: true, label: Text('Detailed', style: TextStyle(fontSize: 12))),
+          ],
+          selected: {_detailed},
+          showSelectedIcon: false,
+          style: const ButtonStyle(visualDensity: VisualDensity.compact),
+          onSelectionChanged: (v) => setState(() => _detailed = v.first),
+        )),
         SizedBox(
           height: 40,
           child: ElevatedButton.icon(
@@ -606,20 +777,26 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
             onPressed: (_running || _loadingMeta) ? null : _run,
           ),
         ),
+        SizedBox(
+          height: 40,
+          child: OutlinedButton(onPressed: _running ? null : _reset, child: const Text('Reset')),
+        ),
       ]),
     );
   }
 
   Widget _resultsCard() {
     final vis = _visible;
-    final shown = _pageSize == 0 ? vis : vis.take(_pageSize).toList();
+    final shown = _withSubtotals(_pageSize == 0 ? vis : vis.take(_pageSize).toList());
+    final cols = _cols;
+    final nf = _numFrom;
     const h = TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13);
     const cell = TextStyle(fontSize: 13);
     const bold = TextStyle(fontSize: 13, fontWeight: FontWeight.w800);
 
     DataColumn col(int i) => DataColumn(
-          numeric: i >= 3,
-          label: Text(_cols[i], style: h),
+          numeric: i >= nf,
+          label: Text(cols[i], style: h),
           onSort: (_, __) => setState(() {
             if (_sortCol == i) {
               _sortAsc = !_sortAsc;
@@ -675,7 +852,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
               OutlinedButton.icon(
                   onPressed: _rows.isEmpty ? null : _exportPdf,
                   icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                  label: const Text('PDF')),
+                  label: const Text('Print / PDF')),
             ]),
           ],
         ),
@@ -696,12 +873,17 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
               dataRowMinHeight: 38,
               dataRowMaxHeight: 52,
               columnSpacing: 22,
-              columns: [for (var i = 0; i < _cols.length; i++) col(i)],
+              columns: [for (var i = 0; i < cols.length; i++) col(i)],
               rows: [
-                for (var i = 0; i < shown.length; i++)
-                  DataRow(cells: [
-                    for (final c in _cells(shown[i], i + 1)) DataCell(Text(c, style: cell)),
-                  ]),
+                for (final e in _numbered(shown))
+                  e.$1['_sub'] == true
+                      ? DataRow(
+                          color: MaterialStateProperty.all(const Color(0xFFEEF2FF)),
+                          cells: [for (final c in _subCells(e.$1)) DataCell(Text(c, style: bold))],
+                        )
+                      : DataRow(cells: [
+                          for (final c in _cells(e.$1, e.$2)) DataCell(Text(c, style: cell)),
+                        ]),
                 if (_search.isEmpty)
                   DataRow(
                     color: MaterialStateProperty.all(AppTheme.background),
@@ -712,7 +894,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
           ),
         const SizedBox(height: 8),
         Text(
-          'Showing ${shown.length} of ${vis.length} row(s). '
+          'Showing ${shown.where((r) => r['_sub'] != true).length} of ${vis.length} row(s). '
           'The total counts each customer once, even if they sit on more than one market.',
           style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
         ),

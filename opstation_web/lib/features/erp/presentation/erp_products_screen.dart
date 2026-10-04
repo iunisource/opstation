@@ -341,6 +341,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         value: val,
         items: [for (final n in options) <String, String>{'value': n, 'label': n}],
         onChanged: onChanged,
+        floating: true,
       ),
     );
   }
@@ -2117,18 +2118,33 @@ class _SearchSelect extends StatefulWidget {
   final String? value;
   final List<Map<String, String>> items;
   final ValueChanged<String?> onChanged;
-  const _SearchSelect({super.key, required this.label, required this.value, required this.items, required this.onChanged, this.hint = 'Select...'});
+  /// true → the options panel floats over the page (filter bar) instead of
+  /// expanding in place and pushing the content below it down.
+  final bool floating;
+  const _SearchSelect({super.key, required this.label, required this.value, required this.items, required this.onChanged, this.hint = 'Select...', this.floating = false});
   @override
   State<_SearchSelect> createState() => _SearchSelectState();
 }
 
 class _SearchSelectState extends State<_SearchSelect> {
+  /// Only one dropdown open at a time — opening one closes whichever was open.
+  static _SearchSelectState? _current;
+
   bool _open = false;
   String _q = '';
   final _searchCtrl = TextEditingController();
+  final _link = LayerLink();
+  final _headerKey = GlobalKey();
+  OverlayEntry? _entry;
 
   @override
-  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _entry?.remove();
+    _entry = null;
+    if (identical(_current, this)) _current = null;
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   String get _currentLabel {
     for (final it in widget.items) {
@@ -2143,41 +2159,65 @@ class _SearchSelectState extends State<_SearchSelect> {
     return widget.items.where((it) => (it['label'] ?? '').toLowerCase().contains(ql)).toList();
   }
 
-  void _close() { setState(() { _open = false; _q = ''; _searchCtrl.clear(); }); }
+  void _openPanel() {
+    if (!identical(_current, this)) _current?._close();
+    _current = this;
+    setState(() => _open = true);
+    if (widget.floating) {
+      _entry?.remove();
+      _entry = OverlayEntry(builder: _overlay);
+      Overlay.of(context).insert(_entry!);
+    }
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final selLabel = _currentLabel;
-    final hasValue = selLabel.isNotEmpty;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-      Text(widget.label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 4),
-      InkWell(
-        onTap: () => setState(() { _open = !_open; if (!_open) { _q = ''; _searchCtrl.clear(); } }),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-          decoration: BoxDecoration(
-            border: Border.all(color: _open ? AppTheme.primary : AppTheme.border),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(children: [
-            Expanded(child: Text(hasValue ? selLabel : widget.hint, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: hasValue ? AppTheme.textPrimary : Colors.grey))),
-            if (hasValue) InkWell(
-              onTap: () { widget.onChanged(null); _close(); },
-              child: const Padding(padding: EdgeInsets.only(right: 4), child: Icon(Icons.clear, size: 16, color: AppTheme.textSecondary)),
+  void _close() {
+    _entry?.remove();
+    _entry = null;
+    if (identical(_current, this)) _current = null;
+    _q = '';
+    _searchCtrl.clear();
+    if (mounted) setState(() => _open = false);
+  }
+
+  void _setQuery(String v) {
+    setState(() => _q = v);
+    _entry?.markNeedsBuild();
+  }
+
+  Widget _overlay(BuildContext ctx) {
+    final box = _headerKey.currentContext?.findRenderObject() as RenderBox?;
+    final w = box?.size.width ?? 220;
+    final h = box?.size.height ?? 44;
+    return Stack(children: [
+      // Tap anywhere outside closes it; the tap still reaches what's underneath.
+      Positioned.fill(
+        child: Listener(behavior: HitTestBehavior.translucent, onPointerDown: (_) => _close()),
+      ),
+      CompositedTransformFollower(
+        link: _link,
+        showWhenUnlinked: false,
+        offset: Offset(0, h + 2),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: w < 220 ? 220 : w,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(6),
+              color: Colors.white,
+              child: _panel(),
             ),
-            Icon(_open ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
-          ]),
+          ),
         ),
       ),
-      if (_open) Container(
-        margin: const EdgeInsets.only(top: 2),
-        constraints: const BoxConstraints(maxHeight: 240),
+    ]);
+  }
+
+  Widget _panel() => Container(
+        constraints: const BoxConstraints(maxHeight: 280),
         decoration: BoxDecoration(
-          color: Colors.white,
           border: Border.all(color: AppTheme.border),
           borderRadius: BorderRadius.circular(6),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8, offset: const Offset(0, 4))],
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(
@@ -2186,7 +2226,7 @@ class _SearchSelectState extends State<_SearchSelect> {
               controller: _searchCtrl,
               autofocus: true,
               decoration: const InputDecoration(hintText: 'Search...', isDense: true, prefixIcon: Icon(Icons.search, size: 16), contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8), border: OutlineInputBorder()),
-              onChanged: (v) => setState(() => _q = v),
+              onChanged: _setQuery,
             ),
           ),
           Flexible(
@@ -2208,6 +2248,47 @@ class _SearchSelectState extends State<_SearchSelect> {
                 }).toList()),
           ),
         ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final selLabel = _currentLabel;
+    final hasValue = selLabel.isNotEmpty;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(widget.label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 4),
+      CompositedTransformTarget(
+        link: _link,
+        child: InkWell(
+          key: _headerKey,
+          onTap: () => _open ? _close() : _openPanel(),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            decoration: BoxDecoration(
+              border: Border.all(color: _open ? AppTheme.primary : AppTheme.border),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(children: [
+              Expanded(child: Text(hasValue ? selLabel : widget.hint, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: hasValue ? AppTheme.textPrimary : Colors.grey))),
+              if (hasValue) InkWell(
+                onTap: () { widget.onChanged(null); _close(); },
+                child: const Padding(padding: EdgeInsets.only(right: 4), child: Icon(Icons.clear, size: 16, color: AppTheme.textSecondary)),
+              ),
+              Icon(_open ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
+            ]),
+          ),
+        ),
+      ),
+      // Inline mode (inside the Add/Edit dialog): expands in place — never opens a
+      // route or overlay there, which is what kept it from freezing.
+      if (_open && !widget.floating) Container(
+        margin: const EdgeInsets.only(top: 2),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8, offset: const Offset(0, 4))],
+        ),
+        child: _panel(),
       ),
     ]);
   }
