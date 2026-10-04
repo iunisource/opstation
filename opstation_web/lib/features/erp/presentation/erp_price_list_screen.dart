@@ -43,6 +43,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   final _marginCtrl = TextEditingController(); // user-entered; 15 shown only as a hint
   String _source = 'purchase'; // purchase | selling | bom
   String _method = 'markup';   // markup (× (1+m)) | margin (÷ (1−m))
+  String _title = 'Price List'; // printed heading: 'Price List' | 'Cost Sheet'
   final _qty = NumberFormat('#,##0.##');
 
   @override
@@ -356,7 +357,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       margin: const pw.EdgeInsets.all(28),
       build: (ctx) => [
         if (org.isNotEmpty) pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
-        pw.Text('Price List', style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+        pw.Text(_title, style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text('Generated: $stamp', style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
@@ -380,7 +381,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         ),
       ],
     ));
-    await outputPdf(await doc.save(), 'Price List');
+    await outputPdf(await doc.save(), _title);
   }
 
   Future<void> _exportExcel() async {
@@ -390,13 +391,13 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
     final excel = xls.Excel.createExcel();
-    const sheetName = 'Price List';
+    final sheetName = _title;
     final sheet = excel[sheetName];
     final def = excel.getDefaultSheet();
     if (def != null && def != sheetName) excel.delete(def);
     // Customer-facing: heading + timestamp only, no margin/source/scope.
     if (org.isNotEmpty) sheet.appendRow([xls.TextCellValue(org)]);
-    sheet.appendRow([xls.TextCellValue('Price List')]);
+    sheet.appendRow([xls.TextCellValue(_title)]);
     sheet.appendRow([xls.TextCellValue('Generated: $stamp')]);
     sheet.appendRow([xls.TextCellValue('')]);
     sheet.appendRow([
@@ -413,7 +414,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         xls.DoubleCellValue(double.parse(_rate(p).toStringAsFixed(2))),
       ]);
     }
-    excel.save(fileName: 'price-list-${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx');
+    excel.save(fileName: '${_title.toLowerCase().replaceAll(' ', '-')}-${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx');
   }
 
   @override
@@ -498,6 +499,15 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       DropdownMenuItem(value: 'margin', child: Text('Margin on price')),
                     ],
                     onChanged: (v) => setState(() => _method = v ?? 'markup'),
+                  )),
+                  SizedBox(width: 180, child: DropdownButtonFormField<String>(
+                    value: _title, isDense: true,
+                    decoration: const InputDecoration(labelText: 'Document title', isDense: true, border: OutlineInputBorder()),
+                    items: const [
+                      DropdownMenuItem(value: 'Price List', child: Text('Price List')),
+                      DropdownMenuItem(value: 'Cost Sheet', child: Text('Cost Sheet')),
+                    ],
+                    onChanged: (v) => setState(() => _title = v ?? 'Price List'),
                   )),
                   ElevatedButton.icon(
                     onPressed: rows.isEmpty ? null : _generatePdf,

@@ -464,8 +464,10 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       return matchesQuery('${v['voucher_number'] ?? ''} ${_prodLabel[v['product_id']] ?? ''}', _listSearch);
     }).toList();
 
-    return Container(color: AppTheme.background, child: Row(children: [
-      if (_drawerOpen) Container(width: 300,
+    final narrow = isNarrow(context);
+    // Phones: the list and the editor take turns (side by side, the editor was
+    // squeezed to nothing). Desktop keeps the 300px list beside the editor.
+    final drawer = !_drawerOpen ? null : Container(width: narrow ? double.infinity : 300,
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
@@ -475,7 +477,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
                 const Expanded(child: Text('Production Vouchers', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
                 ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero),
-                  onPressed: _newVoucher),
+                  onPressed: () { _newVoucher(); if (narrow) setState(() => _drawerOpen = false); }),
               ]),
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
@@ -486,7 +488,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             : VoucherSortedList(items: filtered, builder: (vsRows) => ListView.builder(itemCount: vsRows.length, itemBuilder: (_, i) {
                 final v = vsRows[i]; final sel = _current?['id'] == v['id'];
                 final posted = (v['status'] as String? ?? 'draft') == 'posted';
-                return InkWell(onTap: () => _loadVoucher(v), child: Container(
+                return InkWell(onTap: () { _loadVoucher(v); if (narrow) setState(() => _drawerOpen = false); }, child: Container(
                   color: sel ? AppTheme.primary.withOpacity(0.07) : null,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -502,34 +504,39 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
                   ]),
                 ));
               }))),
-        ])),
+        ]));
 
-      Expanded(child: Column(children: [
+    final editor = Column(children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
             IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
-            Expanded(child: Text(_current?['voucher_number'] as String? ?? 'New Production Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+            Expanded(child: Text(_current?['voucher_number'] as String? ?? (narrow ? 'New voucher' : 'New Production Voucher'),
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
             if (!_isDraft) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(color: Colors.green.withOpacity(0.13), borderRadius: BorderRadius.circular(4)),
               child: Text('Posted', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w700))),
             if (_isDraft && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete draft'),
             const SizedBox(width: 8),
-            if (_isDraft) OutlinedButton.icon(
+            if (_isDraft && narrow) IconButton(
+              tooltip: 'Save draft',
+              icon: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 20),
+              onPressed: _saving || _posting ? null : () => _save()),
+            if (_isDraft && !narrow) OutlinedButton.icon(
               icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
               label: const Text('Save draft'),
               onPressed: _saving || _posting ? null : () => _save()),
-            const SizedBox(width: 8),
+            SizedBox(width: narrow ? 4 : 8),
             if (_isDraft) ElevatedButton.icon(
               icon: _posting ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle_outline, size: 16),
               label: const Text('Post'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: EdgeInsets.symmetric(horizontal: narrow ? 10 : 16, vertical: 10)),
               onPressed: _saving || _posting ? null : _post),
           ])),
         Expanded(child: _loadingProducts
           ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading...', style: TextStyle(color: AppTheme.textSecondary))]))
-          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          : SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // Header fields — responsive. On desktop, a fixed-width Row. On phone
             // width the fixed columns (220+150+130 + gaps) overflowed and left the
             // BOM picker zero-width (un-tappable), so there we stack full-width.
@@ -581,7 +588,14 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             _ohSection(),
             const SizedBox(height: 30),
           ]))),
-      ])),
+      ]);
+
+    if (narrow) {
+      return Container(color: AppTheme.background, child: drawer ?? editor);
+    }
+    return Container(color: AppTheme.background, child: Row(children: [
+      if (drawer != null) drawer,
+      Expanded(child: editor),
     ]));
   }
 
@@ -622,17 +636,26 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     return Container(padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text(posted ? 'Cost (posted, actual FIFO)' : 'Cost (estimate — actual FIFO computed at posting)',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: posted ? Colors.green.shade700 : AppTheme.textSecondary)),
-        ]),
+        Text(posted ? 'Cost (posted, actual FIFO)' : 'Cost (estimate — actual FIFO computed at posting)',
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: posted ? Colors.green.shade700 : AppTheme.textSecondary)),
         const SizedBox(height: 10),
-        Row(children: [
-          _costCell('Components', compCost, AppTheme.primary),
-          _costCell('Labor & Overhead', ohCost, Colors.teal),
-          _costCell('Total absorbed', total, AppTheme.textPrimary, bold: true),
-          _costCell('Unit cost', unit, Colors.deepPurple, bold: true, decimals: 4),
-        ]),
+        if (isNarrow(context)) ...[
+          Row(children: [
+            _costCell('Components', compCost, AppTheme.primary),
+            _costCell('Labor & Overhead', ohCost, Colors.teal),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            _costCell('Total absorbed', total, AppTheme.textPrimary, bold: true),
+            _costCell('Unit cost', unit, Colors.deepPurple, bold: true, decimals: 4),
+          ]),
+        ] else
+          Row(children: [
+            _costCell('Components', compCost, AppTheme.primary),
+            _costCell('Labor & Overhead', ohCost, Colors.teal),
+            _costCell('Total absorbed', total, AppTheme.textPrimary, bold: true),
+            _costCell('Unit cost', unit, Colors.deepPurple, bold: true, decimals: 4),
+          ]),
       ]));
   }
 
@@ -642,7 +665,43 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     Text(decimals == 4 ? NumberFormat('#,##0.0000').format(v) : _money(v), style: TextStyle(fontSize: bold ? 16 : 14, fontWeight: bold ? FontWeight.w800 : FontWeight.w600, color: c)),
   ]));
 
+  /// Phone layout for one component: name on its own line(s), figures below.
+  Widget _compCard(int i) {
+    final c = _components[i];
+    final pid = c.productId;
+    final have = pid == null ? 0.0 : (_compStock[pid] ?? 0);
+    final short = c.qty > have + 1e-9;
+    final cost = _isDraft ? c.qty * (_prodCost[pid] ?? 0) : c.lineCostSnap;
+    Widget fig(String label, String value, {Color? color, bool bold = false}) => Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+            const SizedBox(height: 2),
+            Text(value, style: TextStyle(fontSize: 12.5, fontWeight: bold ? FontWeight.w700 : FontWeight.w500, color: color ?? AppTheme.textPrimary)),
+          ]),
+        );
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 22, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+          Expanded(child: Text(c.productLabel, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600))),
+        ]),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.only(left: 22),
+          child: Row(children: [
+            fig('Quantity', _trim(c.qty), bold: true),
+            fig('In hand', _trim(have), color: short ? AppTheme.danger : AppTheme.textSecondary, bold: short),
+            if (_canViewCost) fig('Cost', _money(cost), color: AppTheme.textSecondary),
+          ]),
+        ),
+      ]),
+    );
+  }
+
   Widget _compSection() {
+    final narrow = isNarrow(context);
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(children: [
@@ -653,8 +712,13 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             const SizedBox(width: 8),
             const Text('Components (consumed)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Derived from the BOM, scaled to Output Qty. Locked to the recipe.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            if (!narrow) const Expanded(child: Text('Derived from the BOM, scaled to Output Qty. Locked to the recipe.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
+        if (narrow) ...[
+          if (_components.isEmpty)
+            const Padding(padding: EdgeInsets.all(14), child: Text('Pick a BOM to load its components.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          for (var i = 0; i < _components.length; i++) _compCard(i),
+        ] else ...[
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
@@ -696,11 +760,13 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               ],
               const SizedBox(width: 30),
             ])),
+        ],
       ]),
     );
   }
 
   Widget _ohSection() {
+    final narrow = isNarrow(context);
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
       child: Column(children: [
@@ -711,8 +777,38 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
             const SizedBox(width: 8),
             const Text('Labor & Overhead (absorbed)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            Expanded(child: Text(_canViewCost ? 'Total ${_money(_ohTotal)} — added to finished-goods cost.' : 'Added to finished-goods cost at production.', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            if (!narrow) Expanded(child: Text(_canViewCost ? 'Total ${_money(_ohTotal)} — added to finished-goods cost.' : 'Added to finished-goods cost at production.', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            if (narrow) const Spacer(),
+            if (narrow && _canViewCost) Text(_money(_ohTotal), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.teal)),
           ])),
+        if (narrow) ...[
+          if (_overheads.isEmpty)
+            const Padding(padding: EdgeInsets.all(14), child: Text('No labor or overhead on this BOM.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          for (var i = 0; i < _overheads.length; i++)
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SizedBox(width: 22, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(color: Colors.teal.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                    child: Text(_overheads[i].costType == 'labor' ? 'Labor' : 'Overhead',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.teal.shade700)),
+                  ),
+                  if (_overheads[i].descCtrl.text.trim().isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(_overheads[i].descCtrl.text, style: const TextStyle(fontSize: 12.5)),
+                  ],
+                ])),
+                if (_canViewCost) ...[
+                  const SizedBox(width: 10),
+                  Text(_money(_overheads[i].amount), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                ],
+              ]),
+            ),
+        ] else ...[
         Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: Row(children: [
@@ -740,6 +836,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               ],
               const SizedBox(width: 30),
             ])),
+        ],
       ]),
     );
   }
