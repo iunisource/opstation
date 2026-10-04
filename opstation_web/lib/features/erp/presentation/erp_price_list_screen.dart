@@ -28,6 +28,14 @@ class _P {
   _P(this.id, this.sku, this.name, this.main, this.group, this.sub, this.uom, this.cost, this.sell);
 }
 
+/// One printed line — from the live generator or from a saved snapshot.
+class _Line {
+  final String productId, sku, name, uom;
+  final double rate;
+  final bool edited;
+  const _Line(this.productId, this.sku, this.name, this.uom, this.rate, this.edited);
+}
+
 class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   bool _loading = true;
   String? _error;
@@ -45,6 +53,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   String _method = 'markup';   // markup (× (1+m)) | margin (÷ (1−m))
   String _title = 'Price List'; // printed heading: 'Price List' | 'Cost Sheet'
   final Map<String, double> _override = {}; // product_id -> manually entered rate
+  Map<String, dynamic>? _snap; // a saved price list being viewed (read-only); null = live generator
   final _qty = NumberFormat('#,##0.##');
 
   @override
@@ -391,9 +400,241 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     );
   }
 
+  // ── What gets printed / exported / saved ─────────────────────────────────
+  String get _outTitle => (_snap?['title'] as String?) ?? _title;
+
+  List<_Line> _snapLines(Map<String, dynamic> snap) => [
+        for (final l in (snap['lines'] as List? ?? const []))
+          _Line('${l['product_id'] ?? ''}', '${l['sku'] ?? ''}', '${l['name'] ?? ''}', '${l['uom'] ?? ''}',
+              (l['rate'] as num?)?.toDouble() ?? 0, l['edited'] == true),
+      ];
+
+  List<_Line> get _outLines => _snap != null
+      ? _snapLines(_snap!)
+      : [for (final p in _rows) _Line(p.id, p.sku, p.name, p.uom, _rate(p), _override.containsKey(p.id))];
+
+  Future<void> _prepare() async {
+    if (_snap == null && _source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
+  }
+
+  // ── Save a generated list (manual, for the record) ────────────────────────
+  Future<void> _save() async {
+    await _prepare();
+    final lines = _outLines;
+    if (lines.isEmpty || !mounted) return;
+    final nameCtrl = TextEditingController(text: '$_title – ${DateFormat('d MMM y').format(DateTime.now())}');
+    final notesCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Save $_title', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Keeps a copy of these ${lines.length} lines and rates exactly as they are now'
+                '${_override.isEmpty ? '' : ' (including ${_override.length} edited rate${_override.length == 1 ? '' : 's'})'}'
+                ', with the settings used.',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.4)),
+            const SizedBox(height: 14),
+            TextField(controller: nameCtrl, autofocus: true,
+                decoration: const InputDecoration(labelText: 'Name *', isDense: true, border: OutlineInputBorder())),
+            const SizedBox(height: 10),
+            TextField(controller: notesCtrl, maxLines: 3, minLines: 2,
+                decoration: const InputDecoration(labelText: 'Notes (optional)', hintText: 'e.g. Quoted to Al-Rehman Autos, valid till month end',
+                    isDense: true, border: OutlineInputBorder())),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton.icon(onPressed: () => Navigator.pop(ctx, true), icon: const Icon(Icons.bookmark_add_outlined, size: 16), label: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) { _toast('Give it a name'); return; }
+    final user = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('price_list_snapshots').insert({
+        'id': 'pls_${DateTime.now().microsecondsSinceEpoch}',
+        'org_id': user?.orgId,
+        'title': _title,
+        'name': name,
+        'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+        'settings': {
+          'source': _source, 'source_label': _sourceLabel, 'method': _method, 'method_label': _methodLabel,
+          'margin': _margin, 'main_groups': _mains.toList(), 'groups': _groups.toList(), 'sub_groups': _subs.toList(),
+          'search': _searchCtrl.text.trim(), 'picked_products': _pickedIds.length,
+        },
+        'lines': [
+          for (final l in lines)
+            {'product_id': l.productId, 'sku': l.sku, 'name': l.name, 'uom': l.uom,
+             'rate': double.parse(l.rate.toStringAsFixed(4)), 'edited': l.edited},
+        ],
+        'item_count': lines.length,
+        'edited_count': lines.where((l) => l.edited).length,
+        'created_by': user?.id,
+        'created_by_name': user?.name,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      _toast('Saved "$name"');
+    } catch (e) {
+      _toast(e.toString().contains('price_list_snapshots')
+          ? 'Saving needs SQL 314 — run it in Supabase first.'
+          : 'Could not save: $e');
+    }
+  }
+
+  void _toast(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
+  }
+
+  // ── Saved lists ───────────────────────────────────────────────────────────
+  Future<void> _openSaved() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    List<Map<String, dynamic>> list = [];
+    String? err;
+    try {
+      list = List<Map<String, dynamic>>.from(await Supabase.instance.client.from('price_list_snapshots')
+          .select('id, title, name, notes, item_count, edited_count, created_by, created_by_name, created_at, settings')
+          .eq('org_id', orgId).order('created_at', ascending: false).limit(300));
+    } catch (e) {
+      err = e.toString().contains('price_list_snapshots') ? 'Run SQL 314 in Supabase to enable saved lists.' : '$e';
+    }
+    if (!mounted) return;
+    final user = ref.read(currentUserProvider);
+    final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.superAdmin;
+    final q = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final shown = list.where((r) {
+          final t = q.text.trim().toLowerCase();
+          return t.isEmpty || '${r['name']} ${r['notes'] ?? ''} ${r['title']} ${r['created_by_name'] ?? ''}'.toLowerCase().contains(t);
+        }).toList();
+        return AlertDialog(
+          title: const Text('Saved price lists & cost sheets', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          content: SizedBox(
+            width: 640, height: 480,
+            child: err != null
+                ? Center(child: Text(err, style: const TextStyle(color: AppTheme.danger)))
+                : Column(children: [
+                    TextField(controller: q, onChanged: (_) => setD(() {}),
+                        decoration: const InputDecoration(hintText: 'Search name, notes, person…', prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder())),
+                    const SizedBox(height: 8),
+                    Expanded(child: shown.isEmpty
+                        ? const Center(child: Text('Nothing saved yet. Use Save on a generated list to keep a record.', style: TextStyle(color: AppTheme.textSecondary)))
+                        : ListView.separated(
+                            itemCount: shown.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (_, i) {
+                              final r = shown[i];
+                              final st = Map<String, dynamic>.from(r['settings'] as Map? ?? {});
+                              final when = DateTime.tryParse('${r['created_at']}')?.toLocal();
+                              final isCost = r['title'] == 'Cost Sheet';
+                              final canDelete = isAdmin || r['created_by'] == user?.id;
+                              return ListTile(
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                                leading: CircleAvatar(
+                                  radius: 16,
+                                  backgroundColor: (isCost ? Colors.deepPurple : AppTheme.primary).withValues(alpha: 0.1),
+                                  child: Icon(isCost ? Icons.calculate_outlined : Icons.sell_outlined, size: 16,
+                                      color: isCost ? Colors.deepPurple : AppTheme.primary),
+                                ),
+                                title: Text('${r['name']}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                                subtitle: Text(
+                                  '${r['title']} · ${r['item_count'] ?? 0} items'
+                                  '${(r['edited_count'] ?? 0) > 0 ? ' · ${r['edited_count']} edited' : ''}'
+                                  ' · ${st['source_label'] ?? st['source'] ?? ''} ${st['margin'] ?? ''}%'
+                                  '\n${r['created_by_name'] ?? '—'} · ${when == null ? '' : DateFormat('d MMM y, h:mm a').format(when)}'
+                                  '${(r['notes'] as String?)?.isNotEmpty == true ? '\n${r['notes']}' : ''}',
+                                  style: const TextStyle(fontSize: 11.5, height: 1.35),
+                                ),
+                                isThreeLine: true,
+                                onTap: () async {
+                                  Navigator.pop(ctx);
+                                  await _loadSnap(r['id'] as String);
+                                },
+                                trailing: canDelete
+                                    ? IconButton(
+                                        tooltip: 'Delete',
+                                        icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                                        onPressed: () async {
+                                          final yes = await showDialog<bool>(context: ctx, builder: (c2) => AlertDialog(
+                                            title: const Text('Delete saved list?'),
+                                            content: Text('"${r['name']}" will be removed. This can\'t be undone.'),
+                                            actions: [
+                                              TextButton(onPressed: () => Navigator.pop(c2, false), child: const Text('Cancel')),
+                                              TextButton(onPressed: () => Navigator.pop(c2, true), child: const Text('Delete', style: TextStyle(color: AppTheme.danger))),
+                                            ],
+                                          ));
+                                          if (yes != true) return;
+                                          try {
+                                            await Supabase.instance.client.from('price_list_snapshots').delete().eq('id', r['id'] as String);
+                                            setD(() => list.removeWhere((x) => x['id'] == r['id']));
+                                            if (_snap?['id'] == r['id'] && mounted) setState(() => _snap = null);
+                                          } catch (e) { _toast('Could not delete: $e'); }
+                                        },
+                                      )
+                                    : null,
+                              );
+                            },
+                          )),
+                  ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+        );
+      }),
+    );
+  }
+
+  Future<void> _loadSnap(String id) async {
+    try {
+      final row = await Supabase.instance.client.from('price_list_snapshots').select().eq('id', id).single();
+      if (mounted) setState(() => _snap = Map<String, dynamic>.from(row));
+    } catch (e) { _toast('Could not open: $e'); }
+  }
+
+  Widget _snapBanner() {
+    final s = _snap!;
+    final st = Map<String, dynamic>.from(s['settings'] as Map? ?? {});
+    final when = DateTime.tryParse('${s['created_at']}')?.toLocal();
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 1040),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFC7D2FE)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.bookmark, size: 20, color: Color(0xFF3730A3)),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Saved: ${s['name']}', style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF312E81))),
+          Text('${s['title']} · ${s['item_count'] ?? 0} items · ${st['source_label'] ?? st['source'] ?? ''}, '
+              '${st['margin'] ?? ''}% ${st['method_label'] ?? ''} · saved by ${s['created_by_name'] ?? '—'}'
+              '${when == null ? '' : ' on ${DateFormat('d MMM y, h:mm a').format(when)}'}',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF4338CA))),
+          if ((s['notes'] as String?)?.isNotEmpty == true)
+            Padding(padding: const EdgeInsets.only(top: 3),
+                child: Text('${s['notes']}', style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary))),
+        ])),
+        TextButton.icon(
+          onPressed: () => setState(() => _snap = null),
+          icon: const Icon(Icons.close, size: 16),
+          label: const Text('Back to generator'),
+        ),
+      ]),
+    );
+  }
+
   Future<void> _generatePdf() async {
-    if (_source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
-    final rows = _rows;
+    await _prepare();
+    final rows = _outLines;
     if (rows.isEmpty) return;
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     // Customer-facing document: heading + org + generated timestamp ONLY.
@@ -406,7 +647,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       margin: const pw.EdgeInsets.all(28),
       build: (ctx) => [
         if (org.isNotEmpty) pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
-        pw.Text(_title, style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+        pw.Text(_outTitle, style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 2),
         pw.Text('Generated: $stamp', style: pw.TextStyle(fontSize: 9.5, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
@@ -414,7 +655,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
           headers: const ['Sr.#', 'SKU', 'Product Name', 'UOM', 'Rate'],
           data: [
             for (var i = 0; i < rows.length; i++)
-              ['${i + 1}', rows[i].sku, rows[i].name, rows[i].uom, _qty.format(_rate(rows[i]))],
+              ['${i + 1}', rows[i].sku, rows[i].name, rows[i].uom, _qty.format(rows[i].rate)],
           ],
           headerStyle: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold),
           cellStyle: const pw.TextStyle(fontSize: 9.5),
@@ -430,17 +671,18 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         ),
       ],
     ));
-    await outputPdf(await doc.save(), _title);
+    await outputPdf(await doc.save(), _outTitle);
   }
 
   Future<void> _exportExcel() async {
-    if (_source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
-    final rows = _rows;
+    await _prepare();
+    final rows = _outLines;
     if (rows.isEmpty) return;
+    final title = _outTitle;
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
     final excel = xls.Excel.createExcel();
-    final sheetName = _title;
+    final sheetName = title;
     final sheet = excel[sheetName];
     final def = excel.getDefaultSheet();
     if (def != null && def != sheetName) excel.delete(def);
@@ -476,7 +718,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       sheet.cell(at(0, r)).cellStyle = orgStyle;
       r++;
     }
-    sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue(_title));
+    sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue(title));
     sheet.cell(at(0, r)).cellStyle = titleStyle;
     sheet.setRowHeight(r, 28);
     r++;
@@ -498,7 +740,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       sheet.updateCell(at(1, r), xls.TextCellValue(p.sku), cellStyle: body(zebra: z));
       sheet.updateCell(at(2, r), xls.TextCellValue(p.name), cellStyle: body(zebra: z));
       sheet.updateCell(at(3, r), xls.TextCellValue(p.uom), cellStyle: body(zebra: z, align: xls.HorizontalAlign.Center));
-      sheet.updateCell(at(4, r), xls.DoubleCellValue(double.parse(_rate(p).toStringAsFixed(2))),
+      sheet.updateCell(at(4, r), xls.DoubleCellValue(double.parse(p.rate.toStringAsFixed(2))),
           cellStyle: body(zebra: z, align: xls.HorizontalAlign.Right, bold: true, money: true));
       r++;
     }
@@ -514,7 +756,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     sheet.setColumnWidth(3, 9);
     sheet.setColumnWidth(4, 15);
 
-    excel.save(fileName: '${_title.toLowerCase().replaceAll(' ', '-')}-${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx');
+    excel.save(fileName: '${title.toLowerCase().replaceAll(' ', '-')}-${DateFormat('yyyyMMdd').format(DateTime.now())}.xlsx');
   }
 
   @override
@@ -610,21 +852,35 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                     onChanged: (v) => setState(() => _title = v ?? 'Price List'),
                   )),
                   ElevatedButton.icon(
-                    onPressed: rows.isEmpty ? null : _generatePdf,
+                    onPressed: (rows.isEmpty && _snap == null) ? null : _generatePdf,
                     icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
                     label: const Text('PDF / Print'),
                     style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
                   ),
                   OutlinedButton.icon(
-                    onPressed: rows.isEmpty ? null : _exportExcel,
+                    onPressed: (rows.isEmpty && _snap == null) ? null : _exportExcel,
                     icon: const Icon(Icons.table_view_outlined, size: 18),
                     label: const Text('Excel'),
                     style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1D6F42)),
+                  ),
+                  if (_snap == null)
+                    OutlinedButton.icon(
+                      onPressed: rows.isEmpty ? null : _save,
+                      icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+                      label: const Text('Save'),
+                      style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF3730A3)),
+                    ),
+                  TextButton.icon(
+                    onPressed: _openSaved,
+                    icon: const Icon(Icons.bookmarks_outlined, size: 18),
+                    label: const Text('Saved'),
+                    style: TextButton.styleFrom(foregroundColor: const Color(0xFF3730A3)),
                   ),
                 ]),
               ]),
             ),
             const SizedBox(height: 10),
+            if (_snap != null) _snapBanner() else
             Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, children: [
               Text('${rows.length} product(s)  ·  Rate = $_sourceLabel, ${_qty.format(_margin)}% ($_methodLabel)'
                   '  ·  tap a rate to edit it',
@@ -638,14 +894,16 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                 ),
             ]),
             const SizedBox(height: 8),
-            Expanded(child: _preview(rows, mobile)),
+            Expanded(child: _preview(_outLines, mobile)),
           ],
         ]),
       );
     });
   }
 
-  Widget _preview(List<_P> rows, bool mobile) {
+  Widget _preview(List<_Line> rows, bool mobile) {
+    final live = _snap == null;
+    final byId = live ? {for (final p in _rows) p.id: p} : const <String, _P>{};
     return Container(
       constraints: const BoxConstraints(maxWidth: 1040),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
@@ -677,22 +935,23 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       Expanded(child: Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis)),
                       SizedBox(width: 60, child: Text(p.uom, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.center)),
                       SizedBox(width: 110, child: Builder(builder: (_) {
-                        final edited = _override.containsKey(p.id);
+                        final edited = p.edited;
+                        final src = byId[p.productId];
                         return InkWell(
-                          onTap: () => _editRate(p),
+                          onTap: (live && src != null) ? () => _editRate(src) : null,
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                             decoration: BoxDecoration(
                               color: edited ? const Color(0xFFFFF7E6) : null,
                               borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: edited ? const Color(0xFFF5C26B) : AppTheme.border),
+                              border: Border.all(color: edited ? const Color(0xFFF5C26B) : (live ? AppTheme.border : Colors.transparent)),
                             ),
                             child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                              Icon(edited ? Icons.edit : Icons.edit_outlined, size: 11,
+                              if (live || edited) Icon(edited ? Icons.edit : Icons.edit_outlined, size: 11,
                                   color: edited ? const Color(0xFFB45309) : AppTheme.textSecondary),
                               const SizedBox(width: 4),
-                              Flexible(child: Text(_qty.format(_rate(p)), textAlign: TextAlign.right, overflow: TextOverflow.ellipsis,
+                              Flexible(child: Text(_qty.format(p.rate), textAlign: TextAlign.right, overflow: TextOverflow.ellipsis,
                                   style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700,
                                       color: edited ? const Color(0xFF7C4A03) : AppTheme.textPrimary))),
                             ]),
