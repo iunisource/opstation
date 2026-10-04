@@ -501,6 +501,19 @@ const List<_AdminToggle> _toggles = [
     users: _UsersField('org.si_supervisor_users', 'Extra users allowed to supervise Sales Invoices'),
   ),
   _AdminToggle(
+    'org.bom_supervise_flow',
+    'Supervision for Bills of Material (BOMs)',
+    'When ON, every new BOM needs a supervisor\'s check: a "Supervise" action '
+        'appears on the BOM, a Pending filter and multi-select "Supervise selected" '
+        'on the BOM list, and a pendency counter on Manufacturing → Product Assembly '
+        '(BOM) — shown only to the people who can supervise. Supervision is '
+        'NON-BLOCKING — the BOM can be used in production straight away; this only '
+        'records that it was checked. Existing BOMs were auto-supervised, so only '
+        'BOMs created from now on appear. Admins and master admins can always '
+        'supervise; use the user picker below to also allow specific non-admin users.',
+    users: _UsersField('org.bom_supervisor_users', 'Extra users allowed to supervise BOMs'),
+  ),
+  _AdminToggle(
     'org.do_supervise_flow',
     'Supervision for Delivery Orders',
     'When ON, a "Supervise" action appears on each Delivery Order as an extra '
@@ -622,6 +635,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.job_ack_skip_admin',
     'org.production_updates_cost_price',
     'feature.qc_station',
+    'org.bom_supervise_flow',
   ]),
   _ToggleGroup('Inventory & Products', Icons.inventory_2_outlined, [
     'org.transfer_alert_skip_admin',

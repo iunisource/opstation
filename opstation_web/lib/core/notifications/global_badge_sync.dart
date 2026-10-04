@@ -60,6 +60,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'hr_leave_requests', // leavePendingCountProvider
     'payment_advices', // paPendingApprovalCountProvider
     'journal_entries', // jvPendingCountProvider (JV approval / supervision)
+    'bom_headers', // bomSupervisePendingProvider
   ];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -213,6 +214,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(leavePendingCountProvider);
     ref.invalidate(paPendingApprovalCountProvider);
     ref.invalidate(jvPendingCountProvider);
+    ref.invalidate(bomSupervisePendingProvider);
     _checkPoPing(); // ping admins if a new PO just landed
   }
 

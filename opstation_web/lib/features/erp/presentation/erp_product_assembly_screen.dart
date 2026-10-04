@@ -9,6 +9,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart' show bomSupervisePendingProvider;
 import 'product_lifecycle_view.dart';
 
 class _BomLine {
@@ -66,6 +67,14 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   List<_CostLine> _overheads = [];
   bool _saving = false;
 
+  // ── Supervision (org.bom_supervise_flow) — non-blocking check on new BOMs ──
+  bool _superviseFlow = false;
+  bool _canSupervise = false; // admin / master admin, or in org.bom_supervisor_users
+  String _supFilter = 'all';  // all | pending | supervised
+  bool _selectMode = false;
+  final Set<String> _sel = {};
+  bool _supBusy = false;
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isActive => _status == 'active';
 
@@ -73,7 +82,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   void initState() {
     super.initState();
     _components = [_BomLine()];
-    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadRates(); _loadBoms(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadProducts(); _loadRates(); _loadBoms(); _loadSuperviseCfg(); });
   }
   @override
   void dispose() {
@@ -145,6 +154,64 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           .select().eq('org_id', orgId).order('created_at', ascending: false).limit(300);
       if (mounted) setState(() { _boms = List<Map<String, dynamic>>.from(rows); _loadingList = false; });
     } catch (e) { if (mounted) setState(() => _loadingList = false); }
+  }
+
+  Future<void> _loadSuperviseCfg() async {
+    final orgId = _orgId;
+    if (orgId == null) { await Future.delayed(const Duration(milliseconds: 500)); if (mounted) _loadSuperviseCfg(); return; }
+    try {
+      final rows = await Supabase.instance.client.from('app_config').select('key,value')
+          .eq('org_id', orgId).inFilter('key', ['org.bom_supervise_flow', 'org.bom_supervisor_users']);
+      final m = {for (final r in rows as List) r['key'] as String: (r['value']?.toString() ?? '')};
+      final user = ref.read(currentUserProvider);
+      final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.superAdmin;
+      final extra = (m['org.bom_supervisor_users'] ?? '').split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+      if (mounted) setState(() {
+        _superviseFlow = m['org.bom_supervise_flow'] == 'true';
+        _canSupervise = isAdmin || (user != null && extra.contains(user.id));
+      });
+    } catch (_) {}
+  }
+
+  bool _isPendingBom(Map<String, dynamic> b) => b['supervised_at'] == null;
+
+  /// Mark BOMs as supervised (non-blocking). Only ones still pending are touched.
+  Future<void> _supervise(List<String> ids) async {
+    if (ids.isEmpty || !_canSupervise) return;
+    setState(() => _supBusy = true);
+    try {
+      final user = ref.read(currentUserProvider);
+      final now = DateTime.now().toUtc().toIso8601String();
+      await Supabase.instance.client.from('bom_headers').update({
+        'supervised_at': now, 'supervised_by': user?.id, 'supervised_by_name': user?.name,
+      }).inFilter('id', ids).filter('supervised_at', 'is', null);
+      _snack(ids.length == 1 ? 'BOM supervised' : '${ids.length} BOMs supervised');
+      _sel.clear();
+      _selectMode = false;
+      await _loadBoms();
+      if (_current != null) {
+        final fresh = _boms.where((b) => b['id'] == _current!['id']).toList();
+        if (fresh.isNotEmpty && mounted) setState(() => _current = fresh.first);
+      }
+      ref.invalidate(bomSupervisePendingProvider);
+    } catch (e) {
+      _snack(e.toString().contains('supervised_at') ? 'Run SQL 315 in Supabase first.' : 'Could not supervise: $e');
+    }
+    if (mounted) setState(() => _supBusy = false);
+  }
+
+  Future<void> _confirmSupervise(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(ids.length == 1 ? 'Supervise this BOM?' : 'Supervise ${ids.length} BOMs?'),
+      content: const Text('Records that you have checked the recipe. It does not change the BOM or production.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton.icon(onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Supervise')),
+      ],
+    ));
+    if (ok == true) await _supervise(ids);
   }
 
   void _newBom() {
@@ -340,6 +407,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       if (mounted) setState(() => _current = updated);
       _snack('BOM ' + code + ' saved');
       await _loadBoms();
+      if (wasNew) ref.invalidate(bomSupervisePendingProvider);
     } catch (e) { _snack('Save failed: ' + e.toString()); }
     if (mounted) setState(() => _saving = false);
   }
@@ -489,9 +557,15 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _listSearch.isEmpty ? _boms : _boms.where((b) {
+    final filtered = (_listSearch.isEmpty ? _boms : _boms.where((b) {
       return matchesQuery('${b['code'] ?? ''} ${b['name'] ?? ''} ${_prodLabel[b['product_id']] ?? ''}', _listSearch);
+    }).toList()).where((b) {
+      if (!_superviseFlow || _supFilter == 'all') return true;
+      return _supFilter == 'pending' ? _isPendingBom(b) : !_isPendingBom(b);
     }).toList();
+    final pendingCount = _boms.where(_isPendingBom).length;
+    final pendingShown = filtered.where(_isPendingBom).map((b) => b['id'] as String).toList();
+    final canBulk = _superviseFlow && _canSupervise;
 
     return Container(color: AppTheme.background, child: Row(children: [
       if (_drawerOpen) Container(width: 300,
@@ -509,24 +583,102 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search BOMs...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
                 onChanged: (v) => setState(() => _listSearch = v)),
+              if (_superviseFlow) ...[
+                const SizedBox(height: 8),
+                Row(children: [
+                  for (final f in const [('all', 'All'), ('pending', 'Pending'), ('supervised', 'Supervised')])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: ChoiceChip(
+                        label: Text(f.$1 == 'pending' && pendingCount > 0 ? '${f.$2} ($pendingCount)' : f.$2,
+                            style: TextStyle(fontSize: 10.5, fontWeight: _supFilter == f.$1 ? FontWeight.w700 : FontWeight.w500,
+                                color: _supFilter == f.$1 ? Colors.white : AppTheme.textPrimary)),
+                        selected: _supFilter == f.$1,
+                        showCheckmark: false,
+                        selectedColor: f.$1 == 'pending' ? Colors.orange.shade700 : AppTheme.primary,
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onSelected: (_) => setState(() => _supFilter = f.$1),
+                      ),
+                    ),
+                  const Spacer(),
+                  if (canBulk && pendingCount > 0)
+                    IconButton(
+                      tooltip: _selectMode ? 'Done selecting' : 'Select to supervise',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(_selectMode ? Icons.close : Icons.checklist, size: 18, color: AppTheme.primary),
+                      onPressed: () => setState(() { _selectMode = !_selectMode; _sel.clear(); }),
+                    ),
+                ]),
+                if (canBulk && _selectMode)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(children: [
+                      TextButton(
+                        style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+                        onPressed: pendingShown.isEmpty ? null : () => setState(() {
+                          final all = pendingShown.every(_sel.contains);
+                          if (all) { _sel.removeAll(pendingShown); } else { _sel.addAll(pendingShown); }
+                        }),
+                        child: Text(pendingShown.isNotEmpty && pendingShown.every(_sel.contains) ? 'Clear all' : 'Select all pending',
+                            style: const TextStyle(fontSize: 11)),
+                      ),
+                      const Spacer(),
+                      ElevatedButton.icon(
+                        icon: _supBusy
+                            ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : const Icon(Icons.verified_outlined, size: 14),
+                        label: Text('Supervise (${_sel.length})', style: const TextStyle(fontSize: 11)),
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), minimumSize: Size.zero),
+                        onPressed: (_sel.isEmpty || _supBusy) ? null : () => _confirmSupervise(_sel.toList()),
+                      ),
+                    ]),
+                  ),
+              ],
             ])),
           Expanded(child: _loadingList ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : filtered.isEmpty ? const Center(child: Text('No BOMs yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
                 final b = filtered[i]; final sel = _current?['id'] == b['id'];
                 final active = (b['status'] as String? ?? 'active') == 'active';
-                return InkWell(onTap: () => _loadBom(b), child: Container(
-                  color: sel ? AppTheme.primary.withOpacity(0.07) : null,
+                final pending = _superviseFlow && _isPendingBom(b);
+                final pickable = _selectMode && pending;
+                final picked = _sel.contains(b['id']);
+                return InkWell(
+                  onTap: pickable
+                      ? () => setState(() => picked ? _sel.remove(b['id']) : _sel.add(b['id'] as String))
+                      : () => _loadBom(b),
+                  child: Container(
+                  color: picked ? Colors.green.withOpacity(0.08) : (sel ? AppTheme.primary.withOpacity(0.07) : null),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  child: Row(children: [
+                    if (_selectMode) SizedBox(
+                      width: 26,
+                      child: pending
+                          ? Checkbox(value: picked, visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              onChanged: (v) => setState(() => v == true ? _sel.add(b['id'] as String) : _sel.remove(b['id'])))
+                          : const Icon(Icons.verified, size: 14, color: Colors.green),
+                    ),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
                       Expanded(child: Text(b['code'] as String? ?? '', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : AppTheme.textPrimary))),
                       if (!active) Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                         decoration: BoxDecoration(color: Colors.grey.withOpacity(0.15), borderRadius: BorderRadius.circular(3)),
                         child: const Text('Inactive', style: TextStyle(fontSize: 9, color: Colors.grey, fontWeight: FontWeight.w700))),
+                      if (_superviseFlow && !_selectMode) ...[
+                        const SizedBox(width: 4),
+                        pending
+                            ? Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.14), borderRadius: BorderRadius.circular(3)),
+                                child: Text('Pending', style: TextStyle(fontSize: 9, color: Colors.orange.shade800, fontWeight: FontWeight.w700)))
+                            : const Tooltip(message: 'Supervised', child: Icon(Icons.verified, size: 13, color: Colors.green)),
+                      ],
                     ]),
                     Text(_prodLabel[b['product_id']] ?? (b['name'] as String? ?? ''),
                       style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
+                  ])),
                   ]),
                 ));
               })),
@@ -556,6 +708,44 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                       title: (_current?['code'] as String? ?? _prodLabel[_fgId] ?? 'Product'));
                 },
               ),
+            if (_superviseFlow && _current != null) ...[
+              if (!_isPendingBom(_current!))
+                Tooltip(
+                  message: 'Supervised by ${_current!['supervised_by_name'] ?? '—'}'
+                      '${DateTime.tryParse('${_current!['supervised_at']}') == null ? '' : ' on ${DateFormat('d MMM y, h:mm a').format(DateTime.parse('${_current!['supervised_at']}').toLocal())}'}',
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.green.withOpacity(0.35))),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.verified, size: 14, color: Colors.green.shade700),
+                      const SizedBox(width: 4),
+                      Text('Supervised', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.green.shade800)),
+                    ]),
+                  ),
+                )
+              else if (_canSupervise)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: OutlinedButton.icon(
+                    icon: _supBusy
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Icon(Icons.verified_outlined, size: 16, color: Colors.green.shade700),
+                    label: Text('Supervise', style: TextStyle(color: Colors.green.shade800)),
+                    style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.green.shade400),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                    onPressed: _supBusy ? null : () => _confirmSupervise([_current!['id'] as String]),
+                  ),
+                )
+              else
+                Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(12)),
+                  child: Text('Awaiting supervision', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.orange.shade800)),
+                ),
+            ],
             if (_current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete'),
             if (_fgId != null) ...[
               const SizedBox(width: 8),

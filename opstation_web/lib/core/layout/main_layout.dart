@@ -523,6 +523,31 @@ final productSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// BOMs still awaiting supervision (org.bom_supervise_flow). Shown only to the
+// people who can supervise: admins / master admins + org.bom_supervisor_users.
+final bomSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfgRows = await client.from('app_config').select('key,value')
+        .eq('org_id', user.orgId!)
+        .inFilter('key', ['org.bom_supervise_flow', 'org.bom_supervisor_users']);
+    final cfgM = {for (final r in cfgRows as List) r['key'] as String: (r['value']?.toString() ?? '')};
+    if (cfgM['org.bom_supervise_flow'] != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin ||
+        user.role == WebUserRole.superAdmin;
+    final extraIds = (cfgM['org.bom_supervisor_users'] ?? '')
+        .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    if (!isAdmin && !extraIds.contains(user.id)) return 0;
+    final res = await client.from('bom_headers').select('id')
+        .eq('org_id', user.orgId!)
+        .filter('supervised_at', 'is', null);
+    return (res as List).length;
+  } catch (_) { return 0; }
+});
+
 // Count of Sales Invoices still awaiting admin supervision (non-blocking review
 // layer), gated by org.si_supervise_flow. Drives the Sales Invoice menu badge.
 final siSupervisePendingProvider = FutureProvider<int>((ref) async {
@@ -1109,6 +1134,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final sriSupervisePending = ref.watch(sriSupervisePendingProvider).valueOrNull ?? 0;
   final piSupervisePending = ref.watch(piSupervisePendingProvider).valueOrNull ?? 0;
   final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
+  final bomSupervisePending = ref.watch(bomSupervisePendingProvider).valueOrNull ?? 0;
   final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
   final processorOverduePending = ref.watch(processorOverdueCountProvider).valueOrNull ?? 0;
   final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
@@ -1265,7 +1291,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/manufacturing/job-kiosk')) _menuItem(context, 'Job Kiosk', Icons.qr_code_scanner_outlined, '/manufacturing/job-kiosk', location),
     ];
     final mfgVoucherItems = <Widget>[
-      if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)', Icons.account_tree_outlined, '/manufacturing/product-assembly', location),
+      if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)', Icons.account_tree_outlined, '/manufacturing/product-assembly', location, badge: bomSupervisePending),
       if (show('/manufacturing/production-voucher')) _menuItem(context, 'Production Voucher', Icons.precision_manufacturing_outlined, '/manufacturing/production-voucher', location),
       if (show('/manufacturing/damage-stock-voucher')) _menuItem(context, 'Damage Stock Voucher', Icons.report_gmailerrorred_outlined, '/manufacturing/damage-stock-voucher', location),
       if (show('/manufacturing/production-inverse-voucher')) _menuItem(context, 'Production Inverse Voucher', Icons.undo_outlined, '/manufacturing/production-inverse-voucher', location),
@@ -1388,7 +1414,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station', '/manufacturing/job-kiosk',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary', '/erp/fg-without-bom'],
-          _trimDividers(manufacturingItems), badge: jobAckPending),
+          _trimDividers(manufacturingItems), badge: jobAckPending + bomSupervisePending),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
           ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/payment-advice', '/financials/cash-book'],
