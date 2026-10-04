@@ -44,6 +44,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   String _source = 'purchase'; // purchase | selling | bom
   String _method = 'markup';   // markup (× (1+m)) | margin (÷ (1−m))
   String _title = 'Price List'; // printed heading: 'Price List' | 'Cost Sheet'
+  final Map<String, double> _override = {}; // product_id -> manually entered rate
   final _qty = NumberFormat('#,##0.##');
 
   @override
@@ -190,7 +191,11 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     }
   }
 
-  double _rate(_P p) {
+  /// Rate printed / exported: a manual override if one was entered, else the
+  /// calculated rate.
+  double _rate(_P p) => _override[p.id] ?? _calcRate(p);
+
+  double _calcRate(_P p) {
     final b = _base(p);
     final m = _margin / 100;
     if (_method == 'margin') {
@@ -198,6 +203,50 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       return m >= 1 ? b : b / (1 - m);
     }
     return b * (1 + m); // markup on cost
+  }
+
+  Future<void> _editRate(_P p) async {
+    final calc = _calcRate(p);
+    final ctrl = TextEditingController(text: _rate(p).toStringAsFixed(2));
+    ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(p.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Calculated rate: ${_qty.format(calc)}  ($_sourceLabel, ${_qty.format(_margin)}% $_methodLabel)',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Rate', isDense: true, border: OutlineInputBorder()),
+            onSubmitted: (_) => Navigator.pop(ctx, 'save'),
+          ),
+        ]),
+        actions: [
+          if (_override.containsKey(p.id))
+            TextButton(onPressed: () => Navigator.pop(ctx, 'reset'), child: const Text('Use calculated')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (!mounted || res == null) return;
+    setState(() {
+      if (res == 'reset') {
+        _override.remove(p.id);
+      } else {
+        final v = double.tryParse(ctrl.text.trim().replaceAll(',', ''));
+        if (v == null || v < 0) return;
+        if ((v - calc).abs() < 0.005) {
+          _override.remove(p.id); // same as calculated — no need to pin it
+        } else {
+          _override[p.id] = v;
+        }
+      }
+    });
   }
 
   String get _sourceLabel =>
@@ -525,8 +574,18 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
               ]),
             ),
             const SizedBox(height: 10),
-            Text('${rows.length} product(s)  ·  Rate = $_sourceLabel, ${_qty.format(_margin)}% ($_methodLabel)',
-                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, children: [
+              Text('${rows.length} product(s)  ·  Rate = $_sourceLabel, ${_qty.format(_margin)}% ($_methodLabel)'
+                  '  ·  tap a rate to edit it',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              if (_override.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () => setState(_override.clear),
+                  icon: const Icon(Icons.restart_alt, size: 15),
+                  label: Text('Reset ${_override.length} edited rate${_override.length == 1 ? '' : 's'}', style: const TextStyle(fontSize: 12)),
+                  style: TextButton.styleFrom(foregroundColor: const Color(0xFFB45309), visualDensity: VisualDensity.compact),
+                ),
+            ]),
             const SizedBox(height: 8),
             Expanded(child: _preview(rows, mobile)),
           ],
@@ -550,7 +609,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                   SizedBox(width: 80, child: Text('SKU', style: _hs)),
                   Expanded(child: Text('Product Name', style: _hs)),
                   SizedBox(width: 60, child: Text('UOM', style: _hs, textAlign: TextAlign.center)),
-                  SizedBox(width: 90, child: Text('Rate', style: _hs, textAlign: TextAlign.right)),
+                  SizedBox(width: 110, child: Text('Rate', style: _hs, textAlign: TextAlign.right)),
                 ]),
               ),
               const Divider(height: 1),
@@ -566,7 +625,29 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       SizedBox(width: 80, child: Text(p.sku, style: const TextStyle(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
                       Expanded(child: Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis)),
                       SizedBox(width: 60, child: Text(p.uom, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.center)),
-                      SizedBox(width: 90, child: Text(_qty.format(_rate(p)), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700))),
+                      SizedBox(width: 110, child: Builder(builder: (_) {
+                        final edited = _override.containsKey(p.id);
+                        return InkWell(
+                          onTap: () => _editRate(p),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: edited ? const Color(0xFFFFF7E6) : null,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: edited ? const Color(0xFFF5C26B) : AppTheme.border),
+                            ),
+                            child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                              Icon(edited ? Icons.edit : Icons.edit_outlined, size: 11,
+                                  color: edited ? const Color(0xFFB45309) : AppTheme.textSecondary),
+                              const SizedBox(width: 4),
+                              Flexible(child: Text(_qty.format(_rate(p)), textAlign: TextAlign.right, overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700,
+                                      color: edited ? const Color(0xFF7C4A03) : AppTheme.textPrimary))),
+                            ]),
+                          ),
+                        );
+                      })),
                     ]),
                   );
                 },
