@@ -11,6 +11,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
+import 'product_timeline_view.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/utils/friendly_error.dart';
 
@@ -1687,6 +1688,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                         onPressed: () => _pushToPOS(context, p),
                                       );
                                     }),
+                                    IconButton(
+                                      icon: const Icon(Icons.timeline,
+                                          size: 18, color: AppTheme.textSecondary),
+                                      tooltip: 'Timeline — changes and events over time',
+                                      onPressed: () {
+                                        final orgId = ref.read(currentUserProvider)?.orgId;
+                                        if (orgId == null) return;
+                                        showProductTimeline(context, orgId: orgId,
+                                            product: Map<String, dynamic>.from(p as Map));
+                                      },
+                                    ),
                                     IconButton(
                                       icon: const Icon(Icons.qr_code_2,
                                           size: 18, color: AppTheme.primary),
