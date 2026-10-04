@@ -856,6 +856,20 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   }
 
   // ── Stage a product for editing before adding to bill ─────
+  /// Same item = same product in the same unit. Falls back to the catalogue id
+  /// for entries without a product link. (Comparing catalogue ids alone missed
+  /// lines restored from quotations / held bills, which carry no catalogue id.)
+  bool _sameItem(Map<String, dynamic> line, Map<String, dynamic> p) {
+    final pid = p['product_id'];
+    if (pid != null && line['product_id'] != null) {
+      return line['product_id'] == pid && line['uom_id'] == p['uom_id'];
+    }
+    final cat = p['id'] ?? p['pos_catalog_id'];
+    return cat != null && line['pos_catalog_id'] == cat;
+  }
+
+  int _cartIndexFor(Map<String, dynamic> p) => _cart.indexWhere((ci) => _sameItem(ci, p));
+
   void _stageProduct(Map<String, dynamic> product, {int? cartIndex}) {
     // Cost-price hard block: a product with no cost basis can't be sold (would
     // book zero/estimated COGS). Applies even when overselling is allowed.
@@ -872,7 +886,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     if (cartIndex == null && !_allowNoStock && pStock <= 0) { _playBadgeSound(); return; }
     // If already in cart and not explicitly editing, load that cart entry
     if (cartIndex == null) {
-      final existIdx = _cart.indexWhere((ci) => ci['pos_catalog_id'] == (product['id'] ?? product['pos_catalog_id']));
+      final existIdx = _cartIndexFor(product);
       if (existIdx >= 0) { _stageProduct(product, cartIndex: existIdx); return; }
     }
     setState(() {
@@ -919,6 +933,17 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final disc = _stagedDiscType == 'percent'
         ? rawDisc.clamp(0, 100).toDouble()
         : rawDisc.clamp(0, price * qty).toDouble();
+    // The line being edited is remembered by position; if lines above it were
+    // removed meanwhile, find it again by product rather than adding a duplicate.
+    if (_stagedCartIndex != null &&
+        (_stagedCartIndex! >= _cart.length || !_sameItem(_cart[_stagedCartIndex!], _stagedProduct!))) {
+      final again = _cartIndexFor(_stagedProduct!);
+      _stagedCartIndex = again >= 0 ? again : null;
+    } else if (_stagedCartIndex == null) {
+      // New pick, but the same item is already on the bill → update that line.
+      final again = _cartIndexFor(_stagedProduct!);
+      if (again >= 0) _stagedCartIndex = again;
+    }
     setState(() {
       if (_stagedCartIndex != null && _stagedCartIndex! < _cart.length) {
         _cart[_stagedCartIndex!]['quantity'] = qty;
@@ -1194,7 +1219,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   }
 
   void _addToCart(Map<String, dynamic> product) {
-    final existing = _cart.indexWhere((c) => c['pos_catalog_id'] == product['id']);
+    final existing = _cartIndexFor(product);
     setState(() {
       if (existing >= 0) {
         _cart[existing]['quantity'] = (_cart[existing]['quantity'] as double) + 1;
@@ -3033,7 +3058,7 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
     final List itemsList = rawItems is String
         ? (jsonDecode(rawItems) as List? ?? const [])
         : (rawItems as List? ?? const []);
-    final items = itemsList.map((i) {
+    final rawLines = itemsList.map((i) {
       final m = Map<String, dynamic>.from(i as Map);
       m['quantity'] = (m['quantity'] as num?)?.toDouble() ?? 1.0;
       m['unit_price'] = (m['unit_price'] as num?)?.toDouble() ?? 0.0;
@@ -3043,6 +3068,30 @@ ${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
       m['name'] = m['name'] as String? ?? '-';
       return m;
     }).toList();
+    // Combine repeated lines (same product, unit, rate and discount basis) so a
+    // quotation or hold that listed an item twice comes back as one line. The
+    // bill total is unchanged: percent discounts must match to combine, fixed
+    // (rupee) discounts are added together.
+    final items = <Map<String, dynamic>>[];
+    for (final m in rawLines) {
+      final pid = m['product_id'];
+      final hit = pid == null
+          ? -1
+          : items.indexWhere((x) =>
+              x['product_id'] == pid &&
+              x['uom_id'] == m['uom_id'] &&
+              (x['unit_price'] as double) == (m['unit_price'] as double) &&
+              x['discount_type'] == m['discount_type'] &&
+              (m['discount_type'] == 'fixed' || (x['discount'] as double) == (m['discount'] as double)));
+      if (hit < 0) {
+        items.add(m);
+        continue;
+      }
+      final x = items[hit];
+      x['quantity'] = (x['quantity'] as double) + (m['quantity'] as double);
+      if (m['discount_type'] == 'fixed') x['discount'] = (x['discount'] as double) + (m['discount'] as double);
+      x['pos_catalog_id'] ??= m['pos_catalog_id'];
+    }
     // Clamp restored values to what their widgets accept, or the DropdownButton
     // (order discount type) and SegmentedButton (payment) will assert → white screen.
     final odt = bill['order_discount_type'] as String?;

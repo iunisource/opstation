@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -60,6 +61,15 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   // Enables the Qty→Price→Discount→(reopen picker) Enter chain on each row.
   final Map<Map<String, dynamic>, Map<String, dynamic>> _lineCtl = {};
 
+  // Duplicate-product guard: picking a product that's already on the quotation
+  // doesn't add a second line — it jumps to the existing one, highlights it and
+  // shows a banner under the lines.
+  final _linesScroll = ScrollController();
+  Map<String, dynamic>? _dupLine;
+  String? _dupMsg;
+  Timer? _dupTimer;
+  static const double _lineRowH = 45; // approx row height incl. divider, for jumping
+
   Map<String, dynamic> _ctl(Map<String, dynamic> l) {
     return _lineCtl.putIfAbsent(l, () => {
           'qtyCtrl': TextEditingController(text: (l['quantity'] as num?)?.toString() ?? '1'),
@@ -103,6 +113,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
 
   @override
   void dispose() {
+    _dupTimer?.cancel();
+    _linesScroll.dispose();
     _notesCtrl.dispose();
     _globalDiscCtrl.dispose();
     for (final c in _lineCtl.values) {
@@ -319,9 +331,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     } catch (_) {}
   }
 
-  void _closeDoc() => setState(() { _clearAllLineCtl(); _doc = null; _lines = []; });
+  void _closeDoc() => setState(() { _clearAllLineCtl(); _doc = null; _lines = []; _dupLine = null; _dupMsg = null; });
 
   void _pickProduct(int idx, Map<String, dynamic> p) {
+    if (_goToDuplicate(p, exceptIdx: idx)) return;
     setState(() {
       final l = _lines[idx];
       l['product_id'] = p['id'];
@@ -1129,10 +1142,12 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         ),
         const Divider(height: 1),
         Expanded(child: ListView.separated(
+          controller: _linesScroll,
           itemCount: _lines.length,
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (_, i) => _lineRow(i),
         )),
+        _dupBanner(),
         const Divider(height: 1),
         Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: Row(children: [
           TextButton.icon(
@@ -1227,7 +1242,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     final c = _ctl(l);
     final prod = _products.firstWhere((p) => p['id'] == l['product_id'], orElse: () => {});
     final uomAbbr = prod.isEmpty ? '-' : ((prod['uoms']?['abbreviation'] as String?) ?? (prod['uoms']?['name'] as String?) ?? '-');
-    return Padding(
+    final flagged = identical(_dupLine, l);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      color: flagged ? const Color(0xFFFFF1D6) : Colors.transparent,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(children: [
         SizedBox(width: 34, child: Text('${i + 1}', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
@@ -1295,11 +1313,78 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         SizedBox(width: 40, child: IconButton(
           icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
           visualDensity: VisualDensity.compact,
-          onPressed: () => setState(() { _disposeLineCtl(l); _lines.removeAt(i); }),
+          onPressed: () => setState(() {
+            if (identical(_dupLine, l)) { _dupLine = null; _dupMsg = null; }
+            _disposeLineCtl(l);
+            _lines.removeAt(i);
+          }),
         )),
       ]),
     );
   }
+
+  /// If [p] is already on the quotation (other than line [exceptIdx]), don't add
+  /// it again: scroll to that line, highlight it, focus its Qty and show a
+  /// banner below the lines. Returns true when a duplicate was found.
+  bool _goToDuplicate(Map<String, dynamic> p, {int? exceptIdx}) {
+    final pid = p['id'];
+    if (pid == null) return false;
+    final idx = _lines.indexWhere((l) => l['product_id'] == pid);
+    if (idx < 0 || idx == exceptIdx) return false;
+    final line = _lines[idx];
+    _dupTimer?.cancel();
+    setState(() {
+      _dupLine = line;
+      _dupMsg = '${p['name'] ?? 'This product'} is already on line ${idx + 1}. '
+          'Taken you there — update its quantity instead of adding it again.';
+    });
+    _dupTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() { _dupLine = null; _dupMsg = null; });
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      if (_linesScroll.hasClients) {
+        final pos = _linesScroll.position;
+        // Centre the row in the visible list.
+        final target = (idx * _lineRowH - pos.viewportDimension / 2 + _lineRowH / 2)
+            .clamp(0.0, pos.maxScrollExtent).toDouble();
+        await _linesScroll.animateTo(target, duration: const Duration(milliseconds: 280), curve: Curves.easeOutCubic);
+      }
+      if (!mounted) return;
+      final c = _ctl(line);
+      final qc = c['qtyCtrl'] as TextEditingController;
+      qc.selection = TextSelection(baseOffset: 0, extentOffset: qc.text.length);
+      (c['qtyFocus'] as FocusNode).requestFocus();
+    });
+    return true;
+  }
+
+  Widget _dupBanner() => AnimatedSize(
+        duration: const Duration(milliseconds: 180),
+        child: _dupMsg == null
+            ? const SizedBox(width: double.infinity)
+            : Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+                padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7E6),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFF5C26B)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.info_outline, size: 18, color: Color(0xFFB45309)),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(_dupMsg!, style: const TextStyle(fontSize: 12.5, color: Color(0xFF7C4A03), fontWeight: FontWeight.w600))),
+                  IconButton(
+                    tooltip: 'Dismiss',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close, size: 16, color: Color(0xFFB45309)),
+                    onPressed: () { _dupTimer?.cancel(); setState(() { _dupLine = null; _dupMsg = null; }); },
+                  ),
+                ]),
+              ),
+      );
 
   // Open the shared product picker (keyboard nav) for an existing line row.
   Future<void> _productPicker(int idx) async {
@@ -1314,6 +1399,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   Future<void> _addLineAndPick() async {
     final picked = await pickProduct(context, _products, title: 'Add product to quotation');
     if (picked == null || picked.isEmpty) return; // × / Esc ends the loop
+    if (_goToDuplicate(picked)) return; // already on the quotation → go to that line
     final line = {
       'product_id': picked['id'],
       'item_name': picked['name'],
