@@ -56,6 +56,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
   final Map<String, List<String>> _chartStation = {};                // emp -> standing stations (first = main)
   final Map<String, List<Map<String, dynamic>>> _chartDuties = {};   // emp -> duties
   bool _chartMissing = false;
+  String _chartNotes = '';                                           // general notes (SQL 323)
 
   final _dk = DateFormat('yyyy-MM-dd');
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -582,6 +583,44 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     } catch (_) {
       _chartMissing = true;
     }
+    try {
+      final n = await _c.from('duty_chart_notes').select('notes').eq('org_id', orgId).maybeSingle();
+      _chartNotes = '${n?['notes'] ?? ''}';
+    } catch (_) {}
+  }
+
+  Future<void> _editNotes() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final ctrl = TextEditingController(text: _chartNotes);
+    final v = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Duty Chart notes', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+      content: SizedBox(width: 560, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('General instructions for everyone. Printed below the chart.',
+            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: ctrl, autofocus: true, minLines: 6, maxLines: 14,
+          decoration: const InputDecoration(
+            hintText: 'e.g.\n• All staff are responsible for 5S of their own area\n• Shift change at 2:00 pm\n• Report machine faults to the supervisor immediately',
+            border: OutlineInputBorder()),
+        ),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Save')),
+      ],
+    ));
+    if (v == null) return;
+    final text = v.trim();
+    try {
+      await _c.from('duty_chart_notes').upsert({'org_id': orgId, 'notes': text,
+          'updated_by': ref.read(currentUserProvider)?.id, 'updated_at': DateTime.now().toUtc().toIso8601String()}, onConflict: 'org_id');
+      setState(() => _chartNotes = text);
+      _snack(text.isEmpty ? 'Notes cleared' : 'Notes saved');
+    } catch (e) {
+      _snack(e.toString().contains('duty_chart_notes') ? 'Run SQL 323 in Supabase first.' : 'Could not save: $e');
+    }
   }
 
   List<DropdownMenuItem<String?>> _stationItems(String? current, String noneLabel) => [
@@ -981,6 +1020,12 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
               showSelectedIcon: false,
               onSelectionChanged: (v) => setState(() => _chartMode = v.first),
             ),
+          if (_view == 'chart')
+            OutlinedButton.icon(
+              onPressed: _editNotes,
+              icon: Icon(_chartNotes.isEmpty ? Icons.sticky_note_2_outlined : Icons.sticky_note_2, size: 16),
+              label: Text(_chartNotes.isEmpty ? 'Notes' : 'Notes ✓'),
+            ),
           OutlinedButton.icon(onPressed: _manageMembers, icon: const Icon(Icons.groups_outlined, size: 16),
               label: Text('Members (${_employees.where((e) => !_hidden.contains('${e['id']}')).length}/${_employees.length})')),
           OutlinedButton.icon(onPressed: _manageStations, icon: const Icon(Icons.factory_outlined, size: 16), label: Text('Stations (${_stations.where((s) => s['is_active'] != false).length})')),
@@ -1358,58 +1403,83 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     _sendToPrinter(b.toString());
   }
 
+  /// Duty Chart print: a grid — one row per person, one column per station,
+  /// a coloured ✓ where the person stands; duties in the last column.
   void _printChart() {
     String esc(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final emps = _shownEmployees;
-    final groups = <(Map<String, dynamic>?, List<Map<String, dynamic>>)>[
-      for (final s in _stations) (s, emps.where((e) => (_chartStation['${e['id']}'] ?? const <String>[]).contains(s['id'])).toList()),
-      (null, emps.where((e) => !(_chartStation['${e['id']}'] ?? const <String>[]).any((sid) => _station(sid) != null)).toList()),
-    ].where((g) => g.$2.isNotEmpty).toList();
+    List<String> mine(Map<String, dynamic> e) => _chartStation['${e['id']}'] ?? const <String>[];
+    final cols = [
+      for (final s in _stations)
+        if (s['is_active'] != false || emps.any((e) => mine(e).contains(s['id']))) s,
+    ];
+    final landscape = cols.length > 5;
     final b = StringBuffer();
     b.write('<!doctype html><html><head><meta charset="utf-8"><title>Duty Chart</title><style>'
-        '@page{size:A4 portrait;margin:12mm}'
+        '@page{size:A4 ${landscape ? 'landscape' : 'portrait'};margin:10mm}'
         '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
         'body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;margin:0}'
         '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1e3a8a;padding-bottom:6px;margin-bottom:12px}'
         'h1{font-size:20px;margin:0;color:#1e3a8a}.org{font-size:10px;letter-spacing:1.3px;text-transform:uppercase;color:#475569;font-weight:700}'
         '.per{font-size:11px;color:#475569}'
-        'table{border-collapse:collapse;width:100%;font-size:11px;margin-bottom:12px}thead{display:table-header-group}'
-        'th{background:#1e3a8a;color:#fff;padding:6px;text-align:left;font-size:10px}td{border:1px solid #e2e8f0;padding:6px;vertical-align:top}'
-        'tr{break-inside:avoid}td.n{font-weight:700;width:30%}td.n small{display:block;font-weight:400;color:#64748b}'
-        'ul{margin:0;padding-left:16px}li{margin:1px 0}.tg{font-size:9px;font-weight:700;padding:0 4px;border-radius:3px;margin-left:4px}'
-        '.sec{font-size:13px;font-weight:800;margin:6px 0 4px;padding-left:8px;border-left:5px solid}'
+        'table{border-collapse:collapse;width:100%;font-size:10.5px;table-layout:fixed}thead{display:table-header-group}'
+        'th{background:#1e3a8a;color:#fff;padding:6px 4px;font-size:9.5px;font-weight:700;vertical-align:bottom;word-wrap:break-word}'
+        'th.st{text-align:center;border-top:5px solid}'
+        'td{border:1px solid #cbd5e1;padding:5px 6px;vertical-align:middle}'
+        'tr{break-inside:avoid}tbody tr:nth-child(even) td.n,tbody tr:nth-child(even) td.d{background:#f8fafc}'
+        'td.n{font-weight:700}td.n small{display:block;font-weight:400;color:#64748b;font-size:9px}'
+        'td.c{text-align:center;font-size:14px;font-weight:900;color:#fff;padding:3px}'
+        'td.d{font-size:9.5px;color:#334155}td.d div{margin:1px 0}'
+        'tfoot td{font-weight:800;background:#eef2ff;text-align:center;font-size:10px}'
         '.sig{display:flex;justify-content:space-between;margin-top:36px;font-size:10px;color:#475569}.sig div{border-top:1px solid #94a3b8;padding-top:4px;width:28%;text-align:center}'
+        '.notes{margin-top:14px;border:1px solid #cbd5e1;border-left:5px solid #1e3a8a;border-radius:4px;padding:8px 10px;break-inside:avoid}'
+        '.nh{font-size:11px;font-weight:800;color:#1e3a8a;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}.nb{font-size:11px;line-height:1.5}'
         '.foot{margin-top:10px;font-size:9px;color:#64748b}'
         '</style></head><body>');
     b.write('<div class="hd"><div><div class="org">${esc(org)}</div><h1>Duty Chart</h1></div>'
-        '<div class="per">Standing duties · ${emps.length} people</div></div>');
-    for (final g in groups) {
-      final col = g.$1 == null ? '#94a3b8' : '${g.$1!['color'] ?? '#2F6FED'}';
-      b.write('<div class="sec" style="border-color:$col">${esc(g.$1 == null ? 'No station' : '${g.$1!['name']}')} '
-          '<span style="color:#64748b;font-weight:600">(${g.$2.length})</span></div>');
-      b.write('<table><thead><tr><th>Name</th><th>Duties</th></tr></thead><tbody>');
-      for (final e in g.$2) {
-        final id = '${e['id']}';
-        final also = [for (final sid in _chartStation[id] ?? const <String>[]) if (sid != g.$1?['id'] && _station(sid) != null) '${_station(sid)!['name']}'];
-        final sub = [e['employee_code'], e['designation'], if (also.isNotEmpty) 'also: ${also.join(', ')}'].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
-        b.write('<tr><td class="n">${esc('${e['full_name'] ?? ''}')}${sub.isEmpty ? '' : '<small>${esc(sub)}</small>'}</td><td>');
-        final ds = _chartDuties[id] ?? const <Map<String, dynamic>>[];
-        if (ds.isEmpty) {
-          b.write('<span style="color:#94a3b8">—</span>');
+        '<div class="per">Standing duties · ${emps.length} people · ${cols.length} stations</div></div>');
+    final hasDuties = emps.any((e) => (_chartDuties['${e['id']}'] ?? const []).isNotEmpty);
+    // widths: name 22%, duties 30% (if any), stations share the rest
+    final nameW = 22.0, dutyW = hasDuties ? 30.0 : 0.0;
+    final stW = cols.isEmpty ? 0.0 : (100 - nameW - dutyW) / cols.length;
+    b.write('<table><colgroup><col style="width:$nameW%">');
+    for (var i = 0; i < cols.length; i++) { b.write('<col style="width:${stW.toStringAsFixed(2)}%">'); }
+    if (hasDuties) b.write('<col style="width:$dutyW%">');
+    b.write('</colgroup><thead><tr><th style="text-align:left">Name</th>');
+    for (final s in cols) {
+      b.write('<th class="st" style="border-top-color:${s['color'] ?? '#2F6FED'}">${esc('${s['name']}')}</th>');
+    }
+    if (hasDuties) b.write('<th style="text-align:left">Duties</th>');
+    b.write('</tr></thead><tbody>');
+    for (final e in emps) {
+      final id = '${e['id']}';
+      final sub = [e['employee_code'], e['designation']].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
+      b.write('<tr><td class="n">${esc('${e['full_name'] ?? ''}')}${sub.isEmpty ? '' : '<small>${esc(sub)}</small>'}</td>');
+      for (final s in cols) {
+        if (mine(e).contains(s['id'])) {
+          b.write('<td class="c" style="background:${s['color'] ?? '#2F6FED'}">&#10003;</td>');
         } else {
-          b.write('<ul>');
-          for (final d in ds) {
-            final mine = _chartStation[id] ?? const <String>[];
-            final ts = d['station_id'] != null && (mine.length > 1 || !mine.contains(d['station_id'])) ? _station(d['station_id'] as String?) : null;
-            final tc = ts == null ? '' : '${ts['color'] ?? '#2F6FED'}';
-            b.write('<li>${esc('${d['duty'] ?? ''}')}${ts == null ? '' : '<span class="tg" style="background:${tc}22;color:$tc">${esc('${ts['name']}')}</span>'}</li>');
-          }
-          b.write('</ul>');
+          b.write('<td></td>');
         }
-        b.write('</td></tr>');
       }
-      b.write('</tbody></table>');
+      if (hasDuties) {
+        final ds = _chartDuties[id] ?? const <Map<String, dynamic>>[];
+        b.write('<td class="d">');
+        for (final d in ds) {
+          final ts = d['station_id'] == null ? null : _station(d['station_id'] as String?);
+          b.write('<div>• ${esc('${d['duty'] ?? ''}')}${ts == null ? '' : ' <b style="color:${ts['color'] ?? '#2F6FED'}">(${esc('${ts['name']}')})</b>'}</div>');
+        }
+        b.write('</td>');
+      }
+      b.write('</tr>');
+    }
+    b.write('</tbody><tfoot><tr><td style="text-align:left">Total</td>');
+    for (final s in cols) { b.write('<td>${emps.where((e) => mine(e).contains(s['id'])).length}</td>'); }
+    if (hasDuties) b.write('<td></td>');
+    b.write('</tr></tfoot></table>');
+    if (_chartNotes.trim().isNotEmpty) {
+      b.write('<div class="notes"><div class="nh">Notes</div><div class="nb">${esc(_chartNotes.trim()).replaceAll('\n', '<br>')}</div></div>');
     }
     b.write('<div class="sig"><div>Prepared by</div><div>Production Manager</div><div>Approved by</div></div>'
         '<div class="foot">Printed ${DateFormat('d MMM y, h:mm a').format(DateTime.now())}</div></body></html>');
