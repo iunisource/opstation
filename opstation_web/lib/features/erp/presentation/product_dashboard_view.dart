@@ -136,9 +136,9 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
 
     Future<void> loadPurchases() async {
       try {
+        // 1) Purchase invoices (priced).
         final items = List<Map<String, dynamic>>.from(await _c.from('purchase_invoice_items')
             .select('invoice_id, qty_received, unit_cost, discount, line_total').eq('product_id', id) as List);
-        if (items.isEmpty) return;
         final invIds = {for (final i in items) '${i['invoice_id']}'}.toList();
         final invs = <String, Map<String, dynamic>>{};
         for (var k = 0; k < invIds.length; k += 150) {
@@ -147,11 +147,42 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
               .inFilter('id', invIds.sublist(k, (k + 150).clamp(0, invIds.length)));
           for (final r in rows as List) { invs['${r['id']}'] = Map<String, dynamic>.from(r as Map); }
         }
-        final supIds = {for (final v in invs.values) if (v['supplier_id'] != null) '${v['supplier_id']}'}.toList();
+        // 2) GRNs received but not (yet) invoiced — e.g. consignment stock or a
+        //    pending invoice. They moved stock, so they belong in the history.
+        final grnItems = List<Map<String, dynamic>>.from(await _c.from('purchase_grn_items')
+            .select('grn_id, qty_received').eq('product_id', id) as List);
+        final grnIds = {for (final g in grnItems) '${g['grn_id']}'}.toList();
+        final grns = <String, Map<String, dynamic>>{};
+        final invoicedGrn = <String>{};
+        for (var k = 0; k < grnIds.length; k += 150) {
+          final part = grnIds.sublist(k, (k + 150).clamp(0, grnIds.length));
+          final rows = await _c.from('purchase_grns')
+              .select('id, voucher_number, voucher_date, supplier_id, branch_id, is_voided, status')
+              .inFilter('id', part);
+          for (final r in rows as List) { grns['${r['id']}'] = Map<String, dynamic>.from(r as Map); }
+          final pis = await _c.from('purchase_invoices').select('grn_id, is_voided').inFilter('grn_id', part);
+          for (final r in pis as List) { if (r['is_voided'] != true) invoicedGrn.add('${r['grn_id']}'); }
+        }
+        final supIds = {
+          for (final v in invs.values) if (v['supplier_id'] != null) '${v['supplier_id']}',
+          for (final v in grns.values) if (v['supplier_id'] != null) '${v['supplier_id']}',
+        }.toList();
         final sup = <String, String>{};
         if (supIds.isNotEmpty) {
           final rows = await _c.from('suppliers').select('id, name').inFilter('id', supIds);
           for (final r in rows as List) { sup['${r['id']}'] = '${r['name'] ?? ''}'; }
+        }
+        for (final g in grnItems) {
+          final grn = grns['${g['grn_id']}'];
+          if (grn == null || grn['is_voided'] == true || invoicedGrn.contains('${grn['id']}')) continue;
+          final qty = _n(g['qty_received']);
+          if (qty <= 0) continue;
+          purchases.add({
+            'date': grn['voucher_date'], 'number': grn['voucher_number'],
+            'supplier': sup['${grn['supplier_id']}'] ?? '—',
+            'branch': _branchName['${grn['branch_id']}'] ?? '',
+            'qty': qty, 'grn': true, 'posted': '${grn['status'] ?? ''}' != 'draft',
+          });
         }
         for (final i in items) {
           final inv = invs['${i['invoice_id']}'];
@@ -388,7 +419,8 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
     final p = _sel!;
     final sell = _n(p['selling_price']);
     final cost = _n(p['cost_price']);
-    final margin = sell > 0 ? (sell - cost) / sell * 100 : null;
+    // No cost price → margin is unknown, not 100%.
+    final margin = sell > 0 && cost > 0 ? (sell - cost) / sell * 100 : null;
     final totalStock = _stock.fold<double>(0, (s, r) => s + _n(r['quantity']));
     final low = _n(p['low_stock_limit']);
     final uom = (p['uoms'] is Map) ? '${p['uoms']['abbreviation'] ?? p['uoms']['name'] ?? ''}' : '';
@@ -435,11 +467,11 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
     final tiles = Wrap(spacing: 10, runSpacing: 10, children: [
       _tile('Sell price', money(sell)),
       _tile('Cost price', money(cost)),
-      _tile('Margin', margin == null ? '—' : '${margin.toStringAsFixed(1)}%',
+      _tile('Margin', margin == null ? '—' : '${margin.toStringAsFixed(1)}%', sub: cost <= 0 ? 'no cost price' : null,
           color: margin == null ? AppTheme.textPrimary : (margin < 0 ? AppTheme.danger : AppTheme.success)),
       _tile('On hand', _q(totalStock), sub: uom.isEmpty ? null : uom,
           color: low > 0 && totalStock <= low ? AppTheme.danger : AppTheme.textPrimary),
-      _tile('Stock value', money(totalStock * cost), sub: 'at cost'),
+      _tile('Stock value', cost > 0 ? money(totalStock * cost) : '—', sub: cost > 0 ? 'at cost' : 'no cost price'),
       _tile('Sold (90 days)', _q(_sold90), sub: uom.isEmpty ? null : uom),
     ]);
 
@@ -566,29 +598,46 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
   Widget _empty(String t) => Padding(padding: const EdgeInsets.symmetric(vertical: 18), child: Text(t, style: const TextStyle(color: AppTheme.textSecondary)));
 
   Widget _purchasesView() {
-    if (_purchases.isEmpty) return _empty('No purchase invoices for this product.');
+    if (_purchases.isEmpty) return _empty('No purchases or goods received for this product.');
+    final priced = _purchases.where((r) => r['grn'] != true).toList();
+    final unInvoiced = _purchases.where((r) => r['grn'] == true).toList();
     final qty = _purchases.fold<double>(0, (s, r) => s + _n(r['qty']));
-    final amt = _purchases.fold<double>(0, (s, r) => s + _n(r['total']));
-    final last = _purchases.first;
+    final pQty = priced.fold<double>(0, (s, r) => s + _n(r['qty']));
+    final amt = priced.fold<double>(0, (s, r) => s + _n(r['total']));
+    final last = priced.isEmpty ? null : priced.first;
     final bySup = <String, double>{};
     for (final r in _purchases) { bySup['${r['supplier']}'] = (bySup['${r['supplier']}'] ?? 0) + _n(r['qty']); }
     final top = (bySup.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first;
-    final nets = _purchases.map((r) => _n(r['net'])).where((v) => v > 0).toList();
+    final nets = priced.map((r) => _n(r['net'])).where((v) => v > 0).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Wrap(spacing: 10, runSpacing: 10, children: [
-        _tile('Last price', money(_n(last['net'])), sub: '${_date(last['date'])} · ${last['supplier']}'),
-        _tile('Average price', money(qty > 0 ? amt / qty : 0), sub: 'weighted'),
+        if (last != null) _tile('Last price', money(_n(last['net'])), sub: '${_date(last['date'])} · ${last['supplier']}'),
+        if (pQty > 0) _tile('Average price', money(amt / pQty), sub: 'weighted'),
         if (nets.isNotEmpty) _tile('Lowest / Highest', '${money(nets.reduce((a, b) => a < b ? a : b))} / ${money(nets.reduce((a, b) => a > b ? a : b))}'),
-        _tile('Total bought', _q(qty), sub: '${_purchases.length} invoices'),
+        _tile('Total received', _q(qty), sub: '${priced.length} invoice${priced.length == 1 ? '' : 's'}${unInvoiced.isEmpty ? '' : ' · ${unInvoiced.length} GRN not invoiced'}'),
         _tile('Main supplier', top.key, sub: '${_q(top.value)} units'),
       ]),
+      if (unInvoiced.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFCD34D))),
+          child: Text(
+            '${_q(unInvoiced.fold<double>(0, (s, r) => s + _n(r['qty'])))} received on GRN without a purchase invoice yet'
+            '${_sel?['is_consignment'] == true ? ' (consignment stock — invoiced later)' : ''}. These have no price until invoiced.',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF92400E), fontWeight: FontWeight.w600)),
+        ),
+      ],
       const SizedBox(height: 12),
       _table(
-        ['Date', 'Invoice', 'Supplier', 'Qty', 'Unit cost', 'Disc', 'Net price', 'Amount'],
+        ['Date', 'Document', 'Supplier', 'Qty', 'Unit cost', 'Disc', 'Net price', 'Amount'],
         [
           for (final r in _purchases)
-            [_date(r['date']), '${r['number'] ?? ''}${r['posted'] == true ? '' : ' (draft)'}', '${r['supplier']}',
-             _q(r['qty']), money(_n(r['unit'])), _n(r['disc']) == 0 ? '—' : _q(r['disc']), money(_n(r['net'])), money(_n(r['total']))],
+            r['grn'] == true
+                ? [_date(r['date']), '${r['number'] ?? ''} · GRN, not invoiced${r['posted'] == true ? '' : ' (draft)'}', '${r['supplier']}',
+                   _q(r['qty']), '—', '—', '—', '—']
+                : [_date(r['date']), '${r['number'] ?? ''}${r['posted'] == true ? '' : ' (draft)'}', '${r['supplier']}',
+                   _q(r['qty']), money(_n(r['unit'])), _n(r['disc']) == 0 ? '—' : _q(r['disc']), money(_n(r['net'])), money(_n(r['total']))],
         ],
         right: {3, 4, 5, 6, 7},
         flex: [3, 3, 5, 2, 3, 2, 3, 3],
