@@ -332,16 +332,32 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
         'status': 'draft', 'is_locked': false, 'created_by': ref.read(currentUserProvider)?.id,
       });
-      for (final si in srnItems) {
-        final pid = si['product_id'] as String;
-        final price = priceMap[pid] ?? 0;
-        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
-        await Supabase.instance.client.from('sales_return_invoice_items').insert({
-          'id': 'srii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'invoice_id': invId, 'srn_item_id': si['id'],
-          'product_id': pid, 'uom_id': si['uom_id'],
-          'quantity': si['quantity'], 'unit_price': price, 'discount': 0, 'line_total': qty * price,
-        });
+      // All lines in ONE insert: either every SRN line lands on the SRI or none
+      // does. (Line-by-line inserts could stop half way — e.g. 68 of 89 lines —
+      // and the "SRI already exists" guard then blocked a retry.)
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      var n = 0;
+      final lines = <Map<String, dynamic>>[
+        for (final si in srnItems)
+          {
+            'id': 'srii_${stamp}_${n++}',
+            'invoice_id': invId, 'srn_item_id': si['id'],
+            'product_id': si['product_id'], 'uom_id': si['uom_id'],
+            'quantity': si['quantity'], 'unit_price': priceMap[si['product_id']] ?? 0, 'discount': 0,
+            'line_total': ((si['quantity'] as num?)?.toDouble() ?? 0) * (priceMap[si['product_id']] ?? 0),
+          },
+      ];
+      try {
+        await Supabase.instance.client.from('sales_return_invoice_items').insert(lines);
+      } catch (e) {
+        // Roll back the empty header so the SRI can simply be generated again.
+        try { await Supabase.instance.client.from('sales_return_invoice_items').delete().eq('invoice_id', invId); } catch (_) {}
+        try { await Supabase.instance.client.from('sales_return_invoices').delete().eq('id', invId); } catch (_) {}
+        rethrow;
+      }
+      final got = await Supabase.instance.client.from('sales_return_invoice_items').select('id').eq('invoice_id', invId);
+      if ((got as List).length != srnItems.length) {
+        _showSnack('Warning: SRN has ${srnItems.length} lines but the SRI saved ${got.length}. Please report this.');
       }
       await _logAudit(invId, 'created', 'SRI $vNum from SRN ${srn['voucher_number']}');
       _showSnack('$vNum created — enter prices then issue');

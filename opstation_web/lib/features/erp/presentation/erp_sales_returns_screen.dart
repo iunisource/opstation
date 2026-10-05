@@ -291,17 +291,32 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         'subtotal': 0, 'discount_total': 0, 'grand_total': 0,
         'status': 'draft', 'is_locked': false, 'created_by': userId,
       });
-      for (final si in _items) {
-        final pid = si['product_id'] as String;
-        final prod = _products.firstWhere((p) => p['id'] == pid, orElse: () => const {});
-        final price = (prod['selling_price'] as num?)?.toDouble() ?? 0;
-        final qty = (si['quantity'] as num?)?.toDouble() ?? 0;
-        await Supabase.instance.client.from('sales_return_invoice_items').insert({
-          'id': 'srii_${DateTime.now().microsecondsSinceEpoch}_${pid.substring(0, 4)}',
-          'invoice_id': invId, 'srn_item_id': si['id'],
-          'product_id': pid, 'uom_id': si['uom_id'],
-          'quantity': si['quantity'], 'unit_price': price, 'discount': 0, 'line_total': qty * price,
-        });
+      // Read the SRN lines fresh from the database (not the on-screen list) and
+      // insert them all in ONE call: every line lands on the SRI or none does.
+      final srnLines = List<Map<String, dynamic>>.from(await Supabase.instance.client
+          .from('sales_return_items').select('*').eq('return_id', srnId));
+      final pids = [for (final si in srnLines) si['product_id'] as String];
+      final prods = pids.isEmpty ? <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(
+          await Supabase.instance.client.from('products').select('id,selling_price').inFilter('id', pids));
+      final priceMap = {for (final p in prods) p['id'] as String: (p['selling_price'] as num?)?.toDouble() ?? 0};
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      var n = 0;
+      final lines = <Map<String, dynamic>>[
+        for (final si in srnLines)
+          {
+            'id': 'srii_${stamp}_${n++}',
+            'invoice_id': invId, 'srn_item_id': si['id'],
+            'product_id': si['product_id'], 'uom_id': si['uom_id'],
+            'quantity': si['quantity'], 'unit_price': priceMap[si['product_id']] ?? 0, 'discount': 0,
+            'line_total': ((si['quantity'] as num?)?.toDouble() ?? 0) * (priceMap[si['product_id']] ?? 0),
+          },
+      ];
+      try {
+        await Supabase.instance.client.from('sales_return_invoice_items').insert(lines);
+      } catch (e) {
+        try { await Supabase.instance.client.from('sales_return_invoice_items').delete().eq('invoice_id', invId); } catch (_) {}
+        try { await Supabase.instance.client.from('sales_return_invoices').delete().eq('id', invId); } catch (_) {}
+        rethrow;
       }
       await _logAudit(srnId, 'invoiced', 'Draft SRI $vNum created — set prices in Sales Return Invoices tab');
       await Supabase.instance.client.from('voucher_audit_log').insert({
