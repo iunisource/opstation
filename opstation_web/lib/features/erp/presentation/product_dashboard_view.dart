@@ -145,7 +145,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
         final invs = <String, Map<String, dynamic>>{};
         for (var k = 0; k < invIds.length; k += 150) {
           final rows = await _c.from('purchase_invoices')
-              .select('id, voucher_number, voucher_date, supplier_id, branch_id, is_voided, is_locked, status')
+              .select('id, voucher_number, voucher_date, supplier_id, branch_id, is_voided, is_locked, status, grn_id')
               .inFilter('id', invIds.sublist(k, (k + 150).clamp(0, invIds.length)));
           for (final r in rows as List) { invs['${r['id']}'] = Map<String, dynamic>.from(r as Map); }
         }
@@ -162,8 +162,12 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
               .select('id, voucher_number, voucher_date, supplier_id, branch_id, is_voided, status')
               .inFilter('id', part);
           for (final r in rows as List) { grns['${r['id']}'] = Map<String, dynamic>.from(r as Map); }
-          final pis = await _c.from('purchase_invoices').select('grn_id, is_voided').inFilter('grn_id', part);
-          for (final r in pis as List) { if (r['is_voided'] != true) invoicedGrn.add('${r['grn_id']}'); }
+        }
+        // A GRN line counts as invoiced only if an active invoice of that GRN
+        // actually carries THIS product. (Consignment lines are left off the
+        // invoice, so the GRN having an invoice is not enough.)
+        for (final v in invs.values) {
+          if (v['is_voided'] != true && v['grn_id'] != null) invoicedGrn.add('${v['grn_id']}');
         }
         final supIds = {
           for (final v in invs.values) if (v['supplier_id'] != null) '${v['supplier_id']}',
