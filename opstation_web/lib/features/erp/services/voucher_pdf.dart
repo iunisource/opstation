@@ -662,62 +662,23 @@ class VoucherPdf {
 
         pw.SizedBox(height: 9),
 
-        // ── Meta grid ──────────────────────────────────────────────────
-        pw.Container(
-          padding: const pw.EdgeInsets.all(9),
-          decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
-          child: pw.Row(children: [
-            if (date != null) _metaCell('Date', date),
-            if (customerOrSupplier != null)
-              _metaCell(isPurchase ? 'Supplier' : 'Customer', customerOrSupplier,
-                  sub: (customerCode != null && customerCode.isNotEmpty)
-                      ? 'Code: $customerCode'
-                      : null),
-            if (branchName != null) _metaCell('Branch', branchName),
-            if (salespersonName != null) _metaCell('Salesperson', salespersonName),
-          ]),
+        // ── Party + document details ─────────────────────────────────────
+        // One framed block: who it is for (left) and the document's facts
+        // (right, label/value rows). Replaces the three stacked boxes.
+        _partyAndDetails(
+          isPurchase: isPurchase,
+          party: customerOrSupplier,
+          partyCode: customerCode,
+          address: customerAddress,
+          contact: customerContact,
+          phone: customerPhone,
+          details: [
+            if (date != null) MapEntry('Date', date),
+            if (branchName != null) MapEntry('Branch', branchName),
+            if (salespersonName != null) MapEntry('Salesperson', salespersonName),
+            ...?relatedRefs?.entries,
+          ],
         ),
-
-        // ── Related references (SO # in DO, SO+DO in SI) ────────────────
-        if (relatedRefs != null && relatedRefs.isNotEmpty) ...[
-          pw.SizedBox(height: 6),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(8),
-            decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
-            child: pw.Row(children: [
-              for (final e in relatedRefs.entries) _metaCell(e.key, e.value),
-            ]),
-          ),
-        ],
-
-        // ── Customer details (address / contact / phone) ────────────────
-        if (customerAddress != null || customerContact != null || customerPhone != null) ...[
-          pw.SizedBox(height: 6),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(8),
-            decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
-            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(isPurchase ? 'SUPPLIER DETAILS' : 'BILL TO',
-                  style: pw.TextStyle(fontSize: 8, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 0.8)),
-              pw.SizedBox(height: 4),
-              if (customerAddress != null && customerAddress.isNotEmpty)
-                pw.Text(customerAddress, style: pw.TextStyle(fontSize: 11)),
-              if ((customerContact != null && customerContact.isNotEmpty) ||
-                  (customerPhone != null && customerPhone.isNotEmpty)) ...[
-                pw.SizedBox(height: 3),
-                pw.Row(children: [
-                  if (customerContact != null && customerContact.isNotEmpty)
-                    pw.Text('Attn: $customerContact', style: pw.TextStyle(fontSize: 10, color: _muted)),
-                  if (customerContact != null && customerContact.isNotEmpty &&
-                      customerPhone != null && customerPhone.isNotEmpty)
-                    pw.Text('  ·  ', style: pw.TextStyle(fontSize: 10, color: _muted)),
-                  if (customerPhone != null && customerPhone.isNotEmpty)
-                    pw.Text('Ph: $customerPhone', style: pw.TextStyle(fontSize: 10, color: _muted)),
-                ]),
-              ],
-            ]),
-          ),
-        ],
 
         if (remarks != null && remarks.isNotEmpty) ...[
           pw.SizedBox(height: 6),
@@ -854,6 +815,85 @@ class VoucherPdf {
             ]),
           ),
         ]),
+      ),
+    );
+  }
+
+  static pw.Widget _partyAndDetails({
+    required bool isPurchase,
+    String? party,
+    String? partyCode,
+    String? address,
+    String? contact,
+    String? phone,
+    required List<MapEntry<String, String>> details,
+  }) {
+    bool has(String? v) => v != null && v.trim().isNotEmpty;
+    pw.Widget caption(String t) => pw.Row(children: [
+          pw.Container(width: 3, height: 9, color: _accent),
+          pw.SizedBox(width: 5),
+          pw.Text(t, style: pw.TextStyle(fontSize: 7.5, color: _muted, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
+        ]);
+
+    final detailsCol = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      caption(isPurchase ? 'DOCUMENT' : 'INVOICE DETAILS'),
+      pw.SizedBox(height: 5),
+      for (var i = 0; i < details.length; i++)
+        pw.Container(
+          padding: const pw.EdgeInsets.symmetric(vertical: 3.5),
+          decoration: i == details.length - 1
+              ? null
+              : const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: _border, width: 0.6))),
+          child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            pw.SizedBox(width: 78, child: pw.Text(details[i].key, style: pw.TextStyle(fontSize: 9, color: _muted))),
+            pw.Expanded(child: pw.Text(details[i].value, textAlign: pw.TextAlign.right,
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+          ]),
+        ),
+    ]);
+
+    // No customer/supplier (e.g. stock documents): details only, in a row.
+    if (!has(party)) {
+      if (details.isEmpty) return pw.SizedBox.shrink();
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(9),
+        decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
+        child: pw.Row(children: [for (final e in details) _metaCell(e.key, e.value)]),
+      );
+    }
+
+    final partyCol = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      caption(isPurchase ? 'SUPPLIER' : 'BILL TO'),
+      pw.SizedBox(height: 6),
+      pw.Text(party!, style: pw.TextStyle(fontSize: 13.5, fontWeight: pw.FontWeight.bold)),
+      if (has(partyCode)) ...[
+        pw.SizedBox(height: 2),
+        pw.Text('${isPurchase ? 'Supplier' : 'Customer'} code: $partyCode', style: pw.TextStyle(fontSize: 9, color: _muted)),
+      ],
+      if (has(address)) ...[
+        pw.SizedBox(height: 5),
+        pw.Text(address!, style: const pw.TextStyle(fontSize: 10, lineSpacing: 1.5)),
+      ],
+      if (has(contact) || has(phone)) ...[
+        pw.SizedBox(height: 4),
+        pw.Text([if (has(contact)) 'Attn: $contact', if (has(phone)) 'Ph: $phone'].join('   ·   '),
+            style: pw.TextStyle(fontSize: 9.5, color: _muted)),
+      ],
+    ]);
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(border: pw.Border.all(color: _border), borderRadius: pw.BorderRadius.circular(6)),
+      child: pw.Table(
+        border: const pw.TableBorder(verticalInside: pw.BorderSide(color: _border, width: 0.8)),
+        columnWidths: details.isEmpty
+            ? {0: const pw.FlexColumnWidth(1)}
+            : {0: const pw.FlexColumnWidth(11), 1: const pw.FlexColumnWidth(9)},
+        children: [
+          pw.TableRow(verticalAlignment: pw.TableCellVerticalAlignment.top, children: [
+            pw.Padding(padding: const pw.EdgeInsets.fromLTRB(11, 9, 11, 10), child: partyCol),
+            if (details.isNotEmpty) pw.Padding(padding: const pw.EdgeInsets.fromLTRB(11, 9, 11, 8), child: detailsCol),
+          ]),
+        ],
       ),
     );
   }

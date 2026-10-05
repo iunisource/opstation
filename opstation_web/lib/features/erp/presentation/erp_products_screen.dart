@@ -12,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/catalog_image_uploader.dart';
 import '../../auth/auth_controller.dart';
 import 'product_timeline_view.dart';
+import 'product_dashboard_view.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/utils/friendly_error.dart';
 
@@ -49,6 +50,24 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   bool _productSuperviseEnabled = false;           // org.product_supervise_flow
   bool _superviseFilter = false;                   // show only supervision-pending
   bool _noLowStockLimit = false;                   // show only products with no low-stock limit set
+  // Classic (table) or Modern (product dashboard). Remembered per browser.
+  bool _modern = () {
+    try { return html.window.localStorage['products_view'] == 'modern'; } catch (_) { return false; }
+  }();
+
+  void _setModern(bool v) {
+    setState(() => _modern = v);
+    try { html.window.localStorage['products_view'] = v ? 'modern' : 'classic'; } catch (_) {}
+  }
+
+  bool get _filtersActive => _posFilter != 'all' || _fMain != null || _fGroup != null || _fSub != null
+      || _superviseFilter || _noLowStockLimit;
+
+  void _clearFilters() {
+    _posFilter = 'all'; _fMain = null; _fGroup = null; _fSub = null;
+    _superviseFilter = false; _noLowStockLimit = false;
+    _runFilter();
+  }
 
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
@@ -887,6 +906,38 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     _load();
   }
 
+  /// Adds a classification value straight from the product form. It is saved
+  /// to Product Classifications (product_taxonomies) so it appears everywhere.
+  Future<bool> _addTaxonomy(String type, String label, String name) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null || name.trim().isEmpty) return false;
+    final exists = (_taxonomies[type] ?? []).any((t) => '${t['name']}'.trim().toLowerCase() == name.trim().toLowerCase());
+    if (exists) return true;
+    final row = {
+      'id': 'ptax_${DateTime.now().microsecondsSinceEpoch}',
+      'org_id': orgId,
+      'taxonomy_type': type,
+      'name': name.trim(),
+    };
+    try {
+      await Supabase.instance.client.from('product_taxonomies').insert(row);
+      if (mounted) {
+        setState(() {
+          final list = (_taxonomies[type] ??= []);
+          list.add(row);
+          list.sort((a, b) => '${a['name']}'.toLowerCase().compareTo('${b['name']}'.toLowerCase()));
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$label "${name.trim()}" added to Product Classifications')));
+      }
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('Could not add $label', e))));
+      }
+      return false;
+    }
+  }
+
   Future<void> _showDialog(BuildContext context, Map<String, dynamic>? product) async {
     final orgIdPre = ref.read(currentUserProvider)?.orgId;
     // Load existing branch allocation (inventory_stock) for this product (edit only).
@@ -936,6 +987,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         value: cur,
         items: [for (final n in names) <String, String>{'value': n, 'label': n}],
         onChanged: onChanged,
+        onCreate: (name) => _addTaxonomy(type, label, name),
       );
     }
 
@@ -1357,6 +1409,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             const Text('Products',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const Spacer(),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('Classic'), icon: Icon(Icons.table_rows_outlined, size: 16)),
+                ButtonSegment(value: true, label: Text('Modern'), icon: Icon(Icons.dashboard_outlined, size: 16)),
+              ],
+              selected: {_modern},
+              showSelectedIcon: false,
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+              onSelectionChanged: (v) => _setModern(v.first),
+            ),
+            const SizedBox(width: 8),
             OutlinedButton.icon(
               onPressed: _exportCsv,
               icon: const Icon(Icons.download, size: 18),
@@ -1375,6 +1438,27 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
               label: const Text('Add Product'),
             ),
           ]),
+          if (_modern) ...[
+            const SizedBox(height: 16),
+            Expanded(child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : ProductDashboardView(
+                    orgId: ref.read(currentUserProvider)?.orgId ?? '',
+                    products: _filtered,
+                    allProducts: _products,
+                    searchCtrl: _searchCtrl,
+                    posProductIds: _posProductIds,
+                    filtersActive: _filtersActive,
+                    onClearFilters: _clearFilters,
+                    onEdit: (p) => _showDialog(context, p),
+                    onPrintLabel: (p) => _printBarcodeLabels([p]),
+                    onTimeline: (p) {
+                      final org = ref.read(currentUserProvider)?.orgId;
+                      if (org != null) showProductTimeline(context, orgId: org, product: p);
+                    },
+                    onReload: _load,
+                  )),
+          ] else ...[
           const SizedBox(height: 8),
           Row(children: [
             Text('${_filtered.length} products',
@@ -1746,6 +1830,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 ),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -2133,7 +2218,10 @@ class _SearchSelect extends StatefulWidget {
   /// true → the options panel floats over the page (filter bar) instead of
   /// expanding in place and pushing the content below it down.
   final bool floating;
-  const _SearchSelect({super.key, required this.label, required this.value, required this.items, required this.onChanged, this.hint = 'Select...', this.floating = false});
+  /// When set, typing a name that isn't in the list offers "+ Add …"; returns
+  /// true once the new option is saved (it is then selected).
+  final Future<bool> Function(String name)? onCreate;
+  const _SearchSelect({super.key, required this.label, required this.value, required this.items, required this.onChanged, this.hint = 'Select...', this.floating = false, this.onCreate});
   @override
   State<_SearchSelect> createState() => _SearchSelectState();
 }
@@ -2143,6 +2231,7 @@ class _SearchSelectState extends State<_SearchSelect> {
   static _SearchSelectState? _current;
 
   bool _open = false;
+  bool _creating = false;
   String _q = '';
   final _searchCtrl = TextEditingController();
   final _link = LayerLink();
@@ -2241,9 +2330,38 @@ class _SearchSelectState extends State<_SearchSelect> {
               onChanged: _setQuery,
             ),
           ),
+          if (widget.onCreate != null && _q.trim().isNotEmpty &&
+              !widget.items.any((it) => (it['label'] ?? '').trim().toLowerCase() == _q.trim().toLowerCase()))
+            InkWell(
+              onTap: _creating ? null : () async {
+                final name = _q.trim();
+                setState(() => _creating = true);
+                _entry?.markNeedsBuild();
+                bool ok = false;
+                try { ok = await widget.onCreate!(name); } catch (_) {}
+                if (!mounted) return;
+                setState(() => _creating = false);
+                if (ok) { widget.onChanged(name); _close(); }
+              },
+              child: Container(
+                width: double.infinity,
+                color: AppTheme.primary.withOpacity(0.06),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(children: [
+                  _creating
+                      ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.add_circle_outline, size: 16, color: AppTheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text('Add "${_q.trim()}" to ${widget.label}',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                ]),
+              ),
+            ),
           Flexible(
             child: _filtered.isEmpty
-              ? const Padding(padding: EdgeInsets.all(12), child: Text('No results', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+              ? Padding(padding: const EdgeInsets.all(12), child: Text(
+                  widget.onCreate != null && _q.trim().isEmpty ? 'Nothing here yet — type a name to add it' : 'No results',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
               : ListView(shrinkWrap: true, children: _filtered.map((it) {
                   final selected = it['value'] == widget.value;
                   return InkWell(

@@ -1,0 +1,681 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/money.dart';
+import '../../../core/storage/catalog_image_uploader.dart';
+import '../../../core/theme/app_theme.dart';
+
+/// Products ▸ Modern view. A product "dashboard": search list on the left,
+/// the selected product's full profile on the right — picture, prices,
+/// stock in every branch, purchase history (supplier / qty / price) or
+/// production history (job runs + production vouchers), BOMs and where-used.
+/// Read-only; editing still goes through the normal product form.
+class ProductDashboardView extends StatefulWidget {
+  const ProductDashboardView({
+    super.key,
+    required this.orgId,
+    required this.products,
+    required this.allProducts,
+    required this.searchCtrl,
+    required this.posProductIds,
+    required this.filtersActive,
+    required this.onClearFilters,
+    required this.onEdit,
+    required this.onPrintLabel,
+    required this.onTimeline,
+    required this.onReload,
+  });
+
+  final String orgId;
+  final List<Map<String, dynamic>> products;     // filtered list (left panel)
+  final List<Map<String, dynamic>> allProducts;  // for names in BOM tables
+  final TextEditingController searchCtrl;
+  final Set<String> posProductIds;
+  final bool filtersActive;
+  final VoidCallback onClearFilters;
+  final void Function(Map<String, dynamic> p) onEdit;
+  final void Function(Map<String, dynamic> p) onPrintLabel;
+  final void Function(Map<String, dynamic> p) onTimeline;
+  final Future<void> Function() onReload;
+
+  @override
+  State<ProductDashboardView> createState() => _ProductDashboardViewState();
+}
+
+class _ProductDashboardViewState extends State<ProductDashboardView> {
+  String? _selId;
+  bool _loading = false;
+  String _tab = 'auto';
+  final Map<String, String> _branchName = {};
+  final Map<String, Map<String, dynamic>> _byId = {};
+
+  // Loaded for the selected product
+  List<Map<String, dynamic>> _stock = [];
+  List<Map<String, dynamic>> _purchases = [];
+  List<Map<String, dynamic>> _runs = [];
+  List<Map<String, dynamic>> _vouchers = [];
+  List<Map<String, dynamic>> _boms = [];
+  final Map<String, List<Map<String, dynamic>>> _bomComps = {};
+  List<Map<String, dynamic>> _usedIn = [];
+  double _sold90 = 0;
+
+  SupabaseClient get _c => Supabase.instance.client;
+  final _d = DateFormat('d MMM y');
+  final _qf = NumberFormat('#,##0.##');
+
+  @override
+  void initState() {
+    super.initState();
+    _indexProducts();
+    _loadBranches();
+    widget.searchCtrl.addListener(_onSearch);
+    if (widget.products.isNotEmpty) _select('${widget.products.first['id']}');
+  }
+
+  @override
+  void didUpdateWidget(covariant ProductDashboardView old) {
+    super.didUpdateWidget(old);
+    _indexProducts();
+  }
+
+  @override
+  void dispose() {
+    widget.searchCtrl.removeListener(_onSearch);
+    super.dispose();
+  }
+
+  void _onSearch() { if (mounted) setState(() {}); }
+
+  void _indexProducts() {
+    _byId.clear();
+    for (final p in widget.allProducts) { _byId['${p['id']}'] = p; }
+  }
+
+  Map<String, dynamic>? get _sel => _selId == null ? null : _byId[_selId];
+
+  String _pname(String? id) {
+    final p = _byId[id];
+    if (p == null) return id ?? '—';
+    final sku = '${p['sku'] ?? ''}';
+    return sku.isEmpty ? '${p['name'] ?? ''}' : '${p['name'] ?? ''}  ·  $sku';
+  }
+
+  String _q(dynamic v) => _qf.format((v as num?)?.toDouble() ?? double.tryParse('$v') ?? 0);
+  String _date(dynamic v) {
+    final d = DateTime.tryParse('${v ?? ''}');
+    return d == null ? '—' : _d.format(d.toLocal());
+  }
+  double _n(dynamic v) => (v as num?)?.toDouble() ?? double.tryParse('${v ?? ''}') ?? 0;
+
+  Future<void> _loadBranches() async {
+    try {
+      final rows = await _c.from('branches').select('id, name').eq('org_id', widget.orgId);
+      for (final b in rows as List) { _branchName['${b['id']}'] = '${b['name'] ?? ''}'; }
+      if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _select(String id) async {
+    setState(() { _selId = id; _loading = true; _tab = 'auto'; });
+    final org = widget.orgId;
+    final stock = <Map<String, dynamic>>[];
+    final purchases = <Map<String, dynamic>>[];
+    final runs = <Map<String, dynamic>>[];
+    final vouchers = <Map<String, dynamic>>[];
+    final boms = <Map<String, dynamic>>[];
+    final comps = <String, List<Map<String, dynamic>>>{};
+    final usedIn = <Map<String, dynamic>>[];
+    double sold90 = 0;
+
+    Future<void> loadStock() async {
+      try {
+        final r = await _c.from('inventory_stock').select('branch_id, quantity').eq('org_id', org).eq('product_id', id);
+        stock.addAll(List<Map<String, dynamic>>.from(r as List));
+      } catch (_) {}
+    }
+
+    Future<void> loadPurchases() async {
+      try {
+        final items = List<Map<String, dynamic>>.from(await _c.from('purchase_invoice_items')
+            .select('invoice_id, qty_received, unit_cost, discount, line_total').eq('product_id', id) as List);
+        if (items.isEmpty) return;
+        final invIds = {for (final i in items) '${i['invoice_id']}'}.toList();
+        final invs = <String, Map<String, dynamic>>{};
+        for (var k = 0; k < invIds.length; k += 150) {
+          final rows = await _c.from('purchase_invoices')
+              .select('id, voucher_number, voucher_date, supplier_id, branch_id, is_voided, is_locked, status')
+              .inFilter('id', invIds.sublist(k, (k + 150).clamp(0, invIds.length)));
+          for (final r in rows as List) { invs['${r['id']}'] = Map<String, dynamic>.from(r as Map); }
+        }
+        final supIds = {for (final v in invs.values) if (v['supplier_id'] != null) '${v['supplier_id']}'}.toList();
+        final sup = <String, String>{};
+        if (supIds.isNotEmpty) {
+          final rows = await _c.from('suppliers').select('id, name').inFilter('id', supIds);
+          for (final r in rows as List) { sup['${r['id']}'] = '${r['name'] ?? ''}'; }
+        }
+        for (final i in items) {
+          final inv = invs['${i['invoice_id']}'];
+          if (inv == null || inv['is_voided'] == true) continue;
+          final qty = _n(i['qty_received']);
+          final total = _n(i['line_total']);
+          purchases.add({
+            'date': inv['voucher_date'], 'number': inv['voucher_number'],
+            'supplier': sup['${inv['supplier_id']}'] ?? '—',
+            'branch': _branchName['${inv['branch_id']}'] ?? '',
+            'qty': qty, 'unit': _n(i['unit_cost']), 'disc': _n(i['discount']),
+            'net': qty > 0 ? total / qty : _n(i['unit_cost']), 'total': total,
+            'posted': inv['is_locked'] == true,
+          });
+        }
+        purchases.sort((a, b) => '${b['date']}'.compareTo('${a['date']}'));
+      } catch (_) {}
+    }
+
+    Future<void> loadProduction() async {
+      try {
+        final jobs = List<Map<String, dynamic>>.from(await _c.from('job_cards').select().eq('product_id', id) as List);
+        if (jobs.isNotEmpty) {
+          final jobNo = {for (final j in jobs) '${j['id']}': '${j['job_number'] ?? ''}'};
+          final r = await _c.from('job_card_runs').select().inFilter('job_card_id', jobNo.keys.toList());
+          for (final x in r as List) {
+            final m = Map<String, dynamic>.from(x as Map);
+            m['_job'] = jobNo['${m['job_card_id']}'] ?? '';
+            runs.add(m);
+          }
+          runs.sort((a, b) => '${b['run_date'] ?? b['created_at']}'.compareTo('${a['run_date'] ?? a['created_at']}'));
+        }
+      } catch (_) {}
+      try {
+        final r = await _c.from('production_vouchers').select().eq('product_id', id);
+        vouchers.addAll(List<Map<String, dynamic>>.from(r as List).where((v) => v['is_voided'] != true));
+        vouchers.sort((a, b) => '${b['voucher_date'] ?? b['created_at']}'.compareTo('${a['voucher_date'] ?? a['created_at']}'));
+      } catch (_) {}
+    }
+
+    Future<void> loadBoms() async {
+      try {
+        final r = await _c.from('bom_headers').select().eq('org_id', org).eq('product_id', id);
+        boms.addAll(List<Map<String, dynamic>>.from(r as List).where((b) => b['is_voided'] != true));
+        if (boms.isNotEmpty) {
+          final cr = await _c.from('bom_components').select('bom_id, product_id, quantity, line_order')
+              .inFilter('bom_id', [for (final b in boms) '${b['id']}']);
+          for (final x in cr as List) { (comps['${x['bom_id']}'] ??= []).add(Map<String, dynamic>.from(x as Map)); }
+          for (final l in comps.values) { l.sort((a, b) => _n(a['line_order']).compareTo(_n(b['line_order']))); }
+        }
+      } catch (_) {}
+      try {
+        final cr = List<Map<String, dynamic>>.from(await _c.from('bom_components').select('bom_id, quantity').eq('product_id', id) as List);
+        if (cr.isNotEmpty) {
+          final qtyBy = {for (final x in cr) '${x['bom_id']}': x['quantity']};
+          final hs = await _c.from('bom_headers').select('id, code, name, product_id, status, output_qty').inFilter('id', qtyBy.keys.toList());
+          for (final h in hs as List) {
+            final m = Map<String, dynamic>.from(h as Map);
+            m['_qty'] = qtyBy['${m['id']}'];
+            usedIn.add(m);
+          }
+        }
+      } catch (_) {}
+    }
+
+    Future<void> loadSold() async {
+      try {
+        final since = DateTime.now().subtract(const Duration(days: 90)).toUtc().toIso8601String();
+        final r = await _c.from('inventory_movements').select('quantity')
+            .eq('org_id', org).eq('product_id', id).eq('movement_type', 'sale').gte('moved_at', since);
+        for (final x in r as List) { sold90 += -_n(x['quantity']); }
+      } catch (_) {}
+    }
+
+    await Future.wait([loadStock(), loadPurchases(), loadProduction(), loadBoms(), loadSold()]);
+    if (!mounted || _selId != id) return;
+    setState(() {
+      _stock = stock;
+      _purchases = purchases;
+      _runs = runs;
+      _vouchers = vouchers;
+      _boms = boms;
+      _bomComps..clear()..addAll(comps);
+      _usedIn = usedIn;
+      _sold90 = sold90;
+      _loading = false;
+    });
+  }
+
+  Future<void> _changePhoto(Map<String, dynamic> p) async {
+    try {
+      final url = await CatalogImageUploader.pickAndUpload(orgId: widget.orgId, folder: 'products', keyHint: '${p['id']}');
+      if (url == null) return;
+      await _c.from('products').update({'image_url': url}).eq('id', '${p['id']}');
+      await widget.onReload();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+    }
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    final wide = MediaQuery.of(context).size.width >= 900;
+    if (!wide) {
+      // Phone / narrow: list first; picking a product opens its profile.
+      if (_sel == null) return _listPanel(full: true);
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        TextButton.icon(onPressed: () => setState(() => _selId = null), icon: const Icon(Icons.arrow_back, size: 18), label: const Text('All products')),
+        Expanded(child: _profile(narrow: true)),
+      ]);
+    }
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(width: 300, child: _listPanel()),
+      const SizedBox(width: 16),
+      Expanded(child: _sel == null
+          ? const Center(child: Text('Pick a product on the left', style: TextStyle(color: AppTheme.textSecondary)))
+          : _profile()),
+    ]);
+  }
+
+  Widget _thumb(Map<String, dynamic> p, double size, {double radius = 8}) {
+    final url = p['image_url'] as String?;
+    return Container(
+      width: size, height: size,
+      decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(radius), border: Border.all(color: AppTheme.border)),
+      clipBehavior: Clip.antiAlias,
+      child: url == null || url.isEmpty
+          ? Icon(Icons.inventory_2_outlined, size: size * 0.42, color: const Color(0xFF94A3B8))
+          : Image.network(url, fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Icon(Icons.broken_image_outlined, size: size * 0.4, color: const Color(0xFF94A3B8))),
+    );
+  }
+
+  Widget _listPanel({bool full = false}) {
+    final list = widget.products;
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+          child: TextField(
+            controller: widget.searchCtrl,
+            decoration: const InputDecoration(hintText: 'Search name, SKU, barcode…', prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder()),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 8, 4),
+          child: Row(children: [
+            Text('${list.length} products', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            const Spacer(),
+            if (widget.filtersActive)
+              TextButton(onPressed: widget.onClearFilters, style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                  child: const Text('Clear filters', style: TextStyle(fontSize: 11.5))),
+          ]),
+        ),
+        const Divider(height: 1),
+        Expanded(child: list.isEmpty
+            ? const Center(child: Text('No products', style: TextStyle(color: AppTheme.textSecondary)))
+            : ListView.builder(
+                itemCount: list.length,
+                itemBuilder: (_, i) {
+                  final p = list[i];
+                  final id = '${p['id']}';
+                  final on = id == _selId;
+                  final inactive = p['is_active'] == false;
+                  return InkWell(
+                    onTap: () => _select(id),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: on ? AppTheme.primary.withValues(alpha: 0.08) : null,
+                        border: Border(left: BorderSide(color: on ? AppTheme.primary : Colors.transparent, width: 3)),
+                      ),
+                      child: Row(children: [
+                        _thumb(p, 36, radius: 6),
+                        const SizedBox(width: 10),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('${p['name'] ?? ''}', maxLines: 2, overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 12.5, fontWeight: on ? FontWeight.w700 : FontWeight.w600,
+                                  color: inactive ? AppTheme.textSecondary : AppTheme.textPrimary,
+                                  decoration: inactive ? TextDecoration.lineThrough : null)),
+                          Text([p['sku'], p['product_group']].where((x) => x != null && '$x'.isNotEmpty).join(' · '),
+                              maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                        ])),
+                      ]),
+                    ),
+                  );
+                },
+              )),
+      ]),
+    );
+  }
+
+  // ── Profile ────────────────────────────────────────────────────────────
+  Widget _card({required Widget child, EdgeInsets padding = const EdgeInsets.all(16)}) => Container(
+        width: double.infinity,
+        padding: padding,
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+        child: child,
+      );
+
+  Widget _chip(String t, {Color c = AppTheme.textSecondary, IconData? icon}) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: c.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20), border: Border.all(color: c.withValues(alpha: 0.30))),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (icon != null) ...[Icon(icon, size: 12, color: c), const SizedBox(width: 4)],
+          Text(t, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
+        ]),
+      );
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 108, child: Text(k, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          Expanded(child: Text(v.isEmpty ? '—' : v, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600))),
+        ]),
+      );
+
+  Widget _tile(String label, String value, {Color color = AppTheme.textPrimary, String? sub}) => Container(
+        width: 150,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
+          if (sub != null) Text(sub, style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+        ]),
+      );
+
+  Widget _profile({bool narrow = false}) {
+    final p = _sel!;
+    final sell = _n(p['selling_price']);
+    final cost = _n(p['cost_price']);
+    final margin = sell > 0 ? (sell - cost) / sell * 100 : null;
+    final totalStock = _stock.fold<double>(0, (s, r) => s + _n(r['quantity']));
+    final low = _n(p['low_stock_limit']);
+    final uom = (p['uoms'] is Map) ? '${p['uoms']['abbreviation'] ?? p['uoms']['name'] ?? ''}' : '';
+
+    final header = _card(child: Wrap(spacing: 20, runSpacing: 16, crossAxisAlignment: WrapCrossAlignment.start, children: [
+      Column(children: [
+        _thumb(p, narrow ? 140 : 210, radius: 14),
+        const SizedBox(height: 6),
+        TextButton.icon(onPressed: () => _changePhoto(p), icon: const Icon(Icons.photo_camera_outlined, size: 16),
+            label: Text(p['image_url'] == null ? 'Add photo' : 'Change photo', style: const TextStyle(fontSize: 12))),
+      ]),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: narrow ? 560 : 520, minWidth: 260),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${p['name'] ?? ''}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.primaryDark, height: 1.2)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            if (p['is_active'] == false) _chip('Inactive', c: AppTheme.danger, icon: Icons.block)
+            else _chip('Active', c: AppTheme.success, icon: Icons.check_circle_outline),
+            if (widget.posProductIds.contains(p['id'])) _chip('In POS', c: AppTheme.primary, icon: Icons.point_of_sale),
+            if (p['supervised_at'] == null) _chip('Supervision pending', c: AppTheme.warning, icon: Icons.hourglass_empty),
+            if (p['is_service'] == true) _chip('Service', c: Colors.purple),
+            if (p['is_consignment'] == true) _chip('Consignment', c: Colors.teal),
+            if (_boms.isNotEmpty) _chip('Manufactured', c: Colors.indigo, icon: Icons.precision_manufacturing_outlined),
+          ]),
+          const SizedBox(height: 14),
+          _kv('SKU', '${p['sku'] ?? ''}'),
+          _kv('Barcode', '${p['barcode'] ?? ''}'),
+          _kv('Unit', uom),
+          _kv('Type', '${p['product_type'] ?? ''}'),
+          _kv('Classification', [p['product_main_group'], p['product_group'], p['product_sub_group']]
+              .where((x) => x != null && '$x'.isNotEmpty).join('  ›  ')),
+          _kv('Class / Movement', [p['product_class'], p['product_movement_category']].where((x) => x != null && '$x'.isNotEmpty).join(' · ')),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            ElevatedButton.icon(onPressed: () => widget.onEdit(p), icon: const Icon(Icons.edit_outlined, size: 16), label: const Text('Edit')),
+            OutlinedButton.icon(onPressed: () => widget.onPrintLabel(p), icon: const Icon(Icons.qr_code_2, size: 16), label: const Text('Print label')),
+            OutlinedButton.icon(onPressed: () => widget.onTimeline(p), icon: const Icon(Icons.timeline, size: 16), label: const Text('Change history')),
+          ]),
+        ]),
+      ),
+    ]));
+
+    final tiles = Wrap(spacing: 10, runSpacing: 10, children: [
+      _tile('Sell price', money(sell)),
+      _tile('Cost price', money(cost)),
+      _tile('Margin', margin == null ? '—' : '${margin.toStringAsFixed(1)}%',
+          color: margin == null ? AppTheme.textPrimary : (margin < 0 ? AppTheme.danger : AppTheme.success)),
+      _tile('On hand', _q(totalStock), sub: uom.isEmpty ? null : uom,
+          color: low > 0 && totalStock <= low ? AppTheme.danger : AppTheme.textPrimary),
+      _tile('Stock value', money(totalStock * cost), sub: 'at cost'),
+      _tile('Sold (90 days)', _q(_sold90), sub: uom.isEmpty ? null : uom),
+    ]);
+
+    return SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      header,
+      const SizedBox(height: 12),
+      tiles,
+      const SizedBox(height: 12),
+      if (_loading)
+        const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator()))
+      else ...[
+        _stockCard(p, totalStock, low, uom),
+        const SizedBox(height: 12),
+        _historyCard(),
+        const SizedBox(height: 24),
+      ],
+    ]));
+  }
+
+  Widget _sectionTitle(IconData icon, String t, {Widget? trailing}) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(children: [
+          Container(width: 28, height: 28, alignment: Alignment.center,
+              decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(8)),
+              child: Icon(icon, size: 16, color: AppTheme.primary)),
+          const SizedBox(width: 8),
+          Text(t, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+          const Spacer(),
+          if (trailing != null) trailing,
+        ]),
+      );
+
+  Widget _stockCard(Map<String, dynamic> p, double total, double low, String uom) {
+    final rows = [..._stock]..sort((a, b) => _n(b['quantity']).compareTo(_n(a['quantity'])));
+    final maxQ = rows.isEmpty ? 1.0 : rows.map((r) => _n(r['quantity']).abs()).fold<double>(1, (a, b) => a > b ? a : b);
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _sectionTitle(Icons.warehouse_outlined, 'Stock levels',
+          trailing: low > 0 ? Text('Low-stock limit: ${_q(low)}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)) : null),
+      if (rows.isEmpty)
+        const Text('No stock in any branch.', style: TextStyle(color: AppTheme.textSecondary))
+      else
+        for (final r in rows)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(children: [
+              SizedBox(width: 190, child: Text(_branchName['${r['branch_id']}'] ?? '${r['branch_id']}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+              Expanded(child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: (_n(r['quantity']).abs() / maxQ).clamp(0.0, 1.0),
+                  minHeight: 10,
+                  backgroundColor: const Color(0xFFF1F5F9),
+                  color: _n(r['quantity']) < 0 ? AppTheme.danger : AppTheme.primary,
+                ),
+              )),
+              SizedBox(width: 110, child: Text('${_q(r['quantity'])} ${uom}'.trim(), textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _n(r['quantity']) < 0 ? AppTheme.danger : AppTheme.textPrimary))),
+            ]),
+          ),
+      if (rows.length > 1) ...[
+        const Divider(),
+        Row(children: [
+          const Text('Total', style: TextStyle(fontWeight: FontWeight.w800)),
+          const Spacer(),
+          Text('${_q(total)} $uom'.trim(), style: const TextStyle(fontWeight: FontWeight.w800)),
+        ]),
+      ],
+    ]));
+  }
+
+  Widget _historyCard() {
+    final produced = _runs.isNotEmpty || _vouchers.isNotEmpty;
+    final purchased = _purchases.isNotEmpty;
+    var tab = _tab;
+    if (tab == 'auto') tab = produced && !purchased ? 'production' : (purchased ? 'purchases' : (_boms.isNotEmpty ? 'bom' : 'purchases'));
+    final tabs = <(String, String, int)>[
+      ('purchases', 'Purchases', _purchases.length),
+      ('production', 'Production', _runs.length + _vouchers.length),
+      ('bom', 'BOM', _boms.length),
+      ('used', 'Used in', _usedIn.length),
+    ];
+    return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final t in tabs)
+          ChoiceChip(
+            label: Text('${t.$2}${t.$3 > 0 ? '  (${t.$3})' : ''}'),
+            selected: tab == t.$1,
+            onSelected: (_) => setState(() => _tab = t.$1),
+          ),
+      ]),
+      const SizedBox(height: 14),
+      if (tab == 'purchases') _purchasesView()
+      else if (tab == 'production') _productionView()
+      else if (tab == 'bom') _bomView()
+      else _usedInView(),
+    ]));
+  }
+
+  Widget _table(List<String> head, List<List<String>> rows, {Set<int> right = const {}, List<int>? flex}) {
+    final f = flex ?? List.filled(head.length, 1);
+    Widget cell(String t, int i, {bool h = false}) => Expanded(
+          flex: f[i],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: Text(t, textAlign: right.contains(i) ? TextAlign.right : TextAlign.left,
+                style: TextStyle(fontSize: h ? 11.5 : 12.5, fontWeight: h ? FontWeight.w800 : FontWeight.w500,
+                    color: h ? AppTheme.textSecondary : AppTheme.textPrimary)),
+          ),
+        );
+    return Container(
+      decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+      child: Column(children: [
+        Container(color: AppTheme.background, child: Row(children: [for (var i = 0; i < head.length; i++) cell(head[i], i, h: true)])),
+        for (var r = 0; r < rows.length; r++)
+          Container(
+            decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFF1F5F9)))),
+            child: Row(children: [for (var i = 0; i < rows[r].length; i++) cell(rows[r][i], i)]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _empty(String t) => Padding(padding: const EdgeInsets.symmetric(vertical: 18), child: Text(t, style: const TextStyle(color: AppTheme.textSecondary)));
+
+  Widget _purchasesView() {
+    if (_purchases.isEmpty) return _empty('No purchase invoices for this product.');
+    final qty = _purchases.fold<double>(0, (s, r) => s + _n(r['qty']));
+    final amt = _purchases.fold<double>(0, (s, r) => s + _n(r['total']));
+    final last = _purchases.first;
+    final bySup = <String, double>{};
+    for (final r in _purchases) { bySup['${r['supplier']}'] = (bySup['${r['supplier']}'] ?? 0) + _n(r['qty']); }
+    final top = (bySup.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first;
+    final nets = _purchases.map((r) => _n(r['net'])).where((v) => v > 0).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 10, runSpacing: 10, children: [
+        _tile('Last price', money(_n(last['net'])), sub: '${_date(last['date'])} · ${last['supplier']}'),
+        _tile('Average price', money(qty > 0 ? amt / qty : 0), sub: 'weighted'),
+        if (nets.isNotEmpty) _tile('Lowest / Highest', '${money(nets.reduce((a, b) => a < b ? a : b))} / ${money(nets.reduce((a, b) => a > b ? a : b))}'),
+        _tile('Total bought', _q(qty), sub: '${_purchases.length} invoices'),
+        _tile('Main supplier', top.key, sub: '${_q(top.value)} units'),
+      ]),
+      const SizedBox(height: 12),
+      _table(
+        ['Date', 'Invoice', 'Supplier', 'Qty', 'Unit cost', 'Disc', 'Net price', 'Amount'],
+        [
+          for (final r in _purchases)
+            [_date(r['date']), '${r['number'] ?? ''}${r['posted'] == true ? '' : ' (draft)'}', '${r['supplier']}',
+             _q(r['qty']), money(_n(r['unit'])), _n(r['disc']) == 0 ? '—' : _q(r['disc']), money(_n(r['net'])), money(_n(r['total']))],
+        ],
+        right: {3, 4, 5, 6, 7},
+        flex: [3, 3, 5, 2, 3, 2, 3, 3],
+      ),
+    ]);
+  }
+
+  Widget _productionView() {
+    if (_runs.isEmpty && _vouchers.isEmpty) return _empty('No job runs or production vouchers for this product.');
+    final produced = _runs.fold<double>(0, (s, r) => s + _n(r['produced_qty'])) + _vouchers.fold<double>(0, (s, v) => s + _n(v['output_qty']));
+    final rejected = _runs.fold<double>(0, (s, r) => s + _n(r['rejected_qty']));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Wrap(spacing: 10, runSpacing: 10, children: [
+        _tile('Total produced', _q(produced)),
+        if (_runs.isNotEmpty) _tile('Rejected', _q(rejected), color: rejected > 0 ? AppTheme.danger : AppTheme.textPrimary,
+            sub: produced + rejected > 0 ? '${(rejected / (produced + rejected) * 100).toStringAsFixed(1)}% of output' : null),
+        _tile('Job runs', '${_runs.length}'),
+        _tile('Production vouchers', '${_vouchers.length}'),
+      ]),
+      if (_runs.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        const Text('Job runs', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+        const SizedBox(height: 6),
+        _table(
+          ['Date', 'Job / Run', 'Produced', 'Rejected', 'Status'],
+          [
+            for (final r in _runs)
+              [_date(r['run_date'] ?? r['created_at']), '${r['_job']}-R${r['run_no'] ?? ''}', _q(r['produced_qty']),
+               _q(r['rejected_qty']), '${r['status'] ?? '—'}'],
+          ],
+          right: {2, 3},
+          flex: [3, 4, 2, 2, 2],
+        ),
+      ],
+      if (_vouchers.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        const Text('Production vouchers', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+        const SizedBox(height: 6),
+        _table(
+          ['Date', 'Voucher', 'Output qty', 'Total cost', 'Unit cost', 'Status'],
+          [
+            for (final v in _vouchers)
+              [_date(v['voucher_date'] ?? v['created_at']), '${v['voucher_number'] ?? ''}', _q(v['output_qty']),
+               money(_n(v['total_cost'])), _n(v['output_qty']) > 0 ? money(_n(v['total_cost']) / _n(v['output_qty'])) : '—', '${v['status'] ?? '—'}'],
+          ],
+          right: {2, 3, 4},
+          flex: [3, 3, 2, 3, 3, 2],
+        ),
+      ],
+    ]);
+  }
+
+  Widget _bomView() {
+    if (_boms.isEmpty) return _empty('This product has no BOM.');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final b in _boms) ...[
+        Row(children: [
+          Text('${b['code'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5, color: AppTheme.primary)),
+          const SizedBox(width: 8),
+          Expanded(child: Text('${b['name'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+          _chip('${b['status'] ?? 'draft'}', c: '${b['status']}' == 'active' ? AppTheme.success : AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          if (b['supervised_at'] != null) _chip('Supervised', c: AppTheme.success, icon: Icons.verified_outlined)
+          else if (b['rejected_at'] != null) _chip('Rejected', c: AppTheme.danger)
+          else _chip('Pending', c: AppTheme.warning),
+        ]),
+        const SizedBox(height: 4),
+        Text('Makes ${_q(b['output_qty'] ?? 1)} unit(s). Components:', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 6),
+        _table(
+          ['Component', 'Qty'],
+          [for (final c in _bomComps['${b['id']}'] ?? const <Map<String, dynamic>>[]) [_pname('${c['product_id']}'), _q(c['quantity'])]],
+          right: {1},
+          flex: [6, 1],
+        ),
+        const SizedBox(height: 16),
+      ],
+    ]);
+  }
+
+  Widget _usedInView() {
+    if (_usedIn.isEmpty) return _empty('Not used as a component in any BOM.');
+    return _table(
+      ['BOM', 'Makes', 'Qty used', 'Status'],
+      [for (final b in _usedIn) ['${b['code'] ?? ''}', _pname('${b['product_id']}'), _q(b['_qty']), '${b['status'] ?? '—'}']],
+      right: {2},
+      flex: [2, 6, 2, 2],
+    );
+  }
+}
