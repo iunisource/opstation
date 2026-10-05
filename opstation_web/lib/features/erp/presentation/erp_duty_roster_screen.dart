@@ -1425,11 +1425,11 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
         '.per{font-size:11px;color:#475569}'
         'table{border-collapse:collapse;width:100%;font-size:10.5px;table-layout:fixed}thead{display:table-header-group}'
         'th{background:#1e3a8a;color:#fff;padding:6px 4px;font-size:9.5px;font-weight:700;vertical-align:bottom;word-wrap:break-word}'
-        'th.st{text-align:center;border-top:5px solid}'
+        'th.st{text-align:center;border-top:5px solid;font-size:7.5px;line-height:1.2;padding:5px 2px;font-weight:700;overflow-wrap:anywhere;hyphens:auto}'
         'td{border:1px solid #cbd5e1;padding:5px 6px;vertical-align:middle}'
         'tr{break-inside:avoid}tbody tr:nth-child(even) td.n,tbody tr:nth-child(even) td.d{background:#f8fafc}'
         'td.n{font-weight:700}td.n small{display:block;font-weight:400;color:#64748b;font-size:9px}'
-        'td.c{text-align:center;font-size:14px;font-weight:900;color:#fff;padding:3px}'
+        'td.c{text-align:center;font-size:15px;font-weight:900;color:#fff;padding:5px 3px}'
         'td.d{font-size:9.5px;color:#334155}td.d div{margin:1px 0}'
         'tfoot td{font-weight:800;background:#eef2ff;text-align:center;font-size:10px}'
         '.sig{display:flex;justify-content:space-between;margin-top:36px;font-size:10px;color:#475569}.sig div{border-top:1px solid #94a3b8;padding-top:4px;width:28%;text-align:center}'
@@ -1441,7 +1441,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
         '<div class="per">Standing duties · ${emps.length} people · ${cols.length} stations</div></div>');
     final hasDuties = emps.any((e) => (_chartDuties['${e['id']}'] ?? const []).isNotEmpty);
     // widths: name 22%, duties 30% (if any), stations share the rest
-    final nameW = 22.0, dutyW = hasDuties ? 30.0 : 0.0;
+    final nameW = 18.0, dutyW = hasDuties ? 24.0 : 0.0;
     final stW = cols.isEmpty ? 0.0 : (100 - nameW - dutyW) / cols.length;
     b.write('<table><colgroup><col style="width:$nameW%">');
     for (var i = 0; i < cols.length; i++) { b.write('<col style="width:${stW.toStringAsFixed(2)}%">'); }
