@@ -57,6 +57,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
   List<Map<String, dynamic>> _boms = [];
   final Map<String, List<Map<String, dynamic>>> _bomComps = {};
   List<Map<String, dynamic>> _usedIn = [];
+  List<Map<String, dynamic>> _consumed = []; // issued to job runs / production vouchers
   double _sold90 = 0;
 
   SupabaseClient get _c => Supabase.instance.client;
@@ -125,6 +126,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
     final boms = <Map<String, dynamic>>[];
     final comps = <String, List<Map<String, dynamic>>>{};
     final usedIn = <Map<String, dynamic>>[];
+    final consumed = <Map<String, dynamic>>[];
     double sold90 = 0;
 
     Future<void> loadStock() async {
@@ -248,6 +250,49 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
       } catch (_) {}
     }
 
+    // Where this item was actually CONSUMED (as a material) — from stock movements.
+    Future<void> loadConsumed() async {
+      try {
+        final mv = List<Map<String, dynamic>>.from(await _c.from('inventory_movements')
+            .select('quantity, moved_at, reference_id, reference_type, branch_id')
+            .eq('org_id', org).eq('product_id', id).lt('quantity', 0)
+            .inFilter('reference_type', ['job_run', 'production_voucher'])
+            .order('moved_at', ascending: false).limit(1000) as List);
+        if (mv.isEmpty) return;
+        final runIds = {for (final m in mv) if (m['reference_type'] == 'job_run') '${m['reference_id']}'}.toList();
+        final pvIds = {for (final m in mv) if (m['reference_type'] == 'production_voucher') '${m['reference_id']}'}.toList();
+        final label = <String, String>{};
+        final makes = <String, String?>{};
+        final produced = <String, dynamic>{};
+        for (var k = 0; k < runIds.length; k += 150) {
+          final rows = await _c.from('job_card_runs').select('id, run_no, produced_qty, job_cards(job_number, product_id)')
+              .inFilter('id', runIds.sublist(k, (k + 150).clamp(0, runIds.length)));
+          for (final r in rows as List) {
+            final jc = r['job_cards'];
+            label['${r['id']}'] = '${jc is Map ? jc['job_number'] ?? 'JOB' : 'JOB'}-R${r['run_no'] ?? ''}';
+            makes['${r['id']}'] = jc is Map ? jc['product_id'] as String? : null;
+            produced['${r['id']}'] = r['produced_qty'];
+          }
+        }
+        for (var k = 0; k < pvIds.length; k += 150) {
+          final rows = await _c.from('production_vouchers').select('id, voucher_number, product_id, output_qty')
+              .inFilter('id', pvIds.sublist(k, (k + 150).clamp(0, pvIds.length)));
+          for (final r in rows as List) {
+            label['${r['id']}'] = '${r['voucher_number'] ?? ''}';
+            makes['${r['id']}'] = r['product_id'] as String?;
+            produced['${r['id']}'] = r['output_qty'];
+          }
+        }
+        for (final m in mv) {
+          final ref = '${m['reference_id']}';
+          consumed.add({
+            'date': m['moved_at'], 'doc': label[ref] ?? ref, 'makes': makes[ref], 'produced': produced[ref],
+            'qty': -_n(m['quantity']), 'branch': m['branch_id'],
+          });
+        }
+      } catch (_) {}
+    }
+
     Future<void> loadSold() async {
       try {
         final since = DateTime.now().subtract(const Duration(days: 90)).toUtc().toIso8601String();
@@ -257,7 +302,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
       } catch (_) {}
     }
 
-    await Future.wait([loadStock(), loadPurchases(), loadProduction(), loadBoms(), loadSold()]);
+    await Future.wait([loadStock(), loadPurchases(), loadProduction(), loadBoms(), loadSold(), loadConsumed()]);
     if (!mounted || _selId != id) return;
     setState(() {
       _stock = stock;
@@ -267,6 +312,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
       _boms = boms;
       _bomComps..clear()..addAll(comps);
       _usedIn = usedIn;
+      _consumed = consumed;
       _sold90 = sold90;
       _loading = false;
     });
@@ -552,7 +598,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
       ('purchases', 'Purchases', _purchases.length),
       ('production', 'Production', _runs.length + _vouchers.length),
       ('bom', 'BOM', _boms.length),
-      ('used', 'Used in', _usedIn.length),
+      ('used', 'Used in', _usedIn.length + _consumed.length),
     ];
     return _card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Wrap(spacing: 8, runSpacing: 8, children: [
@@ -719,12 +765,41 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
   }
 
   Widget _usedInView() {
-    if (_usedIn.isEmpty) return _empty('Not used as a component in any BOM.');
-    return _table(
-      ['BOM', 'Makes', 'Qty used', 'Status'],
-      [for (final b in _usedIn) ['${b['code'] ?? ''}', _pname('${b['product_id']}'), _q(b['_qty']), '${b['status'] ?? '—'}']],
-      right: {2},
-      flex: [2, 6, 2, 2],
-    );
+    if (_usedIn.isEmpty && _consumed.isEmpty) return _empty('Not used as a component in any BOM, and never consumed in production.');
+    final total = _consumed.fold<double>(0, (s, r) => s + _n(r['qty']));
+    final last = _consumed.isEmpty ? null : _consumed.first;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (_consumed.isNotEmpty) ...[
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          _tile('Consumed', _q(total), sub: 'in ${_consumed.length} run${_consumed.length == 1 ? '' : 's'} / voucher${_consumed.length == 1 ? '' : 's'}'),
+          if (last != null) _tile('Last used', _date(last['date']), sub: '${last['doc']}'),
+        ]),
+        const SizedBox(height: 12),
+        const Text('Consumed in production', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+        const SizedBox(height: 6),
+        _table(
+          ['Date', 'Job run / Voucher', 'Making', 'Output', 'Qty used'],
+          [
+            for (final r in _consumed)
+              [_date(r['date']), '${r['doc']}', r['makes'] == null ? '—' : _pname('${r['makes']}'),
+               r['produced'] == null ? '—' : _q(r['produced']), _q(r['qty'])],
+          ],
+          right: {3, 4},
+          flex: [3, 3, 6, 2, 2],
+        ),
+        const SizedBox(height: 16),
+      ],
+      const Text('BOMs that use it', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+      const SizedBox(height: 6),
+      if (_usedIn.isEmpty)
+        _empty('Not a component in any BOM.')
+      else
+        _table(
+          ['BOM', 'Makes', 'Qty per output', 'Status'],
+          [for (final b in _usedIn) ['${b['code'] ?? ''}', _pname('${b['product_id']}'), _q(b['_qty']), '${b['status'] ?? '—'}']],
+          right: {2},
+          flex: [2, 6, 2, 2],
+        ),
+    ]);
   }
 }
