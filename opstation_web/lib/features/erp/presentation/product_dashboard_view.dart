@@ -152,7 +152,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
         // 2) GRNs received but not (yet) invoiced — e.g. consignment stock or a
         //    pending invoice. They moved stock, so they belong in the history.
         final grnItems = List<Map<String, dynamic>>.from(await _c.from('purchase_grn_items')
-            .select('grn_id, qty_received').eq('product_id', id) as List);
+            .select('grn_id, qty_received, po_item_id').eq('product_id', id) as List);
         final grnIds = {for (final g in grnItems) '${g['grn_id']}'}.toList();
         final grns = <String, Map<String, dynamic>>{};
         final invoicedGrn = <String>{};
@@ -174,6 +174,16 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
           final rows = await _c.from('suppliers').select('id, name').inFilter('id', supIds);
           for (final r in rows as List) { sup['${r['id']}'] = '${r['name'] ?? ''}'; }
         }
+        // GRN has no price of its own — fall back to the PO line's price.
+        final poPrice = <String, double>{};
+        final poIds = {for (final g in grnItems) if (g['po_item_id'] != null) '${g['po_item_id']}'}.toList();
+        for (var k = 0; k < poIds.length; k += 150) {
+          try {
+            final rows = await _c.from('purchase_order_items').select('id, unit_cost')
+                .inFilter('id', poIds.sublist(k, (k + 150).clamp(0, poIds.length)));
+            for (final r in rows as List) { poPrice['${r['id']}'] = _n(r['unit_cost']); }
+          } catch (_) {}
+        }
         for (final g in grnItems) {
           final grn = grns['${g['grn_id']}'];
           if (grn == null || grn['is_voided'] == true || invoicedGrn.contains('${grn['id']}')) continue;
@@ -184,6 +194,9 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
             'supplier': sup['${grn['supplier_id']}'] ?? '—',
             'branch': _branchName['${grn['branch_id']}'] ?? '',
             'qty': qty, 'grn': true, 'posted': '${grn['status'] ?? ''}' != 'draft',
+            'unit': poPrice['${g['po_item_id']}'] ?? 0,
+            'net': poPrice['${g['po_item_id']}'] ?? 0,
+            'total': (poPrice['${g['po_item_id']}'] ?? 0) * qty,
           });
         }
         for (final i in items) {
@@ -645,7 +658,11 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
 
   Widget _purchasesView() {
     if (_purchases.isEmpty) return _empty('No purchases or goods received for this product.');
-    final priced = _purchases.where((r) => r['grn'] != true).toList();
+    final invoiced = _purchases.where((r) => r['grn'] != true).toList();
+    // Invoices give the true price; if there are none, fall back to GRNs at PO price.
+    final grnPriced = _purchases.where((r) => r['grn'] == true && _n(r['unit']) > 0).toList();
+    final usingGrn = invoiced.isEmpty && grnPriced.isNotEmpty;
+    final priced = usingGrn ? grnPriced : invoiced;
     final unInvoiced = _purchases.where((r) => r['grn'] == true).toList();
     final qty = _purchases.fold<double>(0, (s, r) => s + _n(r['qty']));
     final pQty = priced.fold<double>(0, (s, r) => s + _n(r['qty']));
@@ -657,10 +674,10 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
     final nets = priced.map((r) => _n(r['net'])).where((v) => v > 0).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Wrap(spacing: 10, runSpacing: 10, children: [
-        if (last != null) _tile('Last price', money(_n(last['net'])), sub: '${_date(last['date'])} · ${last['supplier']}'),
-        if (pQty > 0) _tile('Average price', money(amt / pQty), sub: 'weighted'),
+        if (last != null) _tile('Last price', money(_n(last['net'])), sub: '${_date(last['date'])} · ${last['supplier']}${usingGrn ? ' · PO price' : ''}'),
+        if (pQty > 0) _tile('Average price', money(amt / pQty), sub: usingGrn ? 'from GRNs at PO price' : 'weighted'),
         if (nets.isNotEmpty) _tile('Lowest / Highest', '${money(nets.reduce((a, b) => a < b ? a : b))} / ${money(nets.reduce((a, b) => a > b ? a : b))}'),
-        _tile('Total received', _q(qty), sub: '${priced.length} invoice${priced.length == 1 ? '' : 's'}${unInvoiced.isEmpty ? '' : ' · ${unInvoiced.length} GRN not invoiced'}'),
+        _tile('Total received', _q(qty), sub: '${invoiced.length} invoice${invoiced.length == 1 ? '' : 's'}${unInvoiced.isEmpty ? '' : ' · ${unInvoiced.length} GRN not invoiced'}'),
         _tile('Main supplier', top.key, sub: '${_q(top.value)} units'),
       ]),
       if (unInvoiced.isNotEmpty) ...[
@@ -670,7 +687,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
           decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFCD34D))),
           child: Text(
             '${_q(unInvoiced.fold<double>(0, (s, r) => s + _n(r['qty'])))} received on GRN without a purchase invoice yet'
-            '${_sel?['is_consignment'] == true ? ' (consignment stock — invoiced later)' : ''}. These have no price until invoiced.',
+            '${_sel?['is_consignment'] == true ? ' (consignment stock — invoiced later)' : ''}. Their price is taken from the PO until the invoice is posted.',
             style: const TextStyle(fontSize: 12, color: Color(0xFF92400E), fontWeight: FontWeight.w600)),
         ),
       ],
@@ -681,7 +698,10 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
           for (final r in _purchases)
             r['grn'] == true
                 ? [_date(r['date']), '${r['number'] ?? ''} · GRN, not invoiced${r['posted'] == true ? '' : ' (draft)'}', '${r['supplier']}',
-                   _q(r['qty']), '—', '—', '—', '—']
+                   _q(r['qty']),
+                   _n(r['unit']) > 0 ? '${money(_n(r['unit']))} (PO)' : '—', '—',
+                   _n(r['net']) > 0 ? money(_n(r['net'])) : '—',
+                   _n(r['total']) > 0 ? money(_n(r['total'])) : '—']
                 : [_date(r['date']), '${r['number'] ?? ''}${r['posted'] == true ? '' : ' (draft)'}', '${r['supplier']}',
                    _q(r['qty']), money(_n(r['unit'])), _n(r['disc']) == 0 ? '—' : _q(r['disc']), money(_n(r['net'])), money(_n(r['total']))],
         ],
