@@ -69,6 +69,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     _runFilter();
   }
 
+  /// Row action icons are 34px each: POS, timeline, label, edit, (de)activate,
+  /// plus delete and supervise for admins. Sized so none is ever cut off.
+  double get _actionsWidth =>
+      34.0 * (5 + (_canDelete ? 1 : 0) + (_productSuperviseEnabled && _canDelete ? 1 : 0)) + 6;
+
   bool get _canDelete {
     final r = ref.read(currentUserProvider)?.role.name;
     return r == 'masterAdmin' || r == 'admin';
@@ -1651,7 +1656,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Sell Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Purchase/Cost Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        SizedBox(width: _productSuperviseEnabled ? 200 : 160),
+                        SizedBox(width: _actionsWidth),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -1744,10 +1749,12 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                         p['cost_price']?.toString() ?? '0',
                                         style: const TextStyle(fontSize: 13))),
                                 SizedBox(
-                                  width: _productSuperviseEnabled ? 200 : 160,
+                                  width: _actionsWidth,
                                   child: Row(children: [
                                     if (_productSuperviseEnabled && p['supervised_at'] == null && _canDelete)
                                       IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                         icon: const Icon(Icons.verified_user_outlined, size: 18, color: AppTheme.primary),
                                         tooltip: 'Supervise (admin)',
                                         onPressed: () => _superviseProduct(p),
@@ -1756,6 +1763,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                       final inPos =
                                           _posProductIds.contains(p['id']);
                                       return IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                         icon: Icon(Icons.point_of_sale,
                                             size: 18,
                                             color: inPos
@@ -1773,6 +1782,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                       );
                                     }),
                                     IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                       icon: const Icon(Icons.timeline,
                                           size: 18, color: AppTheme.textSecondary),
                                       tooltip: 'Timeline — changes and events over time',
@@ -1784,6 +1795,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                       },
                                     ),
                                     IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                       icon: const Icon(Icons.qr_code_2,
                                           size: 18, color: AppTheme.primary),
                                       tooltip: 'Print barcode label',
@@ -1791,12 +1804,16 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                           _printBarcodeLabels([p]),
                                     ),
                                     IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                       icon: const Icon(Icons.edit_outlined,
                                           size: 18),
                                       onPressed: () =>
                                           _showDialog(context, p),
                                     ),
                                     IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                       icon: Icon(
                                         isActive
                                             ? Icons.block
@@ -1813,6 +1830,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                     ),
                                     if (_canDelete)
                                       IconButton(
+                                        visualDensity: VisualDensity.compact, padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
                                         icon: const Icon(Icons.delete_outline,
                                             size: 18, color: AppTheme.danger),
                                         tooltip: 'Delete',
