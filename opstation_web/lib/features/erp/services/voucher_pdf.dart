@@ -928,50 +928,81 @@ class VoucherPdf {
   }
 
   static pw.Widget _itemsTable(List<VoucherLine> lines, bool hasMoney) {
-    final headers = hasMoney
-        ? ['#', 'Product', 'UOM', 'Qty', 'Unit Price', 'Discount', 'Disc. Price', 'Line Total']
-        : ['#', 'Product', 'UOM', 'Qty'];
-    final flex = hasMoney ? [1, 5, 1, 2, 2, 2, 2, 2] : [1, 8, 1, 2];
+    // Calibrated for A4 (≈547pt usable): numbers get fixed, snug columns and
+    // the product name takes everything left, so a usual name fits on ONE
+    // line. SKU sits on the same line in small grey text. Discount columns are
+    // dropped when no line has a discount.
+    final hasDisc = hasMoney && lines.any((l) => (l.discountPct ?? 0) != 0);
+    // (header, width or null for flex, right-aligned)
+    final cols = <(String, double?, bool)>[
+      ('#', 20.0, false),
+      ('Product', null, false),
+      ('UOM', 34.0, false),
+      ('Qty', 42.0, true),
+      if (hasMoney) ('Rate', 56.0, true),
+      if (hasDisc) ('Disc %', 38.0, true),
+      if (hasDisc) ('Net Rate', 56.0, true),
+      if (hasMoney) ('Amount', 66.0, true),
+    ];
+    const cellPad = pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4.5);
+    const txt = pw.TextStyle(fontSize: 9.5);
+
+    pw.Widget cell(String t, bool right, {bool head = false}) => pw.Container(
+          alignment: right ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+          padding: cellPad,
+          child: pw.Text(t,
+              style: head ? pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: _muted) : txt),
+        );
+
+    pw.Widget productCell(VoucherLine l) => pw.Container(
+          alignment: pw.Alignment.centerLeft,
+          padding: cellPad,
+          child: pw.RichText(text: pw.TextSpan(children: [
+            pw.TextSpan(text: l.product, style: txt),
+            if (l.sku != null && l.sku!.trim().isNotEmpty)
+              pw.TextSpan(text: '  ${l.sku}', style: pw.TextStyle(fontSize: 7.5, color: _muted)),
+          ])),
+        );
 
     return pw.Table(
-      border: pw.TableBorder.all(color: _border, width: 0.5),
+      border: const pw.TableBorder(
+        top: pw.BorderSide(color: _border, width: 0.6),
+        bottom: pw.BorderSide(color: _border, width: 0.6),
+        left: pw.BorderSide(color: _border, width: 0.6),
+        right: pw.BorderSide(color: _border, width: 0.6),
+        horizontalInside: pw.BorderSide(color: _border, width: 0.4),
+        verticalInside: pw.BorderSide(color: _border, width: 0.4),
+      ),
       columnWidths: {
-        for (var i = 0; i < flex.length; i++) i: pw.FlexColumnWidth(flex[i].toDouble()),
+        for (var i = 0; i < cols.length; i++)
+          i: cols[i].$2 == null ? const pw.FlexColumnWidth(1) : pw.FixedColumnWidth(cols[i].$2!),
       },
       children: [
         pw.TableRow(
           decoration: const pw.BoxDecoration(color: _bg),
-          children: headers.map((h) => pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-            child: pw.Text(h, style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: _muted)),
-          )).toList(),
+          verticalAlignment: pw.TableCellVerticalAlignment.middle,
+          repeat: true,
+          children: [for (final c in cols) cell(c.$1, c.$3, head: true)],
         ),
-        ...lines.asMap().entries.map((entry) {
-          final i = entry.key; final l = entry.value;
-          final cells = hasMoney
-              ? [
-                  '${i + 1}',
-                  l.product + (l.sku != null ? '\n${l.sku}' : ''),
-                  l.uom ?? '-',
-                  _n4(l.qty),
-                  l.unitPrice != null ? _n4(l.unitPrice) : '-',
-                  l.discountPct != null ? '${_n4(l.discountPct)}%' : '-',
-                  l.unitPrice != null ? _n4(l.unitPrice! * (1 - (l.discountPct ?? 0) / 100)) : '-',
-                  l.lineTotal != null ? _n4(l.lineTotal) : '-',
-                ]
-              : [
-                  '${i + 1}',
-                  l.product + (l.sku != null ? '\n${l.sku}' : ''),
-                  l.uom ?? '-',
-                  _n4(l.qty),
-                ];
-          return pw.TableRow(
-            children: cells.map((c) => pw.Padding(
-              padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              child: pw.Text(c, style: const pw.TextStyle(fontSize: 10)),
-            )).toList(),
-          );
-        }),
+        for (var i = 0; i < lines.length; i++)
+          () {
+            final l = lines[i];
+            final net = l.unitPrice != null ? l.unitPrice! * (1 - (l.discountPct ?? 0) / 100) : null;
+            return pw.TableRow(
+              verticalAlignment: pw.TableCellVerticalAlignment.middle,
+              decoration: i.isOdd ? const pw.BoxDecoration(color: PdfColor.fromInt(0xFFFAFBFD)) : null,
+              children: [
+                cell('${i + 1}', false),
+                productCell(l),
+                cell(l.uom ?? '-', false),
+                cell(_n4(l.qty), true),
+                if (hasMoney) cell(l.unitPrice != null ? _n4(l.unitPrice) : '-', true),
+                if (hasDisc) cell((l.discountPct ?? 0) != 0 ? '${_n4(l.discountPct)}%' : '-', true),
+                if (hasDisc) cell(net != null ? _n4(net) : '-', true),
+                if (hasMoney) cell(l.lineTotal != null ? _n4(l.lineTotal) : '-', true),
+              ],
+            );
+          }(),
       ],
     );
   }
