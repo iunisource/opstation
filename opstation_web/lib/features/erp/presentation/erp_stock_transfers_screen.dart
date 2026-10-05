@@ -1443,9 +1443,25 @@ class _StockTransferVoucherScreenState
       ),
     );
     if (confirm != true) return;
+    if (_busy) return; // guard: block double-submit
     setState(() => _busy = true);
     try {
       final now = DateTime.now().toUtc().toIso8601String();
+      // Claim the status change FIRST, and only if the transfer is still in the
+      // state we think it is. If it was already rejected/cancelled (a second
+      // click, a retry after an error, or another user), nothing is returned
+      // and we stop — previously each Reject re-added the stock to the source
+      // branch, so a transfer rejected 3 times put the goods back 3 times.
+      final claimed = await client.from('stock_transfers').update({
+        'status': inTransit ? 'rejected' : 'cancelled',
+        'updated_at': now,
+      }).eq('id', _transfer!['id']).eq('status', inTransit ? 'in_transit' : 'draft').select('id');
+      if ((claimed as List).isEmpty) {
+        _snack('This transfer was already ${inTransit ? 'rejected' : 'cancelled'} — nothing changed.');
+        widget.onUpdated();
+        await _load();
+        return;
+      }
       if (inTransit) {
         // Return stock to source.
         for (var i = 0; i < _items.length; i++) {
@@ -1481,10 +1497,6 @@ class _StockTransferVoucherScreenState
           }
         }
       }
-      await client.from('stock_transfers').update({
-        'status': inTransit ? 'rejected' : 'cancelled',
-        'updated_at': now,
-      }).eq('id', _transfer!['id']);
       _snack(inTransit ? 'Rejected — stock returned to source' : 'Cancelled');
       widget.onUpdated();
       await _load();
