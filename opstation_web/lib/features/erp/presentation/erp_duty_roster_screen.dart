@@ -53,7 +53,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
   bool _showHidden = false;
   final Set<String> _sel = {};                         // multi-select (week grid / chart)
   // Duty Chart (SQL 321): long-term, undated.
-  final Map<String, String?> _chartStation = {};                     // emp -> standing station
+  final Map<String, List<String>> _chartStation = {};                // emp -> standing stations (first = main)
   final Map<String, List<Map<String, dynamic>>> _chartDuties = {};   // emp -> duties
   bool _chartMissing = false;
 
@@ -572,7 +572,11 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       final d = await _c.from('duty_chart_duties').select().eq('org_id', orgId).order('sort_order').order('created_at');
       _chartStation.clear();
       _chartDuties.clear();
-      for (final r in m as List) { _chartStation['${r['employee_id']}'] = r['station_id'] as String?; }
+      for (final r in m as List) {
+        final ids = <String>[for (final x in (r['station_ids'] as List?) ?? const []) '$x'];
+        if (ids.isEmpty && r['station_id'] != null) ids.add('${r['station_id']}');
+        if (ids.isNotEmpty) _chartStation['${r['employee_id']}'] = ids;
+      }
       for (final r in d as List) { (_chartDuties['${r['employee_id']}'] ??= []).add(Map<String, dynamic>.from(r as Map)); }
       _chartMissing = false;
     } catch (_) {
@@ -605,7 +609,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     if (_chartMissing) { _snack('Run SQL 321 in Supabase first.'); return; }
     if (_stations.isEmpty) { _snack('Add your stations first (Stations button).'); _manageStations(); return; }
     final emp = '${e['id']}';
-    String? station = _chartStation[emp];
+    final picks = <String>[...?_chartStation[emp]];
     final lines = <_DutyLine>[
       for (final d in _chartDuties[emp] ?? const <Map<String, dynamic>>[])
         _DutyLine(TextEditingController(text: '${d['duty'] ?? ''}'), d['station_id'] as String?),
@@ -620,16 +624,22 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
             style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       ]),
       content: SizedBox(width: 560, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Standing station / line', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        const Text('Standing stations / lines', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
         const SizedBox(height: 6),
-        InputDecorator(
-          decoration: box(),
-          child: DropdownButtonHideUnderline(child: DropdownButton<String?>(
-            value: station, isExpanded: true, isDense: true,
-            items: _stationItems(station, '— None —'),
-            onChanged: (v) => setD(() => station = v),
-          )),
-        ),
+        Wrap(spacing: 6, runSpacing: 6, children: [
+          for (final s in _stations)
+            if (s['is_active'] != false || picks.contains('${s['id']}'))
+              FilterChip(
+                avatar: Container(width: 10, height: 10, decoration: BoxDecoration(color: _hex(s['color'] as String?), borderRadius: BorderRadius.circular(3))),
+                label: Text(picks.isNotEmpty && picks.first == '${s['id']}' ? '${s['name']} · main' : '${s['name']}',
+                    style: const TextStyle(fontSize: 12.5)),
+                selected: picks.contains('${s['id']}'),
+                onSelected: (v) => setD(() { if (v) { picks.add('${s['id']}'); } else { picks.remove('${s['id']}'); } }),
+              ),
+        ]),
+        const SizedBox(height: 4),
+        const Text('Tick every station this person works on. The first one ticked is the main station.',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Row(children: [
           const Text('Duties', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
@@ -655,7 +665,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
               IconButton(tooltip: 'Remove', icon: const Icon(Icons.close, size: 18), onPressed: () => setD(() => lines.remove(l))),
             ]),
           ),
-        const Text('Tie a duty to a station only if it is done at a different place than the standing station.',
+        const Text('Tie a duty to a station when it belongs to one particular station.',
             style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
       ]))),
       actions: [
@@ -667,11 +677,11 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     final uid = ref.read(currentUserProvider)?.id;
     final now = DateTime.now().toUtc().toIso8601String();
     try {
-      if (station == null) {
+      if (picks.isEmpty) {
         await _c.from('duty_chart_members').delete().eq('org_id', orgId).eq('employee_id', emp);
       } else {
-        await _c.from('duty_chart_members').upsert({'org_id': orgId, 'employee_id': emp, 'station_id': station, 'updated_by': uid, 'updated_at': now},
-            onConflict: 'org_id,employee_id');
+        await _c.from('duty_chart_members').upsert({'org_id': orgId, 'employee_id': emp, 'station_id': picks.first, 'station_ids': picks,
+            'updated_by': uid, 'updated_at': now}, onConflict: 'org_id,employee_id');
       }
       await _c.from('duty_chart_duties').delete().eq('org_id', orgId).eq('employee_id', emp);
       final rows = <Map<String, dynamic>>[];
@@ -685,7 +695,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       await _loadChart();
       if (mounted) setState(() {});
     } catch (err) {
-      _snack(err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
+      _snack(err.toString().contains('station_ids') ? 'Run SQL 322 in Supabase first.'
+          : err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
     }
   }
 
@@ -695,7 +706,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     final emps = _sel.toList();
     if (orgId == null || emps.isEmpty) return;
     if (_chartMissing) { _snack('Run SQL 321 in Supabase first.'); return; }
-    String choice = 'keep'; // keep | none | s:<id>
+    String choice = 'keep'; // keep | none | s:<id> (add this station)
     final duty = TextEditingController();
     final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
       Widget chip(String value, String label, Color c) => ChoiceChip(
@@ -707,12 +718,12 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       return AlertDialog(
         title: Text('Duty Chart — ${emps.length} selected', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
         content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Standing station', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          const Text('Add a standing station', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
           const SizedBox(height: 6),
           Wrap(spacing: 6, runSpacing: 6, children: [
             chip('keep', 'Keep as is', Colors.transparent),
             for (final s in _stations.where((s) => s['is_active'] != false)) chip('s:${s['id']}', '${s['name']}', _hex(s['color'] as String?)),
-            chip('none', 'Remove', const Color(0xFFCBD5E1)),
+            chip('none', 'Remove all stations', const Color(0xFFCBD5E1)),
           ]),
           const SizedBox(height: 14),
           const Text('Add a duty to everyone selected (optional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
@@ -733,9 +744,14 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       if (choice == 'none') {
         await _c.from('duty_chart_members').delete().eq('org_id', orgId).inFilter('employee_id', emps);
       } else if (choice.startsWith('s:')) {
-        await _c.from('duty_chart_members').upsert(
-            [for (final e in emps) {'org_id': orgId, 'employee_id': e, 'station_id': choice.substring(2), 'updated_by': uid, 'updated_at': now}],
-            onConflict: 'org_id,employee_id');
+        final sid = choice.substring(2);
+        final rows = <Map<String, dynamic>>[];
+        for (final e in emps) {
+          final list = <String>[...?_chartStation[e]];
+          if (!list.contains(sid)) list.add(sid);
+          rows.add({'org_id': orgId, 'employee_id': e, 'station_id': list.first, 'station_ids': list, 'updated_by': uid, 'updated_at': now});
+        }
+        await _c.from('duty_chart_members').upsert(rows, onConflict: 'org_id,employee_id');
       }
       if (t.isNotEmpty) {
         var n = 0;
@@ -749,7 +765,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       if (mounted) setState(() => _sel.clear());
       _snack('Duty Chart updated for ${emps.length} worker${emps.length == 1 ? '' : 's'}');
     } catch (err) {
-      _snack(err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
+      _snack(err.toString().contains('station_ids') ? 'Run SQL 322 in Supabase first.'
+          : err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
     }
   }
 
@@ -766,7 +783,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       );
 
   List<Widget> _dutyLines(String emp, {double size = 12.5}) {
-    final standing = _chartStation[emp];
+    final standing = _chartStation[emp] ?? const <String>[];
     return [
       for (final d in _chartDuties[emp] ?? const <Map<String, dynamic>>[])
         Padding(
@@ -774,7 +791,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('•  ', style: TextStyle(fontSize: size, color: AppTheme.textSecondary)),
             Expanded(child: Text('${d['duty'] ?? ''}', style: TextStyle(fontSize: size))),
-            if (d['station_id'] != null && d['station_id'] != standing && _station(d['station_id'] as String?) != null)
+            if (d['station_id'] != null && (standing.length > 1 || !standing.contains(d['station_id'])) && _station(d['station_id'] as String?) != null)
               Padding(padding: const EdgeInsets.only(left: 6), child: _stationTag(_station(d['station_id'] as String?)!, small: true)),
           ]),
         ),
@@ -797,7 +814,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
           _selectAllBox(emps),
           const Text('Worker', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
         ])),
-        const SizedBox(width: stW, child: Text('Standing station', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
+        const SizedBox(width: stW, child: Text('Standing stations', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
         const Expanded(child: Text('Duties', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
         const SizedBox(width: 48),
       ])),
@@ -812,7 +829,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
                 final id = '${e['id']}';
                 final picked = _sel.contains(id);
                 final isHidden = _hidden.contains(id);
-                final st = _station(_chartStation[id]);
+                final sts = [for (final sid in _chartStation[id] ?? const <String>[]) if (_station(sid) != null) _station(sid)!];
                 final lines = _dutyLines(id);
                 return InkWell(
                   onTap: () => _editChart(e),
@@ -841,9 +858,9 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
                       ])),
                       SizedBox(width: stW, child: Padding(
                         padding: const EdgeInsets.only(top: 8, right: 10),
-                        child: Align(alignment: Alignment.centerLeft, child: st == null
+                        child: Align(alignment: Alignment.centerLeft, child: sts.isEmpty
                             ? const Text('—', style: TextStyle(color: AppTheme.textSecondary))
-                            : _stationTag(st)),
+                            : Wrap(spacing: 4, runSpacing: 4, children: [for (final st in sts) _stationTag(st)])),
                       )),
                       Expanded(child: Padding(
                         padding: const EdgeInsets.only(top: 8),
@@ -874,8 +891,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     final by = <String, List<Map<String, dynamic>>>{};
     final none = <Map<String, dynamic>>[];
     for (final e in emps) {
-      final sid = _chartStation['${e['id']}'];
-      if (sid == null || _station(sid) == null) { none.add(e); } else { (by[sid] ??= []).add(e); }
+      final sids = [for (final sid in _chartStation['${e['id']}'] ?? const <String>[]) if (_station(sid) != null) sid];
+      if (sids.isEmpty) { none.add(e); } else { for (final sid in sids) { (by[sid] ??= []).add(e); } }
     }
     final cols = <(String, Color, List<Map<String, dynamic>>)>[
       for (final s in _stations)
@@ -1346,8 +1363,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final emps = _shownEmployees;
     final groups = <(Map<String, dynamic>?, List<Map<String, dynamic>>)>[
-      for (final s in _stations) (s, emps.where((e) => _chartStation['${e['id']}'] == s['id']).toList()),
-      (null, emps.where((e) => _station(_chartStation['${e['id']}']) == null).toList()),
+      for (final s in _stations) (s, emps.where((e) => (_chartStation['${e['id']}'] ?? const <String>[]).contains(s['id'])).toList()),
+      (null, emps.where((e) => !(_chartStation['${e['id']}'] ?? const <String>[]).any((sid) => _station(sid) != null)).toList()),
     ].where((g) => g.$2.isNotEmpty).toList();
     final b = StringBuffer();
     b.write('<!doctype html><html><head><meta charset="utf-8"><title>Duty Chart</title><style>'
@@ -1374,7 +1391,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       b.write('<table><thead><tr><th>Name</th><th>Duties</th></tr></thead><tbody>');
       for (final e in g.$2) {
         final id = '${e['id']}';
-        final sub = [e['employee_code'], e['designation']].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
+        final also = [for (final sid in _chartStation[id] ?? const <String>[]) if (sid != g.$1?['id'] && _station(sid) != null) '${_station(sid)!['name']}'];
+        final sub = [e['employee_code'], e['designation'], if (also.isNotEmpty) 'also: ${also.join(', ')}'].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
         b.write('<tr><td class="n">${esc('${e['full_name'] ?? ''}')}${sub.isEmpty ? '' : '<small>${esc(sub)}</small>'}</td><td>');
         final ds = _chartDuties[id] ?? const <Map<String, dynamic>>[];
         if (ds.isEmpty) {
@@ -1382,7 +1400,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
         } else {
           b.write('<ul>');
           for (final d in ds) {
-            final ts = d['station_id'] != null && d['station_id'] != _chartStation[id] ? _station(d['station_id'] as String?) : null;
+            final mine = _chartStation[id] ?? const <String>[];
+            final ts = d['station_id'] != null && (mine.length > 1 || !mine.contains(d['station_id'])) ? _station(d['station_id'] as String?) : null;
             final tc = ts == null ? '' : '${ts['color'] ?? '#2F6FED'}';
             b.write('<li>${esc('${d['duty'] ?? ''}')}${ts == null ? '' : '<span class="tg" style="background:${tc}22;color:$tc">${esc('${ts['name']}')}</span>'}</li>');
           }
