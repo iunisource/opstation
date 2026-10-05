@@ -706,6 +706,7 @@ const List<_Feature> _features = [
   // Manufacturing
   _Feature('Production Voucher', 'Manufacturing', '/manufacturing/production-voucher', ['production voucher', 'production']),
   _Feature('Job Card', 'Manufacturing', '/manufacturing/job-card', ['job card', 'work order']),
+  _Feature('Duty Roster', 'Manufacturing', '/manufacturing/duty-roster', ['duty roster', 'roster', 'station', 'line', 'shift']),
   _Feature('Product Assembly (BOM)', 'Manufacturing', '/manufacturing/product-assembly', ['bom', 'assembly', 'recipe']),
   _Feature('Production Floor', 'Manufacturing', '/manufacturing/production-floor', ['production floor', 'shop floor', 'floor']),
   _Feature('Production Inverse (Disassembly)', 'Manufacturing', '/manufacturing/production-inverse-voucher', ['disassembly', 'inverse', 'production inverse']),
