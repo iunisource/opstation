@@ -28,10 +28,17 @@ Color _hex(String? h) {
   return Color(int.tryParse('FF$s', radix: 16) ?? 0xFF2F6FED);
 }
 
+class _DutyLine {
+  _DutyLine(this.ctrl, this.station);
+  final TextEditingController ctrl;
+  String? station;
+}
+
 class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
   bool _loading = true;
   String? _error;
-  String _view = 'week'; // week | day
+  String _view = 'week'; // week | day | chart
+  String _chartMode = 'people'; // people | stations
   late DateTime _weekStart; // Monday
   late DateTime _day;
   String _search = '';
@@ -44,7 +51,11 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
   final Map<String, String> _att = {};                 // '$emp|$date' -> absent | leave | half_day …
   final Set<String> _hidden = {};                      // employees hidden from the roster (SQL 320)
   bool _showHidden = false;
-  final Set<String> _sel = {};                         // multi-select (week grid)
+  final Set<String> _sel = {};                         // multi-select (week grid / chart)
+  // Duty Chart (SQL 321): long-term, undated.
+  final Map<String, String?> _chartStation = {};                     // emp -> standing station
+  final Map<String, List<Map<String, dynamic>>> _chartDuties = {};   // emp -> duties
+  bool _chartMissing = false;
 
   final _dk = DateFormat('yyyy-MM-dd');
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -100,6 +111,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
         final ap = e['approval_status'];
         return ap == null || ap == 'approved';
       }).toList();
+      await _loadChart();
       await _loadRange();
     } catch (e) {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
@@ -539,7 +551,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
           border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35))),
       child: Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
         Text('${_sel.length} selected', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
-        ElevatedButton.icon(onPressed: _bulkAssign, icon: const Icon(Icons.assignment_ind_outlined, size: 16), label: const Text('Assign…')),
+        ElevatedButton.icon(onPressed: _view == 'chart' ? _bulkChart : _bulkAssign, icon: const Icon(Icons.assignment_ind_outlined, size: 16), label: const Text('Assign…')),
         if (anyShown) OutlinedButton.icon(
           onPressed: () => _setHidden(_sel.where((id) => !_hidden.contains(id)).toList(), true),
           icon: const Icon(Icons.visibility_off_outlined, size: 16), label: const Text('Hide from roster')),
@@ -549,6 +561,369 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
         TextButton(onPressed: () => setState(() => _sel.clear()), child: const Text('Clear selection')),
       ]),
     );
+  }
+
+  // ── Duty Chart (long-term) ────────────────────────────────────────────────
+  Future<void> _loadChart() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      final m = await _c.from('duty_chart_members').select().eq('org_id', orgId);
+      final d = await _c.from('duty_chart_duties').select().eq('org_id', orgId).order('sort_order').order('created_at');
+      _chartStation.clear();
+      _chartDuties.clear();
+      for (final r in m as List) { _chartStation['${r['employee_id']}'] = r['station_id'] as String?; }
+      for (final r in d as List) { (_chartDuties['${r['employee_id']}'] ??= []).add(Map<String, dynamic>.from(r as Map)); }
+      _chartMissing = false;
+    } catch (_) {
+      _chartMissing = true;
+    }
+  }
+
+  List<DropdownMenuItem<String?>> _stationItems(String? current, String noneLabel) => [
+        DropdownMenuItem<String?>(value: null, child: Text(noneLabel, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+        for (final s in _stations)
+          if (s['is_active'] != false || s['id'] == current)
+            DropdownMenuItem<String?>(value: '${s['id']}', child: Row(children: [
+              Container(width: 10, height: 10, decoration: BoxDecoration(color: _hex(s['color'] as String?), borderRadius: BorderRadius.circular(3))),
+              const SizedBox(width: 6),
+              Flexible(child: Text('${s['name']}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
+            ])),
+      ];
+
+  Widget _stationTag(Map<String, dynamic> st, {bool small = false}) => Container(
+        padding: EdgeInsets.symmetric(horizontal: small ? 5 : 8, vertical: small ? 1 : 3),
+        decoration: BoxDecoration(color: _hex(st['color'] as String?).withValues(alpha: 0.14), borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: _hex(st['color'] as String?).withValues(alpha: 0.5))),
+        child: Text('${st['name']}', maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: small ? 10.5 : 12, fontWeight: FontWeight.w700, color: _hex(st['color'] as String?))),
+      );
+
+  Future<void> _editChart(Map<String, dynamic> e) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    if (_chartMissing) { _snack('Run SQL 321 in Supabase first.'); return; }
+    if (_stations.isEmpty) { _snack('Add your stations first (Stations button).'); _manageStations(); return; }
+    final emp = '${e['id']}';
+    String? station = _chartStation[emp];
+    final lines = <_DutyLine>[
+      for (final d in _chartDuties[emp] ?? const <Map<String, dynamic>>[])
+        _DutyLine(TextEditingController(text: '${d['duty'] ?? ''}'), d['station_id'] as String?),
+    ];
+    if (lines.isEmpty) lines.add(_DutyLine(TextEditingController(), null));
+    InputDecoration box([String? hint]) => InputDecoration(hintText: hint, isDense: true, border: const OutlineInputBorder(),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10));
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+      title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text('${e['full_name'] ?? ''}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        Text([e['employee_code'], e['designation'], _deptName['${e['department_id']}']].where((x) => x != null && '$x'.isNotEmpty).join(' · '),
+            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      ]),
+      content: SizedBox(width: 560, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Standing station / line', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+        const SizedBox(height: 6),
+        InputDecorator(
+          decoration: box(),
+          child: DropdownButtonHideUnderline(child: DropdownButton<String?>(
+            value: station, isExpanded: true, isDense: true,
+            items: _stationItems(station, '— None —'),
+            onChanged: (v) => setD(() => station = v),
+          )),
+        ),
+        const SizedBox(height: 16),
+        Row(children: [
+          const Text('Duties', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          const Spacer(),
+          TextButton.icon(onPressed: () => setD(() => lines.add(_DutyLine(TextEditingController(), null))),
+              icon: const Icon(Icons.add, size: 16), label: const Text('Add duty')),
+        ]),
+        if (lines.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No duties.', style: TextStyle(color: AppTheme.textSecondary))),
+        for (final l in lines)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(children: [
+              Expanded(child: TextField(controller: l.ctrl, decoration: box('e.g. Machine setup & first-piece check'))),
+              const SizedBox(width: 8),
+              SizedBox(width: 160, child: InputDecorator(
+                decoration: box(),
+                child: DropdownButtonHideUnderline(child: DropdownButton<String?>(
+                  value: l.station, isExpanded: true, isDense: true,
+                  items: _stationItems(l.station, 'Any station'),
+                  onChanged: (v) => setD(() => l.station = v),
+                )),
+              )),
+              IconButton(tooltip: 'Remove', icon: const Icon(Icons.close, size: 18), onPressed: () => setD(() => lines.remove(l))),
+            ]),
+          ),
+        const Text('Tie a duty to a station only if it is done at a different place than the standing station.',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ]))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+      ],
+    )));
+    if (ok != true) return;
+    final uid = ref.read(currentUserProvider)?.id;
+    final now = DateTime.now().toUtc().toIso8601String();
+    try {
+      if (station == null) {
+        await _c.from('duty_chart_members').delete().eq('org_id', orgId).eq('employee_id', emp);
+      } else {
+        await _c.from('duty_chart_members').upsert({'org_id': orgId, 'employee_id': emp, 'station_id': station, 'updated_by': uid, 'updated_at': now},
+            onConflict: 'org_id,employee_id');
+      }
+      await _c.from('duty_chart_duties').delete().eq('org_id', orgId).eq('employee_id', emp);
+      final rows = <Map<String, dynamic>>[];
+      for (final l in lines) {
+        final t = l.ctrl.text.trim();
+        if (t.isEmpty) continue;
+        rows.add({'id': 'dcd_${DateTime.now().microsecondsSinceEpoch}_${rows.length}', 'org_id': orgId, 'employee_id': emp,
+            'duty': t, 'station_id': l.station, 'sort_order': rows.length, 'updated_by': uid});
+      }
+      if (rows.isNotEmpty) await _c.from('duty_chart_duties').insert(rows);
+      await _loadChart();
+      if (mounted) setState(() {});
+    } catch (err) {
+      _snack(err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
+    }
+  }
+
+  /// Selected people: set the standing station and/or add one duty to all.
+  Future<void> _bulkChart() async {
+    final orgId = _orgId;
+    final emps = _sel.toList();
+    if (orgId == null || emps.isEmpty) return;
+    if (_chartMissing) { _snack('Run SQL 321 in Supabase first.'); return; }
+    String choice = 'keep'; // keep | none | s:<id>
+    final duty = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+      Widget chip(String value, String label, Color c) => ChoiceChip(
+            label: Text(label, style: const TextStyle(fontSize: 12.5)),
+            avatar: Container(width: 10, height: 10, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+            selected: choice == value,
+            onSelected: (_) => setD(() => choice = value),
+          );
+      return AlertDialog(
+        title: Text('Duty Chart — ${emps.length} selected', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Standing station', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            chip('keep', 'Keep as is', Colors.transparent),
+            for (final s in _stations.where((s) => s['is_active'] != false)) chip('s:${s['id']}', '${s['name']}', _hex(s['color'] as String?)),
+            chip('none', 'Remove', const Color(0xFFCBD5E1)),
+          ]),
+          const SizedBox(height: 14),
+          const Text('Add a duty to everyone selected (optional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          const SizedBox(height: 6),
+          TextField(controller: duty, decoration: const InputDecoration(hintText: 'e.g. Daily 5S check of own area', isDense: true, border: OutlineInputBorder())),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apply')),
+        ],
+      );
+    }));
+    if (ok != true) return;
+    final uid = ref.read(currentUserProvider)?.id;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final t = duty.text.trim();
+    try {
+      if (choice == 'none') {
+        await _c.from('duty_chart_members').delete().eq('org_id', orgId).inFilter('employee_id', emps);
+      } else if (choice.startsWith('s:')) {
+        await _c.from('duty_chart_members').upsert(
+            [for (final e in emps) {'org_id': orgId, 'employee_id': e, 'station_id': choice.substring(2), 'updated_by': uid, 'updated_at': now}],
+            onConflict: 'org_id,employee_id');
+      }
+      if (t.isNotEmpty) {
+        var n = 0;
+        await _c.from('duty_chart_duties').insert([
+          for (final e in emps)
+            {'id': 'dcd_${DateTime.now().microsecondsSinceEpoch}_${n++}', 'org_id': orgId, 'employee_id': e, 'duty': t,
+             'sort_order': (_chartDuties[e]?.length ?? 0), 'updated_by': uid},
+        ]);
+      }
+      await _loadChart();
+      if (mounted) setState(() => _sel.clear());
+      _snack('Duty Chart updated for ${emps.length} worker${emps.length == 1 ? '' : 's'}');
+    } catch (err) {
+      _snack(err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
+    }
+  }
+
+  Widget _selectAllBox(List<Map<String, dynamic>> emps) => Checkbox(
+        visualDensity: VisualDensity.compact,
+        tristate: true,
+        value: emps.isEmpty || !emps.any((e) => _sel.contains('${e['id']}'))
+            ? false
+            : emps.every((e) => _sel.contains('${e['id']}')) ? true : null,
+        onChanged: emps.isEmpty ? null : (_) => setState(() {
+          final all = emps.every((e) => _sel.contains('${e['id']}'));
+          for (final e in emps) { if (all) { _sel.remove('${e['id']}'); } else { _sel.add('${e['id']}'); } }
+        }),
+      );
+
+  List<Widget> _dutyLines(String emp, {double size = 12.5}) {
+    final standing = _chartStation[emp];
+    return [
+      for (final d in _chartDuties[emp] ?? const <Map<String, dynamic>>[])
+        Padding(
+          padding: const EdgeInsets.only(bottom: 3),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('•  ', style: TextStyle(fontSize: size, color: AppTheme.textSecondary)),
+            Expanded(child: Text('${d['duty'] ?? ''}', style: TextStyle(fontSize: size))),
+            if (d['station_id'] != null && d['station_id'] != standing && _station(d['station_id'] as String?) != null)
+              Padding(padding: const EdgeInsets.only(left: 6), child: _stationTag(_station(d['station_id'] as String?)!, small: true)),
+          ]),
+        ),
+    ];
+  }
+
+  Widget _chartView(bool mobile) {
+    if (_chartMissing) {
+      return const Center(child: Text('Run SQL 321 in Supabase to start the Duty Chart.', style: TextStyle(color: AppTheme.danger)));
+    }
+    return _chartMode == 'stations' ? _chartStations() : _chartPeople();
+  }
+
+  Widget _chartPeople() {
+    final emps = _shownEmployees;
+    const nameW = 230.0, stW = 170.0, minW = 820.0;
+    final table = Column(children: [
+      Container(color: Colors.white, child: Row(children: [
+        SizedBox(width: nameW, child: Row(children: [
+          _selectAllBox(emps),
+          const Text('Worker', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
+        ])),
+        const SizedBox(width: stW, child: Text('Standing station', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
+        const Expanded(child: Text('Duties', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12))),
+        const SizedBox(width: 48),
+      ])),
+      const Divider(height: 1),
+      Expanded(child: emps.isEmpty
+          ? const Center(child: Text('Nobody to show. Use Members to choose who is on the chart.', style: TextStyle(color: AppTheme.textSecondary)))
+          : ListView.separated(
+              itemCount: emps.length,
+              separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFF1F5F9)),
+              itemBuilder: (_, i) {
+                final e = emps[i];
+                final id = '${e['id']}';
+                final picked = _sel.contains(id);
+                final isHidden = _hidden.contains(id);
+                final st = _station(_chartStation[id]);
+                final lines = _dutyLines(id);
+                return InkWell(
+                  onTap: () => _editChart(e),
+                  child: Container(
+                    color: picked ? AppTheme.primary.withValues(alpha: 0.05) : null,
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      SizedBox(width: nameW, child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Checkbox(
+                          visualDensity: VisualDensity.compact,
+                          value: picked,
+                          onChanged: (v) => setState(() { if (v == true) { _sel.add(id); } else { _sel.remove(id); } }),
+                        ),
+                        Expanded(child: Padding(
+                          padding: const EdgeInsets.only(top: 6, right: 8),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Row(children: [
+                              Flexible(child: Text('${e['full_name'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: isHidden ? AppTheme.textSecondary : AppTheme.textPrimary))),
+                              if (isHidden) const Padding(padding: EdgeInsets.only(left: 4), child: Icon(Icons.visibility_off_outlined, size: 13, color: AppTheme.textSecondary)),
+                            ]),
+                            Text([e['employee_code'], e['designation'], _deptName['${e['department_id']}']].where((x) => x != null && '$x'.isNotEmpty).join(' · '),
+                                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                          ]),
+                        )),
+                      ])),
+                      SizedBox(width: stW, child: Padding(
+                        padding: const EdgeInsets.only(top: 8, right: 10),
+                        child: Align(alignment: Alignment.centerLeft, child: st == null
+                            ? const Text('—', style: TextStyle(color: AppTheme.textSecondary))
+                            : _stationTag(st)),
+                      )),
+                      Expanded(child: Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: lines.isEmpty
+                            ? const Text('No duties — tap to add', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontStyle: FontStyle.italic))
+                            : Column(crossAxisAlignment: CrossAxisAlignment.start, children: lines),
+                      )),
+                      SizedBox(width: 48, child: IconButton(tooltip: 'Edit', icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _editChart(e))),
+                    ]),
+                  ),
+                );
+              },
+            )),
+    ]);
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: LayoutBuilder(builder: (context, c) => c.maxWidth >= minW
+            ? table
+            : SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: minW, height: c.maxHeight, child: table))),
+      ),
+    );
+  }
+
+  Widget _chartStations() {
+    final emps = _shownEmployees;
+    final by = <String, List<Map<String, dynamic>>>{};
+    final none = <Map<String, dynamic>>[];
+    for (final e in emps) {
+      final sid = _chartStation['${e['id']}'];
+      if (sid == null || _station(sid) == null) { none.add(e); } else { (by[sid] ??= []).add(e); }
+    }
+    final cols = <(String, Color, List<Map<String, dynamic>>)>[
+      for (final s in _stations)
+        if (s['is_active'] != false || (by['${s['id']}']?.isNotEmpty ?? false))
+          ('${s['name']}', _hex(s['color'] as String?), by['${s['id']}'] ?? []),
+      ('No station', AppTheme.textSecondary, none),
+    ];
+    return ListView(scrollDirection: Axis.horizontal, children: [
+      for (final c in cols)
+        Container(
+          width: 260,
+          margin: const EdgeInsets.only(right: 12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              decoration: BoxDecoration(color: c.$2.withValues(alpha: 0.12), borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
+              child: Row(children: [
+                Container(width: 10, height: 10, decoration: BoxDecoration(color: c.$2, borderRadius: BorderRadius.circular(3))),
+                const SizedBox(width: 8),
+                Expanded(child: Text(c.$1, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13))),
+                Text('${c.$3.length}', style: TextStyle(fontWeight: FontWeight.w800, color: c.$2)),
+              ]),
+            ),
+            Expanded(child: c.$3.isEmpty
+                ? const Center(child: Text('—', style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView(padding: const EdgeInsets.all(8), children: [
+                    for (final e in c.$3)
+                      InkWell(
+                        onTap: () => _editChart(e),
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text('${e['full_name'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+                            if ('${e['designation'] ?? ''}'.isNotEmpty)
+                              Text('${e['designation']}', style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                            if ((_chartDuties['${e['id']}'] ?? const []).isNotEmpty) const SizedBox(height: 4),
+                            ..._dutyLines('${e['id']}', size: 11.5),
+                          ]),
+                        ),
+                      ),
+                  ])),
+          ]),
+        ),
+    ]);
   }
 
   // ── Filters ──────────────────────────────────────────────────────────────
@@ -572,12 +947,23 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
             segments: const [
               ButtonSegment(value: 'week', label: Text('Week'), icon: Icon(Icons.calendar_view_week, size: 16)),
               ButtonSegment(value: 'day', label: Text('Day'), icon: Icon(Icons.view_column_outlined, size: 16)),
+              ButtonSegment(value: 'chart', label: Text('Duty Chart'), icon: Icon(Icons.assignment_outlined, size: 16)),
             ],
             selected: {_view},
             showSelectedIcon: false,
-            onSelectionChanged: (v) { setState(() => _view = v.first); _loadRange(); },
+            onSelectionChanged: (v) { setState(() => _view = v.first); if (v.first != 'chart') _loadRange(); },
           ),
-          _dateNav(),
+          if (_view != 'chart') _dateNav(),
+          if (_view == 'chart')
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'people', label: Text('By person'), icon: Icon(Icons.list_alt, size: 16)),
+                ButtonSegment(value: 'stations', label: Text('By station'), icon: Icon(Icons.view_column_outlined, size: 16)),
+              ],
+              selected: {_chartMode},
+              showSelectedIcon: false,
+              onSelectionChanged: (v) => setState(() => _chartMode = v.first),
+            ),
           OutlinedButton.icon(onPressed: _manageMembers, icon: const Icon(Icons.groups_outlined, size: 16),
               label: Text('Members (${_employees.where((e) => !_hidden.contains('${e['id']}')).length}/${_employees.length})')),
           OutlinedButton.icon(onPressed: _manageStations, icon: const Icon(Icons.factory_outlined, size: 16), label: Text('Stations (${_stations.where((s) => s['is_active'] != false).length})')),
@@ -604,9 +990,12 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
               selected: _showHidden,
               onSelected: (v) => setState(() { _showHidden = v; if (!v) _sel.removeWhere(_hidden.contains); }),
             ),
-          _legendChip(Colors.red, 'Absent'),
-          _legendChip(Colors.orange, 'On leave'),
-          _legendChip(Colors.amber.shade700, 'Half day'),
+          if (_view != 'chart') ...[
+            _legendChip(Colors.red, 'Absent'),
+            _legendChip(Colors.orange, 'On leave'),
+            _legendChip(Colors.amber.shade700, 'Half day'),
+          ] else
+            const Text('Long-term duties — not tied to dates. Tap a person to edit.', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
         ]),
         const SizedBox(height: 10),
         if (_sel.isNotEmpty && !_loading && _error == null) _selectionBar(),
@@ -614,7 +1003,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
             ? const Center(child: CircularProgressIndicator())
             : _error != null
                 ? Center(child: Text(_error!, style: const TextStyle(color: AppTheme.danger)))
-                : _view == 'week' ? _weekGrid(mobile) : _dayBoard()),
+                : _view == 'week' ? _weekGrid(mobile) : _view == 'day' ? _dayBoard() : _chartView(mobile)),
       ]),
     );
   }
@@ -902,6 +1291,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
 
   // ── Print (week grid, landscape) ─────────────────────────────────────────
   void _print() {
+    if (_view == 'chart') { _printChart(); return; }
     String esc(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     final emps = _shownEmployees;
@@ -947,9 +1337,67 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       }
       b.write('</tr>');
     }
-    b.write('</tbody></table><div class="foot">A = absent · L = on leave · ½ = half day (from attendance). '
-        'Printed ${DateFormat('d MMM y, h:mm a').format(DateTime.now())}</div></body></html>');
-    final doc = b.toString();
+    b.write('</tbody></table><div class="foot">Printed ${DateFormat('d MMM y, h:mm a').format(DateTime.now())}</div></body></html>');
+    _sendToPrinter(b.toString());
+  }
+
+  void _printChart() {
+    String esc(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+    final emps = _shownEmployees;
+    final groups = <(Map<String, dynamic>?, List<Map<String, dynamic>>)>[
+      for (final s in _stations) (s, emps.where((e) => _chartStation['${e['id']}'] == s['id']).toList()),
+      (null, emps.where((e) => _station(_chartStation['${e['id']}']) == null).toList()),
+    ].where((g) => g.$2.isNotEmpty).toList();
+    final b = StringBuffer();
+    b.write('<!doctype html><html><head><meta charset="utf-8"><title>Duty Chart</title><style>'
+        '@page{size:A4 portrait;margin:12mm}'
+        '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+        'body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;margin:0}'
+        '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1e3a8a;padding-bottom:6px;margin-bottom:12px}'
+        'h1{font-size:20px;margin:0;color:#1e3a8a}.org{font-size:10px;letter-spacing:1.3px;text-transform:uppercase;color:#475569;font-weight:700}'
+        '.per{font-size:11px;color:#475569}'
+        'table{border-collapse:collapse;width:100%;font-size:11px;margin-bottom:12px}thead{display:table-header-group}'
+        'th{background:#1e3a8a;color:#fff;padding:6px;text-align:left;font-size:10px}td{border:1px solid #e2e8f0;padding:6px;vertical-align:top}'
+        'tr{break-inside:avoid}td.n{font-weight:700;width:30%}td.n small{display:block;font-weight:400;color:#64748b}'
+        'ul{margin:0;padding-left:16px}li{margin:1px 0}.tg{font-size:9px;font-weight:700;padding:0 4px;border-radius:3px;margin-left:4px}'
+        '.sec{font-size:13px;font-weight:800;margin:6px 0 4px;padding-left:8px;border-left:5px solid}'
+        '.sig{display:flex;justify-content:space-between;margin-top:36px;font-size:10px;color:#475569}.sig div{border-top:1px solid #94a3b8;padding-top:4px;width:28%;text-align:center}'
+        '.foot{margin-top:10px;font-size:9px;color:#64748b}'
+        '</style></head><body>');
+    b.write('<div class="hd"><div><div class="org">${esc(org)}</div><h1>Duty Chart</h1></div>'
+        '<div class="per">Standing duties · ${emps.length} people</div></div>');
+    for (final g in groups) {
+      final col = g.$1 == null ? '#94a3b8' : '${g.$1!['color'] ?? '#2F6FED'}';
+      b.write('<div class="sec" style="border-color:$col">${esc(g.$1 == null ? 'No station' : '${g.$1!['name']}')} '
+          '<span style="color:#64748b;font-weight:600">(${g.$2.length})</span></div>');
+      b.write('<table><thead><tr><th>Name</th><th>Duties</th></tr></thead><tbody>');
+      for (final e in g.$2) {
+        final id = '${e['id']}';
+        final sub = [e['employee_code'], e['designation']].where((x) => x != null && '$x'.isNotEmpty).join(' · ');
+        b.write('<tr><td class="n">${esc('${e['full_name'] ?? ''}')}${sub.isEmpty ? '' : '<small>${esc(sub)}</small>'}</td><td>');
+        final ds = _chartDuties[id] ?? const <Map<String, dynamic>>[];
+        if (ds.isEmpty) {
+          b.write('<span style="color:#94a3b8">—</span>');
+        } else {
+          b.write('<ul>');
+          for (final d in ds) {
+            final ts = d['station_id'] != null && d['station_id'] != _chartStation[id] ? _station(d['station_id'] as String?) : null;
+            final tc = ts == null ? '' : '${ts['color'] ?? '#2F6FED'}';
+            b.write('<li>${esc('${d['duty'] ?? ''}')}${ts == null ? '' : '<span class="tg" style="background:${tc}22;color:$tc">${esc('${ts['name']}')}</span>'}</li>');
+          }
+          b.write('</ul>');
+        }
+        b.write('</td></tr>');
+      }
+      b.write('</tbody></table>');
+    }
+    b.write('<div class="sig"><div>Prepared by</div><div>Production Manager</div><div>Approved by</div></div>'
+        '<div class="foot">Printed ${DateFormat('d MMM y, h:mm a').format(DateTime.now())}</div></body></html>');
+    _sendToPrinter(b.toString());
+  }
+
+  void _sendToPrinter(String doc) {
     try {
       html.document.getElementById('ops-print-frame')?.remove();
       final frame = html.IFrameElement()
