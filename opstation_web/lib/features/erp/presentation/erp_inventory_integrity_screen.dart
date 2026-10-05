@@ -260,6 +260,29 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
             expected[pid] = (expected[pid] ?? 0) + ((r['qty'] as num?)?.toDouble() ?? 0);
           }
         } catch (_) {/* ignore if the helper RPC is unavailable */}
+        // (c) sales returns confirmed (SRN) but whose Return Invoice (SRI) is not
+        //     issued yet: stock came back IN at the SRN, the cost layer is only
+        //     created when the SRI is issued. Stock runs AHEAD of layers.
+        try {
+          final srns = await client
+              .from('sales_returns')
+              .select('id')
+              .eq('org_id', orgId)
+              .eq('status', 'saved')
+              .or('is_voided.is.null,is_voided.eq.false');
+          final srnIds = (srns as List).map((e) => e['id'] as String).toList();
+          for (var i = 0; i < srnIds.length; i += 200) {
+            final items = await client
+                .from('sales_return_items')
+                .select('product_id, quantity')
+                .inFilter('return_id', srnIds.sublist(i, (i + 200).clamp(0, srnIds.length)));
+            for (final r in (items as List)) {
+              final pid = r['product_id'] as String?;
+              if (pid == null) continue;
+              expected[pid] = (expected[pid] ?? 0) - ((r['quantity'] as num?)?.toDouble() ?? 0);
+            }
+          }
+        } catch (_) {/* ignore */}
 
         if (expected.isNotEmpty) {
           rows = rows.where((r) {
