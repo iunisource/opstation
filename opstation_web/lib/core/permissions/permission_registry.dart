@@ -188,6 +188,10 @@ const List<PermModule> kPermissionRegistry = [
   // CRM is licensable in app_modules.dart but had no registry entry, so none
   // of its routes appeared in kRouteToModule and the menu showed for every
   // org whether or not the module was switched on.
+  // Automation rules (draft PO / Job on low stock). Not a licensable module.
+  PermModule('automation', 'Automation', Icons.bolt_outlined, [
+    PermItem('automation', 'Automation Rules', PermKind.doc, '/erp/automation'),
+  ], moduleGated: false),
   PermModule('crm', 'CRM', Icons.contacts_outlined, [
     PermItem('crm_customers', 'CRM Customers', PermKind.doc, '/crm/customers'),
     PermItem('crm_pipeline', 'Pipeline', PermKind.doc, '/crm/pipeline'),

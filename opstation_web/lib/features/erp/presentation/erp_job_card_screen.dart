@@ -140,7 +140,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
-  bool get _editable => _status == 'queued' || _status == 'in_progress';
+  bool get _editable => _status == 'draft' || _status == 'queued' || _status == 'in_progress';
   double get _plannedQty => double.tryParse(_plannedQtyCtrl.text) ?? 0;
   double get _producedQty => (_current?['produced_qty'] as num? ?? 0).toDouble();
   double get _remainingQty => (_plannedQty - _producedQty);
@@ -1498,13 +1498,35 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  /// Automation (SQL 324) creates jobs as 'draft'. Releasing makes it a normal
+  /// queued job (visible on the floor / kiosk / QC).
+  Future<void> _releaseDraft() async {
+    if (_current == null || _status != 'draft') return;
+    final id = _current!['id'] as String;
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.from('job_cards')
+          .update({'status': 'queued', 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', id).eq('status', 'draft');
+      if (mounted) setState(() {
+        _status = 'queued';
+        _current!['status'] = 'queued';
+        final idx = _jobs.indexWhere((j) => j['id'] == id);
+        if (idx >= 0) _jobs[idx]['status'] = 'queued';
+      });
+      await _logJobAudit('released', notes: 'Draft released to production');
+      _snack('Released — the job is now queued');
+    } catch (e) { _snack('Could not release: $e'); }
+    if (mounted) setState(() => _busy = false);
+  }
+
   String _esc(String s) => s
       .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
   String _buildJobCardHtml({bool withPrices = true}) {
     final jobNo = _current?['job_number'] as String? ?? 'New Job';
     final st = _status;
-    final stLabel = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : 'Queued';
+    final stLabel = st == 'completed' ? 'Completed' : st == 'cancelled' ? 'Voided' : st == 'in_progress' ? 'In progress' : st == 'draft' ? 'Draft' : 'Queued';
     final branch = (ref.read(selectedBranchProvider)?['name'] as String?) ?? '—';
     final dateStr = DateFormat('d MMM yyyy').format(_date);
     final bomFg = _bomLabel.isEmpty ? (_fgLabel.isEmpty ? '—' : _fgLabel) : (_fgLabel.isEmpty ? _bomLabel : '$_bomLabel — $_fgLabel');
@@ -1878,14 +1900,18 @@ $runSection
             ? Colors.grey
             : st == 'in_progress'
                 ? Colors.blue
-                : Colors.orange;
+                : st == 'draft'
+                    ? Colors.blueGrey
+                    : Colors.orange;
     final lbl = st == 'completed'
         ? 'Completed'
         : st == 'cancelled'
             ? 'Voided'
             : st == 'in_progress'
                 ? 'In progress'
-                : 'Queued';
+                : st == 'draft'
+                    ? 'Draft (auto)'
+                    : 'Queued';
     final planned = (j['planned_qty'] as num? ?? 0).toDouble();
     final produced = (j['produced_qty'] as num? ?? 0).toDouble();
     final jOpen = (j['is_open_ended'] as bool?) ?? false;
@@ -2062,6 +2088,7 @@ $runSection
                 height: 26,
                 child: ListView(scrollDirection: Axis.horizontal, children: [
                   _statusChip('All', 'all'),
+                  if (_jobs.any((j) => j['status'] == 'draft')) _statusChip('Draft', 'draft'),
                   _statusChip('Queued', 'queued'),
                   _statusChip('In progress', 'in_progress'),
                   _statusChip('Completed', 'completed'),
@@ -2200,7 +2227,17 @@ $runSection
               // Shop-floor copy carries no prices — available to everyone on this screen.
               if (_current != null) IconButton(icon: const Icon(Icons.engineering_outlined, size: 20), onPressed: () => _printJobCard(withPrices: false), tooltip: 'Shop-floor print (no prices)', visualDensity: VisualDensity.compact),
               if (_editable && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete', visualDensity: VisualDensity.compact),
-              if (_current != null && _status != 'completed' && _status != 'cancelled')
+              if (_current != null && _status == 'draft')
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: ElevatedButton.icon(
+                    icon: _busy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.rocket_launch_outlined, size: 16),
+                    label: const Text('Release to production', style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), visualDensity: VisualDensity.compact),
+                    onPressed: _busy ? null : _releaseDraft,
+                  ),
+                ),
+              if (_current != null && _status != 'completed' && _status != 'cancelled' && _status != 'draft')
                 Padding(
                   padding: const EdgeInsets.only(left: 4),
                   child: onFloor

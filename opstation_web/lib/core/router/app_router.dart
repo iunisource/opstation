@@ -155,6 +155,7 @@ import '../../features/erp/presentation/payment_advice_public_screen.dart' defer
 import '../../features/erp/presentation/email_action_screen.dart' deferred as _s144;
 import '../../features/erp/presentation/erp_collection_report_screen.dart' deferred as _s145;
 import '../../features/erp/presentation/erp_duty_roster_screen.dart' deferred as _s146;
+import '../../features/erp/presentation/erp_automation_screen.dart' deferred as _s147;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -447,6 +448,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/users', builder: (_, __) => _deferred(_s107.loadLibrary(), () => _s107.ErpUsersScreen())),
           GoRoute(path: '/erp/admin-settings', builder: (_, __) => _deferred(_s108.loadLibrary(), () => _s108.ErpAdminSettingsScreen())),
           GoRoute(path: '/erp/ai-connector', builder: (_, __) => _deferred(_s109.loadLibrary(), () => _s109.ErpMcpConnectorScreen())),
+          GoRoute(path: '/erp/automation', builder: (_, __) => _deferred(_s147.loadLibrary(), () => _s147.ErpAutomationScreen())),
           GoRoute(path: '/erp/audit-log', builder: (_, __) => _deferred(_s134.loadLibrary(), () => _s134.ErpAuditLogScreen())),
           GoRoute(path: '/erp/super-summary', builder: (_, __) => _deferred(_s029.loadLibrary(), () => _s029.ErpSuperSummaryScreen())),
           GoRoute(path: '/erp/onboarding', builder: (_, __) => _deferred(_s009.loadLibrary(), () => _s009.ErpOnboardingScreen())),

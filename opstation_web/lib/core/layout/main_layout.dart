@@ -1459,11 +1459,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           badge: assetsDue + facilityDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
-        ['/erp/onboarding', '/erp/branches', '/erp/files', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/ai-connector', '/erp/audit-log'],
+        ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/automation', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/ai-connector', '/erp/audit-log'],
         [
           _menuItem(context, 'Onboarding Guide', Icons.menu_book_outlined, '/erp/onboarding', location),
           if (show('/erp/branches')) _menuItem(context, 'Branches', Icons.store_outlined, '/erp/branches', location),
           if (show('/erp/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/erp/files', location),
+          if (show('/erp/automation')) _menuItem(context, 'Automation', Icons.bolt_outlined, '/erp/automation', location),
           if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
             _menuItem(context, 'Billing & Subscription', Icons.credit_card_outlined, '/billing', location),
           if (user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.admin)
