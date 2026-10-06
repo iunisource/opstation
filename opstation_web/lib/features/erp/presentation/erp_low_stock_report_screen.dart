@@ -128,15 +128,59 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
 
   Widget _filterDropdown(String label, String type, String? value, void Function(String?) onChanged) {
     final items = _taxonomies[type] ?? [];
-    return SizedBox(width: 190, child: DropdownButtonFormField<String?>(
-      value: value,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: label, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-      items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('All')),
-        ...items.map((t) => DropdownMenuItem<String?>(value: t['name'] as String, child: Text(t['name'] as String, overflow: TextOverflow.ellipsis))),
-      ],
+    return _searchSelect(
+      label: label, width: 190, value: value, allowAll: true,
+      options: [for (final t in items) (t['name'] as String, t['name'] as String)],
       onChanged: onChanged,
+    );
+  }
+
+  /// A dropdown-looking field that opens a searchable list.
+  Widget _searchSelect({
+    required String label,
+    required double width,
+    required String? value,
+    required List<(String, String)> options, // (value, label)
+    required void Function(String?) onChanged,
+    bool allowAll = false,
+  }) {
+    String shown = allowAll ? 'All' : '—';
+    for (final o in options) { if (o.$1 == value) { shown = o.$2; break; } }
+    return SizedBox(width: width, child: InkWell(
+      borderRadius: BorderRadius.circular(4),
+      onTap: () async {
+        String q = '';
+        final picked = await showDialog<(bool, String?)>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+          final list = options.where((o) => q.isEmpty || o.$2.toLowerCase().contains(q.toLowerCase())).toList();
+          return AlertDialog(
+            title: Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            content: SizedBox(width: 360, height: 420, child: Column(children: [
+              TextField(autofocus: true, onChanged: (v) => setD(() => q = v),
+                  decoration: const InputDecoration(hintText: 'Search…', prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder())),
+              const SizedBox(height: 6),
+              Expanded(child: ListView(children: [
+                if (allowAll && q.isEmpty)
+                  ListTile(dense: true, title: const Text('All', style: TextStyle(fontWeight: FontWeight.w600)),
+                      selected: value == null, onTap: () => Navigator.pop(ctx, (true, null))),
+                for (final o in list)
+                  ListTile(dense: true, title: Text(o.$2), selected: o.$1 == value,
+                      trailing: o.$1 == value ? const Icon(Icons.check, size: 16) : null,
+                      onTap: () => Navigator.pop(ctx, (true, o.$1))),
+                if (list.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No match', style: TextStyle(color: AppTheme.textSecondary))),
+              ])),
+            ])),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+          );
+        }));
+        if (picked != null && picked.$1) onChanged(picked.$2);
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(labelText: label, isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            suffixIcon: const Icon(Icons.arrow_drop_down)),
+        child: Text(shown, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
     ));
   }
 
@@ -259,13 +303,11 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
             style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          SizedBox(width: 220, child: DropdownButtonFormField<String>(
-            value: _branchId,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Branch', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-            items: _branches.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))).toList(),
-            onChanged: (v) { setState(() => _branchId = v); _load(); },
-          )),
+          _searchSelect(
+            label: 'Branch', width: 220, value: _branchId,
+            options: [for (final b in _branches) (b['id'] as String, b['name'] as String? ?? '-')],
+            onChanged: (v) { if (v == null) return; setState(() => _branchId = v); _load(); },
+          ),
           _filterDropdown('Main Group', 'main_group', _fMain, (v) => setState(() => _fMain = v)),
           _filterDropdown('Group', 'group', _fGroup, (v) => setState(() => _fGroup = v)),
           _filterDropdown('Class', 'class', _fClass, (v) => setState(() => _fClass = v)),

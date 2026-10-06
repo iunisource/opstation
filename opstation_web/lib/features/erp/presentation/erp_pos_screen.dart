@@ -1877,7 +1877,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final breakdown = _sessionBreakdown();
     String breakdownRows = '';
     breakdown.forEach((k, v) {
-      breakdownRows += '<tr><td>$k</td><td style="text-align:right;font-weight:600">${money(v)}</td></tr>';
+      breakdownRows += '<tr><td>$k</td><td class="num" style="font-weight:700">${money(v)}</td></tr>';
     });
     final custDetail = _customerAccountDetail();
     String custRows = '';
@@ -2007,12 +2007,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           '<td style="text-align:right;font-weight:bold">${money(net)}</td></tr>';
     }
     final String productSection = combined
-        ? (combinedRows.isNotEmpty ? '''<h2>Products Sold (Combined)</h2>
+        ? (combinedRows.isNotEmpty ? '''<div class="sh"><h2>Products sold (combined)</h2><span class="cnt">${combinedEntries.length}</span></div>
 <table><thead><tr><th>Product</th><th style="text-align:right">Qty</th><th>Discount</th><th style="text-align:right">Total</th></tr></thead>
 <tbody>$combinedRows
 <tr class="total-row"><td>TOTAL</td><td style="text-align:right">${combQty.toStringAsFixed(combQty == combQty.roundToDouble() ? 0 : 2)}</td>${discCell(combDisc, combNet + combDisc)}<td style="text-align:right">${money(combNet)}</td></tr>
 </tbody></table>''' : '')
-        : (txnRows.isNotEmpty ? '''<h2>Sales Transactions</h2>
+        : (txnRows.isNotEmpty ? '''<div class="sh"><h2>Sales transactions</h2><span class="cnt">${sales.length}</span></div>
 <table><thead><tr><th>Time</th><th>Txn #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Discount</th><th>Total</th></tr></thead>
 <tbody>$txnRows
 <tr class="total-row"><td colspan="6">TOTAL SALES</td><td style="text-align:right">${money(totalSales)}</td></tr>
@@ -2039,64 +2039,107 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       retRows += '<tr style="background:#fff5f5"><td>$time</td><td>$customer</td><td style="font-size:12px;color:#666">← $refNum</td><td style="text-align:right;color:#e74c3c;font-weight:bold">-$total</td></tr>';
     }
 
+    // ── Layout helpers ────────────────────────────────────────────────────
+    final orgName = ref.read(currentUserProvider)?.orgName ?? '';
+    final isClosed = _session['closed_at'] != null;
+    final avgBill = sales.isEmpty ? 0.0 : totalSales / sales.length;
+    String kpi(String label, String value, {String tone = '', String? sub}) =>
+        '<div class="kpi $tone"><div class="kl">$label</div><div class="kv">$value</div>'
+        '${sub != null ? '<div class="ks">$sub</div>' : ''}</div>';
+    String recon(String label, double v, {String sign = '', bool strong = false, String tone = ''}) =>
+        '<tr class="${strong ? 'strong' : ''}"><td>$label</td>'
+        '<td class="num $tone">${sign.isEmpty ? '' : '$sign '}${money(v)}</td></tr>';
+    String section(String title, String count, String body) =>
+        '<section><div class="sh"><h2>$title</h2>${count.isEmpty ? '' : '<span class="cnt">$count</span>'}</div>$body</section>';
+    final diffLabel = cashDiff.abs() < 0.5 ? 'Balanced' : (cashDiff > 0 ? 'Short' : 'Over');
+    final diffTone = cashDiff.abs() < 0.5 ? 'pos' : (cashDiff > 0 ? 'neg' : 'warn');
+
     final htmlContent = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>$fileTitle</title>
-<style>@page{margin:0}
-*{box-sizing:border-box}body{font-family:Arial,sans-serif;padding:32px;color:#333;max-width:900px;margin:0 auto}
-h1{font-size:24px;margin:0 0 4px}h2{font-size:16px;margin:24px 0 10px;color:#555;border-bottom:2px solid #eee;padding-bottom:6px}
-.meta{color:#888;font-size:13px;margin-bottom:20px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px}
-.stat{background:#f8f9fa;padding:14px 16px;border-radius:10px;border:1px solid #e9ecef}
-.sl{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.sv{font-size:20px;font-weight:700;color:#2c3e50}
-.sv.green{color:#27ae60}.sv.red{color:#e74c3c}.sv.blue{color:#2980b9}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:#f1f3f5;padding:9px 12px;text-align:left;font-size:12px;font-weight:600;color:#555}
-td{padding:8px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
-tr:hover td{background:#fafafa}.total-row td{font-weight:700;background:#f8f9fa;font-size:14px}
-.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
-.badge-sale{background:#d4edda;color:#155724}.badge-ret{background:#f8d7da;color:#721c24}
-@media print{body{padding:16px}h1{font-size:20px}}
+<style>@page{size:A4;margin:12mm}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#0f172a;margin:0 auto;max-width:960px;padding:24px;background:#fff}
+.hd{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;border-radius:14px;padding:18px 22px;margin-bottom:16px}
+.hd .org{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;opacity:.85;font-weight:700}
+.hd h1{font-size:24px;margin:2px 0 0;font-weight:800}
+.hd .meta{font-size:12px;opacity:.95;text-align:right;line-height:1.6}
+.pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:800;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.4)}
+.grp{font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#64748b;margin:16px 0 8px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.kpi{border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;background:#f8fafc;border-top:4px solid #94a3b8}
+.kpi .kl{font-size:10.5px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.kpi .kv{font-size:19px;font-weight:800;margin-top:4px;white-space:nowrap}
+.kpi .ks{font-size:10.5px;color:#64748b;margin-top:2px}
+.kpi.pos{border-top-color:#16a34a}.kpi.pos .kv{color:#15803d}
+.kpi.neg{border-top-color:#dc2626}.kpi.neg .kv{color:#b91c1c}
+.kpi.info{border-top-color:#2563eb}.kpi.info .kv{color:#1d4ed8}
+.kpi.warn{border-top-color:#d97706}.kpi.warn .kv{color:#b45309}
+.kpi.dark{border-top-color:#0f172a;background:#eef2ff}
+.two{display:grid;grid-template-columns:1.1fr 1fr;gap:14px;margin-top:16px}
+.card{border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}
+.card h3{margin:0;padding:10px 14px;font-size:13px;background:#f1f5f9;border-bottom:1px solid #e2e8f0}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{background:#f1f5f9;padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.4px}
+td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.recon td{padding:7px 14px}.recon tr.strong td{font-weight:800;background:#f8fafc;border-top:1.5px solid #cbd5e1}
+.pos{color:#15803d}.neg{color:#b91c1c}.warn{color:#b45309}
+.total-row td{font-weight:800;background:#f8fafc;border-top:1.5px solid #cbd5e1}
+section{margin-top:18px;break-inside:avoid}
+.sh{display:flex;align-items:center;gap:8px;border-bottom:2px solid #1e3a8a;margin-bottom:8px}
+.sh h2{font-size:14px;margin:0;padding:4px 0;color:#1e3a8a}
+.cnt{font-size:10.5px;font-weight:800;background:#e0e7ff;color:#1e3a8a;border-radius:10px;padding:1px 8px}
+.foot{margin-top:22px;font-size:10px;color:#94a3b8;text-align:right}
+@media print{body{padding:0}.hd{border-radius:10px}}
 </style></head><body>
-<h1>POS Session Summary</h1>
-<div class="meta">Branch: <b>$branch</b> &nbsp;|&nbsp; Cashier: <b>$cashier</b> &nbsp;|&nbsp; Opened: <b>$openedAt</b> &nbsp;|&nbsp; Closed: <b>$closedAt</b></div>
-<div class="stats">
-  <div class="stat"><div class="sl">Transactions</div><div class="sv blue">${sales.length}</div></div>
-  <div class="stat"><div class="sl">Returns</div><div class="sv red">${returns.length}</div></div>
-  <div class="stat"><div class="sl">Total Sales</div><div class="sv green">${money(totalSales)}</div></div>
-  <div class="stat"><div class="sl">Total Refunds</div><div class="sv red">${money(totalReturns)}</div></div>
-  <div class="stat"><div class="sl">Net Sales</div><div class="sv">${money(totalSales - totalReturns)}</div></div>
-  <div class="stat"><div class="sl">Customer Account Sale</div><div class="sv blue">${money(customerAccountSale)}</div></div>
-  <div class="stat"><div class="sl">Opening Cash</div><div class="sv">${money(openingCash)}</div></div>
-  <div class="stat"><div class="sl">Closing Cash</div><div class="sv">${money(closingCash)}</div></div>
-  <div class="stat"><div class="sl">Cash Difference</div><div class="sv ${cashDiff <= 0 ? 'green' : 'red'}">${cashDiff > 0 ? '-' : '+'}${money(cashDiff.abs())}</div></div>
+<div class="hd">
+  <div><div class="org">${orgName.isEmpty ? 'Point of Sale' : orgName}</div><h1>POS Session Summary</h1>
+    <div style="margin-top:6px"><span class="pill">${isClosed ? 'CLOSED' : 'OPEN'}</span> <span class="pill">${combined ? 'Combined' : 'Bill-wise'}</span></div></div>
+  <div class="meta">Branch: <b>$branch</b><br>Cashier: <b>$cashier</b><br>Opened: <b>$openedAt</b> · Closed: <b>$closedAt</b></div>
 </div>
-${breakdownRows.isNotEmpty ? '''<h2>Payment Breakdown</h2>
-<table><thead><tr><th>Account / Mode</th><th style="text-align:right">Collected</th></tr></thead>
-<tbody>$breakdownRows</tbody></table>''' : ''}
-${custRows.isNotEmpty ? '''<h2>Customer Account Detail</h2>
-<table><thead><tr><th>Customer</th><th style="text-align:right">Amount</th></tr></thead>
-<tbody>$custRows</tbody></table>''' : ''}
-$productSection
-${expRows.isNotEmpty ? '''<h2>Expenses</h2>
-<table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
-<tbody>$expRows
-<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:#c0392b">-${money(totalExpenses)}</td></tr>
-</tbody></table>''' : ''}
-${payRows.isNotEmpty ? '''<h2>Supplier / Expense Payments (from till)</h2>
-<table><thead><tr><th>Time</th><th>CPV Ref.</th><th>Paid To / Description</th><th>Amount</th></tr></thead>
-<tbody>$payRows
-<tr class="total-row"><td colspan="3">TOTAL PAYMENTS</td><td style="text-align:right;color:#c0392b">-${money(totalPayments)}</td></tr>
-</tbody></table>''' : ''}
-${rcvRows.isNotEmpty ? '''<h2>Customer Receipts (into till)</h2>
-<table><thead><tr><th>Time</th><th>CRV Ref.</th><th>Received From / Description</th><th>Amount</th></tr></thead>
-<tbody>$rcvRows
-<tr class="total-row"><td colspan="3">TOTAL RECEIPTS</td><td style="text-align:right;color:#1e7e34">+${money(totalReceipts)}</td></tr>
-</tbody></table>''' : ''}
-${retRows.isNotEmpty ? '''<h2>Returns &amp; Refunds</h2>
-<table><thead><tr><th>Time</th><th>Customer</th><th>Original Txn</th><th>Refund</th></tr></thead>
-<tbody>$retRows
-<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td style="text-align:right;color:#e74c3c">-${money(totalReturns)}</td></tr>
-</tbody></table>''' : ''}
+
+<div class="grp">Sales</div>
+<div class="kpis">
+  ${kpi('Gross Sales', money(totalSales), tone: 'pos', sub: '${sales.length} bill${sales.length == 1 ? '' : 's'}')}
+  ${kpi('Refunds', money(totalReturns), tone: 'neg', sub: '${returns.length} return${returns.length == 1 ? '' : 's'}')}
+  ${kpi('Net Sales', money(totalSales - totalReturns), tone: 'dark')}
+  ${kpi('Average Bill', money(avgBill), tone: 'info')}
+  ${kpi('On Customer Account', money(customerAccountSale), tone: 'info', sub: 'credit sales')}
+</div>
+
+<div class="grp">Cash in &amp; out of the till</div>
+<div class="kpis">
+  ${kpi('Cash Sales', money(cashSales), tone: 'pos')}
+  ${kpi('Customer Receipts', money(totalReceipts), tone: 'pos', sub: '${_sessionReceipts.length} CRV')}
+  ${kpi('Vendor Payments', money(totalPayments), tone: 'neg', sub: '${_sessionPayments.length} CPV')}
+  ${kpi('Expenses', money(totalExpenses), tone: 'neg', sub: '${_expenses.length} entr${_expenses.length == 1 ? 'y' : 'ies'}')}
+  ${kpi('Cash Difference', '${cashDiff > 0 ? '-' : (cashDiff < -0.5 ? '+' : '')}${money(cashDiff.abs())}', tone: diffTone, sub: diffLabel)}
+</div>
+
+<div class="two">
+  <div class="card"><h3>Cash drawer reconciliation</h3>
+    <table class="recon"><tbody>
+      ${recon('Opening cash', openingCash)}
+      ${recon('Cash sales', cashSales, sign: '+', tone: 'pos')}
+      ${recon('Customer receipts', totalReceipts, sign: '+', tone: 'pos')}
+      ${recon('Cash refunds', cashRefunds, sign: '−', tone: 'neg')}
+      ${recon('Expenses', totalExpenses, sign: '−', tone: 'neg')}
+      ${recon('Vendor payments', totalPayments, sign: '−', tone: 'neg')}
+      ${recon('Expected in drawer', expectedDrawerFinal, strong: true)}
+      ${recon('Counted at close', closingCash, strong: true)}
+      <tr class="strong"><td>Difference — $diffLabel</td><td class="num $diffTone">${cashDiff > 0 ? '−' : (cashDiff < -0.5 ? '+' : '')} ${money(cashDiff.abs())}</td></tr>
+    </tbody></table></div>
+  <div class="card"><h3>Payment breakdown</h3>
+    ${breakdownRows.isNotEmpty ? '<table><tbody>$breakdownRows</tbody></table>' : '<div style="padding:12px 14px;color:#94a3b8;font-size:12px">No payments recorded.</div>'}
+  </div>
+</div>
+
+${custRows.isNotEmpty ? section('Customer account detail', '', '<table><thead><tr><th>Customer</th><th class="num">Amount</th></tr></thead><tbody>$custRows</tbody></table>') : ''}
+${productSection.isNotEmpty ? '<section>$productSection</section>' : ''}
+${payRows.isNotEmpty ? section('Vendor payments (from till)', '${_sessionPayments.length}', '<table><thead><tr><th>Time</th><th>CPV Ref.</th><th>Paid to / Description</th><th class="num">Amount</th></tr></thead><tbody>$payRows<tr class="total-row"><td colspan="3">TOTAL VENDOR PAYMENTS</td><td class="num neg">-${money(totalPayments)}</td></tr></tbody></table>') : ''}
+${expRows.isNotEmpty ? section('Expenses', '${_expenses.length}', '<table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th class="num">Amount</th></tr></thead><tbody>$expRows<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td class="num neg">-${money(totalExpenses)}</td></tr></tbody></table>') : ''}
+${rcvRows.isNotEmpty ? section('Customer receipts (into till)', '${_sessionReceipts.length}', '<table><thead><tr><th>Time</th><th>CRV Ref.</th><th>Received from / Description</th><th class="num">Amount</th></tr></thead><tbody>$rcvRows<tr class="total-row"><td colspan="3">TOTAL RECEIPTS</td><td class="num pos">+${money(totalReceipts)}</td></tr></tbody></table>') : ''}
+${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table><thead><tr><th>Time</th><th>Customer</th><th>Original bill</th><th class="num">Refund</th></tr></thead><tbody>$retRows<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td class="num neg">-${money(totalReturns)}</td></tr></tbody></table>') : ''}
+<div class="foot">Printed ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}</div>
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
 

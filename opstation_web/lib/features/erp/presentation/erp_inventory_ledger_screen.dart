@@ -109,19 +109,15 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final list = rows
           .map((b) => {'id': b['id'], 'name': b['name']})
           .toList();
-      // Also include processor / off-site (virtual) locations, so stock consumed
-      // or produced there via job-work / transfers is visible in the ledger.
-      final have = {for (final b in list) b['id']};
+      // Real branches only: processor / off-site (virtual) locations are left
+      // out of "All Branches" and the multi-branch picker.
       try {
         final orgId = _orgId;
         if (orgId != null) {
           final vrows = await Supabase.instance.client.from('branches')
-              .select('id, name').eq('org_id', orgId).eq('is_virtual', true);
-          for (final v in vrows as List) {
-            if (!have.contains(v['id'])) {
-              list.add({'id': v['id'], 'name': '${v['name']} (processor)'});
-            }
-          }
+              .select('id').eq('org_id', orgId).eq('is_virtual', true);
+          final virtualIds = {for (final v in vrows as List) v['id']};
+          list.removeWhere((b) => virtualIds.contains(b['id']));
         }
       } catch (_) {/* virtual branches optional */}
       list.sort((a, b) => (a['name'] as String? ?? '').compareTo(b['name'] as String? ?? ''));
