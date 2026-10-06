@@ -83,6 +83,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.initState();
     _loadRemember();
     _diagnose();
+    // If this screen was rebuilt mid-sign-in, finish a pending org choice.
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _maybeRunOrgChoice(); });
     _rotTimer = Timer.periodic(const Duration(milliseconds: 2600), (_) {
       if (mounted) setState(() => _rotIndex = (_rotIndex + 1) % _rotWords.length);
     });
@@ -163,21 +165,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           password: _passCtrl.text,
           rememberMe: _rememberMe,
         );
-    if (!mounted) return;
+    if (!mounted) return; // a rebuilt login screen picks up the org choice itself
 
     // Multi-org login → ask which org to enter before finishing.
-    final pending = ref.read(pendingOrgChoiceProvider);
-    if (pending != null && pending.length > 1) {
-      final chosen = await _pickOrg(pending);
-      if (!mounted) return;
-      final ctrl = ref.read(authControllerProvider.notifier);
-      if (chosen == null) {
-        await ctrl.cancelOrgChoice();
-      } else {
-        await ctrl.completeOrgChoice(chosen);
-      }
-      if (!mounted) return;
-    }
+    await _maybeRunOrgChoice();
+    if (!mounted) return;
 
     final err = ref.read(authControllerProvider).error;
     if (err != null) {
@@ -188,6 +180,40 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           behavior: SnackBarBehavior.floating,
         ),
       );
+    }
+  }
+
+  // Only one org picker at a time, across login-screen rebuilds.
+  static bool _orgPickerOpen = false;
+
+  /// Multi-org login: show the org picker if a choice is pending. Safe to call
+  /// from several places — the login screen can be torn down and rebuilt by
+  /// the router while signIn() is in flight, and the NEW instance must still
+  /// finish the choice (otherwise the sign-in is silently dropped and the user
+  /// lands back on an empty login page).
+  Future<void> _maybeRunOrgChoice() async {
+    final pending = ref.read(pendingOrgChoiceProvider);
+    if (pending == null || pending.length < 2 || _orgPickerOpen) return;
+    _orgPickerOpen = true;
+    try {
+      final chosen = await _pickOrg(pending);
+      final ctrl = ref.read(authControllerProvider.notifier);
+      if (chosen == null) {
+        await ctrl.cancelOrgChoice();
+      } else {
+        await ctrl.completeOrgChoice(chosen);
+      }
+    } finally {
+      _orgPickerOpen = false;
+    }
+    if (!mounted) return;
+    final err = ref.read(authControllerProvider).error;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(err.toString()),
+        backgroundColor: AppTheme.danger,
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 
@@ -348,6 +374,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final isLoading = ref.watch(authControllerProvider).isLoading;
+    // A multi-org sign-in sets the pending choice; open the picker as soon as
+    // it appears, whichever login-screen instance is on screen.
+    ref.listen<List<Map<String, dynamic>>?>(pendingOrgChoiceProvider, (prev, next) {
+      if (next != null && next.length > 1) {
+        WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _maybeRunOrgChoice(); });
+      }
+    });
     return Scaffold(
       backgroundColor: Colors.white,
       body: Stack(
