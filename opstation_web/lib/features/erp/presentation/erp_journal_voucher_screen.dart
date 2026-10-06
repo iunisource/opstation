@@ -50,6 +50,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   bool _loadingMaster = true, _saving = false;
   bool _jvSuperviseFlow = false; // org.jv_supervise_flow: docs + non-blocking supervise
   bool _jvApproveFlow = false;   // org.jv_approve_flow: BLOCKING approval before posting
+  bool _jvVoidFlow = false;      // org.jv_void_flow: posted JVs are VOIDED (reversal), not deleted
   bool _superviseBusy = false;
   String _statusFilter = 'all'; // all | draft | pending | posted
   final Set<String> _sel = {};   // ticked JVs for bulk approve / supervise
@@ -96,11 +97,12 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     }
     try {
       final rows = await Supabase.instance.client.from('app_config').select('key,value')
-          .eq('org_id', orgId).inFilter('key', ['org.jv_supervise_flow', 'org.jv_approve_flow']);
+          .eq('org_id', orgId).inFilter('key', ['org.jv_supervise_flow', 'org.jv_approve_flow', 'org.jv_void_flow']);
       final m = {for (final r in (rows as List)) r['key'] as String: r['value'] as String?};
       if (mounted) setState(() {
         _jvSuperviseFlow = m['org.jv_supervise_flow'] == 'true';
         _jvApproveFlow = m['org.jv_approve_flow'] == 'true';
+        _jvVoidFlow = m['org.jv_void_flow'] == 'true';
       });
     } catch (_) {}
   }
@@ -267,7 +269,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       var q = Supabase.instance.client.from('journal_entries').select().eq('org_id', orgId).eq('reference_type', 'jv');
       final bid = _branchId; if (bid != null) q = q.eq('branch_id', bid);
       final rows = await q.order('created_at', ascending: false).limit(200);
-      if (mounted) setState(() { _vouchers = List<Map<String,dynamic>>.from(rows); _loadingList = false; });
+      // Void reversals (JV-…-VOID) are bookkeeping twins of a voided JV — keep
+      // them out of the voucher list; they show on ledgers.
+      if (mounted) setState(() { _vouchers = List<Map<String,dynamic>>.from(rows).where((r) => r['reverses_id'] == null).toList(); _loadingList = false; });
       ref.invalidate(jvPendingCountProvider); // keep the nav badge in step
     } catch (e) { if (mounted) setState(() => _loadingList = false); }
   }
@@ -463,6 +467,50 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       await Supabase.instance.client.from('journal_entries').delete().eq('id', id);
       _snack('Deleted'); _newVoucher(); await _loadVouchers();
     } catch (e) { _snack('Delete failed: ' + e.toString()); }
+  }
+
+  bool get _isVoided => _current?['is_voided'] == true;
+
+  /// org.jv_void_flow: a POSTED JV is voided — kept on record, marked VOIDED,
+  /// and a mirror reversal (JV-…-VOID) is posted on the same date (SQL 325).
+  Future<void> _void() async {
+    if (_current == null || _isVoided) return;
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+      title: Text('Void ${_current!['entry_number'] ?? 'JV'}?'),
+      content: SizedBox(width: 440, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('The JV stays on record marked VOIDED, and a reversing entry is posted on the same date, '
+            'so every ledger it touched goes back to as if it never happened. This cannot be undone.',
+            style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 12),
+        TextField(controller: reasonCtrl, autofocus: true, maxLines: 2, onChanged: (_) => setD(() {}),
+            decoration: const InputDecoration(labelText: 'Reason (required)', border: OutlineInputBorder())),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(
+          onPressed: reasonCtrl.text.trim().isEmpty ? null : () => Navigator.pop(ctx, true),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+          child: const Text('Void'),
+        ),
+      ],
+    )));
+    if (ok != true) return;
+    final u = ref.read(currentUserProvider);
+    try {
+      final id = _current!['id'] as String;
+      final revNo = await Supabase.instance.client.rpc('void_journal_voucher', params: {
+        'p_id': id, 'p_reason': reasonCtrl.text.trim(), 'p_user': u?.id, 'p_user_name': u?.name,
+      });
+      _logAudit('voided', notes: 'Reason: ${reasonCtrl.text.trim()} · reversal $revNo');
+      final fresh = await Supabase.instance.client.from('journal_entries').select().eq('id', id).single();
+      if (mounted) setState(() => _current = fresh);
+      _snack('Voided — reversal $revNo posted');
+      await _loadVouchers();
+    } catch (e) {
+      final m = e.toString();
+      _snack(m.contains('void_journal_voucher') || m.contains('is_voided') ? 'Run SQL 325 in Supabase first.' : 'Void failed: $m');
+    }
   }
 
   Future<void> _unlockVoucher() async {
@@ -770,10 +818,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     </style></head><body>
     <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">Print</button></div>
     <h2>Journal Voucher</h2>
+    ${_isVoided ? '<div style="text-align:center;color:#c53030;font-weight:800;letter-spacing:2px;border:2px solid #c53030;padding:4px;margin:6px auto;max-width:520px">VOIDED${_current?['void_reason'] != null ? ' — ' + esc('${_current!['void_reason']}') : ''}</div>' : ''}
     <table class="meta" style="border:none;margin-bottom:5px"><tr>
       <td><b>Voucher#:</b> ${_current!['entry_number'] ?? ''}</td>
       <td><b>Date:</b> ${DateFormat('dd MMM yyyy').format(_date)}</td>
-      <td><b>Status:</b> ${_status.toUpperCase()}</td>
+      <td><b>Status:</b> ${_isVoided ? '<span style="color:#c53030;font-weight:800">VOIDED</span>' : _status.toUpperCase()}</td>
     </tr><tr><td colspan="3"><b>Narration:</b> ${_narCtrl.text}</td></tr></table>
     ${badges.isEmpty ? '' : '<div class="trusts">$badges</div>'}
     <table class="grid"><thead><tr><th style="width:30px">#</th><th>Account</th><th>Description</th><th class="num" style="width:120px">Debit</th><th class="num" style="width:120px">Credit</th></tr></thead><tbody>
@@ -854,7 +903,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       switch (_statusFilter) {
         case 'draft': if (posted || isPending(v)) return false; break;
         case 'pending': if (!isPending(v)) return false; break;
-        case 'posted': if (!posted) return false; break;
+        case 'posted': if (!posted || v['is_voided'] == true) return false; break;
+        case 'voided': if (v['is_voided'] != true) return false; break;
       }
       if (_jvSuperviseFlow && _supFilter != 'all') {
         final sup = v['supervised_at'] != null;
@@ -906,6 +956,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                 chip('Draft', 'draft', _statusFilter, (v) => _statusFilter = v),
                 if (_jvApproveFlow) chip('Pending approval', 'pending', _statusFilter, (v) => _statusFilter = v, count: pendingCount),
                 chip('Posted', 'posted', _statusFilter, (v) => _statusFilter = v),
+                if (_jvVoidFlow || _vouchers.any((v) => v['is_voided'] == true))
+                  chip('Voided', 'voided', _statusFilter, (v) => _statusFilter = v),
               ])),
               if (_jvSuperviseFlow) ...[
                 const SizedBox(height: 6),
@@ -956,10 +1008,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                         ],
                         Builder(builder: (_) {
                           final pend = isPending(v);
-                          final c = posted ? Colors.green : (pend ? Colors.deepOrange : Colors.orange);
+                          final voided = v['is_voided'] == true;
+                          final c = voided ? Colors.red : (posted ? Colors.green : (pend ? Colors.deepOrange : Colors.orange));
                           return Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                             decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
-                            child: Text(posted ? 'Posted' : (pend ? 'Pending approval' : 'Draft'), style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700)));
+                            child: Text(voided ? 'Voided' : (posted ? 'Posted' : (pend ? 'Pending approval' : 'Draft')), style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700)));
                         }),
                       ]),
                       Text(v['entry_date'] as String? ?? '', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
@@ -978,12 +1031,18 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             const SizedBox(width: 8),
             ConstrainedBox(constraints: BoxConstraints(maxWidth: narrow ? MediaQuery.of(context).size.width - 80 : 420), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(_current?['entry_number'] as String? ?? 'New Journal Voucher', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
-              if (_current != null) Text(_isLocked ? '🔒 Posted & Locked' : '✏️ Draft', style: TextStyle(fontSize: 10, color: _isLocked ? Colors.green : Colors.orange, fontWeight: FontWeight.w600)),
+              if (_current != null) Text(_isVoided ? '⛔ Voided${_current?['void_reason'] != null ? ' — ${_current!['void_reason']}' : ''}' : (_isLocked ? '🔒 Posted & Locked' : '✏️ Draft'),
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 10, color: _isVoided ? Colors.red : (_isLocked ? Colors.green : Colors.orange), fontWeight: FontWeight.w600)),
             ])),
             ])),
             if (_current != null) IconButton(icon: const Icon(Icons.history_outlined, size: 20), onPressed: _showAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
-            if (_current != null && canDeleteJv) IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
+            // Void flow ON: posted JVs are voided, drafts can still be deleted.
+            if (_current != null && canDeleteJv && !(_jvVoidFlow && _isLocked))
+              IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
+            if (_current != null && canDeleteJv && _jvVoidFlow && _isLocked && !_isVoided)
+              IconButton(icon: const Icon(Icons.block, size: 20, color: Colors.red), onPressed: _void, tooltip: 'Void (posts a reversal)'),
             const SizedBox(width: 8),
             if (!_isLocked && canWrite) ...[
               OutlinedButton(onPressed: _saving ? null : () => _save(post: false), child: const Text('Save Draft', style: TextStyle(fontSize: 12))),
@@ -1001,7 +1060,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
                   onPressed: (_canPost && !_saving) ? () => _save(post: true) : null),
             ],
-            if (_isLocked) Row(mainAxisSize: MainAxisSize.min, children: [
+            if (_isLocked && _isVoided)
+              Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.red.withOpacity(0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.red.withOpacity(0.3))),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.block, size: 14, color: Colors.red), const SizedBox(width: 4),
+                  Text('Voided${_current?['voided_by_name'] != null ? ' by ${_current!['voided_by_name']}' : ''}', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w700, fontSize: 13))])),
+            if (_isLocked && !_isVoided) Row(mainAxisSize: MainAxisSize.min, children: [
               Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.3))),
                 child: const Row(children: [Icon(Icons.lock, size: 14, color: Colors.green), SizedBox(width: 4), Text('Posted', style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: 13))])),
               if (canEdit) const SizedBox(width: 8),

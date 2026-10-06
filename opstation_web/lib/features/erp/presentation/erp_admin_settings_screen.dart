@@ -476,6 +476,16 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.jv_void_flow',
+    'Void Journal Vouchers instead of deleting',
+    'When ON, a POSTED Journal Voucher can no longer be deleted — it is "Voided" '
+        'with a reason: the JV stays on record marked VOIDED, and a reversing entry '
+        '(JV-…-VOID) is posted on the same date so every ledger it touched nets back '
+        'to zero. Draft JVs can still be deleted (they never reached the books). '
+        'When OFF, JVs keep today\'s delete button. Needs SQL 325.',
+  ),
+
+  _AdminToggle(
     'org.jv_approve_flow',
     'Approval required to post Journal Vouchers',
     'When ON, a non-admin cannot post a JV to the general ledger — they "Submit for '
@@ -649,6 +659,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Financials', Icons.account_balance_outlined, [
     'org.jv_supervise_flow',
     'org.jv_approve_flow',
+    'org.jv_void_flow',
     'org.pa_approval_enabled',
     'org.pa_signatures',
     'org.pa_approval_watermark',
