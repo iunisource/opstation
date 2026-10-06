@@ -44,7 +44,7 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
       // this report can ever show), which cuts the payload from the whole
       // catalogue to a handful of rows and was the main cause of the slow load.
       final results = await Future.wait([
-        client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name'),
+        client.from('branches').select('id, name, is_virtual').eq('org_id', orgId).eq('is_active', true).order('name'),
         client.from('product_taxonomies').select().eq('org_id', orgId).order('name'),
         client.from('products')
             .select('id, name, sku, low_stock_limit, product_main_group, product_group, product_class, product_movement_category, uoms(abbreviation)')
@@ -52,8 +52,13 @@ class _ErpLowStockReportScreenState extends ConsumerState<ErpLowStockReportScree
             .gt('low_stock_limit', 0)
             .limit(10000),
       ]);
-      final branchList = List<Map<String, dynamic>>.from(results[0] as List);
-      _branchId ??= branchList.isNotEmpty ? branchList.first['id'] as String : null;
+      // Real branches only — processor / off-site (virtual) locations hold
+      // stock out for processing and have no low-stock limits of their own.
+      final branchList = List<Map<String, dynamic>>.from(results[0] as List)
+          .where((b) => b['is_virtual'] != true).toList();
+      if (_branchId == null || !branchList.any((b) => b['id'] == _branchId)) {
+        _branchId = branchList.isNotEmpty ? branchList.first['id'] as String : null;
+      }
 
       final Map<String, List<Map<String, dynamic>>> grouped = {};
       for (final t in results[1] as List) {
