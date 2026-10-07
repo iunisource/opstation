@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -22,19 +24,36 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
   static const _rule = Color(0xFFE5E7EB);
 
   bool _loading = true;
+  bool _refreshing = false;
   String? _error;
   Map<String, dynamic>? _a;
+  DateTime? _updatedAt;
+  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // Live: re-read every 30 s so an open page follows edits / approval /
+    // cancellation without the link being shared again.
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _load(silent: true));
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (silent && (_loading || _refreshing)) return;
     setState(() {
-      _loading = true;
-      _error = null;
+      if (silent) {
+        _refreshing = true;
+      } else {
+        _loading = true;
+        _error = null;
+      }
     });
     try {
       final res = await Supabase.instance.client
@@ -44,16 +63,22 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
       setState(() {
         if (m == null || m['ok'] != true) {
           _error = 'not_found';
+          _a = null;
         } else {
           _a = m;
+          _error = null;
+          _updatedAt = DateTime.now();
         }
         _loading = false;
+        _refreshing = false;
       });
     } catch (_) {
       if (mounted) {
         setState(() {
-          _error = 'network';
+          // A failed background refresh keeps the last good copy on screen.
+          if (!silent || _a == null) _error = 'network';
           _loading = false;
+          _refreshing = false;
         });
       }
     }
@@ -80,9 +105,25 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
             ? const Center(child: CircularProgressIndicator())
             : _error != null
                 ? _errorView()
-                : _body(),
+                : _withWatermark(_body()),
       ),
     );
+  }
+
+  /// Cancelled / rejected advices get a visible repeated watermark across the
+  /// whole page, so a forwarded screenshot can't pass as payable.
+  Widget _withWatermark(Widget child) {
+    final st = (_a?['status'] as String?) ?? '';
+    final mark = st == 'void' ? 'CANCELLED' : st == 'rejected' ? 'REJECTED' : null;
+    if (mark == null) return child;
+    return Stack(children: [
+      child,
+      Positioned.fill(
+        child: IgnorePointer(
+          child: CustomPaint(painter: _WatermarkPainter(mark)),
+        ),
+      ),
+    ]);
   }
 
   Widget _errorView() => Center(
@@ -110,7 +151,7 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
     final a = _a!;
     final status = (a['status'] as String?) ?? 'approved';
     final (Color sc, String sl) = switch (status) {
-      'void' => (const Color(0xFFB91C1C), 'VOIDED'),
+      'void' => (const Color(0xFFB91C1C), 'CANCELLED'),
       'rejected' => (const Color(0xFFB91C1C), 'REJECTED'),
       'pending' => (const Color(0xFFB45309), 'PENDING APPROVAL'),
       _ => (const Color(0xFF15803D), 'APPROVED'),
@@ -141,7 +182,7 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
                 Expanded(
                   child: Text(
                     status == 'void'
-                        ? 'This payment advice was VOIDED and must not be paid.'
+                        ? 'This payment advice was CANCELLED and must not be paid.'
                         : status == 'rejected'
                             ? 'This payment advice was REJECTED and must not be paid.'
                             : status == 'pending'
@@ -190,7 +231,7 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
                 if (status == 'void') ...[
                   const SizedBox(height: 8),
                   Text(
-                    'Voided${a['voided_by_name'] != null ? ' by ${a['voided_by_name']}' : ''}'
+                    'Cancelled${a['voided_by_name'] != null ? ' by ${a['voided_by_name']}' : ''}'
                     '${a['voided_at'] != null ? ' on ${_dt(a['voided_at'])}' : ''}'
                     '${((a['void_reason'] as String?) ?? '').isNotEmpty ? ' — ${a['void_reason']}' : ''}',
                     style: const TextStyle(color: Color(0xFFB91C1C), fontWeight: FontWeight.w600, fontSize: 13),
@@ -222,8 +263,22 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
               ]),
             ),
             const SizedBox(height: 12),
-            Text('Checked against the live system on ${DateFormat('d MMM yyyy, HH:mm').format(DateTime.now())}.',
-                textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 11.5)),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Flexible(
+                child: Text(
+                    'Live copy · last updated ${DateFormat('d MMM yyyy, HH:mm:ss').format(_updatedAt ?? DateTime.now())}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _muted, fontSize: 11.5)),
+              ),
+              const SizedBox(width: 6),
+              _refreshing
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : TextButton.icon(
+                      onPressed: () => _load(silent: true),
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('Refresh', style: TextStyle(fontSize: 12)),
+                    ),
+            ]),
           ]),
         ),
       ),
@@ -288,4 +343,43 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
       ]),
     );
   }
+}
+
+class _WatermarkPainter extends CustomPainter {
+  final String text;
+  _WatermarkPainter(this.text);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: const Color(0xFFB91C1C).withOpacity(0.13),
+          fontSize: 30,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 4,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    const gapX = 70.0, gapY = 110.0;
+    final stepX = tp.width + gapX;
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.rotate(-math.pi / 6);
+    final reach = math.sqrt(size.width * size.width + size.height * size.height);
+    var row = 0;
+    for (var y = -reach; y < reach; y += gapY, row++) {
+      final shift = (row.isOdd ? stepX / 2 : 0.0);
+      for (var x = -reach - shift; x < reach; x += stepX) {
+        tp.paint(canvas, Offset(x, y));
+      }
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _WatermarkPainter old) => old.text != text;
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1217,6 +1218,7 @@ class _ErpPaymentAdviceScreenState
                     style: const TextStyle(fontWeight: FontWeight.w800)),
               ]),
             ),
+            _shareMenu(a, size: 20),
             _printMenu(a, size: 20),
             if (archiveBtn != null) archiveBtn,
           ]),
@@ -1262,6 +1264,7 @@ class _ErpPaymentAdviceScreenState
                     fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 4),
+          _shareMenu(a, size: 20),
           _printMenu(a, size: 20),
           if (_canModerate)
           IconButton(
@@ -1306,6 +1309,7 @@ class _ErpPaymentAdviceScreenState
             style: TextStyle(fontSize: narrow ? 16 : 20, fontWeight: FontWeight.w800),
           ),
         ),
+        if (_current != null) _shareMenu(_current!),
         if (_current != null) _printMenu(_current!),
       ]),
       const SizedBox(height: 8),
@@ -1698,6 +1702,69 @@ class _ErpPaymentAdviceScreenState
       ),
     );
   }
+
+  // ── Share link (WhatsApp) ─────────────────────────────────────────────
+  /// Short live link (SQL 329 + Firebase function paLink). The person opens the
+  /// current version every time, so edits / approval / cancellation show up
+  /// without resharing. The PDF stays as it is.
+  String? _shareUrl(Map<String, dynamic> a) {
+    final code = (a['share_code'] as String?) ?? '';
+    return code.isEmpty ? null : '${html.window.location.origin}/l/$code';
+  }
+
+  String _shareText(Map<String, dynamic> a, String url) {
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+    final d = DateTime.tryParse(a['advice_date'] as String? ?? '');
+    final st = (a['status'] as String?) ?? '';
+    return [
+      if (org.isNotEmpty) '*$org*',
+      if (st == 'void') '❌ CANCELLED',
+      if (st == 'rejected') '❌ REJECTED',
+      'Payment Advice ${a['advice_number'] ?? ''}',
+      'Amount: Rs ${NumberFormat(((a['grand_total'] as num?) ?? 0) % 1 == 0 ? '#,##0' : '#,##0.00').format((a['grand_total'] as num?) ?? 0)}',
+      if (d != null) 'Date: ${DateFormat('d MMM yyyy').format(d)}',
+      '',
+      '👉 Open Link: $url',
+    ].join('\n');
+  }
+
+  Widget _shareMenu(Map<String, dynamic> a, {double size = 24}) =>
+      PopupMenuButton<String>(
+        tooltip: 'Share link',
+        icon: Icon(Icons.share_outlined, size: size, color: AppTheme.textSecondary),
+        onSelected: (v) async {
+          final url = _shareUrl(a);
+          if (url == null) {
+            _snack('Share link not ready — run SQL 329 and reload.');
+            return;
+          }
+          if (v == 'wa') {
+            html.window.open('https://wa.me/?text=${Uri.encodeComponent(_shareText(a, url))}', '_blank');
+          } else {
+            await Clipboard.setData(ClipboardData(text: url));
+            _snack('Link copied — $url');
+          }
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(
+            value: 'wa',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.chat_outlined, color: Color(0xFF25D366)),
+              title: Text('Share on WhatsApp'),
+              subtitle: Text('Live link — always the latest version'),
+            ),
+          ),
+          PopupMenuItem(
+            value: 'copy',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.link),
+              title: Text('Copy link'),
+            ),
+          ),
+        ],
+      );
 
   // ── Print / PDF ────────────────────────────────────────────────────────
   /// Print button with two copies: the standard slip, and an Accounts copy

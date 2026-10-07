@@ -109,9 +109,23 @@
     ],
     "rewrites": [
       {
+        "source": "/l/**",
+        "function": {
+          "functionId": "paLink",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "**/!(*.@(js|mjs|wasm|json|css|map|png|jpg|jpeg|gif|svg|ico|otf|ttf|woff|woff2|txt|xml|webmanifest))",
         "destination": "/index.html"
       }
     ]
-  }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs20"
+    }
+  ]
 }
