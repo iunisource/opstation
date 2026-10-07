@@ -21,6 +21,7 @@ class _JvLine {
   static int _seq = 0;
   final String id = 'jvl_${DateTime.now().microsecondsSinceEpoch}_${_seq++}';
   String? accountId; String accountName = ''; String accountType = 'coa';
+  String? glAccountId; // GL account a party line was loaded with (keeps 1420 advances on 1420)
   final TextEditingController descCtrl   = TextEditingController();
   final TextEditingController debitCtrl  = TextEditingController();
   final TextEditingController creditCtrl = TextEditingController();
@@ -343,6 +344,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         }
         if ((l.accountType == 'supplier' || l.accountType == 'customer') && pid != null) {
           l.accountId = pid;            // restore the picker selection to the actual party
+          l.glAccountId = savedAccId;
         } else {
           l.accountId = savedAccId;
         }
@@ -439,7 +441,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       for (var i = 0; i < valid.length; i++) {
         final l = valid[i];
         final isParty = l.accountType == 'supplier' || l.accountType == 'customer';
-        final glAcc   = l.accountType == 'supplier' ? apId
+        // Supplier advances live on 1420 (Advances to Suppliers); keep them there
+        // on re-save instead of folding them into the AP control.
+        final keepAdv = l.accountType == 'supplier' && (l.glAccountId ?? '').endsWith('_1420');
+        final glAcc   = keepAdv ? l.glAccountId
+                      : l.accountType == 'supplier' ? apId
                       : l.accountType == 'customer' ? arId
                       : l.accountId;
         linesJson.add({
@@ -460,7 +466,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         final newParties = <String>{for (final j in linesJson) if (j['party_id'] != null) j['party_id'] as String};
         final lost = oldParties.difference(newParties);
         final bareCtrl = linesJson.where((j) => j['party_id'] == null &&
-            ((j['account_id'] as String? ?? '').endsWith('_2110') || (j['account_id'] as String? ?? '').endsWith('_1210'))).length;
+            ['_2110', '_1210', '_1420'].any((sfx) => (j['account_id'] as String? ?? '').endsWith(sfx))).length;
         if (lost.isNotEmpty && bareCtrl > 0) {
           throw 'Not saved: ${lost.length} vendor/customer link(s) would be lost — $bareCtrl line(s) now post to Accounts Payable/Receivable with no party. Pick the vendor/customer on those lines, then save again.';
         }
