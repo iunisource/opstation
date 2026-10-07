@@ -35,6 +35,27 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   String _missingFilter = 'all'; // all | contact | phone | either
   String _routeFilter = 'all'; // all | assigned | unassigned
   Set<String> _assignedCustomerIds = {}; // customers present in any route stop
+  // More filters (behind the filter icon) — combine with the two dropdowns.
+  List<Map<String, dynamic>> _routes = [];            // this org's routes (id, name)
+  final Map<String, Set<String>> _routesByCustomer = {}; // customer_id -> route_ids
+  String? _fRoute;     // specific route
+  String? _fCategory;  // customer category
+  String? _fGroup;     // customer group
+  String _fStatus = 'all'; // all | active | inactive
+  int get _moreFilterCount => [_fRoute, _fCategory, _fGroup].where((x) => x != null).length
+      + (_fStatus != 'all' ? 1 : 0) + (_missingFilter != 'all' ? 1 : 0) + (_routeFilter != 'all' ? 1 : 0);
+
+  // Labels for the "Show" (data-quality) filter, shared by the modal and chips.
+  Map<String, String> get _missingLabels => {
+    if (!widget.crmMode && _customerSuperviseEnabled) 'supervise_pending': 'Supervision pending',
+    'all': 'All customers',
+    'contact': 'Missing: Contact Person',
+    'phone': 'Missing: Phone',
+    'either': 'Missing: Contact or Phone',
+    'no_location': 'Missing: Location',
+    'has_location': 'Has Location',
+    'malformed': 'Malformed: Contact/Phone',
+  };
   final Set<String> _selectedIds = {}; // for bulk delete (filtered rows)
 
   bool get _canBulk => !widget.crmMode && _canDeleteCustomer(ref.read(currentUserProvider)?.role);
@@ -150,20 +171,26 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       // Which customers are on a route? route_stops has no org_id, so scope by
       // this org's routes. Used by the "Route" filter (assigned/unassigned).
       final Set<String> assignedIds = {};
+      final routes = <Map<String, dynamic>>[];
+      final byCustomer = <String, Set<String>>{};
       try {
         final routeRows = await client
             .from('sales_routes')
-            .select('id')
-            .eq('org_id', orgId);
-        final routeIds = [for (final r in routeRows) r['id'] as String];
-        if (routeIds.isNotEmpty) {
+            .select('id, name')
+            .eq('org_id', orgId)
+            .order('name');
+        routes.addAll(List<Map<String, dynamic>>.from(routeRows as List));
+        final routeIds = [for (final r in routes) r['id'] as String];
+        for (var k = 0; k < routeIds.length; k += 150) {
           final stopRows = await client
               .from('route_stops')
               .select('customer_id, route_id')
-              .inFilter('route_id', routeIds);
+              .inFilter('route_id', routeIds.sublist(k, (k + 150).clamp(0, routeIds.length)));
           for (final s in stopRows) {
             final cid = s['customer_id'] as String?;
-            if (cid != null) assignedIds.add(cid);
+            if (cid == null) continue;
+            assignedIds.add(cid);
+            (byCustomer[cid] ??= <String>{}).add('${s['route_id']}');
           }
         }
       } catch (_) {/* filter just falls back to showing all */}
@@ -176,6 +203,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         _targetsEnabled = targetsOn;
         _customerSuperviseEnabled = superviseOn;
         _assignedCustomerIds = assignedIds;
+        _routes = routes;
+        _routesByCustomer..clear()..addAll(byCustomer);
+        if (_fRoute != null && !routes.any((r) => r['id'] == _fRoute)) _fRoute = null;
         _loading = false;
       });
     } catch (_) { setState(() => _loading = false); }
@@ -193,6 +223,12 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             !_assignedCustomerIds.contains(c['id'])) return false;
         if (_routeFilter == 'unassigned' &&
             _assignedCustomerIds.contains(c['id'])) return false;
+        // More filters — each narrows further (AND with everything else).
+        if (_fRoute != null && !(_routesByCustomer[c['id']]?.contains(_fRoute) ?? false)) return false;
+        if (_fCategory != null && (c['category'] as String?)?.trim() != _fCategory) return false;
+        if (_fGroup != null && (c['group_name'] as String?)?.trim() != _fGroup) return false;
+        if (_fStatus == 'active' && c['is_active'] == false) return false;
+        if (_fStatus == 'inactive' && c['is_active'] != false) return false;
         final noContact =
             (c['contact_person'] as String? ?? '').trim().isEmpty;
         final noPhone = (c['phone'] as String? ?? '').trim().isEmpty;
@@ -217,6 +253,110 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         }
       }).toList();
     });
+  }
+
+  /// "More filters" panel (filter icon). Choices apply together with the
+  /// Filter and Route dropdowns, e.g. Missing: Location + Route "Model Town".
+  Future<void> _openMoreFilters() async {
+    String? route = _fRoute, cat = _fCategory, grp = _fGroup;
+    String status = _fStatus;
+    String missing = _missingFilter;
+    String assign = _routeFilter;
+    final narrow = MediaQuery.of(context).size.width < 600;
+    final apply = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+      Widget pick(String label, String? value, List<(String, String)> opts, void Function(String?) on) {
+        String shown = 'Any';
+        for (final o in opts) { if (o.$1 == value) { shown = o.$2; break; } }
+        return InkWell(
+          onTap: () async {
+            String q = '';
+            final r = await showDialog<(bool, String?)>(context: ctx, builder: (c2) => StatefulBuilder(builder: (c2, set2) {
+              final list = opts.where((o) => q.isEmpty || o.$2.toLowerCase().contains(q.toLowerCase())).toList();
+              return AlertDialog(
+                title: Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                content: SizedBox(width: 360, height: 400, child: Column(children: [
+                  TextField(autofocus: true, onChanged: (v) => set2(() => q = v),
+                      decoration: const InputDecoration(hintText: 'Search…', prefixIcon: Icon(Icons.search, size: 18), isDense: true, border: OutlineInputBorder())),
+                  const SizedBox(height: 6),
+                  Expanded(child: ListView(children: [
+                    if (q.isEmpty) ListTile(dense: true, title: const Text('Any', style: TextStyle(fontWeight: FontWeight.w600)),
+                        selected: value == null, onTap: () => Navigator.pop(c2, (true, null))),
+                    for (final o in list) ListTile(dense: true, title: Text(o.$2), selected: o.$1 == value,
+                        trailing: o.$1 == value ? const Icon(Icons.check, size: 16) : null,
+                        onTap: () => Navigator.pop(c2, (true, o.$1))),
+                    if (list.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No match', style: TextStyle(color: AppTheme.textSecondary))),
+                  ])),
+                ])),
+                actions: [TextButton(onPressed: () => Navigator.pop(c2), child: const Text('Close'))],
+              );
+            }));
+            if (r != null && r.$1) setD(() => on(r.$2));
+          },
+          child: InputDecorator(
+            decoration: InputDecoration(labelText: label, isDense: true, border: const OutlineInputBorder(),
+                suffixIcon: const Icon(Icons.arrow_drop_down)),
+            child: Text(shown, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontWeight: value == null ? FontWeight.w400 : FontWeight.w700)),
+          ),
+        );
+      }
+      final routeOpts = <(String, String)>[
+        for (final r in _routes)
+          ('${r['id']}', '${r['name'] ?? ''}  (${_routesByCustomer.values.where((s) => s.contains(r['id'])).length})'),
+      ];
+      final missingOpts = _missingLabels.entries.where((e) => e.key != 'all').map((e) => (e.key, e.value)).toList();
+      return AlertDialog(
+        insetPadding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 40, vertical: 24),
+        title: const Row(children: [Icon(Icons.filter_list, size: 20), SizedBox(width: 8), Text('Filters', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800))]),
+        content: SizedBox(width: narrow ? MediaQuery.of(ctx).size.width : 440, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('All filters work together — e.g. "Missing: Location" + a route shows only that route\'s customers without a location.',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 14),
+          pick('Show', missing == 'all' ? null : missing, missingOpts, (v) => missing = v ?? 'all'),
+          const SizedBox(height: 14),
+          const Text('Route assignment', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          const SizedBox(height: 6),
+          SizedBox(width: double.infinity, child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'all', label: Text('All')),
+              ButtonSegment(value: 'assigned', label: Text('Assigned')),
+              ButtonSegment(value: 'unassigned', label: Text('Not assigned')),
+            ],
+            selected: {assign},
+            showSelectedIcon: false,
+            onSelectionChanged: (v) => setD(() { assign = v.first; if (assign == 'unassigned') route = null; }),
+          )),
+          const SizedBox(height: 14),
+          pick('Route', route, routeOpts, (v) { route = v; if (v != null && assign == 'unassigned') assign = 'all'; }),
+          const SizedBox(height: 12),
+          pick('Category', cat, [for (final c in _categories) (c, c)], (v) => cat = v),
+          const SizedBox(height: 12),
+          pick('Group', grp, [for (final g in _groups) (g, g)], (v) => grp = v),
+          const SizedBox(height: 14),
+          const Text('Status', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          const SizedBox(height: 6),
+          SizedBox(width: double.infinity, child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'all', label: Text('All')),
+              ButtonSegment(value: 'active', label: Text('Active')),
+              ButtonSegment(value: 'inactive', label: Text('Inactive')),
+            ],
+            selected: {status},
+            showSelectedIcon: false,
+            onSelectionChanged: (v) => setD(() => status = v.first),
+          )),
+        ]))),
+        actions: [
+          TextButton(onPressed: () => setD(() { route = null; cat = null; grp = null; status = 'all'; missing = 'all'; assign = 'all'; }), child: const Text('Reset')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apply')),
+        ],
+      );
+    }));
+    if (apply != true) return;
+    setState(() { _fRoute = route; _fCategory = cat; _fGroup = grp; _fStatus = status; _missingFilter = missing; _routeFilter = assign; });
+    _filter();
   }
 
   /// Heuristic for junk contact/phone data (distinct from simply missing):
@@ -261,22 +401,20 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Text('Customers', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-            const Spacer(),
-            if (!widget.crmMode) ...[
+          Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text('Customers', style: TextStyle(fontSize: MediaQuery.of(context).size.width < 600 ? 22 : 28, fontWeight: FontWeight.w800)),
+            if (!widget.crmMode) Wrap(spacing: 8, runSpacing: 8, children: [
               OutlinedButton.icon(
                 onPressed: () => context.push('/customers/import'),
                 icon: const Icon(Icons.upload_file, size: 18),
                 label: const Text('Bulk Import'),
               ),
-              const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: () => _showDialog(context, null),
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('Add Customer'),
               ),
-            ],
+            ]),
           ]),
           const SizedBox(height: 8),
           Row(children: [
@@ -319,77 +457,42 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 240,
-              child: DropdownButtonFormField<String>(
-                value: _missingFilter,
-                decoration: const InputDecoration(
-                  labelText: 'Filter',
-                  isDense: true,
-                ),
-                items: [
-                  // Only when the supervise flow is on: jump straight to the
-                  // customers still awaiting supervision.
-                  if (!widget.crmMode && _customerSuperviseEnabled)
-                    const DropdownMenuItem(
-                        value: 'supervise_pending',
-                        child: Text('Supervision pending')),
-                  const DropdownMenuItem(
-                      value: 'all', child: Text('All customers')),
-                  const DropdownMenuItem(
-                      value: 'contact',
-                      child: Text('Missing: Contact Person')),
-                  const DropdownMenuItem(
-                      value: 'phone', child: Text('Missing: Phone')),
-                  const DropdownMenuItem(
-                      value: 'either',
-                      child: Text('Missing: Contact or Phone')),
-                  const DropdownMenuItem(
-                      value: 'no_location',
-                      child: Text('Missing: Location')),
-                  const DropdownMenuItem(
-                      value: 'has_location',
-                      child: Text('Has Location')),
-                  const DropdownMenuItem(
-                      value: 'malformed',
-                      child: Text('Malformed: Contact/Phone')),
-                ],
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _missingFilter = v);
-                  _filter();
-                },
-              ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 200,
-              child: DropdownButtonFormField<String>(
-                value: _routeFilter,
-                decoration: const InputDecoration(
-                  labelText: 'Route',
-                  isDense: true,
-                ),
-                items: const [
-                  DropdownMenuItem(
-                      value: 'all', child: Text('All customers')),
-                  DropdownMenuItem(
-                      value: 'assigned', child: Text('Assigned to a route')),
-                  DropdownMenuItem(
-                      value: 'unassigned', child: Text('Route not assigned')),
-                ],
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => _routeFilter = v);
-                  _filter();
-                },
+            const SizedBox(width: 8),
+            Badge(
+              isLabelVisible: _moreFilterCount > 0,
+              label: Text('$_moreFilterCount'),
+              child: IconButton.outlined(
+                tooltip: 'Filters',
+                onPressed: _openMoreFilters,
+                icon: Icon(Icons.filter_list, color: _moreFilterCount > 0 ? AppTheme.primary : null),
               ),
             ),
           ]),
+          if (_moreFilterCount > 0) Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Wrap(spacing: 6, runSpacing: 6, children: [
+              if (_missingFilter != 'all') InputChip(label: Text(_missingLabels[_missingFilter] ?? _missingFilter, style: const TextStyle(fontSize: 12)),
+                onDeleted: () { setState(() => _missingFilter = 'all'); _filter(); }),
+              if (_routeFilter != 'all') InputChip(label: Text(_routeFilter == 'assigned' ? 'Assigned to a route' : 'Route not assigned', style: const TextStyle(fontSize: 12)),
+                onDeleted: () { setState(() => _routeFilter = 'all'); _filter(); }),
+              if (_fRoute != null) InputChip(
+                label: Text('Route: ${_routes.firstWhere((r) => r['id'] == _fRoute, orElse: () => {'name': '?'})['name']}', style: const TextStyle(fontSize: 12)),
+                onDeleted: () { setState(() => _fRoute = null); _filter(); }),
+              if (_fCategory != null) InputChip(label: Text('Category: $_fCategory', style: const TextStyle(fontSize: 12)),
+                onDeleted: () { setState(() => _fCategory = null); _filter(); }),
+              if (_fGroup != null) InputChip(label: Text('Group: $_fGroup', style: const TextStyle(fontSize: 12)),
+                onDeleted: () { setState(() => _fGroup = null); _filter(); }),
+              if (_fStatus != 'all') InputChip(label: Text(_fStatus == 'active' ? 'Active only' : 'Inactive only', style: const TextStyle(fontSize: 12)),
+                onDeleted: () { setState(() => _fStatus = 'all'); _filter(); }),
+              TextButton(onPressed: () { setState(() { _fRoute = null; _fCategory = null; _fGroup = null; _fStatus = 'all'; _missingFilter = 'all'; _routeFilter = 'all'; }); _filter(); },
+                  child: const Text('Clear all', style: TextStyle(fontSize: 12))),
+            ]),
+          ),
           const SizedBox(height: 16),
           if (_loading)
             const Center(child: CircularProgressIndicator())
+          else if (MediaQuery.of(context).size.width < 700)
+            Expanded(child: _mobileList())
           else
             Expanded(
               child: Container(
@@ -543,6 +646,91 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       ),
     );
   }
+
+  /// Phone layout: one card per customer; actions in a ⋮ menu.
+  Widget _mobileList() {
+    final role = ref.watch(currentUserProvider)?.role;
+    if (_filtered.isEmpty) {
+      return const Center(child: Text('No customers', style: TextStyle(color: AppTheme.textSecondary)));
+    }
+    return ListView.separated(
+      itemCount: _filtered.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) {
+        final c = _filtered[i];
+        final active = c['is_active'] as bool? ?? true;
+        final hasLoc = c['latitude'] != null && c['longitude'] != null;
+        final pending = !widget.crmMode && _customerSuperviseEnabled && c['supervised_at'] == null;
+        final sub = [c['contact_person'], c['phone']].where((x) => x != null && '$x'.trim().isNotEmpty).join(' · ');
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => Customer360Screen(customer: c))),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (_canBulk) Checkbox(
+                  visualDensity: VisualDensity.compact,
+                  value: _selectedIds.contains(c['id'] as String),
+                  onChanged: (v) => setState(() { if (v == true) { _selectedIds.add(c['id'] as String); } else { _selectedIds.remove(c['id'] as String); } }),
+                ),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    if ((c['code'] as String? ?? '').isNotEmpty) Padding(padding: const EdgeInsets.only(right: 6),
+                        child: Text(c['code'] as String, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary, fontSize: 12.5))),
+                    Expanded(child: Text(c['shop_name'] as String? ?? '', maxLines: 2, overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: active ? AppTheme.textPrimary : AppTheme.textSecondary))),
+                  ]),
+                  if (sub.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 2),
+                      child: Text(sub, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 4, children: [
+                    if ((c['category'] as String? ?? '').isNotEmpty) _tag(c['category'] as String, AppTheme.primary),
+                    if (hasLoc) _tag('Location', AppTheme.success, icon: Icons.location_on) else _tag('No location', AppTheme.textSecondary, icon: Icons.location_off),
+                    if (!active) _tag('Deactivated', AppTheme.danger),
+                    if (pending) _tag('Supervision pending', Colors.amber.shade800),
+                  ]),
+                ])),
+                PopupMenuButton<String>(
+                  onSelected: (v) {
+                    switch (v) {
+                      case 'map': _openLocation((c['latitude'] as num).toDouble(), (c['longitude'] as num).toDouble()); break;
+                      case 'history': Navigator.of(context).push(MaterialPageRoute(builder: (_) => CustomerHistoryScreen(
+                          customerId: c['id'] as String, customerName: c['shop_name'] as String? ?? '', customerCode: c['code'] as String?))); break;
+                      case 'edit': _showDialog(context, c); break;
+                      case 'supervise': _superviseCustomer(c); break;
+                      case 'toggle': _toggleCustomerActive(c); break;
+                      case 'delete': _delete(c['id'] as String); break;
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    if (!widget.crmMode && hasLoc) const PopupMenuItem(value: 'map', child: Text('Show location')),
+                    if (!widget.crmMode) const PopupMenuItem(value: 'history', child: Text('View history')),
+                    if (!widget.crmMode) const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    if (pending && _canDeactivateCustomer(role)) const PopupMenuItem(value: 'supervise', child: Text('Supervise')),
+                    if (!widget.crmMode && _canDeactivateCustomer(role)) PopupMenuItem(value: 'toggle', child: Text(active ? 'Deactivate' : 'Activate')),
+                    if (!widget.crmMode && _canDeleteCustomer(role)) const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: AppTheme.danger))),
+                  ],
+                ),
+              ]),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _tag(String t, Color c, {IconData? icon}) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: c.withOpacity(0.10), borderRadius: BorderRadius.circular(10)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (icon != null) ...[Icon(icon, size: 11, color: c), const SizedBox(width: 3)],
+          Text(t, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: c)),
+        ]),
+      );
 
   bool _canDeleteCustomer(WebUserRole? role) =>
       role == WebUserRole.masterAdmin;
