@@ -202,6 +202,18 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
         l.accountType = r['account_type'] as String? ?? 'coa';
         final pid = r['party_id'] as String?;
         final savedAccId = r['account_id'] as String?;
+        // Lines written by SQL/imports often carry the party on party_id but a
+        // generic account_type ('coa' / null). Infer the party type so the
+        // vendor/customer link survives a re-save instead of collapsing into a
+        // bare AP/AR line.
+        if (pid != null && l.accountType != 'supplier' && l.accountType != 'customer') {
+          final acc = savedAccId ?? '';
+          if (pid.startsWith('sup_') || acc.endsWith('_2110') || _supplierList.any((s) => s['id'] == pid)) {
+            l.accountType = 'supplier';
+          } else if (pid.startsWith('cust_') || acc.endsWith('_1210') || _customerList.any((c) => c['id'] == pid)) {
+            l.accountType = 'customer';
+          }
+        }
         if ((l.accountType == 'supplier' || l.accountType == 'customer') && pid != null) {
           l.accountId = pid;            // restore the picker selection to the actual party
         } else {
