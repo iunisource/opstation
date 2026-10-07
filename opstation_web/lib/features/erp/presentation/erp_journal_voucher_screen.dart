@@ -330,6 +330,17 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         l.accountType = r['account_type'] as String? ?? 'coa';
         final pid = r['party_id'] as String?;
         final savedAccId = r['account_id'] as String?;
+        // Lines written by SQL/imports often carry the party on party_id but a
+        // generic account_type ('coa' / 'liability' / null). Infer the party type
+        // so the vendor/customer link survives a re-save.
+        if (pid != null && l.accountType != 'supplier' && l.accountType != 'customer') {
+          final acc = savedAccId ?? '';
+          if (pid.startsWith('sup_') || acc.endsWith('_2110') || _supplierList.any((s) => s['id'] == pid)) {
+            l.accountType = 'supplier';
+          } else if (pid.startsWith('cust_') || acc.endsWith('_1210') || _customerList.any((c) => c['id'] == pid)) {
+            l.accountType = 'customer';
+          }
+        }
         if ((l.accountType == 'supplier' || l.accountType == 'customer') && pid != null) {
           l.accountId = pid;            // restore the picker selection to the actual party
         } else {
@@ -439,6 +450,20 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
           'debit': l.debit, 'credit': l.credit,
           'description': l.descCtrl.text.trim(), 'line_order': i + 1,
         });
+      }
+      // Safety net: never let a re-save silently strip a vendor/customer link.
+      // If the saved version had party-linked lines and this save would replace
+      // them with bare AP/AR control lines (no party), refuse.
+      if (!wasNew) {
+        final oldRows = await client.from('journal_lines').select('party_id, account_id, debit, credit').eq('entry_id', eId);
+        final oldParties = <String>{for (final r in (oldRows as List)) if (r['party_id'] != null) r['party_id'] as String};
+        final newParties = <String>{for (final j in linesJson) if (j['party_id'] != null) j['party_id'] as String};
+        final lost = oldParties.difference(newParties);
+        final bareCtrl = linesJson.where((j) => j['party_id'] == null &&
+            ((j['account_id'] as String? ?? '').endsWith('_2110') || (j['account_id'] as String? ?? '').endsWith('_1210'))).length;
+        if (lost.isNotEmpty && bareCtrl > 0) {
+          throw 'Not saved: ${lost.length} vendor/customer link(s) would be lost — $bareCtrl line(s) now post to Accounts Payable/Receivable with no party. Pick the vendor/customer on those lines, then save again.';
+        }
       }
       await client.rpc('save_journal_entry', params: {'p_entry': entryJson, 'p_lines': linesJson});
       final updated = await client.from('journal_entries').select().eq('id', eId).single();
