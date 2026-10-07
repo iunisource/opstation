@@ -485,6 +485,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
 
   Future<void> _delete() async {
     if (_current == null) return;
+    if (_deleteBlocked) { _snack('Void flow is on — a JV that was posted can only be voided, not deleted.'); return; }
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Delete Journal Voucher?'),
       content: const Text('This removes all GL lines and cannot be undone.'),
@@ -494,13 +495,19 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     if (ok != true) return;
     try {
       final id = _current!['id'] as String;
-      await Supabase.instance.client.from('journal_lines').delete().eq('entry_id', id);
-      await Supabase.instance.client.from('journal_entries').delete().eq('id', id);
+      // Atomic, server-checked delete (SQL 328): refuses when void flow is on and
+      // the JV was ever posted.
+      await Supabase.instance.client.rpc('delete_journal_voucher', params: {'p_id': id});
       _snack('Deleted'); _newVoucher(); await _loadVouchers();
     } catch (e) { _snack('Delete failed: ' + e.toString()); }
   }
 
   bool get _isVoided => _current?['is_voided'] == true;
+  /// Has this JV ever hit the books? (posted now, or posted earlier then unlocked)
+  bool get _everPosted => _isLocked || _isVoided || _current?['posted_at'] != null ||
+      _auditTrail.any((a) => a['action'] == 'posted' || a['action'] == 'unlocked');
+  /// Void flow ON: anything that was ever posted can only be voided, never deleted.
+  bool get _deleteBlocked => _jvVoidFlow && _everPosted;
 
   /// org.jv_void_flow: a POSTED JV is voided — kept on record, marked VOIDED,
   /// and a mirror reversal (JV-…-VOID) is posted on the same date (SQL 325).
@@ -1069,11 +1076,15 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             ])),
             if (_current != null) IconButton(icon: const Icon(Icons.history_outlined, size: 20), onPressed: _showAuditTrail, tooltip: 'Audit Trail'),
             if (_current != null) IconButton(icon: const Icon(Icons.print_outlined, size: 20), onPressed: _print, tooltip: 'Print'),
-            // Void flow ON: posted JVs are voided, drafts can still be deleted.
-            if (_current != null && canDeleteJv && !(_jvVoidFlow && _isLocked))
+            // Void flow ON: anything ever posted (incl. unlocked) is voided, never
+            // deleted; only never-posted drafts can be deleted.
+            if (_current != null && canDeleteJv && !_deleteBlocked)
               IconButton(icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red), onPressed: _delete, tooltip: 'Delete'),
             if (_current != null && canDeleteJv && _jvVoidFlow && _isLocked && !_isVoided)
               IconButton(icon: const Icon(Icons.block, size: 20, color: Colors.red), onPressed: _void, tooltip: 'Void (posts a reversal)'),
+            if (_current != null && canDeleteJv && _deleteBlocked && !_isLocked && !_isVoided)
+              const Tooltip(message: 'This JV was posted before. With void flow on it can\'t be deleted — post it again, then use Void.',
+                child: Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Icon(Icons.info_outline, size: 18, color: Colors.orange))),
             const SizedBox(width: 8),
             if (!_isLocked && canWrite) ...[
               OutlinedButton(onPressed: _saving ? null : () => _save(post: false), child: const Text('Save Draft', style: TextStyle(fontSize: 12))),
