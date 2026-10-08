@@ -391,6 +391,7 @@ const Map<String, String> _routeByName = {
   'Attendance Kiosk': '/hr/attendance-kiosk',
   'Leave': '/hr/leave',
   'Assets': '/assets',
+  'Asset Report': '/assets/report',
   'Facility': '/facility',
   'Team (360)': '/team',
   'Retailers': '/operations/retailers',

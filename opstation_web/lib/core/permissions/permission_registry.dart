@@ -173,6 +173,7 @@ const List<PermModule> kPermissionRegistry = [
   ]),
   PermModule('assets', 'Assets', Icons.chair_outlined, [
     PermItem('assets', 'Asset Register', PermKind.doc, '/assets'),
+    PermItem('asset_report', 'Asset Report', PermKind.report, '/assets/report'),
   ]),
   PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
     PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),

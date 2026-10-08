@@ -1447,12 +1447,14 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ]),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
-      if (show('/assets') || show('/facility'))
+      if (show('/assets') || show('/assets/report') || show('/facility'))
         _navMenu(context, 'Management', Icons.domain_outlined, location,
-          ['/assets', '/facility'],
+          ['/assets', '/assets/report', '/facility'],
           [
             if (show('/assets'))
               _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
+            if (show('/assets/report'))
+              _menuItem(context, 'Asset Report', Icons.summarize_outlined, '/assets/report', location),
             if (show('/facility'))
               _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
           ],
@@ -1547,7 +1549,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         // Assets/Facility grants live outside erpMenuItems (their menu is built
         // inline from show()), so count them in the gate too.
         if (isErpUser &&
-            (erpMenuItems.isNotEmpty || show('/assets') || show('/facility')))
+            (erpMenuItems.isNotEmpty || show('/assets') || show('/assets/report') || show('/facility')))
           ...splitErpMenus(),
   ];
 }

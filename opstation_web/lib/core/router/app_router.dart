@@ -156,6 +156,7 @@ import '../../features/erp/presentation/email_action_screen.dart' deferred as _s
 import '../../features/erp/presentation/erp_collection_report_screen.dart' deferred as _s145;
 import '../../features/erp/presentation/erp_duty_roster_screen.dart' deferred as _s146;
 import '../../features/erp/presentation/erp_automation_screen.dart' deferred as _s147;
+import '../../features/assets/presentation/erp_asset_report_screen.dart' deferred as _s148;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -434,6 +435,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/operations/notifications', builder: (_, __) => _deferred(_s072.loadLibrary(), () => _s072.NotificationsComposerScreen())),
           GoRoute(path: '/operations/retailers', builder: (_, __) => _deferred(_s073.loadLibrary(), () => _s073.RetailersAdminScreen())),
           GoRoute(path: '/assets', builder: (_, __) => _deferred(_s074.loadLibrary(), () => _s074.ErpAssetsScreen())),
+          GoRoute(path: '/assets/report', builder: (_, __) => _deferred(_s148.loadLibrary(), () => _s148.ErpAssetReportScreen())),
           GoRoute(path: '/facility', builder: (_, __) => _deferred(_s075.loadLibrary(), () => _s075.ErpFacilityScreen())),
           GoRoute(path: '/orgs', builder: (_, __) => _deferred(_s064.loadLibrary(), () => _s064.OrgsScreen())),
           GoRoute(path: '/subscriptions', builder: (_, __) => _deferred(_s065.loadLibrary(), () => _s065.SubscriptionsScreen())),

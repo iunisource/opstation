@@ -77,6 +77,9 @@ const List<_Cat> _kCatalog = [
   _Cat('HR', Icons.badge_outlined, [
     _Card('Attendance Board', '/hr/attendance-board', Icons.event_available_outlined, 'Team attendance overview'),
   ]),
+  _Cat('Management', Icons.domain_outlined, [
+    _Card('Asset Report', '/assets/report', Icons.summarize_outlined, 'Assets by category, custodian, condition, branch or status'),
+  ]),
 ];
 
 class ReportsCenterScreen extends ConsumerStatefulWidget {
