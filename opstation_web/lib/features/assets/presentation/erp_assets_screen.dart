@@ -48,20 +48,30 @@ String _statusLabel(String? s) =>
         ? '—'
         : s!.replaceAll('_', ' ');
 
-Color _statusColor(String? s) {
-  switch (s) {
-    case 'in_use':
-      return AppTheme.success;
-    case 'in_storage':
-      return AppTheme.primary;
-    case 'under_repair':
-      return AppTheme.warning;
-    case 'lost':
-    case 'disposed':
-      return AppTheme.danger;
-    default:
-      return AppTheme.textSecondary;
-  }
+/// Colours a status can be given (Manage list ▸ colour dot).
+const Map<String, Color> _kStatusPalette = {
+  'green': Color(0xFF16A34A),
+  'blue': Color(0xFF2563EB),
+  'orange': Color(0xFFEA580C),
+  'red': Color(0xFFDC2626),
+  'purple': Color(0xFF7C3AED),
+  'teal': Color(0xFF0D9488),
+  'grey': Color(0xFF6B7280),
+};
+
+/// Default colour when none is configured: built-ins keep their colours and
+/// custom names are guessed from their words (operative → green, non-operative → red…).
+String _defaultStatusColorKey(String? s) {
+  final v = (s ?? '').toLowerCase();
+  if (v.isEmpty) return 'grey';
+  if (v.contains('non') || v.contains('not_') || v.contains('lost') || v.contains('dispos') ||
+      v.contains('broken') || v.contains('scrap') || v.contains('dead') || v.contains('faulty')) return 'red';
+  if (v.contains('repair') || v.contains('service') || v.contains('maint') || v.contains('pending')) return 'orange';
+  if (v.contains('storage') || v.contains('store') || v.contains('spare')) return 'blue';
+  if (v.contains('retired') || v.contains('idle')) return 'grey';
+  if (v.contains('operative') || v.contains('in_use') || v.contains('working') || v.contains('active') ||
+      v.contains('ok') || v.contains('running') || v.contains('good')) return 'green';
+  return 'grey';
 }
 
 class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
@@ -557,6 +567,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   // dropdowns: "+ Add new…" and "Manage list…".
   List<String> _statusList = [..._statuses];
   List<String> _condList = [..._conditions];
+  Map<String, String> _statusColors = {}; // slug -> palette key (org.asset_status_colors)
   int _optTick = 0;
 
   static String _slug(String s) => s
@@ -576,8 +587,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           .from('app_config')
           .select('key, value')
           .eq('org_id', orgId)
-          .inFilter('key', ['org.asset_statuses', 'org.asset_conditions']);
+          .inFilter('key', ['org.asset_statuses', 'org.asset_conditions', 'org.asset_status_colors']);
       for (final r in rows as List) {
+        if (r['key'] == 'org.asset_status_colors') {
+          try {
+            _statusColors = Map<String, String>.from(jsonDecode('${r['value']}') as Map);
+          } catch (_) {}
+          continue;
+        }
         try {
           final list = List<String>.from(jsonDecode('${r['value']}') as List)
               .map(_slug)
@@ -614,6 +631,20 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       }
       _optTick++;
     });
+  }
+
+  Future<void> _saveStatusColor(String slug, String colorKey) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final next = {..._statusColors, slug: colorKey};
+    final client = Supabase.instance.client;
+    final val = jsonEncode(next);
+    final upd = await client.from('app_config').update({'value': val})
+        .eq('org_id', orgId).eq('key', 'org.asset_status_colors').select('key');
+    if ((upd as List).isEmpty) {
+      await client.from('app_config').insert({'org_id': orgId, 'key': 'org.asset_status_colors', 'value': val});
+    }
+    setState(() => _statusColors = next);
   }
 
   int _optUsage(String kind, String slug) => _assets
@@ -691,6 +722,9 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
             return;
           }
           await save([for (final x in list) x == old ? s : x]);
+          if (isStatus && _statusColors[old] != null) {
+            try { await _saveStatusColor(s, _statusColors[old]!); } catch (_) {}
+          }
           await _load();
           setD(() {});
         }
@@ -728,7 +762,34 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
-                    title: Text(_optLabel(list[i])),
+                    leading: !isStatus
+                        ? null
+                        : PopupMenuButton<String>(
+                            tooltip: 'Colour',
+                            onSelected: (k) async {
+                              try {
+                                await _saveStatusColor(list[i], k);
+                              } catch (e) {
+                                _snack('Could not save colour: ${e.toString().split('\n').first}');
+                              }
+                              setD(() {});
+                            },
+                            itemBuilder: (_) => [
+                              for (final e in _kStatusPalette.entries)
+                                PopupMenuItem(
+                                    value: e.key,
+                                    child: Row(children: [
+                                      CircleAvatar(radius: 7, backgroundColor: e.value),
+                                      const SizedBox(width: 8),
+                                      Text(e.key[0].toUpperCase() + e.key.substring(1)),
+                                    ])),
+                            ],
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: CircleAvatar(radius: 9, backgroundColor: _statusColor(list[i])),
+                            ),
+                          ),
+                    title: isStatus ? _statusChipFor(list[i]) : Text(_optLabel(list[i])),
                     subtitle: Text('${_optUsage(kind, list[i])} asset(s)', style: const TextStyle(fontSize: 11)),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(
@@ -787,7 +848,16 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       decoration: InputDecoration(labelText: label),
       items: [
         if (allowNone) const DropdownMenuItem<String?>(value: null, child: Text('—')),
-        for (final o in opts) DropdownMenuItem<String?>(value: o, child: Text(_optLabel(o))),
+        for (final o in opts)
+          DropdownMenuItem<String?>(
+              value: o,
+              child: kind == 'status'
+                  ? Row(children: [
+                      CircleAvatar(radius: 5, backgroundColor: _statusColor(o)),
+                      const SizedBox(width: 8),
+                      Text(_optLabel(o)),
+                    ])
+                  : Text(_optLabel(o))),
         const DropdownMenuItem<String?>(
             value: '__add__',
             child: Row(children: [
@@ -1387,13 +1457,18 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     );
   }
 
+  Widget _statusChipFor(String s) => Align(alignment: Alignment.centerLeft, child: _statusChip(s));
+
+  Color _statusColor(String? s) =>
+      _kStatusPalette[_statusColors[s] ?? _defaultStatusColorKey(s)] ?? AppTheme.textSecondary;
+
   Widget _statusChip(String? s) {
     final c = _statusColor(s);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
           color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(6)),
-      child: Text(_statusLabel(s),
+      child: Text(_optLabel(s),
           style: TextStyle(
               fontSize: 11, fontWeight: FontWeight.w700, color: c)),
     );

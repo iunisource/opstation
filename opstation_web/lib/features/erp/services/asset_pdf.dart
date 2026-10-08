@@ -260,8 +260,8 @@ class AssetPdf {
                               color: _accent)),
                       pw.SizedBox(height: 2),
                       pw.Text(_s(name),
-                          maxLines: 2,
-                          style: pw.TextStyle(fontSize: 9.5, color: _ink)),
+                          maxLines: 4,
+                          style: pw.TextStyle(fontSize: _nameSize(name, 9.5), color: _ink)),
                       pw.SizedBox(height: 5),
                       pw.Text(_s(caption),
                           style: pw.TextStyle(fontSize: 7, color: _muted)),
@@ -271,6 +271,15 @@ class AssetPdf {
       ),
     ));
     await outputPdf(await doc.save(), 'Asset Label $code');
+  }
+
+  /// Long asset names step the font down so the whole name fits the label.
+  static double _nameSize(String name, double base) {
+    final n = name.trim().length;
+    if (n <= 22) return base;
+    if (n <= 36) return base - 1.5;
+    if (n <= 50) return base - 2.5;
+    return base - 3.5;
   }
 
   static pw.Widget _qr(String data, double size) => pw.BarcodeWidget(
@@ -343,8 +352,8 @@ class AssetPdf {
                             color: _accent)),
                     pw.SizedBox(height: 2),
                     pw.Text(_s(l['name'] ?? ''),
-                        maxLines: 2,
-                        style: pw.TextStyle(fontSize: 9, color: _ink)),
+                        maxLines: 4,
+                        style: pw.TextStyle(fontSize: _nameSize(l['name'] ?? '', 9), color: _ink)),
                     pw.SizedBox(height: 4),
                     pw.Text(_s(caption),
                         style: pw.TextStyle(fontSize: 6.5, color: _muted)),
