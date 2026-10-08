@@ -145,6 +145,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           .select('id, name, role')
           .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
           .order('name');
+      await _loadOptionLists(orgId);
       final custodians = await client
           .from('asset_custodians')
           .select()
@@ -385,7 +386,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       };
     }).toList();
 
-    final cond = _capitalize(a['condition'] as String?);
+    final cond = _optLabel(a['condition'] as String?);
 
     Uint8List? imgBytes;
     final imgFile = _files.firstWhere(
@@ -550,6 +551,275 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     );
   }
 
+  // ───────────────────────────────────────────────────── status / condition lists
+  // Both lists are per organization (app_config org.asset_statuses /
+  // org.asset_conditions, JSON arrays of slugs). Managed straight from the
+  // dropdowns: "+ Add new…" and "Manage list…".
+  List<String> _statusList = [..._statuses];
+  List<String> _condList = [..._conditions];
+  int _optTick = 0;
+
+  static String _slug(String s) => s
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+      .replaceAll(RegExp(r'^_+|_+$'), '');
+
+  static String _optLabel(String? s) {
+    final t = (s ?? '').replaceAll('_', ' ').trim();
+    return t.isEmpty ? '—' : t[0].toUpperCase() + t.substring(1);
+  }
+
+  Future<void> _loadOptionLists(String orgId) async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config')
+          .select('key, value')
+          .eq('org_id', orgId)
+          .inFilter('key', ['org.asset_statuses', 'org.asset_conditions']);
+      for (final r in rows as List) {
+        try {
+          final list = List<String>.from(jsonDecode('${r['value']}') as List)
+              .map(_slug)
+              .where((x) => x.isNotEmpty)
+              .toList();
+          if (list.isEmpty) continue;
+          if (r['key'] == 'org.asset_statuses') _statusList = list;
+          if (r['key'] == 'org.asset_conditions') _condList = list;
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveOptionList(String kind, List<String> list) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final key = kind == 'status' ? 'org.asset_statuses' : 'org.asset_conditions';
+    final client = Supabase.instance.client;
+    final val = jsonEncode(list);
+    final upd = await client
+        .from('app_config')
+        .update({'value': val})
+        .eq('org_id', orgId)
+        .eq('key', key)
+        .select('key');
+    if ((upd as List).isEmpty) {
+      await client.from('app_config').insert({'org_id': orgId, 'key': key, 'value': val});
+    }
+    setState(() {
+      if (kind == 'status') {
+        _statusList = list;
+      } else {
+        _condList = list;
+      }
+      _optTick++;
+    });
+  }
+
+  int _optUsage(String kind, String slug) => _assets
+      .where((a) => (kind == 'status' ? a['status'] : a['condition']) == slug)
+      .length;
+
+  Future<String?> _askOptionName(BuildContext ctx, String title, {String initial = ''}) async {
+    final c = TextEditingController(text: initial);
+    final ok = await showDialog<bool>(
+      context: ctx,
+      builder: (c2) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+            controller: c,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Name'),
+            onSubmitted: (_) => Navigator.pop(c2, true)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c2, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(c2, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    final s = _slug(c.text);
+    return ok == true && s.isNotEmpty ? s : null;
+  }
+
+  /// Adds a new option and returns its slug (or null if cancelled / duplicate).
+  Future<String?> _addOption(BuildContext ctx, String kind) async {
+    final list = kind == 'status' ? _statusList : _condList;
+    final s = await _askOptionName(ctx, kind == 'status' ? 'New status' : 'New condition');
+    if (s == null) return null;
+    if (list.contains(s)) return s;
+    try {
+      await _saveOptionList(kind, [...list, s]);
+      return s;
+    } catch (e) {
+      _snack('Could not save: ${e.toString().split('\n').first}');
+      return null;
+    }
+  }
+
+  Future<void> _manageOptions(BuildContext ctx, String kind) async {
+    final isStatus = kind == 'status';
+    await showDialog(
+      context: ctx,
+      builder: (c2) => StatefulBuilder(builder: (c2, setD) {
+        final list = isStatus ? _statusList : _condList;
+        Future<void> save(List<String> next) async {
+          try {
+            await _saveOptionList(kind, next);
+          } catch (e) {
+            _snack('Could not save: ${e.toString().split('\n').first}');
+          }
+          setD(() {});
+        }
+
+        Future<void> rename(String old) async {
+          final s = await _askOptionName(c2, 'Rename', initial: _optLabel(old));
+          if (s == null || s == old) return;
+          if (list.contains(s)) {
+            _snack('“${_optLabel(s)}” already exists.');
+            return;
+          }
+          final orgId = _orgId;
+          try {
+            // move every asset that uses the old value to the new one
+            await Supabase.instance.client
+                .from('assets')
+                .update({isStatus ? 'status' : 'condition': s})
+                .eq('org_id', orgId!)
+                .eq(isStatus ? 'status' : 'condition', old);
+          } catch (e) {
+            _snack('Could not rename on assets: ${e.toString().split('\n').first}');
+            return;
+          }
+          await save([for (final x in list) x == old ? s : x]);
+          await _load();
+          setD(() {});
+        }
+
+        Future<void> remove(String s) async {
+          final n = _optUsage(kind, s);
+          if (n > 0) {
+            _snack('“${_optLabel(s)}” is used by $n asset${n == 1 ? '' : 's'}. Change them first.');
+            return;
+          }
+          if (list.length <= 1) {
+            _snack('Keep at least one option.');
+            return;
+          }
+          await save([for (final x in list) if (x != s) x]);
+        }
+
+        void move(int i, int d) {
+          final j = i + d;
+          if (j < 0 || j >= list.length) return;
+          final next = [...list];
+          final t = next[i];
+          next[i] = next[j];
+          next[j] = t;
+          save(next);
+        }
+
+        return AlertDialog(
+          title: Text(isStatus ? 'Asset statuses' : 'Asset conditions'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                for (var i = 0; i < list.length; i++)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(_optLabel(list[i])),
+                    subtitle: Text('${_optUsage(kind, list[i])} asset(s)', style: const TextStyle(fontSize: 11)),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      IconButton(
+                          tooltip: 'Up',
+                          icon: const Icon(Icons.arrow_upward, size: 16),
+                          onPressed: i == 0 ? null : () => move(i, -1)),
+                      IconButton(
+                          tooltip: 'Down',
+                          icon: const Icon(Icons.arrow_downward, size: 16),
+                          onPressed: i == list.length - 1 ? null : () => move(i, 1)),
+                      IconButton(
+                          tooltip: 'Rename',
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          onPressed: () => rename(list[i])),
+                      if (_isMaster)
+                        IconButton(
+                            tooltip: 'Delete',
+                            icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                            onPressed: () => remove(list[i])),
+                    ]),
+                  ),
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c2), child: const Text('Close')),
+            ElevatedButton.icon(
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add'),
+                onPressed: () async {
+                  await _addOption(c2, kind);
+                  setD(() {});
+                }),
+          ],
+        );
+      }),
+    );
+  }
+
+  /// Status / Condition dropdown with "+ Add new…" and "Manage list…" built in.
+  Widget _optionDropdown({
+    required BuildContext ctx,
+    required String kind,
+    required String label,
+    required String? value,
+    required bool allowNone,
+    required void Function(String?) onChanged,
+    required VoidCallback rebuild,
+  }) {
+    final list = kind == 'status' ? _statusList : _condList;
+    final opts = [...list, if (value != null && !list.contains(value)) value];
+    return DropdownButtonFormField<String?>(
+      key: ValueKey('$kind-$_optTick-$value'),
+      value: value,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label),
+      items: [
+        if (allowNone) const DropdownMenuItem<String?>(value: null, child: Text('—')),
+        for (final o in opts) DropdownMenuItem<String?>(value: o, child: Text(_optLabel(o))),
+        const DropdownMenuItem<String?>(
+            value: '__add__',
+            child: Row(children: [
+              Icon(Icons.add, size: 16, color: AppTheme.primary),
+              SizedBox(width: 6),
+              Text('Add new…', style: TextStyle(color: AppTheme.primary)),
+            ])),
+        const DropdownMenuItem<String?>(
+            value: '__manage__',
+            child: Row(children: [
+              Icon(Icons.tune, size: 16, color: AppTheme.textSecondary),
+              SizedBox(width: 6),
+              Text('Manage list…', style: TextStyle(color: AppTheme.textSecondary)),
+            ])),
+      ],
+      onChanged: (v) async {
+        if (v == '__add__') {
+          final s = await _addOption(ctx, kind);
+          if (s != null) onChanged(s);
+          _optTick++;
+          rebuild();
+        } else if (v == '__manage__') {
+          await _manageOptions(ctx, kind);
+          _optTick++;
+          rebuild();
+        } else {
+          onChanged(v);
+        }
+      },
+    );
+  }
+
   // ───────────────────────────────────────────────────── CSV import / export
   bool get _canBulk {
     final r = ref.read(currentUserProvider)?.role;
@@ -687,11 +957,11 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
 
       final st = cell(r, 'status').toLowerCase().replaceAll(' ', '_');
       if (st.isNotEmpty) {
-        if (_statuses.contains(st)) { f['status'] = st; } else { rowErr.add('status “$st” — use ${_statuses.join(', ')}'); }
+        if (_statusList.contains(_slug(st))) { f['status'] = _slug(st); } else { rowErr.add('status “$st” — use ${_statusList.map(_optLabel).join(', ')}'); }
       }
       final cond = cell(r, 'condition').toLowerCase();
       if (cond.isNotEmpty) {
-        if (_conditions.contains(cond)) { f['condition'] = cond; } else { rowErr.add('condition “$cond” — use ${_conditions.join(', ')}'); }
+        if (_condList.contains(_slug(cond))) { f['condition'] = _slug(cond); } else { rowErr.add('condition “$cond” — use ${_condList.map(_optLabel).join(', ')}'); }
       }
       final br = cell(r, 'branch');
       if (br.isNotEmpty) {
@@ -1004,7 +1274,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                     hint: 'Status',
                     items: {
                       'all': 'All statuses',
-                      for (final s in _statuses) s: _statusLabel(s),
+                      for (final s in _statusList) s: _optLabel(s),
                     },
                     onChanged: (v) => setState(() => _statusFilter = v),
                   ),
@@ -1201,7 +1471,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   a['assigned_to'] == null
                       ? 'Unassigned'
                       : _custodianNames[a['assigned_to']]),
-              _kv('Condition', _capitalize(a['condition'] as String?)),
+              _kv('Condition', _optLabel(a['condition'] as String?)),
             ]),
             const SizedBox(height: 16),
             _section('Specification', [
@@ -1708,15 +1978,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child: _optionDropdown(
+                      ctx: ctx,
+                      kind: 'status',
+                      label: 'Status',
                       value: status,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: 'Status'),
-                      items: _statuses
-                          .map((s) => DropdownMenuItem(
-                              value: s, child: Text(_statusLabel(s))))
-                          .toList(),
+                      allowNone: false,
                       onChanged: (v) => setS(() => status = v ?? status),
+                      rebuild: () => setS(() {}),
                     ),
                   ),
                 ]),
@@ -1771,18 +2040,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                               labelText: 'Serial no.'))),
                   const SizedBox(width: 10),
                   Expanded(
-                      child: DropdownButtonFormField<String?>(
+                      child: _optionDropdown(
+                    ctx: ctx,
+                    kind: 'condition',
+                    label: 'Condition',
                     value: condition,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Condition'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                          value: null, child: Text('—')),
-                      for (final c in _conditions)
-                        DropdownMenuItem<String?>(
-                            value: c, child: Text(_capitalize(c))),
-                    ],
+                    allowNone: true,
                     onChanged: (v) => setS(() => condition = v),
+                    rebuild: () => setS(() {}),
                   )),
                 ]),
                 const SizedBox(height: 10),
@@ -1936,15 +2201,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 onChanged: (v) => setS(() => custodian = v),
               ),
               const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
+              _optionDropdown(
+                ctx: ctx,
+                kind: 'status',
+                label: 'Status',
                 value: status,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: _statuses
-                    .map((s) => DropdownMenuItem(
-                        value: s, child: Text(_statusLabel(s))))
-                    .toList(),
+                allowNone: false,
                 onChanged: (v) => setS(() => status = v ?? status),
+                rebuild: () => setS(() {}),
               ),
               const SizedBox(height: 10),
               TextField(
