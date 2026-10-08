@@ -1309,6 +1309,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/manufacturing/claim-processing-voucher')) _menuItem(context, 'Claim Processing Voucher', Icons.assignment_return_outlined, '/manufacturing/claim-processing-voucher', location),
     ];
     final mfgReportItems = <Widget>[
+      if (show('/manufacturing/production-report')) _menuItem(context, 'Production Report', Icons.factory_outlined, '/manufacturing/production-report', location),
       if (show('/manufacturing/production-waste-report')) _menuItem(context, 'Production Waste Report', Icons.recycling_outlined, '/manufacturing/production-waste-report', location),
       if (show('/manufacturing/overheads-summary')) _menuItem(context, 'Overheads Summary', Icons.summarize_outlined, '/manufacturing/overheads-summary', location),
       if (show('/erp/fg-without-bom')) _menuItem(context, 'Goods without BOM', Icons.account_tree_outlined, '/erp/fg-without-bom', location),
@@ -1424,7 +1425,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
           ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station', '/manufacturing/job-kiosk', '/manufacturing/duty-roster',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
-           '/manufacturing/claim-processing-voucher', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary', '/erp/fg-without-bom'],
+           '/manufacturing/claim-processing-voucher', '/manufacturing/production-report', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary', '/erp/fg-without-bom'],
           _trimDividers(manufacturingItems), badge: jobAckPending + bomSupervisePending),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,

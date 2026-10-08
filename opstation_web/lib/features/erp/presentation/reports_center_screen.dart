@@ -71,6 +71,7 @@ const List<_Cat> _kCatalog = [
   _Cat('Manufacturing', Icons.precision_manufacturing_outlined, [
     _Card('Production Floor', '/manufacturing/production-floor', Icons.space_dashboard_outlined, 'Live production status'),
     _Card('Production Planner', '/manufacturing/production-plan', Icons.account_tree_outlined, 'Material planning for runs'),
+    _Card('Production Report', '/manufacturing/production-report', Icons.factory_outlined, 'Production runs by date or date range, per product'),
     _Card('Production Waste', '/manufacturing/production-waste-report', Icons.recycling_outlined, 'Scrap & waste by run'),
     _Card('Overheads Summary', '/manufacturing/overheads-summary', Icons.summarize_outlined, 'Applied labour & overhead'),
   ]),

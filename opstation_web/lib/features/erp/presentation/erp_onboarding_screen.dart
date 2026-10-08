@@ -356,6 +356,7 @@ const Map<String, String> _routeByName = {
   'Claim Processing Voucher': '/manufacturing/claim-processing-voucher',
   'Goods without BOM': '/erp/fg-without-bom',
   'Production Waste Report': '/manufacturing/production-waste-report',
+  'Production Report': '/manufacturing/production-report',
   'Chart of Accounts': '/erp/chart-of-accounts',
   'Journal Vouchers': '/financials/journal-vouchers',
   'Opening Journal': '/financials/opening-journal',

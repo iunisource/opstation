@@ -141,6 +141,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('damage_stock', 'Damage Stock Voucher', PermKind.doc, '/manufacturing/damage-stock-voucher'),
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),
     PermItem('production_waste', 'Production Waste Report', PermKind.report, '/manufacturing/production-waste-report'),
+    PermItem('production_report', 'Production Report', PermKind.report, '/manufacturing/production-report'),
     PermItem('overheads_summary', 'Overheads Summary', PermKind.report, '/manufacturing/overheads-summary'),
     PermItem('fg_without_bom', 'Goods without BOM', PermKind.report, '/erp/fg-without-bom'),
     // Capability (not a navigable screen): who may SEE costing on the Production

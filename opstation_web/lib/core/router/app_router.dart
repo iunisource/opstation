@@ -157,6 +157,7 @@ import '../../features/erp/presentation/erp_collection_report_screen.dart' defer
 import '../../features/erp/presentation/erp_duty_roster_screen.dart' deferred as _s146;
 import '../../features/erp/presentation/erp_automation_screen.dart' deferred as _s147;
 import '../../features/assets/presentation/erp_asset_report_screen.dart' deferred as _s148;
+import '../../features/erp/presentation/erp_production_report_screen.dart' deferred as _s149;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -495,6 +496,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => _deferred(_s013.loadLibrary(), () => _s013.ErpDamageStockVoucherScreen())),
       GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => _deferred(_s014.loadLibrary(), () => _s014.ErpClaimProcessingVoucherScreen())),
       GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => _deferred(_s015.loadLibrary(), () => _s015.ErpProductionWasteReportScreen())),
+      GoRoute(path: '/manufacturing/production-report', builder: (_, __) => _deferred(_s149.loadLibrary(), () => _s149.ErpProductionReportScreen())),
       GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => _deferred(_s016.loadLibrary(), () => _s016.ErpOverheadsSummaryScreen())),
       GoRoute(path: '/hr/employees', builder: (_, state) => _deferred(_s030.loadLibrary(), () => _s030.HrEmployeesScreen(focusId: state.uri.queryParameters['focus']))),
       GoRoute(path: '/hr/employee-attendance', builder: (_, state) => _deferred(_s031.loadLibrary(), () => _s031.HrEmployeeAttendanceScreen(empId: state.uri.queryParameters['emp'] ?? ''))),

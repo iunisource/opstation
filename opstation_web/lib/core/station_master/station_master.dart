@@ -708,6 +708,7 @@ const List<_Feature> _features = [
   _Feature('Job Card', 'Manufacturing', '/manufacturing/job-card', ['job card', 'work order']),
   _Feature('Asset Report', 'Management', '/assets/report', ['asset report', 'assets report', 'asset register report', 'asset list']),
   _Feature('Automation', 'ERP', '/erp/automation', ['automation', 'auto po', 'reorder', 'low stock', 'replenish']),
+  _Feature('Production Report', 'Manufacturing', '/manufacturing/production-report', ['production report', 'production runs', 'daily production', 'output report', 'produced']),
   _Feature('Duty Roster', 'Manufacturing', '/manufacturing/duty-roster', ['duty roster', 'roster', 'station', 'line', 'shift']),
   _Feature('Product Assembly (BOM)', 'Manufacturing', '/manufacturing/product-assembly', ['bom', 'assembly', 'recipe']),
   _Feature('Production Floor', 'Manufacturing', '/manufacturing/production-floor', ['production floor', 'shop floor', 'floor']),
