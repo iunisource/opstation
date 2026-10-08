@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -82,6 +83,28 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
         });
       }
     }
+  }
+
+  /// For "Account #: 0241 0102 79" style lines, copy just the value (digits /
+  /// IBAN without spaces) — that's what gets pasted into a banking app.
+  static String _copyValue(String line) {
+    var v = line;
+    final i = v.indexOf(':');
+    if (i > 0 && i < v.length - 1) v = v.substring(i + 1).trim();
+    final compact = v.replaceAll(RegExp(r'[\s-]'), '');
+    if (RegExp(r'^[A-Za-z]{0,4}\d{6,}[A-Za-z0-9]*$').hasMatch(compact)) return compact;
+    return v;
+  }
+
+  Future<void> _copy(String text, String msg) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+          content: Text(msg, maxLines: 2, overflow: TextOverflow.ellipsis),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2)));
   }
 
   static String _money(num? v) {
@@ -306,8 +329,52 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: _ink)),
         ]),
         if (bank.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          SelectableText(bank, style: const TextStyle(fontSize: 12.5, color: _muted, height: 1.35)),
+          const SizedBox(height: 8),
+          Row(children: [
+            const Text('BANK/BENEFICIARY DETAILS',
+                style: TextStyle(fontSize: 10, color: _muted, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+            const Spacer(),
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => _copy(bank, 'All details copied'),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.copy_all, size: 14, color: _brand),
+                  SizedBox(width: 4),
+                  Text('Copy all', style: TextStyle(fontSize: 11.5, color: _brand, fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          // Each line (title, account no., IBAN, bank…) is its own tap-to-copy chip.
+          for (final ln in bank.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(6),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: () => _copy(_copyValue(ln), 'Copied: ${_copyValue(ln)}'),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: _rule),
+                    ),
+                    child: Row(children: [
+                      Expanded(
+                        child: Text(ln, style: const TextStyle(fontSize: 13, color: _ink, height: 1.3)),
+                      ),
+                      const SizedBox(width: 8),
+                      const Icon(Icons.content_copy, size: 15, color: _muted),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
         ],
       ]),
     );

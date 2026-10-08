@@ -109,7 +109,7 @@ class PaymentAdvicePdf {
         children: [
           cell('#', bold: true),
           cell('Party', bold: true),
-          cell('Bank details', bold: true),
+          cell('Bank/Beneficiary details', bold: true),
           cell('Last paid', bold: true, align: pw.TextAlign.center),
           if (!accountsCopy)
             cell('Amount due', bold: true, align: pw.TextAlign.right),

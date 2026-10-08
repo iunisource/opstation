@@ -1495,7 +1495,7 @@ class _ErpPaymentAdviceScreenState
         const SizedBox(height: 12),
         // Bank details (free text, multiline) + bullet helper.
         Row(children: [
-          const Text('Bank Details',
+          const Text('Bank/Beneficiary Details',
               style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
