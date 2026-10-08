@@ -1,6 +1,9 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'dart:convert';
 import 'dart:typed_data';
+import 'package:csv/csv.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -547,6 +550,326 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     );
   }
 
+  // ───────────────────────────────────────────────────── CSV import / export
+  bool get _canBulk {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
+
+  static const _csvCols = [
+    'asset_code', 'name', 'category', 'branch', 'status', 'condition',
+    'custodian', 'location', 'serial_no', 'model', 'manufacturer',
+    'purchase_date', 'purchase_cost', 'warranty_expiry', 'description', 'notes',
+  ];
+
+  void _downloadCsv(String fileName, List<List<dynamic>> rows) {
+    final csv = const ListToCsvConverter().convert(rows);
+    final bytes = utf8.encode('﻿$csv'); // BOM so Excel keeps Urdu / symbols
+    final blob = html.Blob([bytes], 'text/csv;charset=utf-8');
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    html.AnchorElement(href: url)
+      ..setAttribute('download', fileName)
+      ..click();
+    html.Url.revokeObjectUrl(url);
+  }
+
+  void _exportCsv({bool templateOnly = false}) {
+    final rows = <List<dynamic>>[_csvCols];
+    if (!templateOnly) {
+      for (final a in _assets) {
+        String d(dynamic v) => v == null ? '' : '$v'.split('T').first;
+        rows.add([
+          a['asset_code'] ?? '',
+          a['name'] ?? '',
+          _catNames[a['category_id']] ?? '',
+          _branchNames[a['branch_id']] ?? '',
+          a['status'] ?? '',
+          a['condition'] ?? '',
+          _custodianNames[a['assigned_to']] ?? '',
+          a['location_text'] ?? '',
+          a['serial_no'] ?? '',
+          a['model'] ?? '',
+          a['manufacturer'] ?? '',
+          d(a['purchase_date']),
+          a['purchase_cost'] ?? '',
+          d(a['warranty_expiry']),
+          a['description'] ?? '',
+          a['notes'] ?? '',
+        ]);
+      }
+    } else {
+      rows.add(['', 'Tablet Lenovo M10', 'IT Equipment', _branches.isNotEmpty ? _branches.first['name'] ?? '' : '',
+        'in_use', 'good', 'Ali Raza', 'Front office', 'SN12345', 'M10', 'Lenovo',
+        '2026-01-15', '45000', '2027-01-15', '', 'Leave asset_code blank to auto-number']);
+    }
+    final stamp = DateFormat('yyyyMMdd').format(DateTime.now());
+    _downloadCsv(templateOnly ? 'assets_template.csv' : 'assets_$stamp.csv', rows);
+  }
+
+  static DateTime? _parseAnyDate(String s) {
+    final t = s.trim();
+    if (t.isEmpty) return null;
+    final iso = DateTime.tryParse(t);
+    if (iso != null) return iso;
+    for (final f in ['dd/MM/yyyy', 'd/M/yyyy', 'dd-MM-yyyy', 'd-M-yyyy', 'd MMM yyyy', 'dd MMM yyyy', 'd-MMM-yyyy', 'd-MMM-yy']) {
+      try {
+        return DateFormat(f).parseStrict(t);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Future<void> _importCsv() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom, allowedExtensions: ['csv'], withData: true);
+    if (res == null || res.files.isEmpty || res.files.single.bytes == null) return;
+    List<List<String>> rows;
+    try {
+      var text = utf8.decode(res.files.single.bytes!, allowMalformed: true);
+      if (text.startsWith('﻿')) text = text.substring(1);
+      text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+      rows = [
+        for (final r in const CsvToListConverter(shouldParseNumbers: false, eol: '\n').convert(text))
+          [for (final c in r) (c?.toString() ?? '').trim()]
+      ].where((r) => r.any((c) => c.isNotEmpty)).toList();
+    } catch (e) {
+      _snack('Could not read the file: $e');
+      return;
+    }
+    if (rows.length < 2) {
+      _snack('The file has no data rows.');
+      return;
+    }
+    final head = [for (final h in rows.first) h.toLowerCase().replaceAll(' ', '_')];
+    int col(String k) => head.indexOf(k);
+    if (col('name') < 0 && col('asset_code') < 0) {
+      _snack('Header must include at least “name” (download the template to see the columns).');
+      return;
+    }
+    String cell(List<String> r, String k) {
+      final i = col(k);
+      return i >= 0 && i < r.length ? r[i].trim() : '';
+    }
+
+    final byCode = {for (final a in _assets) '${a['asset_code']}'.toLowerCase(): a};
+    final catBy = <String, String>{};
+    for (final c in _categories) {
+      catBy['${c['name']}'.toLowerCase()] = c['id'] as String;
+      if ((c['code'] as String?)?.isNotEmpty == true) catBy['${c['code']}'.toLowerCase()] = c['id'] as String;
+    }
+    final branchBy = {for (final b in _branches) '${b['name']}'.toLowerCase(): b['id'] as String};
+    final custBy = {for (final c in _custodians) '${c['name']}'.toLowerCase(): c['id'] as String};
+
+    final creates = <Map<String, dynamic>>[];
+    final updates = <Map<String, dynamic>>[];
+    final errors = <String>[];
+    final newCats = <String>{};
+    final newCusts = <String>{};
+    final seenCodes = <String>{};
+
+    for (var i = 1; i < rows.length; i++) {
+      final r = rows[i];
+      final line = i + 1;
+      final code = cell(r, 'asset_code');
+      final existing = code.isEmpty ? null : byCode[code.toLowerCase()];
+      final f = <String, dynamic>{};
+      final rowErr = <String>[];
+
+      if (code.isNotEmpty) {
+        if (seenCodes.contains(code.toLowerCase())) rowErr.add('duplicate asset_code $code in file');
+        seenCodes.add(code.toLowerCase());
+      }
+      final name = cell(r, 'name');
+      if (name.isNotEmpty) f['name'] = name;
+      if (existing == null && name.isEmpty) rowErr.add('name is required for a new asset');
+
+      final st = cell(r, 'status').toLowerCase().replaceAll(' ', '_');
+      if (st.isNotEmpty) {
+        if (_statuses.contains(st)) { f['status'] = st; } else { rowErr.add('status “$st” — use ${_statuses.join(', ')}'); }
+      }
+      final cond = cell(r, 'condition').toLowerCase();
+      if (cond.isNotEmpty) {
+        if (_conditions.contains(cond)) { f['condition'] = cond; } else { rowErr.add('condition “$cond” — use ${_conditions.join(', ')}'); }
+      }
+      final br = cell(r, 'branch');
+      if (br.isNotEmpty) {
+        final id = branchBy[br.toLowerCase()];
+        if (id == null) { rowErr.add('branch “$br” not found'); } else { f['branch_id'] = id; }
+      }
+      final cat = cell(r, 'category');
+      if (cat.isNotEmpty) {
+        final id = catBy[cat.toLowerCase()];
+        if (id != null) { f['category_id'] = id; } else { newCats.add(cat); f['_cat'] = cat; }
+      }
+      final cu = cell(r, 'custodian');
+      if (cu.isNotEmpty) {
+        final id = custBy[cu.toLowerCase()];
+        if (id != null) { f['assigned_to'] = id; } else { newCusts.add(cu); f['_cust'] = cu; }
+      }
+      for (final k in ['purchase_date', 'warranty_expiry']) {
+        final v = cell(r, k);
+        if (v.isEmpty) continue;
+        final d = _parseAnyDate(v);
+        if (d == null) { rowErr.add('$k “$v” is not a date (use 2026-01-31)'); } else { f[k] = DateFormat('yyyy-MM-dd').format(d); }
+      }
+      final cost = cell(r, 'purchase_cost').replaceAll(',', '');
+      if (cost.isNotEmpty) {
+        final n = double.tryParse(cost);
+        if (n == null) { rowErr.add('purchase_cost “$cost” is not a number'); } else { f['purchase_cost'] = n; }
+      }
+      for (final k in ['serial_no', 'model', 'manufacturer', 'description', 'notes']) {
+        final v = cell(r, k);
+        if (v.isNotEmpty) f[k] = v;
+      }
+      final loc = cell(r, 'location');
+      if (loc.isNotEmpty) f['location_text'] = loc;
+
+      if (rowErr.isNotEmpty) {
+        errors.add('Row $line${code.isNotEmpty ? ' ($code)' : ''}: ${rowErr.join('; ')}');
+        continue;
+      }
+      if (existing != null) {
+        updates.add({'_id': existing['id'], '_code': existing['asset_code'], ...f});
+      } else {
+        creates.add({'_code': code, ...f});
+      }
+    }
+
+    if (!mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import assets'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text('${res.files.single.name} · ${rows.length - 1} rows', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+              const SizedBox(height: 10),
+              Text('• ${creates.length} new asset${creates.length == 1 ? '' : 's'} will be created'),
+              Text('• ${updates.length} existing asset${updates.length == 1 ? '' : 's'} will be updated (matched by asset_code; blank cells leave a field unchanged)'),
+              if (newCats.isNotEmpty) Text('• New categories: ${newCats.join(', ')}'),
+              if (newCusts.isNotEmpty) Text('• New custodians: ${newCusts.join(', ')}'),
+              if (errors.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text('${errors.length} row${errors.length == 1 ? '' : 's'} skipped:',
+                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                for (final e in errors.take(50)) Text(e, style: const TextStyle(fontSize: 12, color: Colors.red)),
+                if (errors.length > 50) Text('…and ${errors.length - 50} more', style: const TextStyle(fontSize: 12)),
+              ],
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: creates.isEmpty && updates.isEmpty ? null : () => Navigator.pop(ctx, true),
+              child: Text('Import ${creates.length + updates.length}')),
+        ],
+      ),
+    );
+    if (go != true) return;
+
+    final client = Supabase.instance.client;
+    final progress = ValueNotifier<String>('Starting…');
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        content: Row(children: [
+          const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+          const SizedBox(width: 14),
+          Expanded(child: ValueListenableBuilder<String>(valueListenable: progress, builder: (_, v, __) => Text(v))),
+        ]),
+      ),
+    );
+    var done = 0;
+    final fails = <String>[];
+    try {
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      var k = 0;
+      final catIds = <String, String>{};
+      for (final c in newCats) {
+        final id = 'acat_${stamp}_${k++}';
+        await client.from('asset_categories').insert({'id': id, 'org_id': orgId, 'name': c});
+        catIds[c] = id;
+      }
+      final custIds = <String, String>{};
+      for (final c in newCusts) {
+        final id = 'acus_${stamp}_${k++}';
+        await client.from('asset_custodians').insert({'id': id, 'org_id': orgId, 'name': c});
+        custIds[c] = id;
+      }
+      Map<String, dynamic> clean(Map<String, dynamic> m) {
+        final out = <String, dynamic>{};
+        m.forEach((key, v) {
+          if (!key.startsWith('_')) out[key] = v;
+        });
+        if (m['_cat'] != null) out['category_id'] = catIds[m['_cat']];
+        if (m['_cust'] != null) out['assigned_to'] = custIds[m['_cust']];
+        return out;
+      }
+
+      for (final u in updates) {
+        progress.value = 'Updating ${u['_code']}… (${++done}/${creates.length + updates.length})';
+        try {
+          await client.from('assets').update(clean(u)).eq('id', u['_id']);
+        } catch (e) {
+          fails.add('${u['_code']}: ${e.toString().split('\n').first}');
+        }
+      }
+      for (final c in creates) {
+        var code = (c['_code'] as String?) ?? '';
+        try {
+          if (code.isEmpty) {
+            code = (await client.rpc('next_asset_code', params: {'p_org_id': orgId})) as String? ?? '';
+          }
+          progress.value = 'Creating $code… (${++done}/${creates.length + updates.length})';
+          final id = 'asset_${DateTime.now().millisecondsSinceEpoch}_${k++}';
+          final payload = clean(c);
+          payload.putIfAbsent('status', () => 'in_use');
+          await client.from('assets').insert({
+            'id': id, 'org_id': orgId, 'asset_code': code,
+            'created_by': client.auth.currentUser?.id, ...payload,
+          });
+          try {
+            await client.rpc('asset_reassign', params: {
+              'p_asset_id': id,
+              'p_branch_id': payload['branch_id'],
+              'p_location_text': payload['location_text'],
+              'p_assigned_to': payload['assigned_to'],
+              'p_status': payload['status'],
+              'p_action': 'created',
+              'p_note': 'Imported from CSV',
+            });
+          } catch (_) {}
+        } catch (e) {
+          fails.add('${code.isEmpty ? c['name'] : code}: ${e.toString().split('\n').first}');
+        }
+      }
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+    await _load();
+    if (!mounted) return;
+    if (fails.isEmpty) {
+      _snack('Imported: ${creates.length} new, ${updates.length} updated${errors.isNotEmpty ? ', ${errors.length} rows skipped' : ''}.');
+    } else {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('${fails.length} row${fails.length == 1 ? '' : 's'} failed'),
+          content: SizedBox(width: 480, child: SingleChildScrollView(child: Text(fails.join('\n')))),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    }
+  }
+
   // ───────────────────────────────────────────────────── build
   @override
   Widget build(BuildContext context) {
@@ -586,6 +909,29 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               label: const Text('Custodians'),
               onPressed: _custodiansDialog,
             ),
+            if (_canBulk) ...[
+              const SizedBox(width: 8),
+              PopupMenuButton<String>(
+                tooltip: 'Import / export (CSV)',
+                onSelected: (v) {
+                  if (v == 'export') _exportCsv();
+                  if (v == 'template') _exportCsv(templateOnly: true);
+                  if (v == 'import') _importCsv();
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'export', child: ListTile(dense: true, leading: Icon(Icons.download_outlined), title: Text('Export CSV'))),
+                  PopupMenuItem(value: 'import', child: ListTile(dense: true, leading: Icon(Icons.upload_file_outlined), title: Text('Import CSV'))),
+                  PopupMenuItem(value: 'template', child: ListTile(dense: true, leading: Icon(Icons.description_outlined), title: Text('Download template'))),
+                ],
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: Chip(
+                    avatar: Icon(Icons.import_export, size: 18),
+                    label: Text('Import / Export'),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             ElevatedButton.icon(
               icon: const Icon(Icons.add, size: 18),
