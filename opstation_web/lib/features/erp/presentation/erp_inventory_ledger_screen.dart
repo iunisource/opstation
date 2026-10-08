@@ -664,6 +664,52 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           title = 'Goods Receipt Note';
           voucher = await client.from('purchase_grns').select('*, suppliers(name)').eq('id', refId).maybeSingle();
           if (voucher != null) lines = await client.from('purchase_grn_items').select('*, products(name, sku)').eq('grn_id', refId);
+          // A GRN carries quantities only. Once it is invoiced, show each line at
+          // the invoice's (net) price so Price / Total are filled in.
+          if (voucher != null && (lines as List).isNotEmpty) {
+            try {
+              final invs = List<Map<String, dynamic>>.from(await client.from('purchase_invoices')
+                  .select('id, voucher_number, is_voided').eq('grn_id', refId) as List)
+                  .where((v) => v['is_voided'] != true).toList();
+              if (invs.isNotEmpty) {
+                final items = await client.from('purchase_invoice_items')
+                    .select('product_id, qty_received, unit_cost, discount, line_total')
+                    .inFilter('invoice_id', [for (final v in invs) v['id']]);
+                final qtyBy = <String, double>{}, amtBy = <String, double>{};
+                for (final it in items as List) {
+                  final pid = '${it['product_id']}';
+                  final q = ((it['qty_received'] as num?) ?? 0).toDouble();
+                  final lt = (it['line_total'] as num?)?.toDouble()
+                      ?? q * ((it['unit_cost'] as num?) ?? 0).toDouble() - ((it['discount'] as num?) ?? 0).toDouble();
+                  qtyBy[pid] = (qtyBy[pid] ?? 0) + q;
+                  amtBy[pid] = (amtBy[pid] ?? 0) + lt;
+                }
+                lines = [
+                  for (final l in lines as List)
+                    () {
+                      final m = Map<String, dynamic>.from(l as Map);
+                      final pid = '${m['product_id']}';
+                      final iq = qtyBy[pid] ?? 0;
+                      if (iq > 0) {
+                        final price = (amtBy[pid] ?? 0) / iq;
+                        final q = ((m['qty_received'] ?? m['quantity']) as num?)?.toDouble() ?? 0;
+                        m['unit_price'] = price;
+                        m['line_total'] = price * q;
+                      }
+                      return m;
+                    }(),
+                ];
+                final sum = lines.fold<double>(0, (a, l) => a + (((l as Map)['line_total'] as num?)?.toDouble() ?? 0));
+                voucher = {
+                  ...voucher,
+                  '_invoiced_as': invs.map((v) => v['voucher_number']).whereType<String>().join(', '),
+                  if (voucher['grand_total'] == null && voucher['total'] == null && voucher['total_amount'] == null) 'total': sum,
+                };
+              } else {
+                voucher = {...voucher, '_invoiced_as': ''};
+              }
+            } catch (_) {/* leave Price / Total blank if the invoice can't be read */}
+          }
           break;
         case 'purchase_returns':
           title = 'Purchase Return Note';
@@ -784,6 +830,16 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                 const Icon(Icons.person, size: 13, color: AppTheme.textSecondary),
                 const SizedBox(width: 5),
                 Text(entityName + (entityCode.isNotEmpty ? ' (' + entityCode + ')' : ''), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ]),
+              if (v.containsKey('_invoiced_as')) Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon((v['_invoiced_as'] as String).isNotEmpty ? Icons.receipt_long : Icons.hourglass_empty, size: 13,
+                    color: (v['_invoiced_as'] as String).isNotEmpty ? AppTheme.success : Colors.orange),
+                const SizedBox(width: 5),
+                Text((v['_invoiced_as'] as String).isNotEmpty
+                        ? 'Invoiced: ${v['_invoiced_as']} — prices from the invoice'
+                        : 'Not invoiced yet — prices appear once invoiced',
+                    style: TextStyle(fontSize: 12,
+                        color: (v['_invoiced_as'] as String).isNotEmpty ? AppTheme.success : Colors.orange)),
               ]),
               if (v['from_branch'] != null || v['to_branch'] != null) Row(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.swap_horiz, size: 14, color: AppTheme.textSecondary),
