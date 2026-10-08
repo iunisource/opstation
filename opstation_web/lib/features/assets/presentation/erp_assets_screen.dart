@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart' show assetsDueCountProvider;
 import '../../erp/services/asset_pdf.dart';
 
 /// Public asset page (static, Firebase-hosted). The QR encodes
@@ -102,6 +103,13 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     super.dispose();
   }
 
+  /// Branch choices for a picker: real branches, plus the asset's current one
+  /// if it happens to be a processor location (so the picker never breaks).
+  List<Map<String, dynamic>> _branchOptions(String? current) {
+    if (current == null || _branches.any((b) => b['id'] == current)) return _branches;
+    return [..._branches, {'id': current, 'name': _branchNames[current] ?? current}];
+  }
+
   Future<void> _load() async {
     final orgId = _orgId;
     if (orgId == null) {
@@ -145,7 +153,11 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       setState(() {
         _assets = List<Map<String, dynamic>>.from(assets);
         _categories = List<Map<String, dynamic>>.from(cats);
-        _branches = List<Map<String, dynamic>>.from(branches);
+        // Real branches only for picking — processor / off-site (virtual)
+        // locations don't hold company assets. Names keep every branch so an
+        // older asset still shows where it was.
+        final allBranches = List<Map<String, dynamic>>.from(branches);
+        _branches = allBranches.where((b) => b['is_virtual'] != true).toList();
         _users = List<Map<String, dynamic>>.from(users);
         _custodians = List<Map<String, dynamic>>.from(custodians);
         _catNames
@@ -154,7 +166,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               MapEntry(c['id'] as String, (c['name'] as String?) ?? '—')));
         _branchNames
           ..clear()
-          ..addEntries(_branches.map((b) =>
+          ..addEntries(allBranches.map((b) =>
               MapEntry(b['id'] as String, (b['name'] as String?) ?? '—')));
         _userNames
           ..clear()
@@ -170,6 +182,9 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           _selectedId = null;
         }
       });
+      // Keep the menu's maintenance-due counter in step with what's on screen
+      // (servicing an asset or changing its due date updates it right away).
+      ref.invalidate(assetsDueCountProvider);
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       _snack('Could not load assets: ${e.toString().split('\n').first}');
@@ -1369,7 +1384,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                       items: [
                         const DropdownMenuItem<String?>(
                             value: null, child: Text('—')),
-                        for (final b in _branches)
+                        for (final b in _branchOptions(branchId))
                           DropdownMenuItem<String?>(
                               value: b['id'] as String,
                               child: Text(b['name'] as String? ?? '—')),
@@ -1548,7 +1563,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 items: [
                   const DropdownMenuItem<String?>(
                       value: null, child: Text('—')),
-                  for (final b in _branches)
+                  for (final b in _branchOptions(branchId))
                     DropdownMenuItem<String?>(
                         value: b['id'] as String,
                         child: Text(b['name'] as String? ?? '—')),
@@ -1726,6 +1741,11 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     );
   }
 
+  bool get _isMaster {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
+
   Future<void> _custodiansDialog() async {
     final orgId = _orgId;
     if (orgId == null) return;
@@ -1737,6 +1757,8 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               TextEditingController(text: existing?['name'] as String? ?? '');
           final phoneCtrl =
               TextEditingController(text: existing?['phone'] as String? ?? '');
+          final emailCtrl =
+              TextEditingController(text: existing?['email'] as String? ?? '');
           final desigCtrl = TextEditingController(
               text: existing?['designation'] as String? ?? '');
           final ok = await showDialog<bool>(
@@ -1752,7 +1774,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 TextField(
                     controller: phoneCtrl,
                     keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(labelText: 'Phone')),
+                    decoration: const InputDecoration(
+                        labelText: 'Phone', helperText: 'Maintenance reminders go here by SMS')),
+                const SizedBox(height: 10),
+                TextField(
+                    controller: emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                        labelText: 'Email', helperText: '…and here by email, if given')),
                 const SizedBox(height: 10),
                 TextField(
                     controller: desigCtrl,
@@ -1771,24 +1800,147 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           );
           if (ok == true && nameCtrl.text.trim().isNotEmpty) {
             final client = Supabase.instance.client;
-            if (existing == null) {
-              await client.from('asset_custodians').insert({
-                'id': 'acus_${DateTime.now().millisecondsSinceEpoch}',
-                'org_id': orgId,
-                'name': nameCtrl.text.trim(),
-                'phone': _nz(phoneCtrl.text),
-                'designation': _nz(desigCtrl.text),
-              });
-            } else {
-              await client.from('asset_custodians').update({
-                'name': nameCtrl.text.trim(),
-                'phone': _nz(phoneCtrl.text),
-                'designation': _nz(desigCtrl.text),
-              }).eq('id', existing['id']);
+            try {
+              if (existing == null) {
+                await client.from('asset_custodians').insert({
+                  'id': 'acus_${DateTime.now().millisecondsSinceEpoch}',
+                  'org_id': orgId,
+                  'name': nameCtrl.text.trim(),
+                  'phone': _nz(phoneCtrl.text),
+                  'email': _nz(emailCtrl.text),
+                  'designation': _nz(desigCtrl.text),
+                });
+              } else {
+                await client.from('asset_custodians').update({
+                  'name': nameCtrl.text.trim(),
+                  'phone': _nz(phoneCtrl.text),
+                  'email': _nz(emailCtrl.text),
+                  'designation': _nz(desigCtrl.text),
+                }).eq('id', existing['id']);
+              }
+            } catch (e) {
+              _snack('Could not save: ${e.toString().split('\n').first}');
             }
             await _load();
             setS(() {});
           }
+        }
+
+        // Pick one or more existing employees and add them as custodians
+        // (name, phone, email and designation copied from HR).
+        Future<void> fromEmployees() async {
+          final client = Supabase.instance.client;
+          List<Map<String, dynamic>> emps = [];
+          final desig = <String, String>{};
+          try {
+            emps = List<Map<String, dynamic>>.from(await client
+                .from('hr_employees')
+                .select('id, full_name, employee_code, phone, email, designation_id, status')
+                .eq('org_id', orgId)
+                .order('full_name'));
+            emps = emps.where((e) => e['status'] != 'left').toList();
+            final ds = await client.from('hr_designations').select('id, name').eq('org_id', orgId);
+            for (final d in ds as List) {
+              desig['${d['id']}'] = '${d['name'] ?? ''}';
+            }
+          } catch (e) {
+            _snack('Could not load employees: ${e.toString().split('\n').first}');
+            return;
+          }
+          final already = {
+            for (final c in _custodians)
+              if (c['employee_id'] != null) '${c['employee_id']}'
+          };
+          final picked = <String>{};
+          var q = '';
+          if (!ctx.mounted) return;
+          final ok = await showDialog<bool>(
+            context: ctx,
+            builder: (c2) => StatefulBuilder(builder: (c2, setP) {
+              final list = emps.where((e) {
+                final s = '${e['full_name'] ?? ''} ${e['employee_code'] ?? ''} ${e['phone'] ?? ''}'.toLowerCase();
+                return q.isEmpty || s.contains(q.toLowerCase());
+              }).toList();
+              return AlertDialog(
+                title: const Text('Add from employees'),
+                content: SizedBox(
+                  width: 440,
+                  height: 460,
+                  child: Column(children: [
+                    TextField(
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.search, size: 18),
+                          hintText: 'Search name, code or phone',
+                          isDense: true),
+                      onChanged: (v) => setP(() => q = v.trim()),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: list.isEmpty
+                          ? const Center(
+                              child: Text('No employees found',
+                                  style: TextStyle(color: AppTheme.textSecondary)))
+                          : ListView.builder(
+                              itemCount: list.length,
+                              itemBuilder: (_, i) {
+                                final e = list[i];
+                                final id = '${e['id']}';
+                                final isIn = already.contains(id);
+                                final d = desig['${e['designation_id']}'] ?? '';
+                                final sub = [e['employee_code'], d, e['phone']]
+                                    .whereType<String>()
+                                    .where((s) => s.trim().isNotEmpty)
+                                    .join('  ·  ');
+                                return CheckboxListTile(
+                                  dense: true,
+                                  value: isIn || picked.contains(id),
+                                  onChanged: isIn
+                                      ? null
+                                      : (v) => setP(() => v == true ? picked.add(id) : picked.remove(id)),
+                                  title: Text('${e['full_name'] ?? '—'}'),
+                                  subtitle: Text(isIn ? 'Already a custodian' : sub,
+                                      style: const TextStyle(fontSize: 11)),
+                                );
+                              }),
+                    ),
+                  ]),
+                ),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c2, false),
+                      child: const Text('Cancel')),
+                  ElevatedButton(
+                      onPressed: picked.isEmpty ? null : () => Navigator.pop(c2, true),
+                      child: Text(picked.isEmpty ? 'Add' : 'Add ${picked.length}')),
+                ],
+              );
+            }),
+          );
+          if (ok != true || picked.isEmpty) return;
+          final stamp = DateTime.now().millisecondsSinceEpoch;
+          var n = 0;
+          final rows = [
+            for (final e in emps)
+              if (picked.contains('${e['id']}'))
+                {
+                  'id': 'acus_${stamp}_${n++}',
+                  'org_id': orgId,
+                  'employee_id': e['id'],
+                  'name': e['full_name'],
+                  'phone': e['phone'],
+                  'email': e['email'],
+                  'designation': desig['${e['designation_id']}'],
+                }
+          ];
+          try {
+            await client.from('asset_custodians').insert(rows);
+            _snack('${rows.length} custodian${rows.length == 1 ? '' : 's'} added from employees');
+          } catch (e) {
+            _snack('Could not add: ${e.toString().split('\n').first}');
+          }
+          await _load();
+          setS(() {});
         }
 
         int countFor(String id) =>
@@ -1797,68 +1949,76 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         return AlertDialog(
           title: const Text('Custodians'),
           content: SizedBox(
-            width: 420,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                    'Tap a custodian to see the assets currently with them.',
-                    style: TextStyle(
-                        fontSize: 12, color: AppTheme.textSecondary)),
-              ),
-              const SizedBox(height: 8),
-              if (_custodians.isEmpty)
-                const Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text('No custodians yet.',
-                        style: TextStyle(color: AppTheme.textSecondary)))
-              else
-                ..._custodians.map((c) {
-                  final n = countFor(c['id'] as String);
-                  final sub = [c['designation'], c['phone']]
-                      .whereType<String>()
-                      .where((s) => s.trim().isNotEmpty)
-                      .join('  ·  ');
-                  return ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    onTap: () {
-                      setState(() => _custodianFilter = c['id'] as String);
-                      Navigator.of(ctx, rootNavigator: true).pop();
-                    },
-                    title: Text(c['name'] as String? ?? '—'),
-                    subtitle: sub.isEmpty
-                        ? null
-                        : Text(sub, style: const TextStyle(fontSize: 12)),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                            color: AppTheme.primary.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(10)),
-                        child: Text('$n assets',
-                            style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.primary)),
-                      ),
-                      IconButton(
-                          icon: const Icon(Icons.edit_outlined, size: 16),
-                          onPressed: () => addOrEdit(existing: c)),
-                    ]),
-                  );
-                }),
-            ]),
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                      'Tap a custodian to see the assets currently with them.',
+                      style: TextStyle(
+                          fontSize: 12, color: AppTheme.textSecondary)),
+                ),
+                const SizedBox(height: 8),
+                if (_custodians.isEmpty)
+                  const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Text('No custodians yet.',
+                          style: TextStyle(color: AppTheme.textSecondary)))
+                else
+                  ..._custodians.map((c) {
+                    final n = countFor(c['id'] as String);
+                    final sub = [c['designation'], c['phone'], c['email']]
+                        .whereType<String>()
+                        .where((s) => s.trim().isNotEmpty)
+                        .join('  ·  ');
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      onTap: () {
+                        setState(() => _custodianFilter = c['id'] as String);
+                        Navigator.of(ctx, rootNavigator: true).pop();
+                      },
+                      leading: Icon(c['employee_id'] != null ? Icons.badge_outlined : Icons.person_outline,
+                          size: 18, color: AppTheme.textSecondary),
+                      title: Text(c['name'] as String? ?? '—'),
+                      subtitle: sub.isEmpty
+                          ? null
+                          : Text(sub, style: const TextStyle(fontSize: 12)),
+                      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                              color: AppTheme.primary.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(10)),
+                          child: Text('$n assets',
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.primary)),
+                        ),
+                        IconButton(
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            onPressed: () => addOrEdit(existing: c)),
+                      ]),
+                    );
+                  }),
+              ]),
+            ),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(),
                 child: const Text('Close')),
+            OutlinedButton.icon(
+                onPressed: fromEmployees,
+                icon: const Icon(Icons.badge_outlined, size: 16),
+                label: const Text('From employees')),
             ElevatedButton.icon(
                 onPressed: () => addOrEdit(),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add custodian')),
+                label: const Text('Add manually')),
           ],
         );
       }),
@@ -1871,13 +2031,18 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
-        Future<void> add() async {
-          final nameCtrl = TextEditingController();
-          final codeCtrl = TextEditingController();
+        int countFor(String id) =>
+            _assets.where((a) => a['category_id'] == id).length;
+
+        Future<void> addOrEdit({Map<String, dynamic>? existing}) async {
+          final nameCtrl =
+              TextEditingController(text: existing?['name'] as String? ?? '');
+          final codeCtrl =
+              TextEditingController(text: existing?['code'] as String? ?? '');
           final ok = await showDialog<bool>(
             context: ctx,
             builder: (c2) => AlertDialog(
-              title: const Text('New category'),
+              title: Text(existing == null ? 'New category' : 'Edit category'),
               content: Column(mainAxisSize: MainAxisSize.min, children: [
                 TextField(
                     controller: nameCtrl,
@@ -1894,49 +2059,130 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                     child: const Text('Cancel')),
                 ElevatedButton(
                     onPressed: () => Navigator.pop(c2, true),
-                    child: const Text('Add')),
+                    child: Text(existing == null ? 'Add' : 'Save')),
               ],
             ),
           );
           if (ok == true && nameCtrl.text.trim().isNotEmpty) {
-            await Supabase.instance.client.from('asset_categories').insert({
-              'id': 'acat_${DateTime.now().millisecondsSinceEpoch}',
-              'org_id': orgId,
-              'name': nameCtrl.text.trim(),
-              'code': _nz(codeCtrl.text),
-            });
+            final client = Supabase.instance.client;
+            try {
+              if (existing == null) {
+                await client.from('asset_categories').insert({
+                  'id': 'acat_${DateTime.now().millisecondsSinceEpoch}',
+                  'org_id': orgId,
+                  'name': nameCtrl.text.trim(),
+                  'code': _nz(codeCtrl.text),
+                });
+              } else {
+                await client.from('asset_categories').update({
+                  'name': nameCtrl.text.trim(),
+                  'code': _nz(codeCtrl.text),
+                }).eq('id', existing['id']);
+              }
+            } catch (e) {
+              _snack('Could not save: ${e.toString().split('\n').first}');
+            }
             await _load();
             setS(() {});
           }
         }
 
+        Future<void> remove(Map<String, dynamic> c) async {
+          final n = countFor(c['id'] as String);
+          if (n > 0) {
+            _snack('“${c['name']}” still has $n asset${n == 1 ? '' : 's'}. Move them to another category first.');
+            return;
+          }
+          final ok = await showDialog<bool>(
+            context: ctx,
+            builder: (c2) => AlertDialog(
+              title: const Text('Delete category?'),
+              content: Text('“${c['name']}” has no assets and will be removed.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(c2, false), child: const Text('Cancel')),
+                ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                    onPressed: () => Navigator.pop(c2, true),
+                    child: const Text('Delete')),
+              ],
+            ),
+          );
+          if (ok != true) return;
+          try {
+            await Supabase.instance.client
+                .from('asset_categories')
+                .update({'is_active': false}).eq('id', c['id']);
+          } catch (e) {
+            _snack('Could not delete: ${e.toString().split('\n').first}');
+          }
+          await _load();
+          setS(() {});
+        }
+
         return AlertDialog(
           title: const Text('Asset categories'),
           content: SizedBox(
-            width: 380,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              ..._categories.map((c) => ListTile(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                if (_categories.isNotEmpty)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Tap a category to see its assets.',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  ),
+                const SizedBox(height: 6),
+                ..._categories.map((c) {
+                  final n = countFor(c['id'] as String);
+                  return ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
+                    onTap: () {
+                      setState(() => _catFilter = c['id'] as String);
+                      Navigator.of(ctx, rootNavigator: true).pop();
+                    },
                     title: Text(c['name'] as String? ?? '—'),
                     subtitle: (c['code'] as String?)?.isNotEmpty == true
                         ? Text(c['code'] as String)
                         : null,
-                  )),
-              if (_categories.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: Text('No categories yet.',
-                      style: TextStyle(color: AppTheme.textSecondary)),
-                ),
-            ]),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: AppTheme.primary.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(10)),
+                        child: Text('$n asset${n == 1 ? '' : 's'}',
+                            style: const TextStyle(
+                                fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                      ),
+                      IconButton(
+                          tooltip: 'Edit',
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          onPressed: () => addOrEdit(existing: c)),
+                      if (_isMaster)
+                        IconButton(
+                            tooltip: n > 0 ? 'Has assets — move them first' : 'Delete',
+                            icon: Icon(Icons.delete_outline,
+                                size: 16, color: n > 0 ? AppTheme.textSecondary : Colors.red),
+                            onPressed: () => remove(c)),
+                    ]),
+                  );
+                }),
+                if (_categories.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('No categories yet.',
+                        style: TextStyle(color: AppTheme.textSecondary)),
+                  ),
+              ]),
+            ),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(),
                 child: const Text('Close')),
             ElevatedButton.icon(
-                onPressed: add,
+                onPressed: () => addOrEdit(),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Add category')),
           ],

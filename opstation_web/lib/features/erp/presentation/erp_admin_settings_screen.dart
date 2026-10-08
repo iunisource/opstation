@@ -276,6 +276,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.asset_custodian_reminder',
+    'Remind custodians directly (SMS + email)',
+    'When ON, each asset\'s custodian is reminded personally when its maintenance '
+        'enters the lead time above, again on the due day, and weekly while overdue: '
+        'by SMS to their phone (uses Settings ▸ SMS Notifications, which must be enabled) '
+        'and by email if the custodian has one. Custodians without a phone or email are skipped.',
+  ),
+
+  _AdminToggle(
     'org.backup_enabled',
     'Daily data backup by email',
     'When ON, a zipped CSV export of all of this organization\'s data (one file '
@@ -671,6 +680,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Alerts, Data & Assets', Icons.notifications_active_outlined, [
     'org.asset_maintenance_reminder',
+    'org.asset_custodian_reminder',
     'org.backup_enabled',
   ]),
   _ToggleGroup('Assistant', Icons.hub_outlined, [

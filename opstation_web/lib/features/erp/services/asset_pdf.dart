@@ -253,8 +253,9 @@ class AssetPdf {
                             style: pw.TextStyle(fontSize: 8, color: _muted)),
                       pw.SizedBox(height: 1),
                       pw.Text(_s(code),
+                          maxLines: 1,
                           style: pw.TextStyle(
-                              fontSize: 16,
+                              fontSize: 11,
                               fontWeight: pw.FontWeight.bold,
                               color: _accent)),
                       pw.SizedBox(height: 2),
@@ -335,8 +336,9 @@ class AssetPdf {
                           style: pw.TextStyle(fontSize: 7.5, color: _muted)),
                     pw.SizedBox(height: 1),
                     pw.Text(_s(l['code'] ?? ''),
+                        maxLines: 1,
                         style: pw.TextStyle(
-                            fontSize: 14,
+                            fontSize: 11,
                             fontWeight: pw.FontWeight.bold,
                             color: _accent)),
                     pw.SizedBox(height: 2),
