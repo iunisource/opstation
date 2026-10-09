@@ -67,8 +67,13 @@ class PaymentAdvicePdf {
     String? voidedBy,
     DateTime? voidedAt,
     String? voidReason,
+    // Optional "Paid" mark (approved advices only).
+    DateTime? paidAt,
+    String? paidBy,
+    String? paidRef,
   }) async {
     final isVoid = status == 'void';
+    final isPaid = !isVoid && status == 'approved' && paidAt != null;
     // Use a Unicode TTF so em-dashes, bullets (•) in bank details, middots
     // and non-Latin text all render instead of the missing-glyph box that
     // the built-in Helvetica shows. Falls back to Helvetica if the font
@@ -362,18 +367,22 @@ class PaymentAdvicePdf {
                   decoration: pw.BoxDecoration(
                       color: isVoid
                           ? const PdfColor.fromInt(0xFFFEE2E2)
-                          : status == 'approved'
+                          : isPaid
+                              ? const PdfColor.fromInt(0xFFDBEAFE)
+                              : status == 'approved'
                               ? const PdfColor.fromInt(0xFFDCFCE7)
                               : const PdfColor.fromInt(0xFFFEF3C7),
                       borderRadius: pw.BorderRadius.circular(4)),
-                  child: pw.Text(isVoid ? 'VOIDED' : status.toUpperCase(),
+                  child: pw.Text(isVoid ? 'VOIDED' : isPaid ? 'PAID' : status.toUpperCase(),
                       style: pw.TextStyle(
                           fontSize: 9,
                           fontWeight: pw.FontWeight.bold,
                           letterSpacing: 1,
                           color: isVoid
                               ? const PdfColor.fromInt(0xFF991B1B)
-                              : status == 'approved'
+                              : isPaid
+                                  ? const PdfColor.fromInt(0xFF1E40AF)
+                                  : status == 'approved'
                                   ? const PdfColor.fromInt(0xFF166534)
                                   : const PdfColor.fromInt(0xFF92400E))),
                 ),
@@ -448,6 +457,17 @@ class PaymentAdvicePdf {
                   fontSize: 9.5,
                   fontWeight: pw.FontWeight.bold,
                   color: const PdfColor.fromInt(0xFF991B1B))),
+        ],
+        if (isPaid) ...[
+          pw.SizedBox(height: 12),
+          pw.Text(
+              'PAID on ${DateFormat('d MMM yyyy').format(paidAt!.toLocal())}'
+              '${paidBy != null && paidBy.isNotEmpty ? ' - marked by $paidBy' : ''}'
+              '${paidRef != null && paidRef.trim().isNotEmpty ? ' - Ref: ${paidRef.trim()}' : ''}',
+              style: pw.TextStyle(
+                  fontSize: 9.5,
+                  fontWeight: pw.FontWeight.bold,
+                  color: const PdfColor.fromInt(0xFF1E40AF))),
         ],
         pw.SizedBox(height: 28),
         pw.Row(children: [

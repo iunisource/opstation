@@ -91,6 +91,7 @@ class _ErpPaymentAdviceScreenState
   // Lines as they were when the advice was opened — for the edit audit diff.
   List<Map<String, dynamic>> _origLines = [];
   int _auditTick = 0;
+  bool _unpaidOnly = false;
   Map<String, dynamic>? _current; // null = new
   final List<_PaLine> _lines = [];
   DateTime _date = DateTime.now();
@@ -502,15 +503,24 @@ class _ErpPaymentAdviceScreenState
   bool get _isApproved => (_current?['status'] as String?) == 'approved';
   bool get _isRejected => (_current?['status'] as String?) == 'rejected';
   bool get _isVoid => (_current?['status'] as String?) == 'void';
+  // Optional "Paid" mark on an approved advice (SQL 341).
+  bool get _isPaid => _isApproved && _current?['paid_at'] != null;
+  bool get _canMarkPaid => _current != null && _isApproved && !_isPaid && !_adminEditing; // anyone with access to the list
+  bool get _canUnmarkPaid => _isPaid && _isAdmin;
   // Approved, rejected and voided advices are final — read-only.
   bool get _isLocked => _isApproved || _isRejected || _isVoid;
   // An admin can reopen an APPROVED advice for editing (audit-logged).
   bool get _readOnly => _isLocked && !_adminEditing;
-  bool get _canAdminEdit => _isApproved && _isAdmin && !_adminEditing;
+  bool get _canAdminEdit => _isApproved && !_isPaid && _isAdmin && !_adminEditing;
   // Pending or approved advices can be voided by admins / approvers.
   bool get _canVoid {
     final st = _current?['status'] as String?;
-    return _current != null && _canModerate && (st == 'pending' || st == 'approved');
+    return _current != null && _canModerate && !_isPaid && (st == 'pending' || st == 'approved');
+  }
+
+  String _paidDate(Map<String, dynamic> a) {
+    final d = DateTime.tryParse((a['paid_at'] as String?) ?? '');
+    return d == null ? '—' : DateFormat('d MMM yyyy').format(d.toLocal());
   }
 
   String _numStr(dynamic v) {
@@ -878,6 +888,143 @@ class _ErpPaymentAdviceScreenState
     }
   }
 
+  Future<void> _markPaid() async {
+    if (!_canMarkPaid || _saving) return;
+    var paidOn = DateTime.now();
+    final refCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dlg) => StatefulBuilder(
+        builder: (dlg, setDlg) => AlertDialog(
+          title: Text('Mark ${_current!['advice_number'] ?? 'advice'} as Paid?'),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text(
+                'Confirms this advice has been cleared, so nobody pays it again. '
+                'It does not post anything to accounts.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            const SizedBox(height: 14),
+            InkWell(
+              onTap: () async {
+                final d = await showDatePicker(
+                    context: dlg,
+                    initialDate: paidOn,
+                    firstDate: DateTime(2024),
+                    lastDate: DateTime.now());
+                if (d != null) setDlg(() => paidOn = d);
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                    labelText: 'Paid on', border: OutlineInputBorder(), isDense: true),
+                child: Text(DateFormat('d MMM yyyy').format(paidOn)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: refCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Reference (optional)',
+                  hintText: 'Cheque no. / transaction ID',
+                  border: OutlineInputBorder(),
+                  isDense: true),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dlg, false), child: const Text('Cancel')),
+            ElevatedButton.icon(
+              onPressed: () => Navigator.pop(dlg, true),
+              icon: const Icon(Icons.task_alt, size: 18),
+              label: const Text('Mark as Paid'),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1D4ED8)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final me = ref.read(currentUserProvider);
+    final refText = refCtrl.text.trim();
+    // Noon local → stays on the chosen day whatever the timezone.
+    final paidAt = DateTime(paidOn.year, paidOn.month, paidOn.day, 12).toUtc().toIso8601String();
+    setState(() => _saving = true);
+    try {
+      final done = await _db.from('payment_advices').update({
+        'paid_at': paidAt,
+        'paid_by': me?.id,
+        'paid_by_name': me?.name,
+        'paid_ref': refText.isEmpty ? null : refText,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _current!['id']).eq('status', 'approved').isFilter('paid_at', null).select('id');
+      if ((done as List).isEmpty) {
+        _snack('Not changed — it is no longer an unpaid approved advice. Reloaded.');
+      } else {
+        await _audit(_current!['id'] as String, 'paid',
+            'Marked paid on ${DateFormat('d MMM yyyy').format(paidOn)}${refText.isEmpty ? '' : ' — Ref: $refText'}');
+        _snack('Marked as paid.');
+      }
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await _reopenCurrent();
+    } catch (e) {
+      if (mounted) setState(() => _saving = false);
+      _snack(e.toString().contains('paid_')
+          ? 'Paid needs the database update — run 341_payment_advice_paid.sql.'
+          : 'Could not mark paid: $e');
+    }
+  }
+
+  Future<void> _unmarkPaid() async {
+    if (!_canUnmarkPaid || _saving) return;
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dlg) => StatefulBuilder(
+        builder: (dlg, setDlg) => AlertDialog(
+          title: const Text('Remove the Paid mark?'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            onChanged: (_) => setDlg(() {}),
+            decoration: const InputDecoration(
+                labelText: 'Reason (required)', border: OutlineInputBorder()),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dlg, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.pop(dlg, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    try {
+      await _db.from('payment_advices').update({
+        'paid_at': null,
+        'paid_by': null,
+        'paid_by_name': null,
+        'paid_ref': null,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _current!['id']);
+      await _audit(_current!['id'] as String, 'unpaid', 'Paid mark removed: ${ctrl.text.trim()}');
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await _reopenCurrent();
+      _snack('Paid mark removed.');
+    } catch (e) {
+      if (mounted) setState(() => _saving = false);
+      _snack('Could not remove: $e');
+    }
+  }
+
+  /// Re-read the open advice (and the list) after a status-only change.
+  Future<void> _reopenCurrent() async {
+    await _refreshLive();
+    if (mounted) setState(() => _auditTick++);
+  }
+
   Future<String?> _askRejectReason() async {
     final ctrl = TextEditingController();
     final ok = await showDialog<bool>(
@@ -1032,13 +1179,17 @@ class _ErpPaymentAdviceScreenState
     final q = _search.trim().toLowerCase();
     final base = _advices.where((a) {
       final archived = (a['is_archived'] as bool?) ?? false;
+      if (_unpaidOnly &&
+          !((a['status'] as String?) == 'approved' && a['paid_at'] == null)) {
+        return false;
+      }
       return _showArchived ? archived : !archived;
     });
     final shown = q.isEmpty
         ? base.toList()
         : base.where((a) {
             final s = '${a['advice_number'] ?? ''} ${a['created_by_name'] ?? ''} '
-                    '${a['status'] ?? ''}'
+                    '${a['status'] ?? ''} ${a['paid_at'] != null ? 'paid ${a['paid_ref'] ?? ''}' : ''}'
                 .toLowerCase();
             return s.contains(q);
           }).toList();
@@ -1119,7 +1270,13 @@ class _ErpPaymentAdviceScreenState
         onChanged: (v) => setState(() => _search = v),
       ),
       const SizedBox(height: 8),
-      Row(children: [
+      Wrap(spacing: 8, runSpacing: 6, children: [
+        FilterChip(
+          label: const Text('Approved, not paid'),
+          selected: _unpaidOnly,
+          onSelected: (v) => setState(() => _unpaidOnly = v),
+          avatar: Icon(_unpaidOnly ? Icons.pending_actions : Icons.pending_actions_outlined, size: 16),
+        ),
         FilterChip(
           label: Text(_showArchived ? 'Showing archived' : 'Show archived'),
           selected: _showArchived,
@@ -1152,16 +1309,21 @@ class _ErpPaymentAdviceScreenState
     final pending = status == 'pending';
     final rejected = status == 'rejected';
     final voided = status == 'void';
+    final paid = status == 'approved' && a['paid_at'] != null;
     final statusColor = voided
         ? AppTheme.textSecondary
         : rejected
             ? AppTheme.danger
-            : (pending ? AppTheme.warning : AppTheme.success);
+            : paid
+                ? const Color(0xFF1D4ED8)
+                : (pending ? AppTheme.warning : AppTheme.success);
     final statusLabel = voided
         ? 'Voided'
         : rejected
             ? 'Rejected'
-            : (pending ? 'Pending' : 'Approved');
+            : paid
+                ? 'Paid'
+                : (pending ? 'Pending' : 'Approved');
     final date = a['advice_date'] != null
         ? DateFormat('d MMM yyyy')
             .format(DateTime.tryParse(a['advice_date'] as String) ?? DateTime.now())
@@ -1303,7 +1465,7 @@ class _ErpPaymentAdviceScreenState
             _current == null
                 ? 'New Payment Advice'
                 : '${_current!['advice_number']}'
-                    '${_isVoid ? ' (Voided)' : _isRejected ? ' (Rejected)' : _adminEditing ? ' (Approved — admin edit)' : _isApproved ? ' (Approved)' : _current!['status'] == 'pending' ? ' (Pending)' : ''}',
+                    '${_isVoid ? ' (Voided)' : _isRejected ? ' (Rejected)' : _adminEditing ? ' (Approved — admin edit)' : _isPaid ? ' (Approved · Paid)' : _isApproved ? ' (Approved)' : _current!['status'] == 'pending' ? ' (Pending)' : ''}',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: narrow ? 16 : 20, fontWeight: FontWeight.w800),
@@ -1720,6 +1882,7 @@ class _ErpPaymentAdviceScreenState
       if (org.isNotEmpty) '*$org*',
       if (st == 'void') '❌ CANCELLED',
       if (st == 'rejected') '❌ REJECTED',
+      if (st == 'approved' && a['paid_at'] != null) '✅ PAID',
       'Payment Advice ${a['advice_number'] ?? ''}',
       'Amount: Rs ${NumberFormat(((a['grand_total'] as num?) ?? 0) % 1 == 0 ? '#,##0' : '#,##0.00').format((a['grand_total'] as num?) ?? 0)}',
       if (d != null) 'Date: ${DateFormat('d MMM yyyy').format(d)}',
@@ -1868,6 +2031,9 @@ class _ErpPaymentAdviceScreenState
         voidedBy: a['voided_by_name'] as String?,
         voidedAt: DateTime.tryParse(a['voided_at'] as String? ?? ''),
         voidReason: a['void_reason'] as String?,
+        paidAt: DateTime.tryParse(a['paid_at'] as String? ?? ''),
+        paidBy: a['paid_by_name'] as String?,
+        paidRef: a['paid_ref'] as String?,
       );
       await outputPdf(bytes,
           'Payment Advice ${a['advice_number'] ?? ''}${accountsCopy ? ' Accounts copy' : ''}',
@@ -1992,6 +2158,10 @@ class _ErpPaymentAdviceScreenState
               approvedAt ?? (status == 'pending' ? 'Awaiting approval' : '—'),
               (a?['approved_signature_url'] as String?) ??
                   (isApproved ? _sigOnFile[a?['approved_by']] : null)),
+        if (isApproved && a?['paid_at'] != null)
+          foot('PAID', 'on ${_paidDate(a!)}',
+              'marked by ${a!['paid_by_name'] ?? '—'}'
+              '${((a!['paid_ref'] as String?) ?? '').isNotEmpty ? ' · Ref: ${a!['paid_ref']}' : ''}'),
       ]),
     );
     if (_sigEnabled || !_isAdmin || a == null) return box;
@@ -2026,8 +2196,28 @@ class _ErpPaymentAdviceScreenState
                   '${(_current?['void_reason'] as String?)?.isNotEmpty == true ? ' — ${_current!['void_reason']}' : ''}'
               : _isRejected
                   ? 'This advice was rejected — it can only be archived.'
-                  : 'This advice is approved and locked.',
-          style: const TextStyle(color: AppTheme.textSecondary));
+                  : _isPaid
+                      ? 'Paid on ${_paidDate(_current!)}'
+                          '${_current?['paid_by_name'] != null ? ' — marked by ${_current!['paid_by_name']}' : ''}'
+                          '${((_current?['paid_ref'] as String?) ?? '').isNotEmpty ? ' · Ref: ${_current!['paid_ref']}' : ''}'
+                      : 'This advice is approved and locked — not yet marked paid.',
+          style: TextStyle(
+              color: _isPaid ? const Color(0xFF1D4ED8) : AppTheme.textSecondary,
+              fontWeight: _isPaid ? FontWeight.w600 : FontWeight.normal));
+      if (_canMarkPaid) {
+        extra.add(ElevatedButton.icon(
+            onPressed: _saving ? null : _markPaid,
+            icon: const Icon(Icons.task_alt, size: 18),
+            label: const Text('Mark as Paid'),
+            style: big(const Color(0xFF1D4ED8))));
+      }
+      if (_canUnmarkPaid) {
+        extra.add(OutlinedButton.icon(
+            onPressed: _saving ? null : _unmarkPaid,
+            icon: const Icon(Icons.undo, size: 18),
+            label: const Text('Remove Paid'),
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48))));
+      }
       if (_canVoid) {
         extra.add(OutlinedButton.icon(
             onPressed: _saving ? null : _void,
@@ -2494,6 +2684,8 @@ class _PaAuditTrail extends StatelessWidget {
     'rejected': 'Rejected',
     'edited_after_approval': 'Edited after approval (admin)',
     'voided': 'Voided',
+    'paid': 'Marked paid',
+    'unpaid': 'Paid mark removed',
     'archived': 'Archived',
     'unarchived': 'Unarchived',
   };

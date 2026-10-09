@@ -60,6 +60,15 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
       final res = await Supabase.instance.client
           .rpc('public_payment_advice', params: {'p_token': widget.token});
       final m = res is Map ? Map<String, dynamic>.from(res) : null;
+      // Optional "Paid" mark (SQL 341) — separate call so the page still works
+      // before that update is run.
+      if (m != null && m['ok'] == true) {
+        try {
+          final p = await Supabase.instance.client
+              .rpc('public_payment_advice_paid', params: {'p_token': widget.token});
+          if (p is Map) m.addAll(Map<String, dynamic>.from(p));
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() {
         if (m == null || m['ok'] != true) {
@@ -173,12 +182,15 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
   Widget _body() {
     final a = _a!;
     final status = (a['status'] as String?) ?? 'approved';
-    final (Color sc, String sl) = switch (status) {
-      'void' => (const Color(0xFFB91C1C), 'CANCELLED'),
-      'rejected' => (const Color(0xFFB91C1C), 'REJECTED'),
-      'pending' => (const Color(0xFFB45309), 'PENDING APPROVAL'),
-      _ => (const Color(0xFF15803D), 'APPROVED'),
-    };
+    final paid = status == 'approved' && a['paid_at'] != null;
+    final (Color sc, String sl) = paid
+        ? (const Color(0xFF1D4ED8), 'PAID')
+        : switch (status) {
+            'void' => (const Color(0xFFB91C1C), 'CANCELLED'),
+            'rejected' => (const Color(0xFFB91C1C), 'REJECTED'),
+            'pending' => (const Color(0xFFB45309), 'PENDING APPROVAL'),
+            _ => (const Color(0xFF15803D), 'APPROVED'),
+          };
     final lines = List<Map<String, dynamic>>.from(
         ((a['lines'] as List?) ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
 
@@ -194,17 +206,25 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
               decoration: BoxDecoration(
                 color: status == 'void' || status == 'rejected'
                     ? const Color(0xFFFEE2E2)
-                    : const Color(0xFFDCFCE7),
+                    : paid
+                        ? const Color(0xFFDBEAFE)
+                        : const Color(0xFFDCFCE7),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(children: [
                 Icon(
-                    status == 'void' || status == 'rejected' ? Icons.cancel : Icons.verified,
+                    status == 'void' || status == 'rejected'
+                        ? Icons.cancel
+                        : paid
+                            ? Icons.task_alt
+                            : Icons.verified,
                     color: sc),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    status == 'void'
+                    paid
+                        ? 'PAID on ${_dt(a['paid_at'], time: false)} — this advice has been cleared. Do not pay it again.'
+                        : status == 'void'
                         ? 'This payment advice was CANCELLED and must not be paid.'
                         : status == 'rejected'
                             ? 'This payment advice was REJECTED and must not be paid.'
@@ -250,6 +270,11 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
                 if (((a['note'] as String?) ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text('Note: ${(a['note'] as String).trim()}', style: const TextStyle(color: _muted, fontSize: 13)),
+                ],
+                if (paid && ((a['paid_ref'] as String?) ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text('Payment reference: ${(a['paid_ref'] as String).trim()}',
+                      style: const TextStyle(color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600, fontSize: 13)),
                 ],
                 if (status == 'void') ...[
                   const SizedBox(height: 8),
