@@ -47,7 +47,7 @@ class _Result {
 }
 
 class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScreen> {
-  final Map<String, DateTime> _lastPunch = {}; // empId -> last successful punch (60s debounce)
+  final Map<String, DateTime> _lastPunch = {}; // code -> last successful punch (2-minute repeat-scan window)
   _Result? _result;
   Timer? _clearTimer;
   bool _busy = false;
@@ -330,14 +330,14 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
     final code = rawCode.trim();
     if (code.isEmpty) return;
 
-    // Local 60s debounce per code (instant feedback; the RPC also enforces one
+    // Local 2-minute repeat-scan window per code (instant feedback; the RPC also enforces one
     // server-side across every kiosk device).
     final now = DateTime.now();
     final last = _lastPunch[code];
-    if (last != null && now.difference(last) < const Duration(seconds: 60)) {
+    if (last != null && now.difference(last) < const Duration(minutes: 2)) {
       _beep(ok: false);
       _show(_Result(_Outcome.blocked, 'Please wait',
-          message: 'Scanned moments ago — try again in a minute.'));
+          message: 'Already scanned — a repeat scan within 2 minutes is ignored.'));
       return;
     }
 
@@ -368,7 +368,10 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
           code: m['code'] as String?,
           photoUrl: m['photo_url'] as String?,
           time: m['time'] as String?,
-          message: m['message'] as String?));
+          message: (m['message'] as String?) ??
+              (outcome == _Outcome.checkedIn
+                  ? 'Scanning again within 2 minutes will not check you out.'
+                  : null)));
       // Background photo attach — result is already on screen.
       final attId = m['attendance_id'] as String?;
       final dir = m['direction'] as String?;
@@ -537,8 +540,15 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
   }
 
   Widget _prompt() {
-    return const Text('Scan your card to punch in / out',
-        style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600));
+    return const Column(mainAxisSize: MainAxisSize.min, children: [
+      Text('Scan your card to punch in / out',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w600)),
+      SizedBox(height: 6),
+      Text('Scanned twice by mistake? A repeat scan within 2 minutes is ignored — it will not check you out.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white38, fontSize: 12.5)),
+    ]);
   }
 
   Widget _resultCard(_Result r) {
