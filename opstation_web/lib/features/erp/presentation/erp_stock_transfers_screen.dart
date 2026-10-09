@@ -1079,7 +1079,7 @@ class _StockTransferVoucherScreenState
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirm != true || _busy) return;
 
     setState(() => _busy = true);
     try {
@@ -1170,6 +1170,10 @@ class _StockTransferVoucherScreenState
       await _load();
     } catch (e) {
       _snack(friendlyError('That did not save', e));
+      try {
+        widget.onUpdated();
+        await _load();
+      } catch (_) {}
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1321,6 +1325,7 @@ class _StockTransferVoucherScreenState
 
   // ── Approve / Receive: increment DESTINATION, mark completed ──────────────
   Future<void> _receive() async {
+    if (_busy) return; // guard: block double-submit
     final client = Supabase.instance.client;
     final orgId = _orgId!;
     final toBranchId = _transfer!['to_branch_id'] as String;
@@ -1340,7 +1345,7 @@ class _StockTransferVoucherScreenState
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirm != true || _busy) return;
     setState(() => _busy = true);
     try {
       // Preferred: atomic server-side receive — moves destination stock, the
@@ -1413,6 +1418,13 @@ class _StockTransferVoucherScreenState
       await _load();
     } catch (e) {
       _snack(friendlyError('That did not save', e));
+      // The request may have gone through even though the reply was lost
+      // (slow network / timeout). Reload so the screen shows the real status
+      // instead of leaving "Approve & Receive" up for another click.
+      try {
+        widget.onUpdated();
+        await _load();
+      } catch (_) {}
     } finally {
       if (mounted) setState(() => _busy = false);
     }
