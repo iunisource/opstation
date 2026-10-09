@@ -27,7 +27,39 @@ class _State extends ConsumerState<ErpAssetReportScreen> {
   List<String> _statusOrder = [], _condOrder = [];
 
   final _search = TextEditingController();
-  String _fCat = 'all', _fCust = 'all', _fCond = 'all', _fBranch = 'all', _fStatus = 'all';
+  String _fCat = 'all', _fCust = 'all', _fCond = 'all', _fBranch = 'all', _fStatus = 'all', _fMaint = 'all';
+
+  static const _maintOpts = {
+    'all': 'All maintenance',
+    'overdue': 'Overdue',
+    'due14': 'Due in 14 days (incl. overdue)',
+    'due30': 'Due in 30 days (incl. overdue)',
+    'later': 'Due after 30 days',
+    'scheduled': 'Any date scheduled',
+    'none': 'Not scheduled',
+  };
+
+  /// Days from today to next_maintenance_due (negative = overdue), or null.
+  int? _maintDays(Map a) {
+    final d = DateTime.tryParse('${a['next_maintenance_due'] ?? ''}');
+    if (d == null) return null;
+    final now = DateTime.now();
+    return DateTime(d.year, d.month, d.day).difference(DateTime(now.year, now.month, now.day)).inDays;
+  }
+
+  bool _maintMatch(Map a) {
+    if (_fMaint == 'all') return true;
+    final n = _maintDays(a);
+    switch (_fMaint) {
+      case 'overdue': return n != null && n < 0;
+      case 'due14': return n != null && n <= 14;
+      case 'due30': return n != null && n <= 30;
+      case 'later': return n != null && n > 30;
+      case 'scheduled': return n != null;
+      case 'none': return n == null;
+    }
+    return true;
+  }
   String _group = 'category'; // none | category | custodian | condition | branch | status
 
   static const _groups = {
@@ -118,6 +150,7 @@ class _State extends ConsumerState<ErpAssetReportScreen> {
       if (_fCond != 'all' && (_fCond == '__none' ? a['condition'] != null : '${a['condition']}' != _fCond)) return false;
       if (_fBranch != 'all' && (_fBranch == '__none' ? a['branch_id'] != null : '${a['branch_id']}' != _fBranch)) return false;
       if (_fStatus != 'all' && '${a['status']}' != _fStatus) return false;
+      if (!_maintMatch(a)) return false;
       if (q.isEmpty) return true;
       final hay = [a['asset_code'], a['name'], a['serial_no'], a['model'], a['manufacturer'], a['notes'],
               a['location_text'], _catOf(a), _custOf(a), _branchOf(a)]
@@ -232,12 +265,13 @@ class _State extends ConsumerState<ErpAssetReportScreen> {
               (v) => setState(() => _fBranch = v)),
           _dd('Status', _fStatus, {'all': 'All statuses', for (final s in _present('status', _statusOrder)) s: _label(s)},
               (v) => setState(() => _fStatus = v), w: 160),
+          _dd('Maintenance', _fMaint, _maintOpts, (v) => setState(() => _fMaint = v), w: 220),
           _dd('Group by', _group, _groups, (v) => setState(() => _group = v), w: 160),
-          if (_search.text.isNotEmpty || [_fCat, _fCust, _fCond, _fBranch, _fStatus].any((x) => x != 'all'))
+          if (_search.text.isNotEmpty || [_fCat, _fCust, _fCond, _fBranch, _fStatus, _fMaint].any((x) => x != 'all'))
             TextButton.icon(
               onPressed: () => setState(() {
                 _search.clear();
-                _fCat = _fCust = _fCond = _fBranch = _fStatus = 'all';
+                _fCat = _fCust = _fCond = _fBranch = _fStatus = _fMaint = 'all';
               }),
               icon: const Icon(Icons.clear, size: 16),
               label: const Text('Clear'),
@@ -357,6 +391,7 @@ class _State extends ConsumerState<ErpAssetReportScreen> {
       if (_fCond != 'all') 'Condition: ${_fCond == '__none' ? 'Not set' : _label(_fCond)}',
       if (_fBranch != 'all') 'Branch: ${_fBranch == '__none' ? 'No branch' : (_branch[_fBranch] ?? _fBranch)}',
       if (_fStatus != 'all') 'Status: ${_label(_fStatus)}',
+      if (_fMaint != 'all') 'Maintenance: ${_maintOpts[_fMaint]}',
       if (_group != 'none') 'Grouped by ${_groups[_group]}',
     ];
     String tr(Map<String, dynamic> a) {
