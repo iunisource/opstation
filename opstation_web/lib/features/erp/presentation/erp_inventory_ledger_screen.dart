@@ -278,7 +278,18 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         final to = _branchNameById(info?['to_branch_id'] as String?);
         return 'Transferred $qtyStr units${to != null ? ' to $to' : ''}$noteSuffix';
       } else {
-        final from = _branchNameById(info?['from_branch_id'] as String?);
+        // Stock coming back INTO the source branch is a return (transfer
+        // rejected, or an unfinished dispatch undone), not a receipt — saying
+        // "Received from Marrakah" at Marrakah made returns look like receipts.
+        final fromId = info?['from_branch_id'] as String?;
+        if (fromId != null && m['branch_id'] == fromId) {
+          final st = (info?['status'] as String?) ?? '';
+          final why = st == 'rejected'
+              ? 'transfer rejected'
+              : st == 'draft' ? 'dispatch undone' : 'returned to source';
+          return 'Returned $qtyStr units ($why)$noteSuffix';
+        }
+        final from = _branchNameById(fromId);
         return 'Received $qtyStr units${from != null ? ' from $from' : ''}$noteSuffix';
       }
     }
@@ -370,6 +381,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
               'from_branch_id': r['from_branch_id'],
               'to_branch_id': r['to_branch_id'],
               'notes': r['notes'],
+              'status': r['status'],
             };
           }
           if (tbl == 'purchase_grns') {
