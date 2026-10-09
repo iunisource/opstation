@@ -23,6 +23,7 @@ class ErpProductionReportScreen extends ConsumerStatefulWidget {
 }
 
 class _Run {
+  final String id;
   final String source; // 'PV' | 'Job'
   final String doc;
   final DateTime? date;
@@ -32,9 +33,10 @@ class _Run {
   final double rejected;
   final String status;
   final double? cost;
+  final double overhead; // absorbed labour & overhead
   final String notes;
-  _Run(this.source, this.doc, this.date, this.branchId, this.productId, this.produced, this.rejected,
-      this.status, this.cost, this.notes);
+  _Run(this.id, this.source, this.doc, this.date, this.branchId, this.productId, this.produced, this.rejected,
+      this.status, this.cost, this.overhead, this.notes);
 }
 
 class _State extends ConsumerState<ErpProductionReportScreen> {
@@ -148,8 +150,9 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
         final st = '${r['status'] ?? ''}';
         if (st == 'void' || st == 'voided' || r['is_voided'] == true) continue;
         final q = _n(r['output_qty']);
-        runs.add(_Run('PV', '${r['voucher_number'] ?? ''}', DateTime.tryParse('${r['voucher_date']}'),
-            r['branch_id'] as String?, r['product_id'] as String?, q, 0, st, _costOf(r, q), '${r['notes'] ?? ''}'));
+        runs.add(_Run('${r['id']}', 'PV', '${r['voucher_number'] ?? ''}', DateTime.tryParse('${r['voucher_date']}'),
+            r['branch_id'] as String?, r['product_id'] as String?, q, 0, st, _costOf(r, q),
+            _n(r['total_overhead_cost']), '${r['notes'] ?? ''}'));
       }
 
       // Job Card batches (runs)
@@ -169,9 +172,9 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
         if (st == 'void' || st == 'voided') continue;
         final j = jobs['${r['job_card_id']}'] ?? const <String, dynamic>{};
         final q = _n(r['produced_qty']);
-        runs.add(_Run('Job', '${j['job_number'] ?? 'Job'}-R${r['run_no'] ?? ''}', DateTime.tryParse('${r['run_date']}'),
+        runs.add(_Run('${r['id']}', 'Job', '${j['job_number'] ?? 'Job'}-R${r['run_no'] ?? ''}', DateTime.tryParse('${r['run_date']}'),
             (r['branch_id'] ?? j['branch_id']) as String?, j['product_id'] as String?, q, _n(r['rejected_qty']), st,
-            _costOf(r, q), '${r['notes'] ?? ''}'));
+            _costOf(r, q), _n(r['overhead_amount']), '${r['notes'] ?? ''}'));
       }
 
       // names
@@ -228,8 +231,9 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
     final m = <String, Map<String, dynamic>>{};
     for (final r in rows) {
       final k = r.productId ?? '—';
-      final e = m.putIfAbsent(k, () => {'pid': k, 'produced': 0.0, 'rejected': 0.0, 'runs': 0, 'cost': 0.0, 'hasCost': false});
+      final e = m.putIfAbsent(k, () => {'pid': k, 'produced': 0.0, 'rejected': 0.0, 'runs': 0, 'cost': 0.0, 'oh': 0.0, 'hasCost': false});
       e['produced'] = (e['produced'] as double) + r.produced;
+      e['oh'] = (e['oh'] as double) + r.overhead;
       e['rejected'] = (e['rejected'] as double) + r.rejected;
       e['runs'] = (e['runs'] as int) + 1;
       if (r.cost != null) {
@@ -341,7 +345,8 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
             _kpi('Products', '${{for (final r in rows) r.productId}.length}'),
             _kpi('Produced', _q.format(produced)),
             if (rejected > 0) _kpi('Rejected', _q.format(rejected), color: Colors.red),
-            if (showCost) _kpi('Production cost', 'Rs ${_rs.format(cost)}'),
+            if (showCost) _kpi('Absorbed overheads', 'Rs ${_rs.format(rows.fold<double>(0, (s, r) => s + r.overhead))}', color: Colors.teal.shade700),
+            if (showCost) _kpi('Production cost (total)', 'Rs ${_rs.format(cost)}'),
           ]),
         const SizedBox(height: 12),
         Expanded(
@@ -353,9 +358,11 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
                       ? Center(
                           child: Text(_loaded ? 'No production recorded for $_rangeLabel' : '',
                               style: const TextStyle(color: AppTheme.textSecondary)))
-                      : _view == 'runs'
-                          ? _runsTable(rows, showCost)
-                          : _productTable(rows, showCost),
+                      : narrow
+                          ? (_view == 'runs' ? _runsCards(rows, showCost) : _productCards(rows, showCost))
+                          : _view == 'runs'
+                              ? _runsTable(rows, showCost)
+                              : _productTable(rows, showCost),
         ),
       ]),
     );
@@ -402,7 +409,8 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
     final cols = <(String, double, bool)>[
       ('Date', 105, false), ('Doc', 150, false), ('Source', 80, false), ('Product', 300, false),
       ('Branch', 140, false), ('Produced', 95, true), ('Rejected', 85, true), ('Status', 80, false),
-      if (showCost) ('Cost', 110, true),
+      if (showCost) ('Abs. overheads', 115, true),
+      if (showCost) ('Total cost', 110, true),
     ];
     final w = cols.fold<double>(0, (s, c) => s + c.$2);
     return _frame(
@@ -414,14 +422,15 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
             decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
             child: Row(children: [
               _cell(r.date == null ? '' : _d.format(r.date!), cols[0].$2),
-              _cell(r.doc, cols[1].$2, bold: true, color: AppTheme.primary),
+              _docCell(r, cols[1].$2),
               _cell(r.source == 'PV' ? 'Voucher' : 'Job batch', cols[2].$2),
               _cell('${_prodSku[r.productId]?.isNotEmpty == true ? '${_prodSku[r.productId]} · ' : ''}${_prodName[r.productId] ?? '—'}', cols[3].$2),
               _cell(_branchName[r.branchId] ?? '', cols[4].$2),
               _cell(_q.format(r.produced), cols[5].$2, right: true, bold: true),
               _cell(r.rejected > 0 ? _q.format(r.rejected) : '', cols[6].$2, right: true, color: Colors.red),
               _cell(r.status, cols[7].$2, color: r.status == 'posted' ? Colors.green.shade700 : Colors.orange.shade800),
-              if (showCost) _cell(r.cost == null ? '' : _rs.format(r.cost), cols[8].$2, right: true),
+              if (showCost) _cell(r.overhead == 0 ? '' : _rs.format(r.overhead), cols[8].$2, right: true, color: Colors.teal.shade700),
+              if (showCost) _cell(r.cost == null ? '' : _rs.format(r.cost), cols[9].$2, right: true),
             ]),
           ),
       ],
@@ -432,7 +441,8 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
         _cell(_q.format(rows.fold<double>(0, (s, r) => s + r.produced)), cols[5].$2, right: true, bold: true),
         _cell(_q.format(rows.fold<double>(0, (s, r) => s + r.rejected)), cols[6].$2, right: true, bold: true),
         _cell('', cols[7].$2),
-        if (showCost) _cell(_rs.format(rows.fold<double>(0, (s, r) => s + (r.cost ?? 0))), cols[8].$2, right: true, bold: true),
+        if (showCost) _cell(_rs.format(rows.fold<double>(0, (s, r) => s + r.overhead)), cols[8].$2, right: true, bold: true),
+        if (showCost) _cell(_rs.format(rows.fold<double>(0, (s, r) => s + (r.cost ?? 0))), cols[9].$2, right: true, bold: true),
       ],
     );
   }
@@ -441,7 +451,8 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
     final data = _byProduct(rows);
     final cols = <(String, double, bool)>[
       ('SKU', 100, false), ('Product', 340, false), ('Runs', 70, true), ('Produced', 110, true), ('Rejected', 100, true),
-      if (showCost) ('Cost', 120, true),
+      if (showCost) ('Abs. overheads', 120, true),
+      if (showCost) ('Total cost', 120, true),
       if (showCost) ('Avg / unit', 100, true),
     ];
     final w = cols.fold<double>(0, (s, c) => s + c.$2);
@@ -458,10 +469,11 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
               _cell('${e['runs']}', cols[2].$2, right: true),
               _cell(_q.format(e['produced']), cols[3].$2, right: true, bold: true),
               _cell((e['rejected'] as double) > 0 ? _q.format(e['rejected']) : '', cols[4].$2, right: true, color: Colors.red),
-              if (showCost) _cell(e['hasCost'] == true ? _rs.format(e['cost']) : '', cols[5].$2, right: true),
+              if (showCost) _cell((e['oh'] as double) == 0 ? '' : _rs.format(e['oh']), cols[5].$2, right: true, color: Colors.teal.shade700),
+              if (showCost) _cell(e['hasCost'] == true ? _rs.format(e['cost']) : '', cols[6].$2, right: true),
               if (showCost)
                 _cell(e['hasCost'] == true && (e['produced'] as double) > 0
-                    ? NumberFormat('#,##0.00').format((e['cost'] as double) / (e['produced'] as double)) : '', cols[6].$2, right: true),
+                    ? NumberFormat('#,##0.00').format((e['cost'] as double) / (e['produced'] as double)) : '', cols[7].$2, right: true),
             ]),
           ),
       ],
@@ -471,10 +483,254 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
         _cell('${rows.length}', cols[2].$2, right: true, bold: true),
         _cell(_q.format(rows.fold<double>(0, (s, r) => s + r.produced)), cols[3].$2, right: true, bold: true),
         _cell(_q.format(rows.fold<double>(0, (s, r) => s + r.rejected)), cols[4].$2, right: true, bold: true),
-        if (showCost) _cell(_rs.format(rows.fold<double>(0, (s, r) => s + (r.cost ?? 0))), cols[5].$2, right: true, bold: true),
-        if (showCost) _cell('', cols[6].$2),
+        if (showCost) _cell(_rs.format(rows.fold<double>(0, (s, r) => s + r.overhead)), cols[5].$2, right: true, bold: true),
+        if (showCost) _cell(_rs.format(rows.fold<double>(0, (s, r) => s + (r.cost ?? 0))), cols[6].$2, right: true, bold: true),
+        if (showCost) _cell('', cols[7].$2),
       ],
     );
+  }
+
+  // ── clickable doc number + detail modal ───────────────────────────────
+  Widget _docCell(_Run r, double w) => SizedBox(
+        width: w,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: InkWell(
+            onTap: () => _openRun(r),
+            child: Text(r.doc,
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w700, color: AppTheme.primary,
+                    decoration: TextDecoration.underline)),
+          ),
+        ),
+      );
+
+  Future<void> _openRun(_Run r) async {
+    final c = Supabase.instance.client;
+    final showCost = _canCost;
+    Map<String, dynamic>? head;
+    Map<String, dynamic>? job;
+    List<Map<String, dynamic>> lines = [];
+    List<Map<String, dynamic>> ohs = [];
+    String? err;
+    try {
+      if (r.source == 'PV') {
+        head = await c.from('production_vouchers').select().eq('id', r.id).maybeSingle();
+        lines = List<Map<String, dynamic>>.from(
+            await c.from('production_voucher_components').select().eq('voucher_id', r.id).order('line_order'));
+        ohs = List<Map<String, dynamic>>.from(
+            await c.from('production_voucher_overheads').select().eq('voucher_id', r.id).order('line_order'));
+      } else {
+        head = await c.from('job_card_runs').select().eq('id', r.id).maybeSingle();
+        if (head != null) {
+          job = await c.from('job_cards').select().eq('id', '${head['job_card_id']}').maybeSingle();
+          lines = List<Map<String, dynamic>>.from(
+              await c.from('job_card_materials').select().eq('job_card_id', '${head['job_card_id']}').order('line_order'));
+        }
+      }
+      final pids = {for (final l in lines) if (l['product_id'] != null) '${l['product_id']}'}
+          .where((p) => !_prodName.containsKey(p)).toList();
+      if (pids.isNotEmpty) {
+        final ps = await c.from('products').select('id, name, sku').inFilter('id', pids);
+        for (final p in ps as List) {
+          _prodName['${p['id']}'] = '${p['name'] ?? ''}';
+          _prodSku['${p['id']}'] = '${p['sku'] ?? ''}';
+        }
+      }
+    } catch (e) {
+      err = e.toString().split('\n').first;
+    }
+    if (!mounted) return;
+    final narrow = MediaQuery.of(context).size.width < 700;
+    double n(dynamic v) => (v as num?)?.toDouble() ?? 0;
+    Widget kv(String k, String v, {Color? color, bool bold = false}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(width: 130, child: Text(k, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+            Expanded(child: Text(v, style: TextStyle(fontSize: 13, color: color, fontWeight: bold ? FontWeight.w700 : FontWeight.w500))),
+          ]),
+        );
+    final h = head ?? const <String, dynamic>{};
+    final isPv = r.source == 'PV';
+    final produced = r.produced;
+    final total = r.cost ?? 0;
+    await showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: EdgeInsets.all(narrow ? 10 : 40),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(isPv ? 'Production Voucher' : 'Job Card batch',
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    Text(r.doc, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
+                  ]),
+                ),
+                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(ctx, rootNavigator: true).pop()),
+              ]),
+              const Divider(),
+              if (err != null)
+                Text('Could not load details: $err', style: const TextStyle(color: Colors.red))
+              else
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      kv('Date', r.date == null ? '' : _d.format(r.date!)),
+                      kv('Product', '${_prodSku[r.productId]?.isNotEmpty == true ? '${_prodSku[r.productId]} · ' : ''}${_prodName[r.productId] ?? '—'}', bold: true),
+                      kv('Branch', _branchName[r.branchId] ?? '—'),
+                      if (!isPv && job != null) kv('Job card', '${job['job_number'] ?? ''} · planned ${_q.format(n(job['planned_qty']))}'),
+                      kv('Produced', _q.format(produced), bold: true),
+                      if (!isPv && n(h['accepted_qty']) > 0) kv('Accepted', _q.format(n(h['accepted_qty'])), color: Colors.green.shade700),
+                      if (r.rejected > 0) kv('Rejected', _q.format(r.rejected), color: Colors.red),
+                      kv('Status', r.status, color: r.status == 'posted' ? Colors.green.shade700 : Colors.orange.shade800),
+                      if (showCost) ...[
+                        const SizedBox(height: 6),
+                        if (isPv) kv('Materials', 'Rs ${_rs.format(n(h['total_component_cost']))}'),
+                        kv('Absorbed overheads', 'Rs ${_rs.format(r.overhead)}', color: Colors.teal.shade700),
+                        kv('Total cost', 'Rs ${_rs.format(total)}', bold: true),
+                        if (produced > 0 && total > 0) kv('Cost / unit', 'Rs ${NumberFormat('#,##0.00').format(total / produced)}'),
+                      ],
+                      if (r.notes.trim().isNotEmpty) kv('Notes', r.notes),
+                      if (lines.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(isPv ? 'Components used' : 'Job card materials (for the whole job)',
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                        const SizedBox(height: 6),
+                        for (final l in lines)
+                          Container(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+                            child: Row(children: [
+                              Expanded(
+                                child: Text(
+                                    '${_prodSku[l['product_id']]?.isNotEmpty == true ? '${_prodSku[l['product_id']]} · ' : ''}${_prodName[l['product_id']] ?? '—'}',
+                                    style: const TextStyle(fontSize: 12.5)),
+                              ),
+                              Text(_q.format(n(l['quantity'] ?? l['issued_qty'] ?? l['planned_qty'])),
+                                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+                              if (showCost && isPv && n(l['unit_cost']) > 0) ...[
+                                const SizedBox(width: 12),
+                                SizedBox(
+                                  width: 90,
+                                  child: Text('Rs ${_rs.format(n(l['unit_cost']) * n(l['quantity']))}',
+                                      textAlign: TextAlign.right, style: const TextStyle(fontSize: 12)),
+                                ),
+                              ],
+                            ]),
+                          ),
+                      ],
+                      if (showCost && ohs.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Text('Labour & overheads', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                        const SizedBox(height: 6),
+                        for (final o in ohs)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(children: [
+                              Expanded(
+                                child: Text(
+                                    [o['cost_type'], o['description']].whereType<String>().where((x) => x.trim().isNotEmpty).join(' · '),
+                                    style: const TextStyle(fontSize: 12.5)),
+                              ),
+                              Text('Rs ${_rs.format(n(o['amount']))}', style: const TextStyle(fontSize: 12.5)),
+                            ]),
+                          ),
+                      ],
+                    ]),
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── mobile cards ──────────────────────────────────────────────────────
+  Widget _runsCards(List<_Run> rows, bool showCost) {
+    final produced = rows.fold<double>(0, (s, r) => s + r.produced);
+    return ListView(children: [
+      for (final r in rows)
+        Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: InkWell(
+            onTap: () => _openRun(r),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                    child: Text(r.doc,
+                        style: const TextStyle(fontWeight: FontWeight.w800, color: AppTheme.primary, decoration: TextDecoration.underline)),
+                  ),
+                  Text(r.date == null ? '' : _d.format(r.date!), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+                const SizedBox(height: 4),
+                Text(_prodName[r.productId] ?? '—', style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Wrap(spacing: 12, runSpacing: 4, children: [
+                  Text('Produced ${_q.format(r.produced)}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  if (r.rejected > 0) Text('Rejected ${_q.format(r.rejected)}', style: const TextStyle(color: Colors.red)),
+                  Text(r.source == 'PV' ? 'Voucher' : 'Job batch', style: const TextStyle(color: AppTheme.textSecondary)),
+                  if ((_branchName[r.branchId] ?? '').isNotEmpty) Text(_branchName[r.branchId]!, style: const TextStyle(color: AppTheme.textSecondary)),
+                  Text(r.status, style: TextStyle(color: r.status == 'posted' ? Colors.green.shade700 : Colors.orange.shade800)),
+                ]),
+                if (showCost) ...[
+                  const SizedBox(height: 4),
+                  Wrap(spacing: 12, children: [
+                    Text('Overheads Rs ${_rs.format(r.overhead)}', style: TextStyle(fontSize: 12, color: Colors.teal.shade700)),
+                    if (r.cost != null) Text('Total Rs ${_rs.format(r.cost)}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  ]),
+                ],
+              ]),
+            ),
+          ),
+        ),
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text('${rows.length} runs · ${_q.format(produced)} produced',
+            textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700)),
+      ),
+    ]);
+  }
+
+  Widget _productCards(List<_Run> rows, bool showCost) {
+    final data = _byProduct(rows);
+    return ListView(children: [
+      for (final e in data)
+        Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_prodName[e['pid']] ?? '—', style: const TextStyle(fontWeight: FontWeight.w700)),
+              if ((_prodSku[e['pid']] ?? '').isNotEmpty)
+                Text(_prodSku[e['pid']]!, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const SizedBox(height: 4),
+              Wrap(spacing: 12, runSpacing: 4, children: [
+                Text('Produced ${_q.format(e['produced'])}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                Text('${e['runs']} run${e['runs'] == 1 ? '' : 's'}', style: const TextStyle(color: AppTheme.textSecondary)),
+                if ((e['rejected'] as double) > 0) Text('Rejected ${_q.format(e['rejected'])}', style: const TextStyle(color: Colors.red)),
+              ]),
+              if (showCost) ...[
+                const SizedBox(height: 4),
+                Wrap(spacing: 12, children: [
+                  Text('Overheads Rs ${_rs.format(e['oh'])}', style: TextStyle(fontSize: 12, color: Colors.teal.shade700)),
+                  if (e['hasCost'] == true) Text('Total Rs ${_rs.format(e['cost'])}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  if (e['hasCost'] == true && (e['produced'] as double) > 0)
+                    Text('Rs ${NumberFormat('#,##0.00').format((e['cost'] as double) / (e['produced'] as double))}/unit',
+                        style: const TextStyle(fontSize: 12)),
+                ]),
+              ],
+            ]),
+          ),
+        ),
+    ]);
   }
 
   // ── print / PDF ────────────────────────────────────────────────────────
@@ -498,7 +754,7 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
       prod.write('<tr><td>${_esc(_prodSku[e['pid']] ?? '')}</td><td><b>${_esc(_prodName[e['pid']] ?? '—')}</b></td>'
           '<td class="num">${e['runs']}</td><td class="num"><b>${_q.format(e['produced'])}</b></td>'
           '<td class="num">${(e['rejected'] as double) > 0 ? _q.format(e['rejected']) : ''}</td>'
-          '${showCost ? '<td class="num">${e['hasCost'] == true ? _rs.format(e['cost']) : ''}</td>' : ''}</tr>');
+          '${showCost ? '<td class="num">${(e['oh'] as double) == 0 ? '' : _rs.format(e['oh'])}</td><td class="num">${e['hasCost'] == true ? _rs.format(e['cost']) : ''}</td>' : ''}</tr>');
     }
     final det = StringBuffer();
     for (final r in rows) {
@@ -507,7 +763,7 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
           '<td>${_esc('${_prodSku[r.productId]?.isNotEmpty == true ? '${_prodSku[r.productId]} · ' : ''}${_prodName[r.productId] ?? '—'}')}</td>'
           '<td>${_esc(_branchName[r.branchId] ?? '')}</td><td class="num"><b>${_q.format(r.produced)}</b></td>'
           '<td class="num">${r.rejected > 0 ? _q.format(r.rejected) : ''}</td><td>${_esc(r.status)}</td>'
-          '${showCost ? '<td class="num">${r.cost == null ? '' : _rs.format(r.cost)}</td>' : ''}</tr>');
+          '${showCost ? '<td class="num">${r.overhead == 0 ? '' : _rs.format(r.overhead)}</td><td class="num">${r.cost == null ? '' : _rs.format(r.cost)}</td>' : ''}</tr>');
     }
     final doc = '''<!doctype html><html><head><meta charset="utf-8"><title>Production Report $_rangeLabel</title>
 <style>
@@ -540,12 +796,12 @@ tr { page-break-inside: avoid; }
 <div class="kpis"><div class="kpi"><span>Runs</span><b>${rows.length}</b></div>
 <div class="kpi"><span>Produced</span><b>${_q.format(produced)}</b></div>
 ${rejected > 0 ? '<div class="kpi"><span>Rejected</span><b style="color:#DC2626">${_q.format(rejected)}</b></div>' : ''}
-${showCost ? '<div class="kpi"><span>Production cost</span><b>Rs ${_rs.format(cost)}</b></div>' : ''}</div>
+${showCost ? '<div class="kpi"><span>Absorbed overheads</span><b>Rs ${_rs.format(rows.fold<double>(0, (s, r) => s + r.overhead))}</b></div><div class="kpi"><span>Production cost (total)</span><b>Rs ${_rs.format(cost)}</b></div>' : ''}</div>
 <h2>By product</h2>
-<table><thead><tr><th>SKU</th><th>Product</th><th class="num">Runs</th><th class="num">Produced</th><th class="num">Rejected</th>${showCost ? '<th class="num">Cost</th>' : ''}</tr></thead>
-<tbody>$prod<tr class="tot"><td></td><td>Total</td><td class="num">${rows.length}</td><td class="num">${_q.format(produced)}</td><td class="num">${_q.format(rejected)}</td>${showCost ? '<td class="num">${_rs.format(cost)}</td>' : ''}</tr></tbody></table>
+<table><thead><tr><th>SKU</th><th>Product</th><th class="num">Runs</th><th class="num">Produced</th><th class="num">Rejected</th>${showCost ? '<th class="num">Abs. overheads</th><th class="num">Total cost</th>' : ''}</tr></thead>
+<tbody>$prod<tr class="tot"><td></td><td>Total</td><td class="num">${rows.length}</td><td class="num">${_q.format(produced)}</td><td class="num">${_q.format(rejected)}</td>${showCost ? '<td class="num">${_rs.format(rows.fold<double>(0, (s, r) => s + r.overhead))}</td><td class="num">${_rs.format(cost)}</td>' : ''}</tr></tbody></table>
 <h2>Runs</h2>
-<table><thead><tr><th>Date</th><th>Doc</th><th>Source</th><th>Product</th><th>Branch</th><th class="num">Produced</th><th class="num">Rejected</th><th>Status</th>${showCost ? '<th class="num">Cost</th>' : ''}</tr></thead>
+<table><thead><tr><th>Date</th><th>Doc</th><th>Source</th><th>Product</th><th>Branch</th><th class="num">Produced</th><th class="num">Rejected</th><th>Status</th>${showCost ? '<th class="num">Abs. overheads</th><th class="num">Total cost</th>' : ''}</tr></thead>
 <tbody>$det</tbody></table>
 <div class="foot"><span>Opstation ERP · Production Report</span><span>Printed $gen</span></div>
 </body></html>''';
