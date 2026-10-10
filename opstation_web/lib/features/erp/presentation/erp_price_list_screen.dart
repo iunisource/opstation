@@ -33,7 +33,10 @@ class _Line {
   final String productId, sku, name, uom;
   final double rate;
   final bool edited;
-  const _Line(this.productId, this.sku, this.name, this.uom, this.rate, this.edited);
+  // Cost the rate was based on, and the formula rate, at the time (saved
+  // lists keep these from SQL 343 on, so the "Quoted = X%" line still works).
+  final double? base, calc;
+  const _Line(this.productId, this.sku, this.name, this.uom, this.rate, this.edited, {this.base, this.calc});
 }
 
 class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
@@ -54,6 +57,8 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   String _title = 'Price List'; // printed heading: 'Price List' | 'Cost Sheet'
   final Map<String, double> _override = {}; // product_id -> manually entered rate
   Map<String, dynamic>? _snap; // a saved price list being viewed (read-only); null = live generator
+  // A saved list reopened in the generator for editing: {id, name, notes, title, created_by}.
+  Map<String, dynamic>? _editing;
   final _qty = NumberFormat('#,##0.##');
 
   @override
@@ -217,20 +222,36 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   /// For a manually quoted rate: what % it works out to on the same cost
   /// source and method as the formula, and how far it is from the formula.
   /// e.g. "Quoted 160 = 45.5% markup on Purchase Cost 110 · formula 40% → 154 (+6, +3.9%)"
-  String _quoteBasis(_P p, double rate) {
-    final b = _base(p);
-    final calc = _calcRate(p);
+  String _quoteBasis(_P p, double rate) =>
+      _basisText(rate: rate, base: _base(p), calc: _calcRate(p), margin: _margin,
+          method: _method, methodLabel: _methodLabel, sourceLabel: _sourceLabel);
+
+  /// Same line for a saved list, from the cost / formula rate stored with it.
+  String? _savedBasis(_Line l, Map<String, dynamic> snap) {
+    if (l.base == null || l.calc == null) return null;
+    final st = Map<String, dynamic>.from(snap['settings'] as Map? ?? {});
+    final method = (st['method'] as String?) ?? 'markup';
+    return _basisText(
+        rate: l.rate, base: l.base!, calc: l.calc!,
+        margin: (st['margin'] as num?)?.toDouble() ?? 0,
+        method: method,
+        methodLabel: (st['method_label'] as String?) ?? (method == 'margin' ? 'margin on price' : 'markup on cost'),
+        sourceLabel: (st['source_label'] as String?) ?? 'Cost');
+  }
+
+  String _basisText({required double rate, required double base, required double calc, required double margin,
+      required String method, required String methodLabel, required String sourceLabel}) {
     final diff = rate - calc;
     final diffPct = calc > 0 ? diff / calc * 100 : 0.0;
     final sign = diff >= 0 ? '+' : '−';
-    final vs = 'formula ${_qty.format(_margin)}% → ${_qty.format(calc)} '
+    final vs = 'formula ${_qty.format(margin)}% → ${_qty.format(calc)} '
         '($sign${_qty.format(diff.abs())}, $sign${diffPct.abs().toStringAsFixed(1)}%)';
-    if (b <= 0) return 'Quoted ${_qty.format(rate)} · no $_sourceLabel to compare · $vs';
-    final pct = _method == 'margin'
-        ? (rate > 0 ? (rate - b) / rate * 100 : 0.0)
-        : (rate / b - 1) * 100;
-    return 'Quoted ${_qty.format(rate)} = ${pct.toStringAsFixed(1)}% $_methodLabel '
-        '($_sourceLabel ${_qty.format(b)}) · $vs';
+    if (base <= 0) return 'Quoted ${_qty.format(rate)} · no $sourceLabel to compare · $vs';
+    final pct = method == 'margin'
+        ? (rate > 0 ? (rate - base) / rate * 100 : 0.0)
+        : (rate / base - 1) * 100;
+    return 'Quoted ${_qty.format(rate)} = ${pct.toStringAsFixed(1)}% $methodLabel '
+        '($sourceLabel ${_qty.format(base)}) · $vs';
   }
 
   Future<void> _editRate(_P p) async {
@@ -442,24 +463,147 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   List<_Line> _snapLines(Map<String, dynamic> snap) => [
         for (final l in (snap['lines'] as List? ?? const []))
           _Line('${l['product_id'] ?? ''}', '${l['sku'] ?? ''}', '${l['name'] ?? ''}', '${l['uom'] ?? ''}',
-              (l['rate'] as num?)?.toDouble() ?? 0, l['edited'] == true),
+              (l['rate'] as num?)?.toDouble() ?? 0, l['edited'] == true,
+              base: (l['base'] as num?)?.toDouble(), calc: (l['calc'] as num?)?.toDouble()),
       ];
 
   List<_Line> get _outLines => _snap != null
       ? _snapLines(_snap!)
-      : [for (final p in _rows) _Line(p.id, p.sku, p.name, p.uom, _rate(p), _override.containsKey(p.id))];
+      : [for (final p in _rows) _Line(p.id, p.sku, p.name, p.uom, _rate(p), _override.containsKey(p.id),
+            base: _base(p), calc: _calcRate(p))];
 
   Future<void> _prepare() async {
     if (_snap == null && _source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
   }
 
   // ── Save a generated list (manual, for the record) ────────────────────────
+  bool _canUpdateSaved(Map<String, dynamic>? r) {
+    if (r == null) return false;
+    final user = ref.read(currentUserProvider);
+    final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.superAdmin;
+    return isAdmin || r['created_by'] == user?.id;
+  }
+
+  Map<String, dynamic> _currentSettings() => {
+        'source': _source, 'source_label': _sourceLabel, 'method': _method, 'method_label': _methodLabel,
+        'margin': _margin, 'main_groups': _mains.toList(), 'groups': _groups.toList(), 'sub_groups': _subs.toList(),
+        'search': _searchCtrl.text.trim(), 'picked_products': _pickedIds.length, 'picked_ids': _pickedIds.toList(),
+      };
+
+  List<Map<String, dynamic>> _linesJson(List<_Line> lines) => [
+        for (final l in lines)
+          {'product_id': l.productId, 'sku': l.sku, 'name': l.name, 'uom': l.uom,
+           'rate': double.parse(l.rate.toStringAsFixed(4)), 'edited': l.edited,
+           if (l.base != null) 'base': double.parse(l.base!.toStringAsFixed(4)),
+           if (l.calc != null) 'calc': double.parse(l.calc!.toStringAsFixed(4))},
+      ];
+
+  /// Overwrite the saved list being edited (the previous version is kept in
+  /// its history by SQL 343).
+  Future<void> _updateSaved() async {
+    final ed = _editing;
+    if (ed == null) return;
+    await _prepare();
+    final lines = _outLines;
+    if (lines.isEmpty || !mounted) return;
+    final nameCtrl = TextEditingController(text: '${ed['name'] ?? ''}');
+    final notesCtrl = TextEditingController(text: '${ed['notes'] ?? ''}');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Update "${ed['name']}"', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Replaces the saved lines and rates with these ${lines.length} lines'
+                '${_override.isEmpty ? '' : ' (including ${_override.length} edited rate${_override.length == 1 ? '' : 's'})'}. '
+                'The previous version is kept in its history.',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.4)),
+            const SizedBox(height: 14),
+            TextField(controller: nameCtrl, autofocus: true,
+                decoration: const InputDecoration(labelText: 'Name *', isDense: true, border: OutlineInputBorder())),
+            const SizedBox(height: 10),
+            TextField(controller: notesCtrl, maxLines: 3, minLines: 2,
+                decoration: const InputDecoration(labelText: 'Notes (optional)', isDense: true, border: OutlineInputBorder())),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton.icon(onPressed: () => Navigator.pop(ctx, true), icon: const Icon(Icons.save_outlined, size: 16), label: const Text('Update')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) { _toast('Give it a name'); return; }
+    final user = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('price_list_snapshots').update({
+        'title': _title,
+        'name': name,
+        'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+        'settings': _currentSettings(),
+        'lines': _linesJson(lines),
+        'item_count': lines.length,
+        'edited_count': lines.where((l) => l.edited).length,
+        'updated_by': user?.id,
+        'updated_by_name': user?.name,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', ed['id'] as String);
+      final id = ed['id'] as String;
+      setState(() => _editing = null);
+      await _loadSnap(id); // show the updated list
+      _toast('Updated "$name"');
+    } catch (e) {
+      _toast(e.toString().contains('updated_')
+          ? 'Updating needs SQL 343 — run it in Supabase first.'
+          : 'Could not update: $e');
+    }
+  }
+
+  /// Reopen a saved list in the generator: same settings, same products, same
+  /// manually edited rates. Then Update it, or Save as new.
+  Future<void> _editSnap() async {
+    final s = _snap;
+    if (s == null) return;
+    final st = Map<String, dynamic>.from(s['settings'] as Map? ?? {});
+    final lines = List<Map<String, dynamic>>.from((s['lines'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
+    final known = {for (final p in _products) p.id};
+    final missing = lines.where((l) => !known.contains('${l['product_id']}')).length;
+    _searchCtrl.text = (st['search'] as String?) ?? '';
+    setState(() {
+      _source = (st['source'] as String?) ?? 'purchase';
+      _method = (st['method'] as String?) ?? 'markup';
+      final m = (st['margin'] as num?)?.toDouble();
+      _marginCtrl.text = m == null ? '' : (m == m.roundToDouble() ? m.toStringAsFixed(0) : m.toString());
+      _title = (s['title'] as String?) == 'Cost Sheet' ? 'Cost Sheet' : 'Price List';
+      _mains..clear()..addAll(List<String>.from(st['main_groups'] as List? ?? const []));
+      _groups..clear()..addAll(List<String>.from(st['groups'] as List? ?? const []));
+      _subs..clear()..addAll(List<String>.from(st['sub_groups'] as List? ?? const []));
+      // Pin exactly the products that were on the saved list.
+      _pickedIds..clear()..addAll(lines.map((l) => '${l['product_id']}').where(known.contains));
+      _override.clear();
+      for (final l in lines) {
+        final pid = '${l['product_id']}';
+        if (l['edited'] == true && known.contains(pid)) _override[pid] = (l['rate'] as num?)?.toDouble() ?? 0;
+      }
+      _editing = {
+        'id': s['id'], 'name': s['name'], 'notes': s['notes'], 'title': s['title'], 'created_by': s['created_by'],
+      };
+      _snap = null;
+    });
+    if (_source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
+    if (missing > 0) _toast('$missing product${missing == 1 ? ' is' : 's are'} no longer active and left out.');
+  }
+
   Future<void> _save() async {
     await _prepare();
     final lines = _outLines;
     if (lines.isEmpty || !mounted) return;
-    final nameCtrl = TextEditingController(text: '$_title – ${DateFormat('d MMM y').format(DateTime.now())}');
-    final notesCtrl = TextEditingController();
+    final nameCtrl = TextEditingController(text: _editing != null
+        ? '${_editing!['name']} (copy)'
+        : '$_title – ${DateFormat('d MMM y').format(DateTime.now())}');
+    final notesCtrl = TextEditingController(text: (_editing?['notes'] as String?) ?? '');
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -497,22 +641,15 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         'title': _title,
         'name': name,
         'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
-        'settings': {
-          'source': _source, 'source_label': _sourceLabel, 'method': _method, 'method_label': _methodLabel,
-          'margin': _margin, 'main_groups': _mains.toList(), 'groups': _groups.toList(), 'sub_groups': _subs.toList(),
-          'search': _searchCtrl.text.trim(), 'picked_products': _pickedIds.length,
-        },
-        'lines': [
-          for (final l in lines)
-            {'product_id': l.productId, 'sku': l.sku, 'name': l.name, 'uom': l.uom,
-             'rate': double.parse(l.rate.toStringAsFixed(4)), 'edited': l.edited},
-        ],
+        'settings': _currentSettings(),
+        'lines': _linesJson(lines),
         'item_count': lines.length,
         'edited_count': lines.where((l) => l.edited).length,
         'created_by': user?.id,
         'created_by_name': user?.name,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       });
+      if (_editing != null) setState(() => _editing = null);
       _toast('Saved "$name"');
     } catch (e) {
       _toast(e.toString().contains('price_list_snapshots')
@@ -533,9 +670,16 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     List<Map<String, dynamic>> list = [];
     String? err;
     try {
-      list = List<Map<String, dynamic>>.from(await Supabase.instance.client.from('price_list_snapshots')
-          .select('id, title, name, notes, item_count, edited_count, created_by, created_by_name, created_at, settings')
-          .eq('org_id', orgId).order('created_at', ascending: false).limit(300));
+      const cols = 'id, title, name, notes, item_count, edited_count, created_by, created_by_name, created_at, settings';
+      try {
+        list = List<Map<String, dynamic>>.from(await Supabase.instance.client.from('price_list_snapshots')
+            .select('$cols, updated_at, updated_by_name, edit_count')
+            .eq('org_id', orgId).order('created_at', ascending: false).limit(300));
+      } catch (_) {
+        // before SQL 343
+        list = List<Map<String, dynamic>>.from(await Supabase.instance.client.from('price_list_snapshots')
+            .select(cols).eq('org_id', orgId).order('created_at', ascending: false).limit(300));
+      }
     } catch (e) {
       err = e.toString().contains('price_list_snapshots') ? 'Run SQL 314 in Supabase to enable saved lists.' : '$e';
     }
@@ -586,6 +730,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                                   '${(r['edited_count'] ?? 0) > 0 ? ' · ${r['edited_count']} edited' : ''}'
                                   ' · ${st['source_label'] ?? st['source'] ?? ''} ${st['margin'] ?? ''}%'
                                   '\n${r['created_by_name'] ?? '—'} · ${when == null ? '' : DateFormat('d MMM y, h:mm a').format(when)}'
+                                  '${r['updated_at'] != null ? ' · updated${r['updated_by_name'] != null ? ' by ${r['updated_by_name']}' : ''} ${DateFormat('d MMM y').format(DateTime.parse('${r['updated_at']}').toLocal())}' : ''}'
                                   '${(r['notes'] as String?)?.isNotEmpty == true ? '\n${r['notes']}' : ''}',
                                   style: const TextStyle(fontSize: 11.5, height: 1.35),
                                 ),
@@ -611,7 +756,9 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                                           try {
                                             await Supabase.instance.client.from('price_list_snapshots').delete().eq('id', r['id'] as String);
                                             setD(() => list.removeWhere((x) => x['id'] == r['id']));
-                                            if (_snap?['id'] == r['id'] && mounted) setState(() => _snap = null);
+                                            if (mounted && (_snap?['id'] == r['id'] || _editing?['id'] == r['id'])) {
+                                              setState(() { if (_snap?['id'] == r['id']) _snap = null; if (_editing?['id'] == r['id']) _editing = null; });
+                                            }
                                           } catch (e) { _toast('Could not delete: $e'); }
                                         },
                                       )
@@ -630,7 +777,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   Future<void> _loadSnap(String id) async {
     try {
       final row = await Supabase.instance.client.from('price_list_snapshots').select().eq('id', id).single();
-      if (mounted) setState(() => _snap = Map<String, dynamic>.from(row));
+      if (mounted) setState(() { _snap = Map<String, dynamic>.from(row); _editing = null; });
     } catch (e) { _toast('Could not open: $e'); }
   }
 
@@ -653,16 +800,67 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
           Text('Saved: ${s['name']}', style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF312E81))),
           Text('${s['title']} · ${s['item_count'] ?? 0} items · ${st['source_label'] ?? st['source'] ?? ''}, '
               '${st['margin'] ?? ''}% ${st['method_label'] ?? ''} · saved by ${s['created_by_name'] ?? '—'}'
-              '${when == null ? '' : ' on ${DateFormat('d MMM y, h:mm a').format(when)}'}',
+              '${when == null ? '' : ' on ${DateFormat('d MMM y, h:mm a').format(when)}'}'
+              '${s['updated_at'] != null ? ' · last updated${s['updated_by_name'] != null ? ' by ${s['updated_by_name']}' : ''} on ${DateFormat('d MMM y, h:mm a').format(DateTime.parse('${s['updated_at']}').toLocal())}' : ''}',
               style: const TextStyle(fontSize: 11.5, color: Color(0xFF4338CA))),
           if ((s['notes'] as String?)?.isNotEmpty == true)
             Padding(padding: const EdgeInsets.only(top: 3),
                 child: Text('${s['notes']}', style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary))),
         ])),
+        OutlinedButton.icon(
+          onPressed: _loading ? null : _editSnap,
+          icon: const Icon(Icons.edit_outlined, size: 16),
+          label: const Text('Edit'),
+          style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF3730A3)),
+        ),
+        const SizedBox(width: 4),
         TextButton.icon(
           onPressed: () => setState(() => _snap = null),
           icon: const Icon(Icons.close, size: 16),
           label: const Text('Back to generator'),
+        ),
+      ]),
+    );
+  }
+
+  /// Shown while a saved list is open for editing in the generator.
+  Widget _editingBanner() {
+    final ed = _editing!;
+    final canUpdate = _canUpdateSaved(ed);
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 1040),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7E6), borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFF5C26B)),
+      ),
+      child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 6, children: [
+        const Icon(Icons.edit_note, size: 20, color: Color(0xFF92400E)),
+        Text('Editing saved: ${ed['name']}', style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF7C4A03))),
+        if (canUpdate)
+          ElevatedButton.icon(
+            onPressed: _updateSaved,
+            icon: const Icon(Icons.save_outlined, size: 16),
+            label: const Text('Update'),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB45309), foregroundColor: Colors.white, visualDensity: VisualDensity.compact),
+          )
+        else
+          const Text('Only its creator or an admin can update it — use Save as new.',
+              style: TextStyle(fontSize: 11.5, color: Color(0xFF92400E))),
+        OutlinedButton.icon(
+          onPressed: _save,
+          icon: const Icon(Icons.bookmark_add_outlined, size: 16),
+          label: const Text('Save as new'),
+          style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+        ),
+        TextButton(
+          onPressed: () async {
+            final id = ed['id'] as String;
+            setState(() => _editing = null);
+            await _loadSnap(id);
+          },
+          child: const Text('Cancel edit'),
         ),
       ]),
     );
@@ -899,7 +1097,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                     label: const Text('Excel'),
                     style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1D6F42)),
                   ),
-                  if (_snap == null)
+                  if (_snap == null && _editing == null)
                     OutlinedButton.icon(
                       onPressed: rows.isEmpty ? null : _save,
                       icon: const Icon(Icons.bookmark_add_outlined, size: 18),
@@ -916,6 +1114,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
               ]),
             ),
             const SizedBox(height: 10),
+            if (_snap == null && _editing != null) _editingBanner(),
             if (_snap != null) _snapBanner() else
             Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, children: [
               Text('${rows.length} product(s)  ·  Rate = $_sourceLabel, ${_qty.format(_margin)}% ($_methodLabel)'
@@ -969,14 +1168,16 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       SizedBox(width: 40, child: Text('${i + 1}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                       SizedBox(width: 80, child: Text(p.sku, style: const TextStyle(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
                       Expanded(child: Builder(builder: (_) {
-                        final src = live && p.edited ? byId[p.productId] : null;
                         final name = Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis);
-                        if (src == null) return name;
+                        if (!p.edited) return name;
                         // Manually quoted: show what that rate works out to vs the formula.
+                        final src = live ? byId[p.productId] : null;
+                        final basis = src != null ? _quoteBasis(src, p.rate) : (_snap != null ? _savedBasis(p, _snap!) : null);
+                        if (basis == null) return name;
                         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           name,
                           const SizedBox(height: 2),
-                          Text(_quoteBasis(src, p.rate),
+                          Text(basis,
                               maxLines: 2, overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 11, color: Color(0xFF92400E))),
                         ]);
