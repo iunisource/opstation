@@ -1007,6 +1007,63 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     );
   }
 
+  /// Searchable rate picker (the plain dropdown was a very long list).
+  Future<void> _pickRate(_CostLine l, List<Map<String, dynamic>> types) async {
+    final q = TextEditingController();
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final terms = q.text.trim().toLowerCase().split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+        final shown = types.where((t) {
+          if (terms.isEmpty) return true;
+          final hay = '${t['name'] ?? ''} ${t['rate'] ?? ''}'.toLowerCase();
+          return terms.every(hay.contains);
+        }).toList();
+        return AlertDialog(
+          titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          contentPadding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          title: Text(l.costType == 'labor' ? 'Select labor rate' : 'Select overhead rate',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          content: SizedBox(
+            width: 560, height: 460,
+            child: Column(children: [
+              TextField(
+                controller: q, autofocus: true,
+                onChanged: (_) => setD(() {}),
+                onSubmitted: (_) { if (shown.length == 1) Navigator.pop(ctx, shown.first['id'] as String); },
+                decoration: const InputDecoration(hintText: 'Search rates…', prefixIcon: Icon(Icons.search, size: 18),
+                    isDense: true, border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 6),
+              Align(alignment: Alignment.centerLeft,
+                  child: Text('${shown.length} of ${types.length}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+              const SizedBox(height: 4),
+              Expanded(child: shown.isEmpty
+                  ? const Center(child: Text('No match', style: TextStyle(color: AppTheme.textSecondary)))
+                  : ListView.separated(
+                      itemCount: shown.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final t = shown[i];
+                        final cur = t['id'] == l.rateId;
+                        return ListTile(
+                          dense: true,
+                          selected: cur,
+                          title: Text('${t['name']}${(t['is_active'] == false) ? ' (inactive)' : ''}', style: const TextStyle(fontSize: 13)),
+                          trailing: Text(_money((t['rate'] as num? ?? 0)), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                          onTap: () => Navigator.pop(ctx, t['id'] as String),
+                        );
+                      })),
+            ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+        );
+      }),
+    );
+    q.dispose();
+    if (picked != null && mounted) setState(() => l.rateId = picked);
+  }
+
   Widget _overheadRow(int i) {
     final l = _overheads[i];
     final types = _typesFor(l.costType);
@@ -1035,19 +1092,27 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
             if (!newIds.contains(l.rateId)) l.rateId = null;
           }))),
         const SizedBox(width: 12),
-        Expanded(child: DropdownButtonFormField<String>(
-          value: selValue,
-          isDense: true, isExpanded: true,
-          decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-            border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
-            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-          hint: Text(types.isEmpty ? 'No rates — add in Manage rates' : 'Select a rate', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
-          items: types.map((t) => DropdownMenuItem(
-            value: t['id'] as String,
-            child: Text('${t['name']}  ·  ${_money((t['rate'] as num? ?? 0))}${(t['is_active'] == false) ? ' (inactive)' : ''}',
-              style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
-          onChanged: (v) => setState(() => l.rateId = v))),
+        Expanded(child: Builder(builder: (_) {
+          Map<String, dynamic>? sel;
+          for (final t in types) { if (t['id'] == selValue) { sel = t; break; } }
+          return InkWell(
+            onTap: types.isEmpty ? null : () => _pickRate(l, types),
+            borderRadius: BorderRadius.circular(4),
+            child: InputDecorator(
+              isEmpty: sel == null,
+              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
+                suffixIcon: Icon(Icons.search, size: 16), suffixIconConstraints: BoxConstraints(minWidth: 28, minHeight: 20)),
+              child: Text(
+                sel == null
+                    ? (types.isEmpty ? 'No rates — add in Manage rates' : 'Select a rate')
+                    : '${sel['name']}  ·  ${_money((sel['rate'] as num? ?? 0))}${(sel['is_active'] == false) ? ' (inactive)' : ''}',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: sel == null ? AppTheme.textSecondary : AppTheme.textPrimary)),
+            ),
+          );
+        })),
         const SizedBox(width: 12),
         SizedBox(width: 90, child: TextField(controller: l.qtyCtrl, textAlign: TextAlign.right,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
