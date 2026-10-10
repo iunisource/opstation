@@ -214,6 +214,25 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     return b * (1 + m); // markup on cost
   }
 
+  /// For a manually quoted rate: what % it works out to on the same cost
+  /// source and method as the formula, and how far it is from the formula.
+  /// e.g. "Quoted 160 = 45.5% markup on Purchase Cost 110 · formula 40% → 154 (+6, +3.9%)"
+  String _quoteBasis(_P p, double rate) {
+    final b = _base(p);
+    final calc = _calcRate(p);
+    final diff = rate - calc;
+    final diffPct = calc > 0 ? diff / calc * 100 : 0.0;
+    final sign = diff >= 0 ? '+' : '−';
+    final vs = 'formula ${_qty.format(_margin)}% → ${_qty.format(calc)} '
+        '($sign${_qty.format(diff.abs())}, $sign${diffPct.abs().toStringAsFixed(1)}%)';
+    if (b <= 0) return 'Quoted ${_qty.format(rate)} · no $_sourceLabel to compare · $vs';
+    final pct = _method == 'margin'
+        ? (rate > 0 ? (rate - b) / rate * 100 : 0.0)
+        : (rate / b - 1) * 100;
+    return 'Quoted ${_qty.format(rate)} = ${pct.toStringAsFixed(1)}% $_methodLabel '
+        '($_sourceLabel ${_qty.format(b)}) · $vs';
+  }
+
   Future<void> _editRate(_P p) async {
     final calc = _calcRate(p);
     final ctrl = TextEditingController(text: _rate(p).toStringAsFixed(2));
@@ -226,13 +245,30 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
           Text('Calculated rate: ${_qty.format(calc)}  ($_sourceLabel, ${_qty.format(_margin)}% $_methodLabel)',
               style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Rate', isDense: true, border: OutlineInputBorder()),
-            onSubmitted: (_) => Navigator.pop(ctx, 'save'),
-          ),
+          StatefulBuilder(builder: (ctx2, setLocal) {
+            final v = double.tryParse(ctrl.text.trim().replaceAll(',', ''));
+            final changed = v != null && (v - calc).abs() >= 0.005;
+            return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Rate', isDense: true, border: OutlineInputBorder()),
+                onChanged: (_) => setLocal(() {}),
+                onSubmitted: (_) => Navigator.pop(ctx, 'save'),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: 380,
+                child: Text(
+                    changed ? _quoteBasis(p, v!) : 'Same as the formula.',
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: changed ? const Color(0xFF92400E) : AppTheme.textSecondary,
+                        fontWeight: changed ? FontWeight.w600 : FontWeight.normal)),
+              ),
+            ]);
+          }),
         ]),
         actions: [
           if (_override.containsKey(p.id))
@@ -932,7 +968,19 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                     child: Row(children: [
                       SizedBox(width: 40, child: Text('${i + 1}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                       SizedBox(width: 80, child: Text(p.sku, style: const TextStyle(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                      Expanded(child: Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      Expanded(child: Builder(builder: (_) {
+                        final src = live && p.edited ? byId[p.productId] : null;
+                        final name = Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis);
+                        if (src == null) return name;
+                        // Manually quoted: show what that rate works out to vs the formula.
+                        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          name,
+                          const SizedBox(height: 2),
+                          Text(_quoteBasis(src, p.rate),
+                              maxLines: 2, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E))),
+                        ]);
+                      })),
                       SizedBox(width: 60, child: Text(p.uom, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.center)),
                       SizedBox(width: 110, child: Builder(builder: (_) {
                         final edited = p.edited;
