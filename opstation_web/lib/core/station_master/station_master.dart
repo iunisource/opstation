@@ -732,6 +732,7 @@ const List<_Feature> _features = [
   _Feature('Skipped Receipts Report', 'Reports', '/reports/skipped-receipts', ['skipped receipt', 'skipped receipts']),
   // HR
   _Feature('Employee Directory', 'HR', '/hr/employees', ['employee', 'staff', 'directory']),
+  _Feature('HR Setup', 'HR', '/hr/setup', ['department', 'designation', 'shift', 'rest day', 'hr setup']),
   _Feature('Attendance', 'HR', '/hr/attendance', ['attendance']),
   _Feature('Attendance Kiosk', 'HR', '/hr/attendance-kiosk', ['kiosk', 'check in']),
   _Feature('Leave', 'HR', '/hr/leave', ['leave', 'time off']),

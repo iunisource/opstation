@@ -1324,6 +1324,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
 
     final hrDirectory = <Widget>[
       if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location),
+      if (show('/hr/setup')) _menuItem(context, 'HR Setup', Icons.tune_outlined, '/hr/setup', location),
     ];
     final hrAttendance = <Widget>[
       if (show('/hr/attendance')) _menuItem(context, 'Attendance', Icons.fact_check_outlined, '/hr/attendance', location),
@@ -1433,7 +1434,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(financialItems), badge: paPending + jvPending),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
-          ['/hr/employees', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending + leavePending),
+          ['/hr/employees', '/hr/setup', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending + leavePending),
       // Logistics — Deliveries (incl. supplier pickups) + Dispatch Orders.
       // Permission-scoped via the registry, so any user granted either item
       // sees this menu — not only admin-tier or the dispatch-manager role.

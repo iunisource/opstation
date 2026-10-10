@@ -151,6 +151,7 @@ const List<PermModule> kPermissionRegistry = [
   ]),
   PermModule('hr', 'HR', Icons.badge_outlined, [
     PermItem('hr_employees', 'Employee Directory', PermKind.doc, '/hr/employees'),
+    PermItem('hr_setup', 'HR Setup (Departments, Designations, Shifts)', PermKind.doc, '/hr/setup'),
     PermItem('hr_attendance', 'Attendance', PermKind.doc, '/hr/attendance'),
     PermItem('hr_attendance_review', 'Attendance Review', PermKind.report, '/hr/attendance-review'),
     PermItem('hr_attendance_kiosk', 'Attendance Kiosk', PermKind.report, '/hr/attendance-kiosk'),

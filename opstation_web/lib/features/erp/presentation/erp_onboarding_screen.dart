@@ -387,6 +387,7 @@ const Map<String, String> _routeByName = {
   'Skipped in Last 3 Routes': '/compliance',
   'Zero-amount verified visits': '/compliance',
   'Employee Directory': '/hr/employees',
+  'HR Setup': '/hr/setup',
   'Attendance': '/hr/attendance',
   'Attendance Board': '/hr/attendance-board',
   'Attendance Kiosk': '/hr/attendance-kiosk',

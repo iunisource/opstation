@@ -13,6 +13,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
+import 'employee_history_section.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -85,6 +86,10 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.admin || r == WebUserRole.masterAdmin; }
+  bool get _canHrSetup {
+    final a = ref.read(accessSyncProvider);
+    return (a?.canEditDoc('hr_setup') ?? false) || (a?.canAddDoc('hr_setup') ?? false);
+  }
   bool get _pending => _current != null && (_current!['approval_status'] as String? ?? 'approved') == 'pending';
   bool get _voided => _current != null && _current!['is_voided'] == true;
   bool get _left => _current != null && _current!['status'] == 'left';
@@ -276,16 +281,6 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (mounted) setState(() { _shifts = List<Map<String, dynamic>>.from(rows); _shiftName = {for (final s in _shifts) s['id'] as String: s['name'] as String}; _orgRestDay = rest; });
   }
 
-  Future<void> _saveOrgRestDay(int? day) async {
-    final orgId = _orgId; if (orgId == null) return;
-    try {
-      await Supabase.instance.client.from('app_config').upsert({
-        'org_id': orgId, 'key': 'org.weekly_rest_day', 'value': day?.toString() ?? '',
-      }, onConflict: 'key,org_id,branch_id');
-      if (mounted) setState(() => _orgRestDay = day);
-    } catch (e) { _snack('Could not save rest day: $e'); }
-  }
-
   List<Map<String, dynamic>> get _activeDepts => _departments.where((d) => d['is_active'] != false).toList();
   List<Map<String, dynamic>> get _activeDesigs => _designations.where((d) => d['is_active'] != false).toList();
 
@@ -368,38 +363,6 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     ctrl.dispose();
     if (v == null || v.trim().isEmpty) return null;
     return _createListItem(table, v);
-  }
-
-  Future<void> _manageList(String table, String title) async {
-    await showDialog(context: context, builder: (ctx) {
-      final addCtrl = TextEditingController();
-      return StatefulBuilder(builder: (ctx, setLocal) {
-        final list = table == 'hr_departments' ? _departments : _designations;
-        Future<void> refresh() async { if (table == 'hr_departments') { await _loadDepts(); } else { await _loadDesignations(); } setLocal(() {}); }
-        return AlertDialog(
-          title: Text('Manage $title'),
-          content: SizedBox(width: isNarrow(context) ? double.maxFinite : 420, child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Row(children: [
-              Expanded(child: TextField(controller: addCtrl, decoration: InputDecoration(hintText: 'New $title', isDense: true, border: const OutlineInputBorder()))),
-              const SizedBox(width: 8),
-              ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-                onPressed: () async { if (addCtrl.text.trim().isEmpty) return; await _createListItem(table, addCtrl.text); addCtrl.clear(); await refresh(); }, child: const Text('Add')),
-            ]),
-            const SizedBox(height: 12),
-            SizedBox(height: 280, width: isNarrow(context) ? double.maxFinite : 420, child: list.isEmpty
-              ? Center(child: Text('No $title yet', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-              : ListView.separated(itemCount: list.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (_, i) {
-                  final r = list[i]; final active = r['is_active'] != false;
-                  return ListTile(dense: true,
-                    title: Text(r['name'] as String? ?? '', style: TextStyle(fontSize: 13, color: active ? AppTheme.textPrimary : AppTheme.textSecondary, decoration: active ? null : TextDecoration.lineThrough)),
-                    trailing: Switch(value: active, onChanged: (val) async { try { await Supabase.instance.client.from(table).update({'is_active': val}).eq('id', r['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }));
-                })),
-          ])),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
-        );
-      });
-    });
-    if (mounted) setState(() {});
   }
 
   // ---- save / delete ----
@@ -1136,6 +1099,22 @@ $docsHtml
             _advancesCard(),
             const SizedBox(height: 16),
             _docsSection(),
+            if (_current != null && _current!['id'] != null) ...[
+              const SizedBox(height: 16),
+              EmployeeHistorySection(
+                key: ValueKey('emp_hist_${_current!['id']}_${_current!['updated_at']}_${_current!['status']}_${_current!['is_voided']}'),
+                employeeId: _current!['id'] as String,
+                isAdmin: _isAdmin || ref.read(currentUserProvider)?.role == WebUserRole.superAdmin,
+                deptName: _deptName,
+                desigName: _desigName,
+                branchName: _branchName,
+                shiftName: _shiftName,
+                accountName: {
+                  for (final a in _assetAccounts)
+                    '${a['id']}': '${a['code'] ?? ''} ${a['name'] ?? ''}'.trim(),
+                },
+              ),
+            ],
             const SizedBox(height: 30),
           ]))),
       ]);
@@ -1192,9 +1171,6 @@ $docsHtml
     final leading = IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact);
     final title = Expanded(child: Text(_current == null ? 'New Employee' : (_name.text.isEmpty ? 'Employee' : _name.text), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis));
     final actions = <Widget>[
-      if (_canWrite) TextButton.icon(icon: const Icon(Icons.apartment_outlined, size: 15), label: const Text('Departments', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_departments', 'departments')),
-      if (_canWrite) TextButton.icon(icon: const Icon(Icons.work_outline, size: 15), label: const Text('Designations', style: TextStyle(fontSize: 12)), onPressed: () => _manageList('hr_designations', 'designations')),
-      if (_isAdmin) TextButton.icon(icon: const Icon(Icons.schedule_outlined, size: 15), label: const Text('Shifts', style: TextStyle(fontSize: 12)), onPressed: _manageShifts),
       if (_current != null) TextButton.icon(icon: const Icon(Icons.event_available_outlined, size: 15), label: const Text('Attendance record', style: TextStyle(fontSize: 12)), onPressed: () { final id = _current?['id'] as String?; if (id != null) context.push('/hr/employee-attendance?emp=$id'); }),
       if (_current != null) _statusChip(),
       if (_current != null) const SizedBox(width: 6),
@@ -1400,191 +1376,17 @@ $docsHtml
       style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
       items: [
         ...items.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text('${s['name']}${s['start_time'] != null ? ' (${s['start_time']}\u2013${s['end_time'] ?? ''})' : ''}', overflow: TextOverflow.ellipsis))),
-        if (_isAdmin) const DropdownMenuItem(value: '__manage__', child: Text('Manage shifts\u2026', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
+        if (_canHrSetup) const DropdownMenuItem(value: '__manage__', child: Text('Manage shifts\u2026', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
       ],
-      onChanged: !_canWrite ? null : (v) async { if (v == '__manage__') { await _manageShifts(); } else setState(() => _shiftId = v); });
-  }
-
-  Future<void> _manageShifts() async {
-    await showDialog(context: context, builder: (ctx) {
-      final nameCtrl = TextEditingController();
-      final graceCtrl = TextEditingController(text: '0');
-      final halfCtrl = TextEditingController();
-      final penaltyDaysCtrl = TextEditingController(text: '1');
-      final plCtrl = TextEditingController();       // paid leave days / month (blank = company default)
-      final restMinCtrl = TextEditingController();  // days worked in the week to earn the rest day
-      bool penalize = false;
-      // Company defaults (employees with no shift, and shifts left blank).
-      final defPlCtrl = TextEditingController();
-      final defRestCtrl = TextEditingController();
-      bool defLoaded = false;
-      Future<void> loadDefaults(void Function(void Function()) setLocal) async {
-        final orgId = _orgId; if (orgId == null) return;
-        try {
-          final rows = await Supabase.instance.client.from('app_config').select('key, value').eq('org_id', orgId)
-              .inFilter('key', ['hr.paid_leave_days', 'hr.rest_day_min_days']);
-          for (final r in (rows as List)) {
-            if (r['key'] == 'hr.paid_leave_days') defPlCtrl.text = '${r['value'] ?? ''}';
-            if (r['key'] == 'hr.rest_day_min_days') defRestCtrl.text = '${r['value'] ?? ''}';
-          }
-        } catch (_) {}
-        if (defRestCtrl.text.isEmpty) defRestCtrl.text = '3';
-        setLocal(() {});
-      }
-      Future<void> saveDefault(String key, String value) async {
-        final orgId = _orgId; if (orgId == null) return;
-        try {
-          await Supabase.instance.client.from('app_config').delete().eq('org_id', orgId).eq('key', key);
-          await Supabase.instance.client.from('app_config').insert({'org_id': orgId, 'key': key, 'value': value.trim()});
-          _snack('Saved. Regenerate draft payroll runs to apply.');
-        } catch (e) { _snack('Could not save: $e'); }
-      }
-      String? editId; String? sStart; String? sEnd;
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      return StatefulBuilder(builder: (ctx, setLocal) {
-        if (!defLoaded) { defLoaded = true; loadDefaults(setLocal); }
-        Future<void> refresh() async { await _loadShifts(); setLocal(() {}); }
-        double? calc() { final a = _min(sStart), b = _min(sEnd); if (a == null || b == null) return null; var d = b - a; if (d <= 0) d += 1440; return (d / 60 * 100).round() / 100; }
-        Future<void> pick(bool isStart) async {
-          final t = await showTimePicker(context: ctx, initialTime: const TimeOfDay(hour: 9, minute: 0));
-          if (t != null) setLocal(() { final s = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}'; if (isStart) sStart = s; else sEnd = s; });
+      onChanged: !_canWrite ? null : (v) async {
+        if (v == '__manage__') {
+          // Shifts now live on HR \u25B8 HR Setup; reload them when coming back.
+          await context.push('/hr/setup?tab=shifts');
+          await _loadShifts();
+        } else {
+          setState(() => _shiftId = v);
         }
-        Future<void> saveShift() async {
-          final orgId = _orgId; if (orgId == null) return;
-          if (nameCtrl.text.trim().isEmpty) { _snack('Shift name required'); return; }
-          final half = double.tryParse(halfCtrl.text.trim());
-          final penaltyDays = int.tryParse(penaltyDaysCtrl.text.trim()) ?? 1;
-          final payload = {'org_id': orgId, 'name': nameCtrl.text.trim(), 'start_time': sStart, 'end_time': sEnd, 'work_hours': calc(), 'half_day_hours': (half != null && half > 0) ? half : null, 'grace_minutes': int.tryParse(graceCtrl.text) ?? 0, 'penalize_unapproved_absence': penalize, 'absence_penalty_days': penalize ? (penaltyDays < 0 ? 0 : penaltyDays) : 1, 'is_active': true,
-            'paid_leave_days': double.tryParse(plCtrl.text.trim()), 'rest_day_min_days': double.tryParse(restMinCtrl.text.trim())};
-          try {
-            if (editId == null) { payload['id'] = 'shift_' + DateTime.now().millisecondsSinceEpoch.toString(); await Supabase.instance.client.from('hr_shifts').insert(payload); }
-            else { await Supabase.instance.client.from('hr_shifts').update(payload).eq('id', editId!); }
-            setLocal(() { nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; plCtrl.clear(); restMinCtrl.clear(); penalize = false; sStart = null; sEnd = null; editId = null; });
-            await refresh();
-          } catch (e) { _snack('Save failed: $e'); }
-        }
-        return AlertDialog(
-          title: Text(editId == null ? 'Shifts' : 'Edit shift'),
-          content: SizedBox(width: isNarrow(context) ? double.maxFinite : 470, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            // Org-wide weekly rest day (auto-marked in the attendance register).
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE0E0E0))),
-              child: Row(children: [
-                const Icon(Icons.event_busy_outlined, size: 16, color: AppTheme.textSecondary),
-                const SizedBox(width: 8),
-                const Expanded(child: Text('Weekly rest day (whole company)', style: TextStyle(fontSize: 12))),
-                DropdownButton<int?>(
-                  value: _orgRestDay,
-                  underline: const SizedBox.shrink(),
-                  hint: const Text('None', style: TextStyle(fontSize: 12)),
-                  items: [
-                    const DropdownMenuItem<int?>(value: null, child: Text('None', style: TextStyle(fontSize: 12))),
-                    for (var i = 0; i < 7; i++) DropdownMenuItem<int?>(value: i, child: Text(dayNames[i], style: const TextStyle(fontSize: 12))),
-                  ],
-                  onChanged: !_canWrite ? null : (v) async { await _saveOrgRestDay(v); setLocal(() {}); },
-                ),
-              ]),
-            ),
-            const SizedBox(height: 8),
-            // Company payroll defaults (used when a shift leaves them blank, and for employees with no shift).
-            Container(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE0E0E0))),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Company defaults (no shift, or shift left blank)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(child: TextField(controller: defPlCtrl, enabled: _canWrite, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: 'Paid leave days / month', isDense: true, border: OutlineInputBorder()))),
-                  const SizedBox(width: 8),
-                  Expanded(child: TextField(controller: defRestCtrl, enabled: _canWrite, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: 'Days worked to earn rest day', isDense: true, border: OutlineInputBorder()))),
-                  const SizedBox(width: 4),
-                  IconButton(icon: const Icon(Icons.save_outlined, size: 18), tooltip: 'Save defaults',
-                    onPressed: !_canWrite ? null : () async {
-                      await saveDefault('hr.paid_leave_days', defPlCtrl.text);
-                      await saveDefault('hr.rest_day_min_days', defRestCtrl.text);
-                      setLocal(() {});
-                    }),
-                ]),
-                const SizedBox(height: 4),
-                const Text('Rest day is paid only if the employee worked at least this many days (½ day counts ½) in the 6 days before it; otherwise it counts as an absent. 0 = always paid. Leave (L) is not a worked day.',
-                    style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
-              ]),
-            ),
-            const SizedBox(height: 10),
-            TextField(controller: nameCtrl, decoration: const InputDecoration(hintText: 'Shift name (e.g. Morning 9-5)', isDense: true, border: OutlineInputBorder())),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(child: OutlinedButton(onPressed: () => pick(true), child: Text(sStart ?? 'Start time', style: const TextStyle(fontSize: 12)))),
-              const SizedBox(width: 8),
-              Expanded(child: OutlinedButton(onPressed: () => pick(false), child: Text(sEnd ?? 'End time', style: const TextStyle(fontSize: 12)))),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              SizedBox(width: 120, child: TextField(controller: graceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Grace min', isDense: true, border: OutlineInputBorder()))),
-              const SizedBox(width: 8),
-              Expanded(child: TextField(controller: halfCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(labelText: 'Half-day hours', hintText: 'auto ${calc() != null ? (calc()! / 2).toStringAsFixed(2) : '\u2014'}', isDense: true, border: const OutlineInputBorder()))),
-            ]),
-            const SizedBox(height: 6),
-            Align(alignment: Alignment.centerLeft, child: Text('Standard hours: ${calc()?.toString() ?? '\u2014'}  \u00b7  worked \u2264 half-day hours counts as \u00bd day', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-            const SizedBox(height: 10),
-            // Unapproved-absence penalty policy (applied from the Attendance Review screen).
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE0E0E0))),
-              child: Column(children: [
-                Row(children: [
-                  const Icon(Icons.gavel_outlined, size: 16, color: AppTheme.textSecondary),
-                  const SizedBox(width: 8),
-                  const Expanded(child: Text('Penalize unapproved absence', style: TextStyle(fontSize: 12))),
-                  Switch(value: penalize, onChanged: !_canWrite ? null : (v) => setLocal(() => penalize = v)),
-                ]),
-                if (penalize) Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(children: [
-                    SizedBox(width: 110, child: TextField(controller: penaltyDaysCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Extra absents', isDense: true, border: OutlineInputBorder()))),
-                    const SizedBox(width: 10),
-                    const Expanded(child: Text('Added on the next working day(s) after an unapproved absence. Punch times are kept but the day reports Absent.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
-                  ]),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 8),
-            // Payroll policy for this shift (blank = company default).
-            Row(children: [
-              Expanded(child: TextField(controller: plCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(labelText: 'Paid leave days / month', hintText: 'default ${defPlCtrl.text.isEmpty ? '0' : defPlCtrl.text}', isDense: true, border: const OutlineInputBorder()))),
-              const SizedBox(width: 8),
-              Expanded(child: TextField(controller: restMinCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(labelText: 'Days to earn rest day', hintText: 'default ${defRestCtrl.text.isEmpty ? '3' : defRestCtrl.text}', isDense: true, border: const OutlineInputBorder()))),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              if (editId != null) TextButton(onPressed: () => setLocal(() { editId = null; nameCtrl.clear(); graceCtrl.text = '0'; halfCtrl.clear(); penaltyDaysCtrl.text = '1'; plCtrl.clear(); restMinCtrl.clear(); penalize = false; sStart = null; sEnd = null; }), child: const Text('Cancel edit')),
-              const Spacer(),
-              ElevatedButton(onPressed: saveShift, style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: Text(editId == null ? 'Add shift' : 'Update')),
-            ]),
-            const Divider(),
-            SizedBox(height: 220, width: isNarrow(context) ? double.maxFinite : 470, child: _shifts.isEmpty
-              ? const Center(child: Text('No shifts yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-              : ListView.separated(itemCount: _shifts.length, separatorBuilder: (_, __) => const Divider(height: 1), itemBuilder: (_, i) {
-                  final s = _shifts[i]; final active = s['is_active'] != false;
-                  return ListTile(dense: true,
-                    title: Text(s['name'] as String? ?? '', style: TextStyle(fontSize: 13, decoration: active ? null : TextDecoration.lineThrough)),
-                    subtitle: Text('${s['start_time'] ?? '\u2014'} \u2013 ${s['end_time'] ?? '\u2014'}  \u00b7  ${s['work_hours'] ?? '\u2014'}h  \u00b7  \u00bd @ ${s['half_day_hours'] ?? ((s['work_hours'] as num?) != null ? ((s['work_hours'] as num) / 2).toStringAsFixed(2) : '\u2014')}h  \u00b7  grace ${s['grace_minutes'] ?? 0}m${s['penalize_unapproved_absence'] == true ? '  \u00b7  penalty +${s['absence_penalty_days'] ?? 1}' : ''}${s['paid_leave_days'] != null ? '  \u00b7  paid leave ${s['paid_leave_days']}' : ''}${s['rest_day_min_days'] != null ? '  \u00b7  rest day \u2265${s['rest_day_min_days']}d' : ''}', style: const TextStyle(fontSize: 11)),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: const Icon(Icons.edit_outlined, size: 16), onPressed: () => setLocal(() { editId = s['id'] as String; nameCtrl.text = s['name'] as String? ?? ''; sStart = s['start_time'] as String?; sEnd = s['end_time'] as String?; graceCtrl.text = (s['grace_minutes'] ?? 0).toString(); halfCtrl.text = s['half_day_hours']?.toString() ?? ''; penalize = s['penalize_unapproved_absence'] == true; penaltyDaysCtrl.text = (s['absence_penalty_days'] ?? 1).toString(); plCtrl.text = s['paid_leave_days']?.toString() ?? ''; restMinCtrl.text = s['rest_day_min_days']?.toString() ?? ''; })),
-                      Switch(value: active, onChanged: (v) async { try { await Supabase.instance.client.from('hr_shifts').update({'is_active': v}).eq('id', s['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }),
-                    ]));
-                })),
-          ]))),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
-        );
       });
-    });
-    if (mounted) setState(() {});
   }
 }
+
