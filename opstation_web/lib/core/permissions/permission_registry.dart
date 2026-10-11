@@ -195,6 +195,12 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('automation', 'Automation', Icons.bolt_outlined, [
     PermItem('automation', 'Automation Rules', PermKind.doc, '/erp/automation'),
   ], moduleGated: false),
+  // Operations — only the screens that are permission-scoped (the rest of the
+  // Operations menu is admin-tier). Route Roster: Edit = make changes;
+  // Add = view & print only.
+  PermModule('operations', 'Operations', Icons.local_shipping_outlined, [
+    PermItem('route_roster', 'Route Roster (Add = view & print, Edit = change)', PermKind.doc, '/operations/route-roster'),
+  ]),
   PermModule('crm', 'CRM', Icons.contacts_outlined, [
     PermItem('crm_customers', 'CRM Customers', PermKind.doc, '/crm/customers'),
     PermItem('crm_pipeline', 'Pipeline', PermKind.doc, '/crm/pipeline'),

@@ -1498,12 +1498,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isAdminTier) ...[
           if (modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
+            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
               _menuItem(context, 'Team', Icons.people_outline, '/team', location),
               _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location),
               _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
+              if (show('/operations/route-roster')) _menuItem(context, 'Route Roster', Icons.calendar_view_week_outlined, '/operations/route-roster', location),
               _menuItem(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
               _menuItem(context, 'Live Map', Icons.map_outlined, '/live-map', location),
               _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
@@ -1547,6 +1548,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ),
           ...splitErpMenus(),
         ],
+
+        // Route Roster is the one permission-scoped Operations screen: ERP users
+        // granted it get an Operations menu with just that item.
+        if (isErpUser && show('/operations/route-roster'))
+          _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
+            ['/operations/route-roster'],
+            [_menuItem(context, 'Route Roster', Icons.calendar_view_week_outlined, '/operations/route-roster', location)]),
 
         // Assets/Facility grants live outside erpMenuItems (their menu is built
         // inline from show()), so count them in the gate too.

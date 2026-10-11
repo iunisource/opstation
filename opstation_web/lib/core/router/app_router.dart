@@ -159,6 +159,7 @@ import '../../features/erp/presentation/erp_automation_screen.dart' deferred as 
 import '../../features/assets/presentation/erp_asset_report_screen.dart' deferred as _s148;
 import '../../features/erp/presentation/erp_production_report_screen.dart' deferred as _s149;
 import '../../features/hr/presentation/hr_setup_screen.dart' deferred as _s150;
+import '../../features/operations/presentation/route_roster_screen.dart' deferred as _s151;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -294,7 +295,9 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             final permScopedLogistics = loc == '/deliveries' ||
                 loc.startsWith('/deliveries/') ||
                 loc == '/dispatch-orders';
-            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics) return false;
+            // Route Roster (Operations) is registry-gated too.
+            final permScopedOps = loc == '/operations/route-roster';
+            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/ai-connector') return false; // admin-tier only
             // Always-available to every ERP user regardless of grants: their
@@ -417,6 +420,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/intelligence/competitors', builder: (_, __) => _deferred(_s053.loadLibrary(), () => _s053.IntelligenceCompetitorsScreen())),
           GoRoute(path: '/intelligence/performance', builder: (_, __) => _deferred(_s054.loadLibrary(), () => _s054.IntelligencePerformanceScreen())),
           GoRoute(path: '/routes', builder: (_, __) => _deferred(_s055.loadLibrary(), () => _s055.RoutesScreen())),
+          GoRoute(path: '/operations/route-roster', builder: (_, __) => _deferred(_s151.loadLibrary(), () => _s151.RouteRosterScreen())),
           GoRoute(path: '/routes/import', builder: (_, __) => _deferred(_s057.loadLibrary(), () => _s057.BulkImportRoutesScreen())),
           GoRoute(path: '/deliveries', builder: (_, __) => _deferred(_s059.loadLibrary(), () => _s059.DeliveriesScreen())),
           GoRoute(

@@ -388,6 +388,7 @@ const Map<String, String> _routeByName = {
   'Zero-amount verified visits': '/compliance',
   'Employee Directory': '/hr/employees',
   'HR Setup': '/hr/setup',
+  'Route Roster': '/operations/route-roster',
   'Attendance': '/hr/attendance',
   'Attendance Board': '/hr/attendance-board',
   'Attendance Kiosk': '/hr/attendance-kiosk',
