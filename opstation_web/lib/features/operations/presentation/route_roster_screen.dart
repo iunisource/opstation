@@ -53,6 +53,13 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
   final Map<String, _Cell> _cells = {};   // saved for this week: '$userId|yyyy-MM-dd'
   final Map<String, _Cell> _carried = {}; // carried over from an earlier week (auto-carry)
   bool _autoCopy = true;                  // org setting, ON unless turned off
+  // Roster type (org setting ops.route_roster_mode): 'standing' = one plan per
+  // weekday, no dates, valid until changed; 'dated' = week-by-week plan.
+  String? _mode;
+  bool get _standing => _mode == 'standing';
+  DateTime? _standingFrom; // last change to the standing roster
+  String? _standingBy;
+  bool _askedMode = false;
   int? _restDay; // 0 = Sunday … 6 = Saturday
   String _q = '';
 
@@ -66,12 +73,15 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
 
   List<DateTime> get _days => [for (var i = 0; i < 7; i++) _weekStart.add(Duration(days: i))];
   static String _ds(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
-  static String _key(String uid, DateTime d) => '$uid|${_ds(d)}';
+  String _key(String uid, DateTime d) => '$uid|${_standing ? 'w${d.weekday}' : _ds(d)}';
 
   @override
   void initState() {
     super.initState();
-    _loadBase().then((_) => _loadWeek());
+    _loadBase().then((_) async {
+      await _loadWeek();
+      await _askModeIfUnset();
+    });
   }
 
   Future<void> _loadBase() async {
@@ -87,10 +97,12 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
       final routes = await _db.from('sales_routes').select('id, name, kind, is_active').eq('org_id', orgId).order('name');
       int? rest;
       var auto = true;
+      String? mode;
       try {
         final cfg = await _db.from('app_config').select('key, value').eq('org_id', orgId)
-            .inFilter('key', ['org.weekly_rest_day', 'ops.route_roster_autocopy']);
+            .inFilter('key', ['org.weekly_rest_day', 'ops.route_roster_autocopy', 'ops.route_roster_mode']);
         for (final c in cfg as List) {
+          if (c['key'] == 'ops.route_roster_mode') mode = '${c['value']}' == 'standing' ? 'standing' : 'dated';
           if (c['key'] == 'org.weekly_rest_day') rest = int.tryParse('${c['value'] ?? ''}');
           if (c['key'] == 'ops.route_roster_autocopy') auto = '${c['value']}' != 'false';
         }
@@ -104,6 +116,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           ..addAll({for (final r in _routes) '${r['id']}': r});
         _restDay = rest;
         _autoCopy = auto;
+        _mode = mode;
       });
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not load salespersons / routes: $e');
@@ -114,6 +127,51 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     final orgId = _orgId;
     if (orgId == null) return;
     setState(() => _loading = true);
+    if (_standing) {
+      try {
+        final rows = await _db
+            .from('route_roster_standing')
+            .select('user_id, weekday, route_ids, note, updated_at, updated_by_name')
+            .eq('org_id', orgId);
+        _cells.clear();
+        _carried.clear();
+        DateTime? last;
+        String? lastBy;
+        for (final r in rows as List) {
+          _cells['${r['user_id']}|w${r['weekday']}'] = _Cell(
+              List<String>.from((r['route_ids'] as List?) ?? const []),
+              (r['note'] as String?) ?? '',
+              r['updated_by_name'] as String?);
+          final at = DateTime.tryParse('${r['updated_at']}');
+          if (at != null && (last == null || at.isAfter(last))) {
+            last = at;
+            lastBy = r['updated_by_name'] as String?;
+          }
+        }
+        // Clearing a cell deletes its row, so also look at the change log.
+        try {
+          final lg = await _db.from('route_roster_log').select('changed_at, changed_by_name')
+              .eq('org_id', orgId).eq('kind', 'standing').order('changed_at', ascending: false).limit(1);
+          if ((lg as List).isNotEmpty) {
+            final at = DateTime.tryParse('${lg.first['changed_at']}');
+            if (at != null && (last == null || at.isAfter(last))) {
+              last = at;
+              lastBy = lg.first['changed_by_name'] as String?;
+            }
+          }
+        } catch (_) {}
+        if (mounted) setState(() { _standingFrom = last?.toLocal(); _standingBy = lastBy; _loading = false; _error = null; });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _error = e.toString().contains('route_roster_standing')
+              ? 'Standing roster needs the database update — run 345_route_roster_standing_log.sql.'
+              : 'Could not load the roster: $e';
+        });
+      }
+      return;
+    }
     try {
       final rows = await _db
           .from('route_roster')
@@ -174,10 +232,11 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     final k = _key(uid, d);
     final own = _cells[k];
     if (own != null) return own.isEmpty ? null : own;
-    return _autoCopy ? _carried[k] : null;
+    return (!_standing && _autoCopy) ? _carried[k] : null;
   }
 
-  bool _isCarried(String uid, DateTime d) => !_cells.containsKey(_key(uid, d)) && _autoCopy && _carried.containsKey(_key(uid, d));
+  bool _isCarried(String uid, DateTime d) =>
+      !_standing && !_cells.containsKey(_key(uid, d)) && _autoCopy && _carried.containsKey(_key(uid, d));
 
   Future<void> _setAutoCopy(bool v) async {
     final orgId = _orgId;
@@ -186,10 +245,138 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
       await _db.from('app_config').delete().eq('org_id', orgId).eq('key', 'ops.route_roster_autocopy');
       await _db.from('app_config').insert({'org_id': orgId, 'key': 'ops.route_roster_autocopy', 'value': v ? 'true' : 'false'});
       setState(() => _autoCopy = v);
+      await _logSetting('Auto-carry to next weeks turned ${v ? 'on' : 'off'}');
       await _loadWeek();
       _snack(v ? 'Auto-carry on — weeks without changes follow the last plan.' : 'Auto-carry off — each week starts empty.');
     } catch (e) {
       _snack('Could not change the setting: $e');
+    }
+  }
+
+  Future<void> _logSetting(String detail) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final me = ref.read(currentUserProvider);
+    try {
+      await _db.from('route_roster_log').insert({
+        'org_id': orgId, 'kind': 'setting', 'action': 'setting', 'detail': detail,
+        'changed_by': me?.id, 'changed_by_name': me?.name,
+      });
+    } catch (_) {}
+  }
+
+  bool get _canEdit => ref.read(accessSyncProvider)?.canEditDoc('route_roster') ?? false;
+
+  /// First time an editor opens the roster: pick the roster type.
+  Future<void> _askModeIfUnset() async {
+    if (_mode != null || _askedMode || !_canEdit || !mounted) return;
+    _askedMode = true;
+    final m = await _chooseModeDialog(first: true);
+    if (m != null) await _switchMode(m, confirm: false);
+  }
+
+  Future<String?> _chooseModeDialog({bool first = false}) => showDialog<String>(
+        context: context,
+        barrierDismissible: !first,
+        builder: (ctx) => AlertDialog(
+          title: Text(first ? 'How should this roster work?' : 'Roster type'),
+          content: SizedBox(
+            width: 460,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                leading: const Icon(Icons.push_pin_outlined, color: AppTheme.primary),
+                title: const Text('Standing roster', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('One plan for Monday to Sunday, no dates. Stays valid until someone changes it. '
+                    'Print shows "effective from" the last change.'),
+                selected: _mode == 'standing',
+                onTap: () => Navigator.pop(ctx, 'standing'),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.date_range_outlined, color: AppTheme.primary),
+                title: const Text('Date-bound roster', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('A plan for each calendar week with dates. Weeks you don\'t change follow the '
+                    'last plan (auto-carry), and you can adjust any specific week.'),
+                selected: _mode == 'dated',
+                onTap: () => Navigator.pop(ctx, 'dated'),
+              ),
+            ]),
+          ),
+          actions: [if (!first) TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+        ),
+      );
+
+  /// Switch roster type. The new type starts from what is on screen now
+  /// (standing ← this week's plan; date-bound ← the standing plan for this week),
+  /// only where the new type has nothing yet.
+  Future<void> _switchMode(String m, {bool confirm = true}) async {
+    final orgId = _orgId;
+    if (orgId == null || m == _mode) return;
+    if (confirm) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Switch to ${m == 'standing' ? 'Standing' : 'Date-bound'} roster?'),
+          content: Text(m == 'standing'
+              ? 'The roster becomes one Monday–Sunday plan with no dates. It starts from the plan shown for this week '
+                  '(where the standing roster is empty). The date-bound plans are kept and come back if you switch again.'
+              : 'The roster becomes week-by-week with dates. This week starts from the standing plan '
+                  '(where this week is empty). The standing plan is kept and comes back if you switch again.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Switch')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    final me = ref.read(currentUserProvider);
+    final now = DateTime.now().toUtc().toIso8601String();
+    // what is on screen now, before switching
+    final onScreen = <(String, int, _Cell)>[];
+    for (final p in _people) {
+      for (final d in _days) {
+        final c = _eff('${p['id']}', d);
+        if (c != null) onScreen.add(('${p['id']}', d.weekday, c));
+      }
+    }
+    try {
+      if (m == 'standing') {
+        final have = await _db.from('route_roster_standing').select('user_id, weekday').eq('org_id', orgId);
+        final taken = {for (final r in have as List) '${r['user_id']}|${r['weekday']}'};
+        final rows = [
+          for (final (uid, wd, c) in onScreen)
+            if (!taken.contains('$uid|$wd'))
+              {'org_id': orgId, 'user_id': uid, 'weekday': wd, 'route_ids': c.routes,
+               'note': c.note.trim().isEmpty ? null : c.note.trim(),
+               'updated_at': now, 'updated_by': me?.id, 'updated_by_name': me?.name},
+        ];
+        if (rows.isNotEmpty) await _db.from('route_roster_standing').upsert(rows, onConflict: 'org_id,user_id,weekday');
+      } else if (_mode == 'standing') {
+        final rows = [
+          for (final (uid, wd, c) in onScreen)
+              {'org_id': orgId, 'user_id': uid, 'day': _ds(_weekStart.add(Duration(days: wd - 1))), 'route_ids': c.routes,
+               'note': c.note.trim().isEmpty ? null : c.note.trim(),
+               'updated_at': now, 'updated_by': me?.id, 'updated_by_name': me?.name},
+        ];
+        if (rows.isNotEmpty) {
+          // only where this week has nothing saved
+          final have = await _db.from('route_roster').select('user_id, day').eq('org_id', orgId)
+              .gte('day', _ds(_weekStart)).lte('day', _ds(_weekStart.add(const Duration(days: 6))));
+          final taken = {for (final r in have as List) '${r['user_id']}|${r['day']}'};
+          final fresh = rows.where((r) => !taken.contains('${r['user_id']}|${r['day']}')).toList();
+          if (fresh.isNotEmpty) await _db.from('route_roster').upsert(fresh, onConflict: 'org_id,user_id,day');
+        }
+      }
+      await _db.from('app_config').delete().eq('org_id', orgId).eq('key', 'ops.route_roster_mode');
+      await _db.from('app_config').insert({'org_id': orgId, 'key': 'ops.route_roster_mode', 'value': m});
+      await _logSetting('Roster type set to ${m == 'standing' ? 'Standing' : 'Date-bound'}');
+      setState(() => _mode = m);
+      await _loadWeek();
+    } catch (e) {
+      _snack(e.toString().contains('route_roster_standing')
+          ? 'Standing roster needs the database update — run 345_route_roster_standing_log.sql.'
+          : 'Could not switch: $e');
     }
   }
 
@@ -222,9 +409,26 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     final me = ref.read(currentUserProvider);
     // With auto-carry on, a cleared cell is saved as an explicit blank so it
     // doesn't pick last week's plan back up.
-    final empty = revert || (routes.isEmpty && note.trim().isEmpty && !_autoCopy);
+    final empty = revert || (routes.isEmpty && note.trim().isEmpty && (!_autoCopy || _standing));
     try {
-      if (empty) {
+      if (_standing) {
+        final wds = {for (final d in days) d.weekday}.toList();
+        if (empty) {
+          await _db.from('route_roster_standing').delete().eq('org_id', orgId).eq('user_id', uid).inFilter('weekday', wds);
+        } else {
+          await _db.from('route_roster_standing').upsert([
+            for (final wd in wds)
+              {
+                'org_id': orgId, 'user_id': uid, 'weekday': wd, 'route_ids': routes,
+                'note': note.trim().isEmpty ? null : note.trim(),
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
+                'updated_by': me?.id, 'updated_by_name': me?.name,
+              }
+          ], onConflict: 'org_id,user_id,weekday');
+        }
+        _standingFrom = DateTime.now();
+        _standingBy = me?.name;
+      } else if (empty) {
         await _db.from('route_roster').delete().eq('org_id', orgId).eq('user_id', uid).inFilter('day', [for (final d in days) _ds(d)]);
       } else {
         await _db.from('route_roster').upsert([
@@ -347,7 +551,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
             takenBy[r] = '${p['name'] ?? ''}';
           }
         }
-        final title = '${person['name'] ?? ''} · ${DateFormat('EEE d MMM').format(day)}';
+        final title = '${person['name'] ?? ''} · ${DateFormat(_standing ? 'EEEE' : 'EEE d MMM').format(day)}';
         final form = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (carried)
                 Container(
@@ -472,6 +676,149 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     }
   }
 
+  // ── History (lifecycle) ───────────────────────────────────────────────────
+  Future<void> _openHistory() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    List<Map<String, dynamic>> rows = [];
+    String? err;
+    try {
+      rows = List<Map<String, dynamic>>.from(await _db
+          .from('route_roster_log')
+          .select()
+          .eq('org_id', orgId)
+          .order('changed_at', ascending: false)
+          .limit(500));
+    } catch (e) {
+      err = e.toString().contains('route_roster_log')
+          ? 'History needs the database update — run 345_route_roster_standing_log.sql.'
+          : 'Could not load history: $e';
+    }
+    if (!mounted) return;
+    final nameOf = {for (final p in _people) '${p['id']}': '${p['name'] ?? ''}'};
+    String routesText(List? ids) {
+      final l = List<String>.from(ids ?? const []);
+      return l.isEmpty ? '—' : l.map(_routeName).join(', ');
+    }
+    String? who = 'all';
+    String kind = 'all';
+    const dayNames = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final shown = rows.where((r) {
+          if (kind != 'all' && r['kind'] != kind) return false;
+          if (who != 'all' && r['user_id'] != who) return false;
+          return true;
+        }).toList();
+        final filters = Wrap(spacing: 8, runSpacing: 8, children: [
+          SizedBox(
+            width: 220,
+            child: DropdownButtonFormField<String>(
+              value: who,
+              isDense: true,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Salesperson', isDense: true, border: OutlineInputBorder()),
+              items: [
+                const DropdownMenuItem(value: 'all', child: Text('All')),
+                for (final p in _people) DropdownMenuItem(value: '${p['id']}', child: Text('${p['name'] ?? ''}', overflow: TextOverflow.ellipsis)),
+              ],
+              onChanged: (v) => setD(() => who = v ?? 'all'),
+            ),
+          ),
+          SizedBox(
+            width: 170,
+            child: DropdownButtonFormField<String>(
+              value: kind,
+              isDense: true,
+              decoration: const InputDecoration(labelText: 'Show', isDense: true, border: OutlineInputBorder()),
+              items: const [
+                DropdownMenuItem(value: 'all', child: Text('Everything')),
+                DropdownMenuItem(value: 'standing', child: Text('Standing roster')),
+                DropdownMenuItem(value: 'dated', child: Text('Date-bound roster')),
+                DropdownMenuItem(value: 'setting', child: Text('Settings')),
+              ],
+              onChanged: (v) => setD(() => kind = v ?? 'all'),
+            ),
+          ),
+        ]);
+        final list = err != null
+            ? Center(child: Text(err!, style: const TextStyle(color: AppTheme.danger)))
+            : shown.isEmpty
+                ? const Center(child: Text('No changes recorded yet.', style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView.separated(
+                    itemCount: shown.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final r = shown[i];
+                      final at = DateTime.tryParse('${r['changed_at']}')?.toLocal();
+                      final whenWho = '${at == null ? '' : DateFormat('d MMM yyyy, h:mm a').format(at)} · ${r['changed_by_name'] ?? '—'}';
+                      if (r['kind'] == 'setting') {
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.settings_outlined, size: 18, color: AppTheme.textSecondary),
+                          title: Text('${r['detail'] ?? ''}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                          subtitle: Text(whenWho, style: const TextStyle(fontSize: 11.5)),
+                        );
+                      }
+                      final slot = r['kind'] == 'standing'
+                          ? '${dayNames[(r['weekday'] as int?) ?? 0]} (standing)'
+                          : DateFormat('EEE d MMM yyyy').format(DateTime.parse('${r['day']}'));
+                      final cleared = r['action'] == 'cleared';
+                      final oldN = ((r['old_note'] as String?) ?? '').trim();
+                      final newN = ((r['new_note'] as String?) ?? '').trim();
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(cleared ? Icons.backspace_outlined : Icons.edit_calendar_outlined,
+                            size: 18, color: cleared ? AppTheme.danger : AppTheme.primary),
+                        title: Text('${nameOf[r['user_id']] ?? 'Salesperson'} · $slot',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const SizedBox(height: 2),
+                          Text.rich(TextSpan(children: [
+                            const TextSpan(text: 'Routes: '),
+                            if (r['old_routes'] != null)
+                              TextSpan(text: routesText(r['old_routes'] as List?),
+                                  style: const TextStyle(decoration: TextDecoration.lineThrough, color: AppTheme.textSecondary)),
+                            if (r['old_routes'] != null) const TextSpan(text: '  →  '),
+                            TextSpan(text: cleared ? 'cleared' : routesText(r['new_routes'] as List?),
+                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ]), style: const TextStyle(fontSize: 12)),
+                          if (oldN != newN)
+                            Text('Note: ${oldN.isEmpty ? '—' : oldN}  →  ${newN.isEmpty ? '—' : newN}', style: const TextStyle(fontSize: 12)),
+                          Text(whenWho, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                        ]),
+                      );
+                    },
+                  );
+        final body = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          filters,
+          const SizedBox(height: 6),
+          Text('${shown.length} change${shown.length == 1 ? '' : 's'} (latest 500)',
+              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          const SizedBox(height: 4),
+          Expanded(child: list),
+        ]);
+        if (_narrow) {
+          return Dialog.fullscreen(
+            child: Scaffold(
+              appBar: AppBar(
+                title: const Text('Roster history', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+              ),
+              body: Padding(padding: const EdgeInsets.fromLTRB(14, 10, 14, 0), child: body),
+            ),
+          );
+        }
+        return AlertDialog(
+          title: const Text('Roster history', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          content: SizedBox(width: 640, height: 520, child: body),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+        );
+      }),
+    );
+  }
+
   // ── PDF ─────────────────────────────────────────────────────────────────
   Future<void> _print() async {
     final org = ref.read(currentUserProvider)?.orgName ?? '';
@@ -503,12 +850,19 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               pw.Text(org.toUpperCase(), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
               pw.Text('Route Roster', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-              pw.Text('Week of ${DateFormat('d MMM').format(days.first)} – ${DateFormat('d MMM yyyy').format(days.last)}',
+              pw.Text(
+                  _standing
+                      ? 'Effective from ${_standingFrom != null ? DateFormat('d MMM yyyy').format(_standingFrom!) : DateFormat('d MMM yyyy').format(DateTime.now())} onwards - valid until changed'
+                      : 'Week of ${DateFormat('d MMM').format(days.first)} – ${DateFormat('d MMM yyyy').format(days.last)}',
                   style: const pw.TextStyle(fontSize: 10)),
             ]),
           ),
-          pw.Text('Printed ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}',
-              style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
+          pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+            pw.Text('Generated by ${ref.read(currentUserProvider)?.name ?? '-'}',
+                style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
+            pw.Text(DateFormat('d MMM yyyy, h:mm a').format(DateTime.now()),
+                style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
+          ]),
         ]),
       ),
       build: (_) => [
@@ -525,7 +879,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
                 for (final d in days)
                   pw.Padding(
                       padding: const pw.EdgeInsets.all(5),
-                      child: pw.Text(DateFormat('EEE d MMM').format(d),
+                      child: pw.Text(DateFormat(_standing ? 'EEEE' : 'EEE d MMM').format(d),
                           style: pw.TextStyle(color: PdfColors.white, fontSize: 9, fontWeight: pw.FontWeight.bold))),
               ],
             ),
@@ -545,7 +899,8 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
         ),
       ],
     ));
-    await outputPdf(await doc.save(), 'Route Roster ${DateFormat('d MMM').format(days.first)}', date: days.first);
+    await outputPdf(await doc.save(), _standing ? 'Route Roster' : 'Route Roster ${DateFormat('d MMM').format(days.first)}',
+        date: _standing ? DateTime.now() : days.first);
   }
 
   bool _isRest(DateTime d) => _restDay != null && d.weekday % 7 == _restDay;
@@ -580,13 +935,19 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
             ),
         ]),
         const SizedBox(height: 4),
-        Text(canEdit
-                ? 'Plan which salesperson covers which routes each day. Tap a cell to edit.'
-                    '${_autoCopy ? ' Faded cells are carried over from an earlier week.' : ''}'
-                : 'Weekly plan of salespersons and routes.',
+        Text(
+            _standing
+                ? 'Standing roster — one Monday–Sunday plan, valid until changed.'
+                    '${_standingFrom != null ? ' Effective from ${DateFormat('d MMM yyyy').format(_standingFrom!)}${_standingBy != null ? ' (updated by $_standingBy)' : ''}.' : ''}'
+                    '${canEdit ? ' Tap a cell to edit.' : ''}'
+                : (canEdit
+                    ? 'Date-bound roster — plan each week. Tap a cell to edit.'
+                        '${_autoCopy ? ' Faded cells are carried over from an earlier week.' : ''}'
+                    : 'Date-bound roster — weekly plan of salespersons and routes.'),
             style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 12),
         Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          if (!_standing) ...[
           IconButton(onPressed: () => _goWeek(-1), icon: const Icon(Icons.chevron_left), tooltip: 'Previous week'),
           InkWell(
             onTap: () async {
@@ -618,6 +979,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
               },
               child: const Text('This week'),
             ),
+          ],
           SizedBox(
             width: 220,
             child: TextField(
@@ -627,6 +989,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
                   filled: true, fillColor: Colors.white, border: OutlineInputBorder()),
             ),
           ),
+          if (!_standing)
           Tooltip(
             message: 'When on, a week with no changes follows the last saved plan for each salesperson and day.',
             child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -634,12 +997,28 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
               const Text('Auto-carry to next weeks', style: TextStyle(fontSize: 12.5)),
             ]),
           ),
-          if (canEdit && !_autoCopy)
+          if (canEdit && !_autoCopy && !_standing)
             OutlinedButton.icon(
               onPressed: _loading ? null : _copyPreviousWeek,
               icon: const Icon(Icons.content_copy_outlined, size: 16),
               label: const Text('Copy previous week'),
             ),
+          if (canEdit)
+            OutlinedButton.icon(
+              onPressed: _loading
+                  ? null
+                  : () async {
+                      final m = await _chooseModeDialog();
+                      if (m != null) await _switchMode(m);
+                    },
+              icon: Icon(_standing ? Icons.push_pin_outlined : Icons.date_range_outlined, size: 16),
+              label: Text(_standing ? 'Type: Standing' : 'Type: Date-bound'),
+            ),
+          OutlinedButton.icon(
+            onPressed: _openHistory,
+            icon: const Icon(Icons.history, size: 16),
+            label: const Text('History'),
+          ),
           ElevatedButton.icon(
             onPressed: _loading || _people.isEmpty ? null : _print,
             icon: const Icon(Icons.print_outlined, size: 16),
@@ -670,7 +1049,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     const line = BorderSide(color: AppTheme.border);
 
     Widget headCell(DateTime d) {
-      final isToday = _ds(d) == todayS;
+      final isToday = _standing ? d.weekday == DateTime.now().weekday : _ds(d) == todayS;
       return Container(
         width: _dayW,
         height: 44,
@@ -682,7 +1061,9 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(DateFormat(_narrow ? 'EEE' : 'EEEE').format(d),
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isToday ? AppTheme.primary : AppTheme.textPrimary)),
-          Text('${DateFormat('d MMM').format(d)}${_isRest(d) ? (_narrow ? ' · rest' : ' · rest day') : ''}',
+          Text(_standing
+                  ? (_isRest(d) ? 'rest day' : '')
+                  : '${DateFormat('d MMM').format(d)}${_isRest(d) ? (_narrow ? ' · rest' : ' · rest day') : ''}',
               style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
         ]),
       );
@@ -745,7 +1126,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
             : () => showDialog<void>(
                   context: context,
                   builder: (ctx) => AlertDialog(
-                    title: Text('Not planned · ${DateFormat('EEE d MMM').format(d)}', style: const TextStyle(fontSize: 15)),
+                    title: Text('Not planned · ${DateFormat(_standing ? 'EEEE' : 'EEE d MMM').format(d)}', style: const TextStyle(fontSize: 15)),
                     content: SizedBox(
                       width: 360,
                       height: 360,
