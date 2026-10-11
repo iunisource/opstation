@@ -351,12 +351,16 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
     }
   }
 
+  // Same design as the JV / cash voucher prints, compact rows to save paper.
   void _print() {
     if (!_loaded || _account == null) return;
     final fmt = const MoneyFmt();
+    String esc(String? v) => (v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final org = ref.read(currentUserProvider)?.orgName ?? '';
+    final me = ref.read(currentUserProvider)?.name ?? '';
     final branch = _effectiveBranchId == null ? 'Accumulated (All Branches)' : ((_sidebarBranch?['name'] as String?) ?? '-');
     final rows = StringBuffer();
-    rows.write('<tr><td colspan="5"><b>Opening Balance</b></td><td class="num bold">' + _bal(_opening) + '</td></tr>');
+    rows.write('<tr class="ob"><td colspan="5"><b>Opening balance</b></td><td class="num bold">${esc(_bal(_opening))}</td></tr>');
     for (final e in _entries) {
       final ds = (e['entry_date'] as String?) ?? '';
       final dt = DateTime.tryParse(ds);
@@ -364,23 +368,43 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       final dr = (e['debit'] as num?)?.toDouble() ?? 0;
       final cr = (e['credit'] as num?)?.toDouble() ?? 0;
       final bal = (e['balance'] as num?)?.toDouble() ?? 0;
-      rows.write('<tr><td>' + date + '</td><td>' + ((e['entry_number'] as String?) ?? '') + '</td><td>' + ((e['description'] as String?) ?? '') + '</td><td class="num">' + (dr > 0 ? fmt.format(dr) : '') + '</td><td class="num">' + (cr > 0 ? fmt.format(cr) : '') + '</td><td class="num bold">' + _bal(bal) + '</td></tr>');
+      rows.write('<tr><td class="nw">$date</td><td class="nw">${esc(e['entry_number'] as String?)}</td>'
+          '<td>${esc(e['description'] as String?)}</td>'
+          '<td class="num">${dr > 0 ? fmt.format(dr) : ''}</td><td class="num">${cr > 0 ? fmt.format(cr) : ''}</td>'
+          '<td class="num bold">${esc(_bal(bal))}</td></tr>');
     }
-    final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Account Activity</title><style>@page{margin:0}'
-      'body{font-family:Arial,sans-serif;padding:16px;font-size:11px;color:#000;-webkit-user-select:text;user-select:text}h1{font-size:18px;margin:0 0 4px}'
-      '.info{font-size:11px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:10px}'
-      'th,td{border:1px solid #999;padding:5px 7px;text-align:left;font-size:10px}'
-      'th{background:#f0f4ff;font-weight:700;border-bottom:1.5px solid #000}.num{text-align:right;white-space:nowrap}.bold{font-weight:800}'
-      'tfoot td{font-weight:800;background:#f5f5f5;border-top:2px solid #000}@page{margin:0}</style></head><body>'
-      '<div class="no-print" style="margin-bottom:10px"><button onclick="window.print()">Print</button></div>'
-      '<h1>Account Activity Report</h1>'
-      '<div class="info"><b>Account:</b> ' + (_account!['label'] as String? ?? '') + '</div>'
-      '<div class="info"><b>Period:</b> ' + DateFormat('d MMM yyyy').format(_dateFrom) + ' to ' + DateFormat('d MMM yyyy').format(_dateTo) + '</div>'
-      '<div class="info"><b>Branch:</b> ' + branch + '</div>'
-      '<table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>'
-      '<tbody>' + rows.toString() + '</tbody>'
-      '<tfoot><tr><td colspan="3">Closing</td><td class="num">' + fmt.format(_periodDr) + '</td><td class="num">' + fmt.format(_periodCr) + '</td><td class="num">' + _bal(_closing) + '</td></tr></tfoot>'
-      '</table></body></html>';
+    final doc = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Account Activity</title><style>@page{margin:0}
+      body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:16px;color:#2d3748}
+      .org{text-align:center;font-size:10px;font-weight:700;letter-spacing:1.5px;color:#4a5568;text-transform:uppercase}
+      h2{text-align:center;color:#1a56db;margin:1px 0 4px;font-size:17px;letter-spacing:.4px}
+      .meta td{border:none;font-size:10px;padding:0 12px 1px 0}
+      table.grid{width:100%;border-collapse:collapse;margin-top:8px;font-size:10.5px;line-height:1.3}
+      table.grid th,table.grid td{padding:3px 6px;text-align:left;vertical-align:top}
+      table.grid thead th{background:#1a56db;color:#fff;font-weight:600;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      table.grid tbody td{border-bottom:1px solid #e2e8f0}
+      table.grid tbody tr:nth-child(even) td{background:#f8fafc;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      table.grid tr.ob td{background:#f0f4ff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      table.grid tfoot td{border-top:2px solid #1a56db;background:#f0f4ff;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      thead{display:table-header-group}tr{page-break-inside:avoid}
+      .num{text-align:right;white-space:nowrap}.nw{white-space:nowrap}.bold{font-weight:700}
+      .foot{margin-top:8px;font-size:9px;color:#718096;display:flex;justify-content:space-between}
+      @media print{.no-print{display:none}@page{margin:0}body{padding:10mm 14mm}}
+    </style></head><body>
+    <div class="no-print" style="margin-bottom:10px"><button onclick="window.print()">Print</button></div>
+    ${org.isEmpty ? '' : '<div class="org">${esc(org)}</div>'}
+    <h2>Account Activity</h2>
+    <table class="meta" style="border:none;margin-bottom:4px"><tr>
+      <td><b>Account:</b> ${esc(_account!['label'] as String?)}</td>
+      <td><b>Period:</b> ${DateFormat('d MMM yyyy').format(_dateFrom)} – ${DateFormat('d MMM yyyy').format(_dateTo)}</td>
+      <td><b>Branch:</b> ${esc(branch)}</td>
+    </tr></table>
+    <table class="grid"><thead><tr><th style="width:62px">Date</th><th style="width:96px">Voucher</th><th>Description</th>
+      <th class="num" style="width:86px">Debit</th><th class="num" style="width:86px">Credit</th><th class="num" style="width:110px">Balance</th></tr></thead>
+    <tbody>${rows.toString()}</tbody>
+    <tfoot><tr><td colspan="3">Period total · closing balance</td><td class="num">${fmt.format(_periodDr)}</td><td class="num">${fmt.format(_periodCr)}</td><td class="num">${esc(_bal(_closing))}</td></tr></tfoot>
+    </table>
+    <div class="foot"><span>${_entries.length} entr${_entries.length == 1 ? 'y' : 'ies'}</span><span>Generated by ${esc(me)} · ${DateFormat('d MMM yyyy, HH:mm').format(DateTime.now())}</span></div>
+    </body></html>''';
     final blob = html.Blob([doc], 'text/html;charset=utf-8');
     html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');
   }
