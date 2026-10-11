@@ -827,61 +827,352 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     await outputPdf(await doc.save(), 'Employee Card - ' + code);
   }
 
-  void _printProfile() {
-    final e = _current; if (e == null) return;
-    String esc(String? s) => (s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-    String row(String k, String? v) => (v == null || v.isEmpty) ? '' : '<tr><td class="k">$k</td><td>${esc(v)}</td></tr>';
+  // Professional A4 employee profile (PDF): letterhead, photo + identity
+  // block with QR, key-facts strip, sectioned two-column details, documents,
+  // signature lines, confidential footer with page numbers.
+  Future<void> _printProfile() async {
+    final e = _current;
+    if (e == null) return;
+    final me = ref.read(currentUserProvider);
+    final org = me?.orgName ?? '';
+    final orgId = _orgId;
+    String t(dynamic v) => (v == null) ? '' : '$v'.trim();
+    String nice(dynamic v) {
+      final x = t(v).replaceAll('_', ' ');
+      return x.isEmpty ? '' : x[0].toUpperCase() + x.substring(1);
+    }
+    String dt(dynamic v) {
+      final d = DateTime.tryParse(t(v));
+      return d == null ? t(v) : DateFormat('d MMM yyyy').format(d);
+    }
+    String tenure(String? join, String? until) {
+      final a = DateTime.tryParse(join ?? '');
+      if (a == null) return '';
+      final b = DateTime.tryParse(until ?? '') ?? DateTime.now();
+      var months = (b.year - a.year) * 12 + b.month - a.month - (b.day < a.day ? 1 : 0);
+      if (months < 0) return '';
+      final y = months ~/ 12, m = months % 12;
+      return [if (y > 0) '$y yr${y == 1 ? '' : 's'}', if (m > 0 || y == 0) '$m mo'].join(' ');
+    }
+
+    final name = t(e['full_name']);
+    final code = t(e['employee_code']);
     final dept = _deptName[e['department_id']] ?? '';
     final desig = _desigName[e['designation_id']] ?? '';
     final branch = _branchName[e['branch_id']] ?? '';
     final shift = _shiftName[e['shift_id']] ?? '';
     final sal = (e['basic_salary'] as num?);
-    final photo = (e['photo_url'] as String?);
-    final status = (e['is_voided'] == true) ? 'Voided' : (e['status'] == 'left' ? 'Left' : (((e['approval_status'] ?? 'approved') == 'pending') ? 'Review Pending' : 'Approved'));
-    final notes = e['notes'] as String?;
-    final docsHtml = _docs.isEmpty ? '' : '<h3>Documents</h3><ul>' + _docs.map((d) => '<li>${esc(d['name'] as String?)}</li>').join('') + '</ul>';
-    final bankHtml = (e['bank_name'] != null || e['bank_account'] != null)
-        ? '<h3>Bank</h3><table>' + row('Bank', e['bank_name'] as String?) + row('Account', e['bank_account'] as String?) + '</table>'
-        : '';
-    final notesHtml = (notes != null && notes.isNotEmpty) ? '<h3>Notes</h3><div style="font-size:12px">' + esc(notes) + '</div>' : '';
-    final content = '''<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(e['full_name'] as String?)}</title>
-<style>@page{margin:0}
-*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#000;padding:24px;max-width:760px;margin:0 auto}
-.head{display:flex;align-items:center;gap:16px;border-bottom:2px solid #333;padding-bottom:14px;margin-bottom:8px}
-.photo{width:88px;height:88px;border-radius:50%;object-fit:cover;border:1px solid #999}
-.ph{width:88px;height:88px;border-radius:50%;background:#eee;display:flex;align-items:center;justify-content:center;color:#999;font-size:30px}
-h1{font-size:20px;margin:0 0 2px}.sub{color:#555;font-size:13px}
-.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid #999;margin-top:4px}
-h3{font-size:13px;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:3px}
-table{width:100%;border-collapse:collapse;font-size:12px}
-td{padding:4px 6px;border-bottom:1px solid #f0f0f0;vertical-align:top}
-td.k{color:#666;width:170px}
-ul{font-size:12px;margin:4px 0 0 18px}
-@media print{body{padding:8px}}
-.wm{position:fixed;top:38%;left:0;right:0;text-align:center;font-size:130px;font-weight:900;color:rgba(198,40,40,.12);transform:rotate(-28deg);letter-spacing:14px;pointer-events:none}
-</style></head><body>
-${e['status'] == 'left' ? '<div class="wm">LEFT</div>' : ''}
-<div class="head">
-${photo != null && photo.isNotEmpty ? '<img class="photo" src="${esc(photo)}"/>' : '<div class="ph">&#128100;</div>'}
-<div><h1>${esc(e['full_name'] as String?)}</h1>
-<div class="sub">${esc(e['employee_code'] as String?)}${desig.isNotEmpty ? ' &middot; ' + esc(desig) : ''}${dept.isNotEmpty ? ' &middot; ' + esc(dept) : ''}</div>
-<div class="tag">$status</div></div>
-</div>
-<h3>Employment</h3><table>
-${row('Branch', branch)}${row('Designation', desig)}${row('Department', dept)}${row('Employment type', e['employment_type'] as String?)}${row('Shift', shift)}${row('Join date', e['join_date'] as String?)}${row('Status', e['status'] as String?)}${row('Left on', e['left_on'] as String?)}${row('Reason for leaving', e['left_reason'] as String?)}${row('Leaving note', e['left_note'] as String?)}${(sal != null && sal > 0) ? row('Basic salary', sal.toString()) : ''}
-</table>
-<h3>Personal</h3><table>
-${row('Father name', e['father_name'] as String?)}${row('CNIC', e['cnic'] as String?)}${row('Gender', e['gender'] as String?)}${row('Date of birth', e['date_of_birth'] as String?)}${row('Phone', e['phone'] as String?)}${row('Email', e['email'] as String?)}${row('Emergency contact', e['emergency_contact'] as String?)}${row('Address', e['address'] as String?)}
-</table>
-$bankHtml
-$notesHtml
-$docsHtml
-<div style="margin-top:20px;font-size:10px;color:#888">Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>
-<script>window.onload=function(){window.print();}</script>
-</body></html>''';
-    final blob = html.Blob([content], 'text/html;charset=utf-8');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.window.open(url, '_blank');
+    final left = e['status'] == 'left';
+    final voided = e['is_voided'] == true;
+    final pending = (e['approval_status'] ?? 'approved') == 'pending';
+    final statusLabel = voided ? 'VOIDED' : left ? 'LEFT' : pending ? 'REVIEW PENDING' : (e['status'] == 'inactive' ? 'INACTIVE' : 'ACTIVE');
+    final statusColor = voided || left
+        ? const PdfColor.fromInt(0xFFB91C1C)
+        : pending
+            ? const PdfColor.fromInt(0xFFB45309)
+            : (e['status'] == 'inactive' ? PdfColors.grey700 : const PdfColor.fromInt(0xFF15803D));
+
+    // images (photo + org logo) — never let a failed image block the print
+    pw.ImageProvider? photo, logo;
+    final purl = t(e['photo_url']);
+    if (purl.isNotEmpty) {
+      try { photo = await networkImage(purl); } catch (_) {}
+    }
+    if (orgId != null) {
+      try {
+        final r = await Supabase.instance.client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.logo_url').maybeSingle();
+        final lu = t(r?['value']);
+        if (lu.isNotEmpty) logo = await networkImage(lu);
+      } catch (_) {}
+    }
+    pw.ThemeData? theme;
+    try {
+      theme = pw.ThemeData.withFont(base: await PdfGoogleFonts.notoSansRegular(), bold: await PdfGoogleFonts.notoSansBold());
+    } catch (_) {}
+
+    const brand = PdfColor.fromInt(0xFF1E3A6E);
+    const ink = PdfColor.fromInt(0xFF111827);
+    const muted = PdfColor.fromInt(0xFF6B7280);
+    const rule = PdfColor.fromInt(0xFFE5E7EB);
+    const band = PdfColor.fromInt(0xFFF3F6FB);
+
+    pw.Widget section(String title, List<(String, String)> items) {
+      final rows = items.where((x) => x.$2.trim().isNotEmpty).toList();
+      if (rows.isEmpty) return pw.SizedBox();
+      final half = (rows.length + 1) ~/ 2;
+      pw.Widget col(List<(String, String)> part) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              for (final r in part)
+                pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 4.5),
+                  decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: rule, width: 0.6))),
+                  child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                    pw.SizedBox(width: 92, child: pw.Text(r.$1, style: const pw.TextStyle(fontSize: 8.5, color: muted))),
+                    pw.Expanded(child: pw.Text(r.$2, style: pw.TextStyle(fontSize: 9.5, color: ink, fontWeight: pw.FontWeight.bold))),
+                  ]),
+                ),
+            ],
+          );
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(top: 14),
+        child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          pw.Row(children: [
+            pw.Container(width: 3, height: 11, color: brand),
+            pw.SizedBox(width: 6),
+            pw.Text(title.toUpperCase(),
+                style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
+          ]),
+          pw.SizedBox(height: 4),
+          pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+            pw.Expanded(child: col(rows.sublist(0, half))),
+            pw.SizedBox(width: 18),
+            pw.Expanded(child: col(rows.sublist(half))),
+          ]),
+        ]),
+      );
+    }
+
+    pw.Widget fact(String label, String value, [String sub = '']) => pw.Expanded(
+          child: pw.Container(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: const pw.BoxDecoration(border: pw.Border(left: pw.BorderSide(color: rule, width: 0.8))),
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              pw.Text(label.toUpperCase(), style: const pw.TextStyle(fontSize: 7, color: muted, letterSpacing: 0.8)),
+              pw.SizedBox(height: 2),
+              pw.Text(value.isEmpty ? '—' : value, maxLines: 1,
+                  style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: ink)),
+              if (sub.isNotEmpty) pw.Text(sub, style: const pw.TextStyle(fontSize: 7.5, color: muted)),
+            ]),
+          ),
+        );
+
+    final money = NumberFormat('#,##0');
+    final doc = pw.Document(theme: theme, title: 'Employee Profile - $name', author: org);
+    final pageTheme = pw.PageTheme(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(34, 30, 34, 30),
+      theme: theme,
+      // LEFT / VOIDED watermark on every page
+      buildBackground: (left || voided)
+          ? (ctx) => pw.FullPage(
+                ignoreMargins: true,
+                child: pw.Center(
+                  child: pw.Transform.rotate(
+                    angle: 0.5,
+                    child: pw.Text(voided ? 'VOIDED' : 'LEFT',
+                        style: pw.TextStyle(
+                            fontSize: 120,
+                            fontWeight: pw.FontWeight.bold,
+                            color: const PdfColor(0.78, 0.16, 0.16, 0.10),
+                            letterSpacing: 10)),
+                  ),
+                ),
+              )
+          : null,
+    );
+    doc.addPage(pw.MultiPage(
+      pageTheme: pageTheme,
+      header: (ctx) => pw.Column(children: [
+        pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+          if (logo != null) ...[pw.SizedBox(height: 34, width: 34, child: pw.Image(logo!, fit: pw.BoxFit.contain)), pw.SizedBox(width: 10)],
+          pw.Expanded(
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              pw.Text(org.toUpperCase(), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
+              pw.Text('Human Resources', style: const pw.TextStyle(fontSize: 8, color: muted)),
+            ]),
+          ),
+          pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+            pw.Text('EMPLOYEE PROFILE', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: ink, letterSpacing: 1.5)),
+            pw.Text(code.isEmpty ? '' : 'Ref: $code', style: const pw.TextStyle(fontSize: 8, color: muted)),
+          ]),
+        ]),
+        pw.SizedBox(height: 8),
+        pw.Container(height: 2, color: brand),
+        pw.SizedBox(height: 2),
+        pw.Container(height: 0.6, color: rule),
+      ]),
+      footer: (ctx) => pw.Container(
+        padding: const pw.EdgeInsets.only(top: 6),
+        decoration: const pw.BoxDecoration(border: pw.Border(top: pw.BorderSide(color: rule, width: 0.6))),
+        child: pw.Row(children: [
+          pw.Expanded(
+            child: pw.Text('Confidential — for internal HR use only.  Generated by ${me?.name ?? '—'} on ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}',
+                style: const pw.TextStyle(fontSize: 7.5, color: muted)),
+          ),
+          pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}', style: const pw.TextStyle(fontSize: 7.5, color: muted)),
+        ]),
+      ),
+      build: (ctx) => [
+        // ── identity block ──
+        pw.Container(
+          margin: const pw.EdgeInsets.only(top: 12),
+          padding: const pw.EdgeInsets.all(14),
+          decoration: pw.BoxDecoration(color: band, borderRadius: pw.BorderRadius.circular(6)),
+          child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+            pw.Container(
+              width: 84, height: 100,
+              decoration: pw.BoxDecoration(
+                color: PdfColors.white,
+                borderRadius: pw.BorderRadius.circular(4),
+                border: pw.Border.all(color: rule, width: 1),
+                image: photo != null ? pw.DecorationImage(image: photo!, fit: pw.BoxFit.cover) : null,
+              ),
+              child: photo == null
+                  ? pw.Center(child: pw.Text(_initials(name), style: pw.TextStyle(fontSize: 26, color: PdfColors.grey400, fontWeight: pw.FontWeight.bold)))
+                  : null,
+            ),
+            pw.SizedBox(width: 16),
+            pw.Expanded(
+              child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                pw.Text(name, style: pw.TextStyle(fontSize: 19, fontWeight: pw.FontWeight.bold, color: ink)),
+                if (t(e['father_name']).isNotEmpty)
+                  pw.Text('S/O ${t(e['father_name'])}', style: const pw.TextStyle(fontSize: 9.5, color: muted)),
+                pw.SizedBox(height: 5),
+                pw.Text([desig, dept].where((x) => x.isNotEmpty).join('  ·  '),
+                    style: pw.TextStyle(fontSize: 10.5, color: brand, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 7),
+                pw.Row(children: [
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                    decoration: pw.BoxDecoration(border: pw.Border.all(color: statusColor, width: 0.9), borderRadius: pw.BorderRadius.circular(3)),
+                    child: pw.Text(statusLabel, style: pw.TextStyle(fontSize: 7.5, color: statusColor, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
+                  ),
+                  if (code.isNotEmpty) ...[
+                    pw.SizedBox(width: 8),
+                    pw.Text('Employee ID  ', style: const pw.TextStyle(fontSize: 8, color: muted)),
+                    pw.Text(code, style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: ink)),
+                  ],
+                ]),
+              ]),
+            ),
+            if (code.isNotEmpty)
+              pw.Column(children: [
+                pw.Container(
+                  padding: const pw.EdgeInsets.all(4),
+                  color: PdfColors.white,
+                  child: pw.BarcodeWidget(barcode: Barcode.qrCode(), data: code, width: 62, height: 62, drawText: false),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Text('Kiosk ID', style: const pw.TextStyle(fontSize: 6.5, color: muted)),
+              ]),
+          ]),
+        ),
+        // ── key facts ──
+        pw.Container(
+          margin: const pw.EdgeInsets.only(top: 10),
+          decoration: pw.BoxDecoration(border: pw.Border.all(color: rule, width: 0.8), borderRadius: pw.BorderRadius.circular(4)),
+          child: pw.Row(children: [
+            fact('Joined', dt(e['join_date']), tenure(t(e['join_date']), left ? t(e['left_on']) : null).isEmpty ? '' : 'Service: ${tenure(t(e['join_date']), left ? t(e['left_on']) : null)}'),
+            fact('Branch', branch),
+            fact('Shift', shift),
+            fact('Employment', nice(e['employment_type'])),
+          ]),
+        ),
+        section('Employment', [
+          ('Designation', desig),
+          ('Department', dept),
+          ('Branch', branch),
+          ('Employment type', nice(e['employment_type'])),
+          ('Shift', shift),
+          ('Join date', dt(e['join_date'])),
+          ('Status', nice(e['status'])),
+          ('Card / kiosk ID', t(e['card_uid'])),
+        ]),
+        section('Personal', [
+          ('Father name', t(e['father_name'])),
+          ('CNIC', t(e['cnic'])),
+          ('Gender', nice(e['gender'])),
+          ('Date of birth', dt(e['date_of_birth'])),
+        ]),
+        section('Contact', [
+          ('Phone', t(e['phone'])),
+          ('Email', t(e['email'])),
+          ('Emergency contact', t(e['emergency_contact'])),
+          ('Address', t(e['address'])),
+        ]),
+        section('Payroll & bank', [
+          ('Basic salary', (sal != null && sal > 0) ? 'Rs ${money.format(sal)}' : ''),
+          ('Paid leave / month', t(e['paid_leave_days'])),
+          ('Advance installment', (e['advance_installment'] as num?) != null ? 'Rs ${money.format(e['advance_installment'] as num)}' : ''),
+          ('Bank', t(e['bank_name'])),
+          ('Account', t(e['bank_account'])),
+        ]),
+        if (left)
+          section('Separation', [
+            ('Left on', dt(e['left_on'])),
+            ('Reason', nice(e['left_reason'])),
+            ('Note', t(e['left_note'])),
+            ('Length of service', tenure(t(e['join_date']), t(e['left_on']))),
+          ]),
+        if (t(e['notes']).isNotEmpty)
+          pw.Padding(
+            padding: const pw.EdgeInsets.only(top: 14),
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              pw.Row(children: [
+                pw.Container(width: 3, height: 11, color: brand),
+                pw.SizedBox(width: 6),
+                pw.Text('NOTES', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
+              ]),
+              pw.SizedBox(height: 5),
+              pw.Container(
+                width: double.infinity,
+                padding: const pw.EdgeInsets.all(8),
+                decoration: pw.BoxDecoration(color: band, borderRadius: pw.BorderRadius.circular(4)),
+                child: pw.Text(t(e['notes']), style: const pw.TextStyle(fontSize: 9, color: ink, lineSpacing: 2)),
+              ),
+            ]),
+          ),
+        if (_docs.isNotEmpty)
+          pw.Padding(
+            padding: const pw.EdgeInsets.only(top: 14),
+            child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+              pw.Row(children: [
+                pw.Container(width: 3, height: 11, color: brand),
+                pw.SizedBox(width: 6),
+                pw.Text('DOCUMENTS ON FILE (${_docs.length})',
+                    style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
+              ]),
+              pw.SizedBox(height: 4),
+              for (var i = 0; i < _docs.length; i++)
+                pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3.5),
+                  decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: rule, width: 0.6))),
+                  child: pw.Row(children: [
+                    pw.SizedBox(width: 18, child: pw.Text('${i + 1}.', style: const pw.TextStyle(fontSize: 8.5, color: muted))),
+                    pw.Expanded(child: pw.Text(t(_docs[i]['name']), style: const pw.TextStyle(fontSize: 9, color: ink))),
+                    pw.Text(dt(_docs[i]['uploaded_at']), style: const pw.TextStyle(fontSize: 8, color: muted)),
+                  ]),
+                ),
+            ]),
+          ),
+        // ── record + signatures ──
+        pw.SizedBox(height: 26),
+        pw.Text(
+            'Record: created ${dt(e['created_at'])}'
+            '${e['approved_at'] != null ? ' · approved ${dt(e['approved_at'])}' : ''}'
+            '${e['updated_at'] != null ? ' · last updated ${dt(e['updated_at'])}' : ''}',
+            style: const pw.TextStyle(fontSize: 7.5, color: muted)),
+        pw.SizedBox(height: 34),
+        pw.Row(children: [
+          for (final lbl in ['Employee signature', 'HR / Authorised signatory'])
+            pw.Expanded(
+              child: pw.Padding(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 12),
+                child: pw.Column(children: [
+                  pw.Container(height: 0.8, color: PdfColors.grey600),
+                  pw.SizedBox(height: 3),
+                  pw.Text(lbl, style: const pw.TextStyle(fontSize: 8, color: muted)),
+                ]),
+              ),
+            ),
+        ]),
+      ],
+    ));
+
+    final bytes = await doc.save();
+    await outputPdf(bytes, 'Employee Profile - ${name.isEmpty ? code : name}');
   }
 
   Widget _statusChip() {
