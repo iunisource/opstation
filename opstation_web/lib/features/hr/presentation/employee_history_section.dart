@@ -48,6 +48,7 @@ class _EmployeeHistorySectionState extends State<EmployeeHistorySection> {
     'father_name': 'Father name',
     'cnic': 'CNIC',
     'gender': 'Gender',
+    'blood_group': 'Blood group',
     'date_of_birth': 'Date of birth',
     'phone': 'Phone',
     'email': 'Email',

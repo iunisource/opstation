@@ -72,6 +72,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   bool _notifyPunch = false;
   // form state
   String? _deptId, _desigId, _branchId, _gender, _empType;
+  String? _bloodGroup;
+  String _bloodFilter = 'all'; // directory list filter: all | none | A+ …
   DateTime? _dob, _joinDate, _leftOn;
   String _status = 'active';
   String? _shiftId;
@@ -99,6 +101,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   static const _genders = [
     {'v': 'male', 'l': 'Male'}, {'v': 'female', 'l': 'Female'}, {'v': 'other', 'l': 'Other'},
   ];
+  static const _bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
   static const _empTypes = [
     {'v': 'permanent', 'l': 'Permanent'}, {'v': 'contract', 'l': 'Contract'}, {'v': 'daily_wager', 'l': 'Daily wager'},
   ];
@@ -289,7 +293,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _current = null; _status = 'active';
       for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays]) c.clear();
       _advAcctId = null; _advBal = null;
-      _deptId = null; _desigId = null; _gender = null; _empType = null;
+      _deptId = null; _desigId = null; _gender = null; _empType = null; _bloodGroup = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null; _leftOn = null;
       _shiftId = null; _photoUrl = null; _notifyPunch = false;
@@ -316,6 +320,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _desigId = e['designation_id'] as String?;
       _branchId = e['branch_id'] as String?;
       _gender = e['gender'] as String?;
+      _bloodGroup = (e['blood_group'] as String?)?.trim().isEmpty == true ? null : e['blood_group'] as String?;
       _empType = e['employment_type'] as String?;
       _status = e['status'] as String? ?? 'active';
       _dob = e['date_of_birth'] != null ? DateTime.tryParse(e['date_of_birth'] as String) : null;
@@ -413,7 +418,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       }
       final payload = {
         'org_id': orgId, 'employee_code': code, 'full_name': _name.text.trim(),
-        'father_name': _t(_father), 'cnic': _t(_cnic), 'gender': _gender,
+        'father_name': _t(_father), 'cnic': _t(_cnic), 'gender': _gender, 'blood_group': _bloodGroup,
         'date_of_birth': _dob != null ? DateFormat('yyyy-MM-dd').format(_dob!) : null,
         'phone': _t(_phone), 'email': _t(_email), 'address': _t(_address), 'emergency_contact': _t(_emergency),
         'department_id': _deptId, 'designation_id': _desigId, 'branch_id': _branchId,
@@ -1085,6 +1090,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
           ('CNIC', t(e['cnic'])),
           ('Gender', nice(e['gender'])),
           ('Date of birth', dt(e['date_of_birth'])),
+          ('Blood group', t(e['blood_group'])),
         ]),
         section('Contact', [
           ('Phone', t(e['phone'])),
@@ -1222,11 +1228,23 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final canEdit = access?.canEditDoc('hr_employees') ?? false;
     _canWrite = _current == null ? canAdd : canEdit;
     final leftCount = _employees.where((e) => e['status'] == 'left').length;
+    // Blood group counts (current employees — not those who left, not voided).
+    final bgCount = <String, int>{};
+    var bgNone = 0;
+    for (final e in _employees) {
+      if (e['status'] == 'left' || e['is_voided'] == true) continue;
+      final g = (e['blood_group'] as String?)?.trim() ?? '';
+      if (g.isEmpty) { bgNone++; } else { bgCount[g] = (bgCount[g] ?? 0) + 1; }
+    }
     final filtered = _employees.where((e) {
       if (!_showLeft && e['status'] == 'left' && _current?['id'] != e['id']) return false;
+      if (_bloodFilter != 'all') {
+        final g = (e['blood_group'] as String?)?.trim() ?? '';
+        if (_bloodFilter == 'none' ? g.isNotEmpty : g != _bloodFilter) return false;
+      }
       if (_listSearch.isEmpty) return true;
       return matchesQuery(
-        '${e['full_name'] ?? ''} ${e['employee_code'] ?? ''} ${e['phone'] ?? ''} ${e['cnic'] ?? ''}',
+        '${e['full_name'] ?? ''} ${e['employee_code'] ?? ''} ${e['phone'] ?? ''} ${e['cnic'] ?? ''} ${e['blood_group'] ?? ''}',
         _listSearch);
     }).toList();
 
@@ -1245,6 +1263,20 @@ class _State extends ConsumerState<HrEmployeesScreen> {
               ]),
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search name, code, phone, CNIC...', prefixIcon: Icon(Icons.search, size: 15), isDense: true, border: OutlineInputBorder()), onChanged: (v) => setState(() => _listSearch = v)),
+              const SizedBox(height: 6),
+              DropdownButtonFormField<String>(
+                value: _bloodFilter, isDense: true, isExpanded: true,
+                decoration: const InputDecoration(prefixIcon: Icon(Icons.bloodtype_outlined, size: 15), isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8), border: OutlineInputBorder()),
+                style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                items: [
+                  const DropdownMenuItem(value: 'all', child: Text('All blood groups')),
+                  for (final g in {..._bloodGroups, ...bgCount.keys})
+                    DropdownMenuItem(value: g, child: Text('$g  ·  ${bgCount[g] ?? 0}')),
+                  DropdownMenuItem(value: 'none', child: Text('Not recorded  ·  $bgNone')),
+                ],
+                onChanged: (v) => setState(() => _bloodFilter = v ?? 'all'),
+              ),
               if (leftCount > 0)
                 InkWell(
                   onTap: () => setState(() => _showLeft = !_showLeft),
@@ -1343,6 +1375,11 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 _labeled('CNIC', _tf(_cnic, hint: 'xxxxx-xxxxxxx-x')),
                 _labeled('Gender', _simpleDropdown(_gender, _genders, (v) => setState(() => _gender = v))),
                 _labeled('Date of birth', _dateField(_dob, (d) => setState(() => _dob = d))),
+                _labeled('Blood group', _simpleDropdown(_bloodGroup, [
+                  {'v': '', 'l': 'Not known'},
+                  for (final g in _bloodGroups) {'v': g, 'l': g},
+                  if (_bloodGroup != null && !_bloodGroups.contains(_bloodGroup)) {'v': _bloodGroup!, 'l': _bloodGroup!},
+                ], (v) => setState(() => _bloodGroup = (v == null || v.isEmpty) ? null : v))),
               ]),
               const SizedBox(height: 12),
               _fieldRow([
