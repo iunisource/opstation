@@ -81,27 +81,27 @@ void openCashVoucherPrint({
   final st = status.toUpperCase();
   final stColor = st == 'POSTED' ? '#2f855a' : (st == 'VOID' || st == 'VOIDED' ? '#c53030' : '#b7791f');
   final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${_esc(title)} ${_esc(voucherNo)}</title><style>@page{margin:0}
-    body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:20px;color:#2d3748}
-    .org{text-align:center;font-size:12px;font-weight:700;letter-spacing:1.5px;color:#4a5568;text-transform:uppercase}
-    h2{text-align:center;color:#1a56db;margin:2px 0 4px;letter-spacing:.5px}
-    table.grid{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}
-    table.grid th,table.grid td{padding:9px 10px;text-align:left}
+    body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:16px;color:#2d3748}
+    .org{text-align:center;font-size:10px;font-weight:700;letter-spacing:1.5px;color:#4a5568;text-transform:uppercase}
+    h2{text-align:center;color:#1a56db;margin:1px 0 4px;font-size:17px;letter-spacing:.4px}
+    table.grid{width:100%;border-collapse:collapse;margin-top:8px;font-size:11px;line-height:1.3}
+    table.grid th,table.grid td{padding:4px 7px;text-align:left;vertical-align:top}
     table.grid thead th{background:#1a56db;color:#fff;font-weight:600;border:none;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     table.grid tbody td{border-bottom:1px solid #e2e8f0}
     table.grid tbody tr:nth-child(even) td{background:#f8fafc;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     table.grid tfoot td{border-top:2px solid #1a56db;background:#f0f4ff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .total{font-weight:700}.num{text-align:right}
-    .meta td{border:none;font-size:11px;padding:1px 14px 1px 0}
-    .words{margin-top:8px;font-size:12px;color:#2d3748}
+    .meta td{border:none;font-size:10px;padding:0 12px 1px 0}
+    .words{margin-top:5px;font-size:10.5px;color:#2d3748}
     .words b{color:#1a56db}
-    .fps{margin-top:40px;display:flex;gap:18px}
-    .fp{flex:1;position:relative;font-size:11.5px;line-height:1.45}
+    .fps{margin-top:22px;display:flex;gap:14px}
+    .fp{flex:1;position:relative;font-size:10px;line-height:1.35}
     .fp .line{border-top:1px solid #718096;margin-bottom:4px}
-    .fp b{display:block;font-size:12.5px;color:#1a202c;min-height:16px}
+    .fp b{display:block;font-size:11px;color:#1a202c;min-height:14px}
     .fp span{color:#718096}
     .fp.pending b{color:#a0aec0}
-    .fp .sig-space{height:42px}
-    @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
+    .fp .sig-space{height:28px}
+    @media print{.no-print{display:none}@page{margin:0}body{padding:10mm 14mm}}
   </style></head><body>
   <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">Print</button></div>
   ${orgName.isEmpty ? '' : '<div class="org">${_esc(orgName)}</div>'}
@@ -112,7 +112,7 @@ void openCashVoucherPrint({
     ${branchName.isEmpty ? '' : '<td><b>Branch:</b> ${_esc(branchName)}</td>'}
     <td><b>Status:</b> <span style="color:$stColor;font-weight:700">$st</span></td>
   </tr><tr><td colspan="4"><b>${_esc(cashLabel)}:</b> ${_esc(cashAccount)}</td></tr></table>
-  <table class="grid"><thead><tr><th style="width:30px">#</th><th>${_esc(partyHeader)}</th><th>Description</th><th class="num" style="width:140px">Amount (Rs.)</th></tr></thead><tbody>
+  <table class="grid"><thead><tr><th style="width:22px">#</th><th>${_esc(partyHeader)}</th><th>Description</th><th class="num" style="width:110px">Amount (Rs.)</th></tr></thead><tbody>
   $rows
   </tbody><tfoot><tr><td colspan="3" class="total num">Total:</td><td class="total num">${money.format(total)}</td></tr></tfoot></table>
   <div class="words"><b>Amount in words:</b> ${_esc(amountInWordsPkr(total))}</div>
