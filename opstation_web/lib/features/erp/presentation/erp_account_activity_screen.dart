@@ -445,10 +445,11 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Account picker
-              SizedBox(width: 300, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 420, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Account *', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 TextField(controller: _accCtrl, focusNode: _accFocus,
+                  minLines: 1, maxLines: 2, style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(hintText: _loadingMaster ? 'Loading accounts...' : 'Search account...', isDense: true,
                     prefixIcon: const Icon(Icons.search, size: 16),
                     suffixIcon: _account != null ? const Icon(Icons.check_circle, size: 16, color: Colors.green) : null,
@@ -456,17 +457,21 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                   onChanged: (v) => setState(() { _accQuery = v; _showAccDrop = true; if (v != (_account?['label'] ?? '')) _account = null; }),
                   onTap: () => setState(() { _accQuery = _accCtrl.text == (_account?['label'] ?? '') ? '' : _accCtrl.text; _showAccDrop = true; })),
                 if (_showAccDrop && accFiltered.isNotEmpty) Container(
-                  constraints: const BoxConstraints(maxHeight: 240), margin: const EdgeInsets.only(top: 2),
+                  constraints: const BoxConstraints(maxHeight: 320), margin: const EdgeInsets.only(top: 2),
                   decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(6),
                     boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)]),
                   child: ListView(shrinkWrap: true, children: accFiltered.map((a) {
                     final c = _typeColor(a['account_type'] as String?);
-                    return InkWell(onTap: () => _pickAccount(a), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      child: Row(children: [
+                    // Full account name on its own line(s); the group sits underneath
+                    // so it no longer eats into the name's width.
+                    return InkWell(onTap: () => _pickAccount(a), child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9)))),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(a['label'] as String? ?? '', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500), softWrap: true),
+                        const SizedBox(height: 2),
                         Container(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1), decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(3)),
                           child: Text((a['account_group'] as String? ?? a['account_type'] as String? ?? ''), style: TextStyle(fontSize: 9, color: c, fontWeight: FontWeight.w700))),
-                        const SizedBox(width: 6),
-                        Expanded(child: Tooltip(message: a['label'] as String? ?? '', waitDuration: const Duration(milliseconds: 400), child: Text(a['label'] as String? ?? '', style: const TextStyle(fontSize: 12), softWrap: true, maxLines: 2, overflow: TextOverflow.ellipsis))),
                       ])));
                   }).toList())),
               ])),
