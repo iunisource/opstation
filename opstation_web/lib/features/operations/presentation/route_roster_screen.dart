@@ -17,6 +17,12 @@ import '../../auth/auth_controller.dart';
 /// route(s) that person covers that day plus an optional note. Standalone — it
 /// does not change route assignments, trips or anything else.
 /// Permission "Route Roster": Edit = make changes; Add (view) = view & print.
+///
+/// Auto-carry (org setting ops.route_roster_autocopy, ON by default): a cell
+/// with nothing saved for that week shows the latest earlier plan for the same
+/// salesperson and weekday. Editing a cell saves it for that week only (and
+/// carries forward from there). Clearing saves an explicit blank so it does not
+/// pick the old plan back up.
 class RouteRosterScreen extends ConsumerStatefulWidget {
   const RouteRosterScreen({super.key});
   @override
@@ -32,9 +38,10 @@ class _Cell {
 }
 
 class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
-  static const _rowH = 66.0;
-  static const _nameW = 190.0;
-  static const _dayW = 168.0;
+  bool _narrow = false;
+  double get _rowH => _narrow ? 72.0 : 66.0;
+  double get _nameW => _narrow ? 108.0 : 190.0;
+  double get _dayW => _narrow ? 116.0 : 168.0;
   static const _quickNotes = ['Leave', 'Off', 'Office', 'Training', 'Recovery'];
 
   bool _loading = true;
@@ -43,7 +50,9 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
   List<Map<String, dynamic>> _people = [];
   List<Map<String, dynamic>> _routes = [];
   final Map<String, Map<String, dynamic>> _routeById = {};
-  final Map<String, _Cell> _cells = {}; // '$userId|yyyy-MM-dd'
+  final Map<String, _Cell> _cells = {};   // saved for this week: '$userId|yyyy-MM-dd'
+  final Map<String, _Cell> _carried = {}; // carried over from an earlier week (auto-carry)
+  bool _autoCopy = true;                  // org setting, ON unless turned off
   int? _restDay; // 0 = Sunday … 6 = Saturday
   String _q = '';
 
@@ -77,9 +86,14 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           .order('name');
       final routes = await _db.from('sales_routes').select('id, name, kind, is_active').eq('org_id', orgId).order('name');
       int? rest;
+      var auto = true;
       try {
-        final c = await _db.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.weekly_rest_day').maybeSingle();
-        rest = int.tryParse('${c?['value'] ?? ''}');
+        final cfg = await _db.from('app_config').select('key, value').eq('org_id', orgId)
+            .inFilter('key', ['org.weekly_rest_day', 'ops.route_roster_autocopy']);
+        for (final c in cfg as List) {
+          if (c['key'] == 'org.weekly_rest_day') rest = int.tryParse('${c['value'] ?? ''}');
+          if (c['key'] == 'ops.route_roster_autocopy') auto = '${c['value']}' != 'false';
+        }
       } catch (_) {}
       if (!mounted) return;
       setState(() {
@@ -89,6 +103,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           ..clear()
           ..addAll({for (final r in _routes) '${r['id']}': r});
         _restDay = rest;
+        _autoCopy = auto;
       });
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not load salespersons / routes: $e');
@@ -113,6 +128,28 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
             (r['note'] as String?) ?? '',
             r['updated_by_name'] as String?);
       }
+      // Auto-carry: latest earlier saved plan per salesperson + weekday
+      // (looks back up to 26 weeks).
+      _carried.clear();
+      if (_autoCopy) {
+        final prev = await _db
+            .from('route_roster')
+            .select('user_id, day, route_ids, note')
+            .eq('org_id', orgId)
+            .lt('day', _ds(_weekStart))
+            .gte('day', _ds(_weekStart.subtract(const Duration(days: 182))))
+            .order('day', ascending: false);
+        final seen = <String>{};
+        for (final r in prev as List) {
+          final d = DateTime.parse('${r['day']}');
+          final slot = '${r['user_id']}|${d.weekday}';
+          if (!seen.add(slot)) continue; // newest first — keep the latest only
+          final c = _Cell(List<String>.from((r['route_ids'] as List?) ?? const []), (r['note'] as String?) ?? '');
+          if (c.isEmpty) continue; // latest plan was an explicit blank
+          final target = _weekStart.add(Duration(days: d.weekday - 1));
+          _carried[_key('${r['user_id']}', target)] = c;
+        }
+      }
       if (mounted) setState(() { _loading = false; _error = null; });
     } catch (e) {
       if (!mounted) return;
@@ -132,11 +169,35 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
 
   String _routeName(String id) => (_routeById[id]?['name'] as String?) ?? '(removed route)';
 
+  /// What the cell shows: saved for this week, else carried over.
+  _Cell? _eff(String uid, DateTime d) {
+    final k = _key(uid, d);
+    final own = _cells[k];
+    if (own != null) return own.isEmpty ? null : own;
+    return _autoCopy ? _carried[k] : null;
+  }
+
+  bool _isCarried(String uid, DateTime d) => !_cells.containsKey(_key(uid, d)) && _autoCopy && _carried.containsKey(_key(uid, d));
+
+  Future<void> _setAutoCopy(bool v) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    try {
+      await _db.from('app_config').delete().eq('org_id', orgId).eq('key', 'ops.route_roster_autocopy');
+      await _db.from('app_config').insert({'org_id': orgId, 'key': 'ops.route_roster_autocopy', 'value': v ? 'true' : 'false'});
+      setState(() => _autoCopy = v);
+      await _loadWeek();
+      _snack(v ? 'Auto-carry on — weeks without changes follow the last plan.' : 'Auto-carry off — each week starts empty.');
+    } catch (e) {
+      _snack('Could not change the setting: $e');
+    }
+  }
+
   /// Routes given to more than one salesperson on the same day.
   Set<String> _clashes(DateTime d) {
     final seen = <String, int>{};
     for (final p in _people) {
-      final c = _cells[_key('${p['id']}', d)];
+      final c = _eff('${p['id']}', d);
       if (c == null) continue;
       for (final r in c.routes) {
         seen[r] = (seen[r] ?? 0) + 1;
@@ -148,17 +209,20 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
   List<Map<String, dynamic>> _uncovered(DateTime d) {
     final covered = <String>{};
     for (final p in _people) {
-      covered.addAll(_cells[_key('${p['id']}', d)]?.routes ?? const []);
+      covered.addAll(_eff('${p['id']}', d)?.routes ?? const []);
     }
     return _routes.where((r) => r['is_active'] != false && !covered.contains('${r['id']}')).toList();
   }
 
   // ── saving ──────────────────────────────────────────────────────────────
-  Future<void> _saveCells(String uid, List<DateTime> days, List<String> routes, String note) async {
+  /// [revert] removes this week's saved cell so it follows the carried plan again.
+  Future<void> _saveCells(String uid, List<DateTime> days, List<String> routes, String note, {bool revert = false}) async {
     final orgId = _orgId;
     if (orgId == null) return;
     final me = ref.read(currentUserProvider);
-    final empty = routes.isEmpty && note.trim().isEmpty;
+    // With auto-carry on, a cleared cell is saved as an explicit blank so it
+    // doesn't pick last week's plan back up.
+    final empty = revert || (routes.isEmpty && note.trim().isEmpty && !_autoCopy);
     try {
       if (empty) {
         await _db.from('route_roster').delete().eq('org_id', orgId).eq('user_id', uid).inFilter('day', [for (final d in days) _ds(d)]);
@@ -253,7 +317,9 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
   // ── cell editor ─────────────────────────────────────────────────────────
   Future<void> _editCell(Map<String, dynamic> person, DateTime day) async {
     final uid = '${person['id']}';
-    final cur = _cells[_key(uid, day)];
+    final saved = _cells[_key(uid, day)];
+    final carried = _isCarried(uid, day);
+    final cur = _eff(uid, day);
     final picked = <String>{...?cur?.routes};
     final noteCtrl = TextEditingController(text: cur?.note ?? '');
     final alsoDays = <DateTime>{};
@@ -277,19 +343,21 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
         final takenBy = <String, String>{};
         for (final p in _people) {
           if ('${p['id']}' == uid) continue;
-          for (final r in _cells[_key('${p['id']}', day)]?.routes ?? const <String>[]) {
+          for (final r in _eff('${p['id']}', day)?.routes ?? const <String>[]) {
             takenBy[r] = '${p['name'] ?? ''}';
           }
         }
-        return AlertDialog(
-          titlePadding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
-          contentPadding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
-          title: Text('${person['name'] ?? ''} · ${DateFormat('EEE d MMM').format(day)}',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-          content: SizedBox(
-            width: 520,
-            height: 520,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        final title = '${person['name'] ?? ''} · ${DateFormat('EEE d MMM').format(day)}';
+        final form = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (carried)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(6)),
+                  child: const Text('Carried over from an earlier week. Saving makes it this week\'s own plan.',
+                      style: TextStyle(fontSize: 11.5, color: Color(0xFF1D4ED8))),
+                ),
               TextField(
                 autofocus: true,
                 onChanged: (v) => setD(() => search = v.trim()),
@@ -350,18 +418,44 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
                     ),
               ]),
               const SizedBox(height: 6),
-            ]),
-          ),
-          actions: [
-            if (cur != null)
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'clear'),
-                style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
-                child: const Text('Clear'),
+            ]);
+        final actions = <Widget>[
+          if (saved != null && _autoCopy)
+            TextButton(onPressed: () => Navigator.pop(ctx, 'revert'), child: const Text('Use carried plan')),
+          if (cur != null || saved != null)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'clear'),
+              style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+              child: const Text('Clear'),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
+        ];
+        if (_narrow) {
+          // Phone: full screen, so search + list + note + Save fit with the keyboard open.
+          return Dialog.fullscreen(
+            child: Scaffold(
+              appBar: AppBar(
+                title: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                actions: [TextButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save'))],
               ),
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            ElevatedButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
-          ],
+              body: Padding(padding: const EdgeInsets.fromLTRB(14, 10, 14, 0), child: form),
+              bottomNavigationBar: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Wrap(alignment: WrapAlignment.end, spacing: 4, children: actions.sublist(0, actions.length - 2)),
+                ),
+              ),
+            ),
+          );
+        }
+        return AlertDialog(
+          titlePadding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+          contentPadding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+          title: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          content: SizedBox(width: 520, height: 540, child: form),
+          actions: actions,
         );
       }),
     );
@@ -369,7 +463,9 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     noteCtrl.dispose();
     if (res == null) return;
     final days = [day, ...alsoDays];
-    if (res == 'clear') {
+    if (res == 'revert') {
+      await _saveCells(uid, [day], const [], '', revert: true);
+    } else if (res == 'clear') {
       await _saveCells(uid, days, const [], '');
     } else {
       await _saveCells(uid, days, picked.toList(), note);
@@ -389,7 +485,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     const head = PdfColor.fromInt(0xFF1E293B);
     const rest = PdfColor.fromInt(0xFFF1F5F9);
     String cellText(String uid, DateTime d) {
-      final c = _cells[_key(uid, d)];
+      final c = _eff(uid, d);
       if (c == null) return '';
       return [
         if (c.routes.isNotEmpty) c.routes.map(_routeName).join(', '),
@@ -466,6 +562,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
     final access = ref.watch(accessSyncProvider);
     final canEdit = access?.canEditDoc('route_roster') ?? false;
     final narrow = MediaQuery.of(context).size.width < 700;
+    _narrow = narrow;
     final days = _days;
     final today = DateTime.now();
     final isThisWeek = _weekStart == _monday(today);
@@ -485,6 +582,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
         const SizedBox(height: 4),
         Text(canEdit
                 ? 'Plan which salesperson covers which routes each day. Tap a cell to edit.'
+                    '${_autoCopy ? ' Faded cells are carried over from an earlier week.' : ''}'
                 : 'Weekly plan of salespersons and routes.',
             style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         const SizedBox(height: 12),
@@ -529,7 +627,14 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
                   filled: true, fillColor: Colors.white, border: OutlineInputBorder()),
             ),
           ),
-          if (canEdit)
+          Tooltip(
+            message: 'When on, a week with no changes follows the last saved plan for each salesperson and day.',
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Switch(value: _autoCopy, onChanged: canEdit && !_loading ? _setAutoCopy : null),
+              const Text('Auto-carry to next weeks', style: TextStyle(fontSize: 12.5)),
+            ]),
+          ),
+          if (canEdit && !_autoCopy)
             OutlinedButton.icon(
               onPressed: _loading ? null : _copyPreviousWeek,
               icon: const Icon(Icons.content_copy_outlined, size: 16),
@@ -575,16 +680,17 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           border: const Border(left: line, bottom: line),
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(DateFormat('EEEE').format(d),
+          Text(DateFormat(_narrow ? 'EEE' : 'EEEE').format(d),
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isToday ? AppTheme.primary : AppTheme.textPrimary)),
-          Text('${DateFormat('d MMM').format(d)}${_isRest(d) ? ' · rest day' : ''}',
+          Text('${DateFormat('d MMM').format(d)}${_isRest(d) ? (_narrow ? ' · rest' : ' · rest day') : ''}',
               style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
         ]),
       );
     }
 
     Widget cell(Map<String, dynamic> p, DateTime d) {
-      final c = _cells[_key('${p['id']}', d)];
+      final c = _eff('${p['id']}', d);
+      final carried = c != null && _isCarried('${p['id']}', d);
       final clash = c != null && c.routes.any(clashes[_ds(d)]!.contains);
       final names = c?.routes.map(_routeName).toList() ?? const <String>[];
       final child = Container(
@@ -608,7 +714,11 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
                   Text(names.join(', '),
                       maxLines: c.note.trim().isEmpty ? 3 : 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.25)),
+                      style: TextStyle(
+                          fontSize: _narrow ? 10.5 : 11.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                          color: carried ? AppTheme.textSecondary : AppTheme.textPrimary)),
                 if (c.note.trim().isNotEmpty)
                   Text(c.note.trim(),
                       maxLines: names.isEmpty ? 3 : 1,
@@ -619,7 +729,9 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
                           color: names.isEmpty ? const Color(0xFF7C3AED) : AppTheme.textSecondary)),
               ]),
       );
-      final tip = clash ? 'A route here is also planned for another salesperson this day' : null;
+      final tip = clash
+          ? 'A route here is also planned for another salesperson this day'
+          : (carried ? 'Carried over from an earlier week' : null);
       final w = canEdit ? InkWell(onTap: () => _editCell(p, d), child: child) : child;
       return tip == null ? w : Tooltip(message: tip, child: w);
     }
@@ -649,7 +761,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           height: 40,
           alignment: Alignment.center,
           decoration: const BoxDecoration(color: AppTheme.background, border: Border(left: line)),
-          child: Text('${active - un.length}/$active routes planned',
+          child: Text(_narrow ? '${active - un.length}/$active' : '${active - un.length}/$active routes planned',
               style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -666,7 +778,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: const BoxDecoration(color: AppTheme.background, border: Border(bottom: line)),
-        child: Text('Salesperson (${people.length})', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+        child: Text(_narrow ? 'Salesperson' : 'Salesperson (${people.length})', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
       ),
       for (final p in people)
         Container(
@@ -676,8 +788,9 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: line)),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${p['name'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
-            if ((p['phone'] as String?)?.isNotEmpty == true)
+            Text('${p['name'] ?? ''}', maxLines: _narrow ? 2 : 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: _narrow ? 11.5 : 12.5, fontWeight: FontWeight.w700)),
+            if (!_narrow && (p['phone'] as String?)?.isNotEmpty == true)
               Text('${p['phone']}', style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
           ]),
         ),
