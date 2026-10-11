@@ -954,6 +954,21 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         );
 
     final money = NumberFormat('#,##0');
+    // Salary-advance outstanding as of today (fresh read of the advance account).
+    if (_advAcctId != null) await _loadAdvBalance();
+    final advBal = _advBal;
+    String advAcctName = '';
+    for (final a in _assetAccounts) {
+      if (a['id'] == _advAcctId) { advAcctName = '${a['code'] ?? ''} ${a['name'] ?? ''}'.trim(); break; }
+    }
+    String outstanding() {
+      if (_advAcctId == null || advBal == null) return '';
+      final asOf = 'as of ${DateFormat('d MMM yyyy').format(DateTime.now())}';
+      if (advBal.abs() < 0.5) return 'Nil ($asOf)';
+      return advBal > 0
+          ? 'Rs ${money.format(advBal)} ($asOf)'
+          : 'Rs ${money.format(-advBal)} in credit ($asOf)';
+    }
     final doc = pw.Document(theme: theme, title: 'Employee Profile - $name', author: org);
     final pageTheme = pw.PageTheme(
       pageFormat: PdfPageFormat.a4,
@@ -1101,7 +1116,11 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         section('Payroll & bank', [
           ('Basic salary', (sal != null && sal > 0) ? 'Rs ${money.format(sal)}' : ''),
           ('Paid leave / month', t(e['paid_leave_days'])),
-          ('Advance installment', (e['advance_installment'] as num?) != null ? 'Rs ${money.format(e['advance_installment'] as num)}' : ''),
+          ('Advance outstanding', outstanding()),
+          ('Advance installment', (e['advance_installment'] as num?) != null
+              ? 'Rs ${money.format(e['advance_installment'] as num)} / month'
+              : (_advAcctId != null && (advBal ?? 0) > 0.5 ? 'Full balance' : '')),
+          ('Advance account', advAcctName),
           ('Bank', t(e['bank_name'])),
           ('Account', t(e['bank_account'])),
         ]),
