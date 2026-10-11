@@ -67,6 +67,12 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   double? _advBal; // outstanding balance of that account, today
   List<Map<String, dynamic>> _assetAccounts = []; // {id, code, name}
   final _notes = TextEditingController();
+  final _reportsTo = TextEditingController();   // free text (SQL 347)
+  String? _accommodation;                       // personal | company
+  Map<String, dynamic>? _att;                   // attendance snapshot (last 30 days + last punch)
+  static const _accomOpts = [
+    {'v': 'personal', 'l': 'Personal / Private'}, {'v': 'company', 'l': 'Company provided'},
+  ];
   final _notifyEmail = TextEditingController();
   final _cardUid = TextEditingController();
   bool _notifyPunch = false;
@@ -115,7 +121,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays]) c.dispose();
+    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays, _reportsTo]) c.dispose();
     super.dispose();
   }
 
@@ -291,7 +297,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   void _newEmployee() {
     setState(() {
       _current = null; _status = 'active';
-      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays]) c.clear();
+      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays, _reportsTo]) c.clear();
+      _accommodation = null; _att = null;
       _advAcctId = null; _advBal = null;
       _deptId = null; _desigId = null; _gender = null; _empType = null; _bloodGroup = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
@@ -316,6 +323,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _bankName.text = e['bank_name'] as String? ?? '';
       _bankAcct.text = e['bank_account'] as String? ?? '';
       _notes.text = e['notes'] as String? ?? '';
+      _reportsTo.text = e['reports_to'] as String? ?? '';
+      _accommodation = e['accommodation'] as String?;
+      _att = null;
       _deptId = e['department_id'] as String?;
       _desigId = e['designation_id'] as String?;
       _branchId = e['branch_id'] as String?;
@@ -340,6 +350,77 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     });
     _loadDocs();
     _loadAdvBalance();
+    _loadAttSnap();
+  }
+
+  /// Attendance over the last 30 days (or since joining / until leaving) and
+  /// the latest punch. Rest days and holidays don't count; a working day with
+  /// no record counts as absent (today excluded until it's over).
+  Future<Map<String, dynamic>?> _loadAttSnap() async {
+    final e = _current;
+    final id = e?['id'] as String?;
+    if (e == null || id == null) return null;
+    try {
+      DateTime d0(DateTime d) => DateTime(d.year, d.month, d.day);
+      final today = d0(DateTime.now());
+      var to = today;
+      final leftOn = DateTime.tryParse('${e['left_on'] ?? ''}');
+      if (e['status'] == 'left' && leftOn != null && leftOn.isBefore(to)) to = d0(leftOn);
+      var from = to.subtract(const Duration(days: 29));
+      final join = DateTime.tryParse('${e['join_date'] ?? ''}');
+      if (join != null && d0(join).isAfter(from)) from = d0(join);
+      final fmt = DateFormat('yyyy-MM-dd');
+      final c = Supabase.instance.client;
+      final rows = await c.from('hr_attendance').select('att_date, status')
+          .eq('employee_id', id).gte('att_date', fmt.format(from)).lte('att_date', fmt.format(to));
+      final byDay = {for (final r in rows as List) '${r['att_date']}': '${r['status'] ?? ''}'};
+      var present = 0, half = 0, absent = 0, leave = 0;
+      for (var d = from; !d.isAfter(to); d = d.add(const Duration(days: 1))) {
+        final st = byDay[fmt.format(d)];
+        if (st == 'holiday' || st == 'rest_day') continue;
+        if (st == null || st.isEmpty) {
+          if (d == today) continue; // day not over yet
+          if (_orgRestDay != null && d.weekday % 7 == _orgRestDay) continue;
+          absent++;
+          continue;
+        }
+        switch (st) {
+          case 'present': present++; break;
+          case 'half_day': half++; break;
+          case 'leave': leave++; break;
+          case 'absent': absent++; break;
+        }
+      }
+      final working = present + half + absent + leave;
+      final last = await c.from('hr_attendance').select('att_date, check_in, check_out, status')
+          .eq('employee_id', id).not('check_in', 'is', null).order('att_date', ascending: false).limit(1);
+      final snap = <String, dynamic>{
+        'from': from, 'to': to,
+        'present': present, 'half': half, 'absent': absent, 'leave': leave, 'working': working,
+        'rate': working > 0 ? (present + half) / working * 100 : null,
+        'last': (last as List).isEmpty ? null : Map<String, dynamic>.from(last.first),
+      };
+      if (mounted && _current?['id'] == id) setState(() => _att = snap);
+      return snap;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _attLine(Map<String, dynamic>? a) {
+    if (a == null) return '';
+    final r = a['rate'] as double?;
+    if (r == null) return 'No working days yet';
+    return '${r.toStringAsFixed(0)}%  (present ${a['present']}, half ${a['half']}, absent ${a['absent']}, leave ${a['leave']} of ${a['working']} working days)';
+  }
+
+  String _lastPunchLine(Map<String, dynamic>? a) {
+    final l = a?['last'] as Map<String, dynamic>?;
+    if (l == null) return '';
+    final d = DateTime.tryParse('${l['att_date']}');
+    final ci = '${l['check_in'] ?? ''}', co = '${l['check_out'] ?? ''}';
+    return '${d == null ? l['att_date'] : DateFormat('EEE d MMM yyyy').format(d)} · in $ci · '
+        '${co.isEmpty || co == 'null' ? 'not checked out' : 'out $co'}';
   }
 
   // ---- department / designation management ----
@@ -430,6 +511,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         'notify_punch': _notifyPunch, 'notify_email': _t(_notifyEmail),
         'approval_status': _isAdmin ? 'approved' : 'pending',
         'bank_name': _t(_bankName), 'bank_account': _t(_bankAcct), 'notes': _t(_notes),
+        'reports_to': _t(_reportsTo), 'accommodation': _accommodation,
         'card_uid': _t(_cardUid),
         'advance_account_id': _advAcctId,
         'advance_installment': double.tryParse(_advInst.text.trim()),
@@ -954,6 +1036,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         );
 
     final money = NumberFormat('#,##0');
+    final att = await _loadAttSnap();
     // Salary-advance outstanding as of today (fresh read of the advance account).
     if (_advAcctId != null) await _loadAdvBalance();
     final advBal = _advBal;
@@ -1088,6 +1171,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
             fact('Branch', branch),
             fact('Shift', shift),
             fact('Employment', nice(e['employment_type'])),
+            fact('Attendance', att?['rate'] == null ? '' : '${(att!['rate'] as double).toStringAsFixed(0)}%', att?['rate'] == null ? '' : 'last 30 days'),
           ]),
         ),
         section('Employment', [
@@ -1099,6 +1183,13 @@ class _State extends ConsumerState<HrEmployeesScreen> {
           ('Join date', dt(e['join_date'])),
           ('Status', nice(e['status'])),
           ('Card / kiosk ID', t(e['card_uid'])),
+          ('Reporting to', t(e['reports_to'])),
+          ('Accommodation', e['accommodation'] == 'company' ? 'Company provided' : (e['accommodation'] == 'personal' ? 'Personal / Private' : '')),
+        ]),
+        section('Attendance', [
+          ('Attendance %', att == null ? '' : _attLine(att)),
+          ('Period', att == null ? '' : '${DateFormat('d MMM').format(att['from'] as DateTime)} – ${DateFormat('d MMM yyyy').format(att['to'] as DateTime)}'),
+          ('Last attendance', _lastPunchLine(att)),
         ]),
         section('Personal', [
           ('Father name', t(e['father_name'])),
@@ -1384,8 +1475,31 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                   if (_leftOn != null && _canWrite)
                     IconButton(icon: const Icon(Icons.close, size: 16), tooltip: 'Clear', onPressed: () => setState(() => _leftOn = null)),
                 ])),
-                const SizedBox.shrink(),
-              ], flex: const [1, 1, 2]),
+                _labeled('Reporting to', _tf(_reportsTo, hint: 'e.g. Production Manager / name')),
+                _labeled('Accommodation', _simpleDropdown(_accommodation, _accomOpts, (v) => setState(() => _accommodation = v))),
+              ]),
+              if (_current != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(6)),
+                  child: _att == null
+                      ? const Text('Attendance: loading…', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))
+                      : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text.rich(TextSpan(children: [
+                            const TextSpan(text: 'Attendance (last 30 days): ', style: TextStyle(color: AppTheme.textSecondary)),
+                            TextSpan(text: _attLine(_att), style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ]), style: const TextStyle(fontSize: 11.5)),
+                          const SizedBox(height: 3),
+                          Text.rich(TextSpan(children: [
+                            const TextSpan(text: 'Last attendance: ', style: TextStyle(color: AppTheme.textSecondary)),
+                            TextSpan(text: _lastPunchLine(_att).isEmpty ? 'none recorded' : _lastPunchLine(_att),
+                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ]), style: const TextStyle(fontSize: 11.5)),
+                        ]),
+                ),
+              ],
             ]),
             const SizedBox(height: 16),
             _card('Personal', [
