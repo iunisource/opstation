@@ -680,49 +680,86 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
   }
 
   // ── Print ─────────────────────────────────────────────────────────────────
-  void _print() {
+  // Same look as the Journal Voucher print: blue title, meta row, blue-header
+  // striped grid with totals band, and signature footprints.
+  Future<void> _print() async {
     if (_currentVoucher == null) {
       _snack('Save the voucher first');
       return;
     }
     final v = _currentVoucher!;
+    String esc(String? x) => (x ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    String when(dynamic iso) {
+      final d = DateTime.tryParse('${iso ?? ''}');
+      return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+    }
+    // Prepared by: stored name, else look the creator up.
+    var preparedBy = (v['created_by_name'] as String?)?.trim() ?? '';
+    if (preparedBy.isEmpty && v['created_by'] != null) {
+      try {
+        final u = await Supabase.instance.client.from('users').select('name').eq('id', v['created_by'] as String).maybeSingle();
+        preparedBy = (u?['name'] as String?)?.trim() ?? '';
+      } catch (_) {}
+    }
     final rows = _lines
-        .where((l) =>
-            l.customerId != null && (double.tryParse(l.amtCtrl.text) ?? 0) > 0)
+        .where((l) => l.customerId != null && (double.tryParse(l.amtCtrl.text) ?? 0) > 0)
         .toList();
     final body = rows.asMap().entries.map((e) {
       final l = e.value;
-      final cd = l.chequeDate != null
-          ? DateFormat('dd MMM yyyy').format(l.chequeDate!)
-          : '-';
+      final cd = l.chequeDate != null ? DateFormat('dd MMM yyyy').format(l.chequeDate!) : '-';
       final amt = double.tryParse(l.amtCtrl.text) ?? 0;
-      return '<tr><td>${e.key + 1}</td><td>${l.customerName}</td><td>${l.bankCtrl.text}</td>'
-          '<td>${l.descCtrl.text}</td><td>${l.chequeNoCtrl.text}</td><td>$cd</td>'
-          '<td style="text-transform:capitalize">${l.status}</td>'
-          '<td style="text-align:right">${_fmt.format(amt)}</td></tr>';
+      final st = l.status;
+      final stColor = st == 'cleared' ? '#2f855a' : (st == 'bounced' ? '#c53030' : '#b7791f');
+      return '<tr><td>${e.key + 1}</td><td>${esc(l.customerName)}</td><td>${esc(l.bankCtrl.text)}</td>'
+          '<td>${esc(l.descCtrl.text)}</td><td>${esc(l.chequeNoCtrl.text)}</td><td>$cd</td>'
+          '<td style="color:$stColor;font-weight:600;text-transform:capitalize">${esc(st)}</td>'
+          '<td class="num">${_fmt.format(amt)}</td></tr>';
     }).join();
-    final html_str =
-        '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PDC Voucher</title><style>@page{margin:0}
-      body{font-family:Arial,sans-serif;padding:20px;color:#333}h2{text-align:center;color:#1a56db}
-      table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:7px;text-align:left;font-size:11px}
-      th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:1.1em}.footer{margin-top:40px;display:flex;justify-content:space-between}
+    String block(String label, String who, String at, {bool done = true}) =>
+        '<div class="fp${done ? '' : ' pending'}"><div class="sig-space"></div>'
+        '<div class="line"></div><b>${esc(who)}</b><span>$label${at.isEmpty ? '' : ' · ${esc(at)}'}</span></div>';
+    final footprints = [
+      block('Prepared by', preparedBy.isNotEmpty ? preparedBy : ' ', when(v['created_at'])),
+      block('Received by', ' ', '', done: false),
+      block('Approved by', ' ', '', done: false),
+    ].join();
+    final status = (v['status'] as String? ?? 'open').toUpperCase();
+    final htmlStr = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PDC Voucher</title><style>@page{margin:0}
+      body{font-family:-apple-system,Segoe UI,Arial,sans-serif;padding:20px;color:#2d3748}
+      h2{text-align:center;color:#1a56db;margin-bottom:4px;letter-spacing:.5px}
+      .sub{text-align:center;color:#718096;font-size:12px;margin-top:0}
+      table.grid{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}
+      table.grid th,table.grid td{padding:9px 10px;text-align:left}
+      table.grid thead th{background:#1a56db;color:#fff;font-weight:600;border:none;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      table.grid tbody td{border-bottom:1px solid #e2e8f0}
+      table.grid tbody tr:nth-child(even) td{background:#f8fafc;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      table.grid tfoot td{border-top:2px solid #1a56db;background:#f0f4ff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .total{font-weight:700}.num{text-align:right}
+      .meta td{border:none;font-size:11px;padding:1px 10px 1px 0}
+      .fps{margin-top:36px;display:flex;gap:18px}
+      .fp{flex:1;position:relative;font-size:11.5px;line-height:1.45}
+      .fp .line{border-top:1px solid #718096;margin-bottom:4px}
+      .fp b{display:block;font-size:12.5px;color:#1a202c;min-height:16px}
+      .fp span{color:#718096}
+      .fp.pending b{color:#a0aec0}
+      .fp .sig-space{height:42px}
       @media print{.no-print{display:none}@page{margin:0}body{padding:15mm 20mm}}
     </style></head><body>
-    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">&#x1F5A8; Print</button></div>
-    <h2>PDC Voucher (Cheques in Hand)</h2>
-    <table style="border:none;margin-bottom:5px;width:100%"><tr>
-      <td style="border:none;padding:1px 10px 1px 0;font-size:10px;white-space:nowrap"><b>Voucher#:</b> ${v['voucher_number'] ?? ''}</td>
-      <td style="border:none;padding:1px 10px;font-size:10px;white-space:nowrap"><b>Date:</b> ${v['voucher_date'] ?? ''}</td>
-      <td style="border:none;padding:1px 10px;font-size:10px"><b>Account:</b> $_cashAccountName</td>
-      <td style="border:none;padding:1px 0;font-size:10px;white-space:nowrap"><b>Status:</b> ${(v['status'] as String? ?? 'open').toUpperCase()}</td>
-    </tr></table>
-    ${_remarksCtrl.text.trim().isNotEmpty ? '<div style="font-size:11px;margin-bottom:6px"><b>Remarks:</b> ${_remarksCtrl.text.trim()}</div>' : ''}
-    <table><thead><tr><th>#</th><th>Party/Account</th><th>Bank</th><th>Description</th><th>Cheque No.</th><th>Cheque Date</th><th>Status</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
+    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">Print</button></div>
+    <h2>PDC Voucher</h2>
+    <p class="sub">Cheques in hand</p>
+    <table class="meta" style="border:none;margin-bottom:5px"><tr>
+      <td><b>Voucher#:</b> ${esc('${v['voucher_number'] ?? ''}')}</td>
+      <td><b>Date:</b> ${DateFormat('dd MMM yyyy').format(_voucherDate)}</td>
+      <td><b>Account:</b> ${esc(_cashAccountName)}</td>
+      <td><b>Status:</b> $status</td>
+    </tr>${_remarksCtrl.text.trim().isNotEmpty ? '<tr><td colspan="4"><b>Remarks:</b> ${esc(_remarksCtrl.text.trim())}</td></tr>' : ''}</table>
+    <table class="grid"><thead><tr><th style="width:30px">#</th><th>Party / Account</th><th>Bank</th><th>Description</th><th>Cheque No.</th><th>Cheque Date</th><th>Status</th><th class="num" style="width:120px">Amount</th></tr></thead><tbody>
     $body
-    </tbody><tfoot><tr><td colspan="7" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${_fmt.format(_total)}</td></tr></tfoot></table>
-    <div class="footer"><div>Received by: _______________</div><div>Approved by: _______________</div></div>
+    </tbody><tfoot><tr><td colspan="7" class="total num">Total:</td><td class="total num">${_fmt.format(_total)}</td></tr></tfoot></table>
+    <div class="fps">$footprints</div>
     </body></html>''';
-    final blob = html.Blob([html_str], 'text/html;charset=utf-8');
+    final blob = html.Blob([htmlStr], 'text/html;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.window.open(url, '_blank');
   }
@@ -735,6 +772,14 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Branch toggle: reload the list for the new branch and start a fresh
+    // voucher, same as the other vouchers.
+    ref.listen(selectedBranchProvider, (prev, next) {
+      if (prev?['id'] != next?['id']) {
+        _newVoucher();
+        _loadVouchers();
+      }
+    });
     final filtered = _listSearch.isEmpty
         ? _vouchers
         : _vouchers.where((v) {
