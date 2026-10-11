@@ -11,6 +11,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/pdf/cash_voucher_print.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
@@ -402,29 +403,47 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
+  // JV-style print (shared with the other cash voucher): org + title, meta,
+  // striped grid, total, amount in words, signature footprints.
   void _print() {
     if (_currentVoucher == null) { _snack('Save the voucher first'); return; }
-    final lines = _lines.where((l) => l.accountId != null).toList();
-    final postedBy = _currentVoucher!['posted_by_name'] as String? ?? '_______________';
-    final rawPostedAt = _currentVoucher!['posted_at'] as String?;
-    final postedAtStr = rawPostedAt != null ? '  (' + rawPostedAt.replaceAll('T', ' ').substring(0, rawPostedAt.length > 16 ? 16 : rawPostedAt.length) + ')' : '';
-    final html_str = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Payment Voucher</title><style>@page{margin:0}
-      body{font-family:Arial,sans-serif;padding:14px;color:#333;font-size:11px}h2{text-align:center;color:#1a56db;font-size:16px;margin:0 0 6px}
-      table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #ddd;padding:3px 6px;text-align:left;font-size:10px}
-      th{background:#f0f4ff;font-weight:600}.total{font-weight:700;font-size:11px}.footer{margin-top:26px;display:flex;justify-content:space-between}
-      @media print{.no-print{display:none}@page{margin:0}body{padding:10mm 14mm}}
-    </style></head><body>
-    <div class="no-print" style="margin-bottom:16px"><button onclick="window.print()">&#x1F5A8; Print</button></div>
-    <h2>Cash Payment Voucher</h2>
-    <table style="border:none;margin-bottom:5px;width:100%"><tr><td style="border:none;padding:1px 10px 1px 0;font-size:10px;white-space:nowrap"><b>Voucher#:</b> ${_currentVoucher!['voucher_number'] ?? ''}</td><td style="border:none;padding:1px 10px;font-size:10px;white-space:nowrap"><b>Date:</b> ${_currentVoucher!['voucher_date'] ?? ''}</td><td style="border:none;padding:1px 10px;font-size:10px"><b>Cash A/c:</b> $_cashAccountName</td><td style="border:none;padding:1px 0;font-size:10px;white-space:nowrap"><b>Status:</b> ${_status.toUpperCase()}</td></tr></table>
-    <table><thead><tr><th>#</th><th>Account / Party</th><th>Description</th><th style="text-align:right">Amount (Rs.)</th></tr></thead><tbody>
-    ${lines.asMap().entries.map((e) => '<tr><td>${e.key + 1}</td><td>${e.value.accountName}</td><td>${e.value.descCtrl.text}</td><td style="text-align:right">${money(double.tryParse(e.value.amtCtrl.text))}</td></tr>').join()}
-    </tbody><tfoot><tr><td colspan="3" class="total" style="text-align:right">Total:</td><td class="total" style="text-align:right">Rs. ${money(_total)}</td></tr></tfoot></table>
-    <div class="footer"><div>Prepared by: _______________</div><div>Approved by: _______________</div><div>Posted by: $postedBy$postedAtStr</div></div>
-    </body></html>''';
-    final blob = html.Blob([html_str], 'text/html;charset=utf-8');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.window.open(url, '_blank');
+    final v = _currentVoucher!;
+    final lines = _lines.where((l) => l.accountId != null && (double.tryParse(l.amtCtrl.text) ?? 0) != 0).toList();
+    String when(dynamic iso) {
+      final d = DateTime.tryParse('${iso ?? ''}');
+      return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+    }
+    String preparedBy = '', preparedAt = '';
+    for (final e in _auditTrail) {
+      if ((e['action'] as String? ?? '') == 'created') {
+        preparedBy = (e['performed_by_name'] as String? ?? '').trim();
+        preparedAt = when(e['performed_at']);
+        break;
+      }
+    }
+    if (preparedAt.isEmpty) preparedAt = when(v['created_at']);
+    final postedBy = (v['posted_by_name'] as String? ?? '').trim();
+    final posted = _status == 'posted' || v['posted_at'] != null;
+    openCashVoucherPrint(
+      title: 'Cash Payment Voucher',
+      voucherNo: '${v['voucher_number'] ?? ''}',
+      date: _voucherDate,
+      cashLabel: 'Paid from',
+      cashAccount: _cashAccountName,
+      status: _status,
+      partyHeader: 'Paid to (Account / Party)',
+      orgName: ref.read(currentUserProvider)?.orgName ?? '',
+      branchName: (ref.read(selectedBranchProvider)?['name'] as String?) ?? '',
+      lines: [for (final l in lines) CashVoucherLine(l.accountName, l.descCtrl.text.trim(), double.tryParse(l.amtCtrl.text) ?? 0)],
+      footprints: [
+        CashVoucherFootprint('Prepared by', preparedBy, when: preparedAt),
+        posted
+            ? CashVoucherFootprint('Posted by', postedBy.isEmpty ? '—' : postedBy, when: when(v['posted_at']))
+            : const CashVoucherFootprint('Posted by', '', when: 'not posted yet', done: false),
+        const CashVoucherFootprint('Approved by', '', done: false),
+        const CashVoucherFootprint("Receiver's signature", '', done: false),
+      ],
+    );
   }
 
   @override
