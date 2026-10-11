@@ -829,7 +829,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   // Professional A4 employee profile (PDF): letterhead, photo + identity
   // block with QR, key-facts strip, sectioned two-column details, documents,
-  // signature lines, confidential footer with page numbers.
+  // confidential footer with page numbers.
   Future<void> _printProfile() async {
     final e = _current;
     if (e == null) return;
@@ -906,11 +906,11 @@ class _State extends ConsumerState<HrEmployeesScreen> {
             children: [
               for (final r in part)
                 pw.Container(
-                  padding: const pw.EdgeInsets.symmetric(vertical: 4.5),
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3.8),
                   decoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: rule, width: 0.6))),
                   child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                    pw.SizedBox(width: 92, child: pw.Text(r.$1, style: const pw.TextStyle(fontSize: 8.5, color: muted))),
-                    pw.Expanded(child: pw.Text(r.$2, style: pw.TextStyle(fontSize: 9.5, color: ink, fontWeight: pw.FontWeight.bold))),
+                    pw.SizedBox(width: 86, child: pw.Text(r.$1, style: const pw.TextStyle(fontSize: 7.8, color: muted))),
+                    pw.Expanded(child: pw.Text(r.$2, style: pw.TextStyle(fontSize: 8.6, color: ink, fontWeight: pw.FontWeight.bold))),
                   ]),
                 ),
             ],
@@ -976,16 +976,16 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       pageTheme: pageTheme,
       header: (ctx) => pw.Column(children: [
         pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
-          if (logo != null) ...[pw.SizedBox(height: 34, width: 34, child: pw.Image(logo!, fit: pw.BoxFit.contain)), pw.SizedBox(width: 10)],
+          if (logo != null) ...[pw.SizedBox(height: 28, width: 28, child: pw.Image(logo!, fit: pw.BoxFit.contain)), pw.SizedBox(width: 10)],
           pw.Expanded(
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(org.toUpperCase(), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
-              pw.Text('Human Resources', style: const pw.TextStyle(fontSize: 8, color: muted)),
+              pw.Text(org.toUpperCase(), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
+              pw.Text('Human Resources', style: const pw.TextStyle(fontSize: 6.5, color: muted)),
             ]),
           ),
           pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-            pw.Text('EMPLOYEE PROFILE', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold, color: ink, letterSpacing: 1.5)),
-            pw.Text(code.isEmpty ? '' : 'Ref: $code', style: const pw.TextStyle(fontSize: 8, color: muted)),
+            pw.Text('EMPLOYEE PROFILE', style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold, color: ink, letterSpacing: 1.5)),
+            pw.Text(code.isEmpty ? '' : 'Ref: $code', style: const pw.TextStyle(fontSize: 6.5, color: muted)),
           ]),
         ]),
         pw.SizedBox(height: 8),
@@ -1007,12 +1007,12 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       build: (ctx) => [
         // ── identity block ──
         pw.Container(
-          margin: const pw.EdgeInsets.only(top: 12),
-          padding: const pw.EdgeInsets.all(14),
+          margin: const pw.EdgeInsets.only(top: 10),
+          padding: const pw.EdgeInsets.all(11),
           decoration: pw.BoxDecoration(color: band, borderRadius: pw.BorderRadius.circular(6)),
           child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
             pw.Container(
-              width: 84, height: 100,
+              width: 68, height: 80,
               decoration: pw.BoxDecoration(
                 color: PdfColors.white,
                 borderRadius: pw.BorderRadius.circular(4),
@@ -1020,29 +1020,29 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 image: photo != null ? pw.DecorationImage(image: photo!, fit: pw.BoxFit.cover) : null,
               ),
               child: photo == null
-                  ? pw.Center(child: pw.Text(_initials(name), style: pw.TextStyle(fontSize: 26, color: PdfColors.grey400, fontWeight: pw.FontWeight.bold)))
+                  ? pw.Center(child: pw.Text(_initials(name), style: pw.TextStyle(fontSize: 21, color: PdfColors.grey400, fontWeight: pw.FontWeight.bold)))
                   : null,
             ),
-            pw.SizedBox(width: 16),
+            pw.SizedBox(width: 13),
             pw.Expanded(
               child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-                pw.Text(name, style: pw.TextStyle(fontSize: 19, fontWeight: pw.FontWeight.bold, color: ink)),
+                pw.Text(name, style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold, color: ink)),
                 if (t(e['father_name']).isNotEmpty)
-                  pw.Text('S/O ${t(e['father_name'])}', style: const pw.TextStyle(fontSize: 9.5, color: muted)),
-                pw.SizedBox(height: 5),
+                  pw.Text('S/O ${t(e['father_name'])}', style: const pw.TextStyle(fontSize: 7.5, color: muted)),
+                pw.SizedBox(height: 4),
                 pw.Text([desig, dept].where((x) => x.isNotEmpty).join('  ·  '),
-                    style: pw.TextStyle(fontSize: 10.5, color: brand, fontWeight: pw.FontWeight.bold)),
-                pw.SizedBox(height: 7),
+                    style: pw.TextStyle(fontSize: 8.5, color: brand, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 5),
                 pw.Row(children: [
                   pw.Container(
                     padding: const pw.EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
                     decoration: pw.BoxDecoration(border: pw.Border.all(color: statusColor, width: 0.9), borderRadius: pw.BorderRadius.circular(3)),
-                    child: pw.Text(statusLabel, style: pw.TextStyle(fontSize: 7.5, color: statusColor, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
+                    child: pw.Text(statusLabel, style: pw.TextStyle(fontSize: 6.5, color: statusColor, fontWeight: pw.FontWeight.bold, letterSpacing: 1)),
                   ),
                   if (code.isNotEmpty) ...[
                     pw.SizedBox(width: 8),
-                    pw.Text('Employee ID  ', style: const pw.TextStyle(fontSize: 8, color: muted)),
-                    pw.Text(code, style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: ink)),
+                    pw.Text('Employee ID  ', style: const pw.TextStyle(fontSize: 6.5, color: muted)),
+                    pw.Text(code, style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: ink)),
                   ],
                 ]),
               ]),
@@ -1052,10 +1052,10 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 pw.Container(
                   padding: const pw.EdgeInsets.all(4),
                   color: PdfColors.white,
-                  child: pw.BarcodeWidget(barcode: Barcode.qrCode(), data: code, width: 62, height: 62, drawText: false),
+                  child: pw.BarcodeWidget(barcode: Barcode.qrCode(), data: code, width: 50, height: 50, drawText: false),
                 ),
                 pw.SizedBox(height: 2),
-                pw.Text('Kiosk ID', style: const pw.TextStyle(fontSize: 6.5, color: muted)),
+                pw.Text('Kiosk ID', style: const pw.TextStyle(fontSize: 5.5, color: muted)),
               ]),
           ]),
         ),
@@ -1147,27 +1147,13 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 ),
             ]),
           ),
-        // ── record + signatures ──
-        pw.SizedBox(height: 26),
+        // ── record ──
+        pw.SizedBox(height: 16),
         pw.Text(
             'Record: created ${dt(e['created_at'])}'
             '${e['approved_at'] != null ? ' · approved ${dt(e['approved_at'])}' : ''}'
             '${e['updated_at'] != null ? ' · last updated ${dt(e['updated_at'])}' : ''}',
             style: const pw.TextStyle(fontSize: 7.5, color: muted)),
-        pw.SizedBox(height: 34),
-        pw.Row(children: [
-          for (final lbl in ['Employee signature', 'HR / Authorised signatory'])
-            pw.Expanded(
-              child: pw.Padding(
-                padding: const pw.EdgeInsets.symmetric(horizontal: 12),
-                child: pw.Column(children: [
-                  pw.Container(height: 0.8, color: PdfColors.grey600),
-                  pw.SizedBox(height: 3),
-                  pw.Text(lbl, style: const pw.TextStyle(fontSize: 8, color: muted)),
-                ]),
-              ),
-            ),
-        ]),
       ],
     ));
 
