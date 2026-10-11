@@ -436,10 +436,18 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       branchName: (ref.read(selectedBranchProvider)?['name'] as String?) ?? '',
       lines: [for (final l in lines) CashVoucherLine(l.accountName, l.descCtrl.text.trim(), double.tryParse(l.amtCtrl.text) ?? 0)],
       footprints: [
-        CashVoucherFootprint('Prepared by', preparedBy, when: preparedAt),
-        posted
-            ? CashVoucherFootprint('Posted by', postedBy.isEmpty ? '—' : postedBy, when: when(v['posted_at']))
-            : const CashVoucherFootprint('Posted by', '', when: 'not posted yet', done: false),
+        // Same person saved and posted it: one block, not two identical ones.
+        if (posted && postedBy.isNotEmpty &&
+            (postedBy.toLowerCase() == preparedBy.toLowerCase() ||
+             // no 'created' history entry: compare the stored user ids instead
+             (preparedBy.isEmpty && v['created_by'] != null && v['created_by'] == v['posted_by'])))
+          CashVoucherFootprint('Prepared & posted by', postedBy, when: when(v['posted_at']))
+        else ...[
+          CashVoucherFootprint('Prepared by', preparedBy, when: preparedAt),
+          posted
+              ? CashVoucherFootprint('Posted by', postedBy.isEmpty ? '—' : postedBy, when: when(v['posted_at']))
+              : const CashVoucherFootprint('Posted by', '', when: 'not posted yet', done: false),
+        ],
         const CashVoucherFootprint('Approved by', '', done: false),
         const CashVoucherFootprint("Receiver's signature", '', done: false),
       ],
