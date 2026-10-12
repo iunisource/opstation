@@ -943,8 +943,55 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     }
   }
 
+  /// Next SKU for a new product: the highest numeric SKU in the org + 1,
+  /// keeping its width (e.g. 10242 → 10243, 00981 → 00982). If SKUs carry a
+  /// prefix (ALA-0123), the most common prefix's highest number + 1.
+  /// Includes inactive products so a number is never reused.
+  Future<String> _nextSku(String orgId) async {
+    final skus = <String>[];
+    try {
+      for (var from = 0; ; from += 1000) {
+        final rows = await Supabase.instance.client.from('products').select('sku')
+            .eq('org_id', orgId).not('sku', 'is', null).range(from, from + 999);
+        for (final r in rows as List) {
+          final v = (r['sku'] as String?)?.trim() ?? '';
+          if (v.isNotEmpty) skus.add(v);
+        }
+        if (rows.length < 1000 || from > 200000) break;
+      }
+    } catch (_) {
+      skus.addAll(_products.map((p) => (p['sku'] as String?)?.trim() ?? '').where((x) => x.isNotEmpty));
+    }
+    final pure = skus.where((x) => RegExp(r'^\d+$').hasMatch(x)).toList();
+    if (pure.isNotEmpty) {
+      var best = pure.first;
+      for (final x in pure) {
+        if (BigInt.parse(x) > BigInt.parse(best)) best = x;
+      }
+      final next = (BigInt.parse(best) + BigInt.one).toString();
+      return next.padLeft(best.length, '0');
+    }
+    // prefix + number (e.g. ALA-0123)
+    final re = RegExp(r'^(.*?)(\d+)$');
+    final byPrefix = <String, List<String>>{};
+    for (final x in skus) {
+      final m = re.firstMatch(x);
+      if (m != null) byPrefix.putIfAbsent(m.group(1)!, () => []).add(m.group(2)!);
+    }
+    if (byPrefix.isEmpty) return '';
+    final prefix = byPrefix.entries.reduce((a, b) => a.value.length >= b.value.length ? a : b).key;
+    var bestN = byPrefix[prefix]!.first;
+    for (final n in byPrefix[prefix]!) {
+      if (BigInt.parse(n) > BigInt.parse(bestN)) bestN = n;
+    }
+    return '$prefix${(BigInt.parse(bestN) + BigInt.one).toString().padLeft(bestN.length, '0')}';
+  }
+
   Future<void> _showDialog(BuildContext context, Map<String, dynamic>? product) async {
     final orgIdPre = ref.read(currentUserProvider)?.orgId;
+    // New product: suggest the next SKU (editable).
+    String suggestedSku = '';
+    if (product == null && orgIdPre != null) suggestedSku = await _nextSku(orgIdPre);
     // Load existing branch allocation (inventory_stock) for this product (edit only).
     final Map<String, double> existingStock = {}; // branch_id -> qty
     if (product != null && orgIdPre != null) {
@@ -959,7 +1006,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     final Set<String> selectedBranches = {...existingStock.keys};
     if (!context.mounted) return;
     final nameCtrl = TextEditingController(text: product?['name'] ?? '');
-    final skuCtrl = TextEditingController(text: product?['sku'] ?? '');
+    final skuCtrl = TextEditingController(text: product?['sku'] ?? suggestedSku);
     final barcodeCtrl = TextEditingController(text: product?['barcode'] ?? '');
     final sellPriceCtrl = TextEditingController(
         text: product?['selling_price']?.toString() ?? '0');
@@ -1169,7 +1216,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   Expanded(
                       child: TextField(
                           controller: skuCtrl,
-                          decoration: const InputDecoration(labelText: 'SKU'))),
+                          decoration: InputDecoration(
+                              labelText: 'SKU',
+                              helperText: product == null && suggestedSku.isNotEmpty
+                                  ? 'Next number suggested — you can change it'
+                                  : null))),
                   const SizedBox(width: 12),
                   Expanded(
                       // Barcodes are system-generated (EAN-13) and immutable —
