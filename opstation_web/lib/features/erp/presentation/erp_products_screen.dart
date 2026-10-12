@@ -355,10 +355,10 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   // (type-to-filter). `value` shows as All if it isn't in the current cascaded
   // [options]. The key includes the option count so it rebuilds on cascade.
   Widget _grpFilter(String label, String? value, List<String> options,
-      void Function(String?) onChanged) {
+      void Function(String?) onChanged, {double width = 190}) {
     final val = (value != null && options.contains(value)) ? value : null;
     return SizedBox(
-      width: 190,
+      width: width,
       child: _SearchSelect(
         key: ValueKey('filt_${label}_${options.length}'),
         label: label,
@@ -1404,12 +1404,59 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     ref.listen(selectedBranchProvider, (_, __) {
       if (mounted) _runFilter();
     });
+    final narrow = MediaQuery.of(context).size.width < 700;
+    final viewToggle = SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment(value: false, label: Text('Classic'), icon: Icon(Icons.table_rows_outlined, size: 16)),
+        ButtonSegment(value: true, label: Text('Modern'), icon: Icon(Icons.dashboard_outlined, size: 16)),
+      ],
+      selected: {_modern},
+      showSelectedIcon: false,
+      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+      onSelectionChanged: (v) => _setModern(v.first),
+    );
+    // Phone: title + Add on one line, view toggle + a "more" menu (import /
+    // export) on the next — nothing runs off the screen.
+    final mobileHeader = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Expanded(child: Text('Products', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800))),
+        ElevatedButton.icon(
+          onPressed: () => _showDialog(context, null),
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('Add'),
+        ),
+      ]),
+      const SizedBox(height: 10),
+      Row(children: [
+        viewToggle,
+        const Spacer(),
+        PopupMenuButton<String>(
+          tooltip: 'Import / export',
+          icon: const Icon(Icons.more_vert),
+          onSelected: (v) {
+            switch (v) {
+              case 'csv_all': _exportCsv(); break;
+              case 'import': _showCsvImport(context); break;
+              case 'xlsx': _exportExcel(); break;
+              case 'csv_shown': _exportFilteredCsv(); break;
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(value: 'xlsx', child: ListTile(dense: true, leading: const Icon(Icons.grid_on_outlined), title: Text(_selected.isNotEmpty ? 'Excel (${_selected.length} selected)' : 'Excel (${_filtered.length} shown)'))),
+            PopupMenuItem(value: 'csv_shown', child: ListTile(dense: true, leading: const Icon(Icons.description_outlined), title: Text(_selected.isNotEmpty ? 'CSV (${_selected.length} selected)' : 'CSV (${_filtered.length} shown)'))),
+            const PopupMenuItem(value: 'csv_all', child: ListTile(dense: true, leading: Icon(Icons.download), title: Text('Export all (CSV)'))),
+            const PopupMenuItem(value: 'import', child: ListTile(dense: true, leading: Icon(Icons.upload_file), title: Text('Import CSV'))),
+          ],
+        ),
+      ]),
+    ]);
     return Container(
       color: AppTheme.background,
-      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
+      padding: EdgeInsets.all(narrow ? 12 : 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (narrow) mobileHeader else
           Row(children: [
             const Text('Products',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
@@ -1489,6 +1536,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          if (narrow) _mobileFilters() else
           Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
             const Text('POS:',
                 style: TextStyle(
@@ -1578,7 +1626,23 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
               ),
-              child: Row(children: [
+              child: narrow
+                  ? Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      Text('${_selected.length} selected', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                      TextButton(onPressed: () => setState(() => _selected.clear()), child: const Text('Clear')),
+                      OutlinedButton.icon(
+                        onPressed: () => _printBarcodeLabels(_products.where((p) => _selected.contains('${p['id']}')).toList()),
+                        icon: const Icon(Icons.qr_code_2, size: 16), label: const Text('Labels')),
+                      OutlinedButton.icon(
+                        onPressed: () => _bulkPushToPOS(context),
+                        icon: const Icon(Icons.point_of_sale, size: 16), label: const Text('To POS')),
+                      if (_canDelete)
+                        OutlinedButton.icon(
+                          onPressed: _bulkDelete,
+                          style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger),
+                          icon: const Icon(Icons.delete_outline, size: 16), label: const Text('Delete')),
+                    ])
+                  : Row(children: [
                 Icon(Icons.check_circle, size: 16, color: AppTheme.primary),
                 const SizedBox(width: 8),
                 Text('${_selected.length} selected', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
@@ -1617,6 +1681,8 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           const SizedBox(height: 16),
           if (_loading)
             const Center(child: CircularProgressIndicator())
+          else if (narrow)
+            Expanded(child: _mobileList())
           else
             Expanded(
               child: Container(
@@ -1853,6 +1919,214 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         ],
       ),
     );
+  }
+
+  // ── Phone layout helpers ────────────────────────────────────────────────
+  int get _activeFilterCount =>
+      (_posFilter != 'all' ? 1 : 0) + (_fMain != null ? 1 : 0) + (_fGroup != null ? 1 : 0) + (_fSub != null ? 1 : 0) +
+      (_superviseFilter ? 1 : 0) + (_noLowStockLimit ? 1 : 0);
+
+  Widget _mobileFilters() {
+    final n = _activeFilterCount;
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          leading: const Icon(Icons.filter_list, size: 20),
+          title: Text(n == 0 ? 'Filters' : 'Filters ($n active)', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          trailing: n == 0
+              ? null
+              : TextButton(
+                  onPressed: () {
+                    _posFilter = 'all';
+                    _fMain = null; _fGroup = null; _fSub = null;
+                    _superviseFilter = false; _noLowStockLimit = false;
+                    _runFilter();
+                  },
+                  child: const Text('Clear')),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(spacing: 8, runSpacing: 6, children: [
+                for (final opt in const [['all', 'All'], ['in', 'In POS'], ['out', 'Not in POS']])
+                  ChoiceChip(
+                    label: Text(opt[1], style: const TextStyle(fontSize: 12)),
+                    selected: _posFilter == opt[0],
+                    visualDensity: VisualDensity.compact,
+                    selectedColor: Colors.purple.withOpacity(0.15),
+                    onSelected: (_) { _posFilter = opt[0]; _runFilter(); },
+                  ),
+              ]),
+            ),
+            const SizedBox(height: 10),
+            LayoutBuilder(builder: (_, c) {
+              final w = c.maxWidth;
+              return Column(children: [
+                _grpFilter('Main Group', _fMain,
+                    (_taxonomies['main_group'] ?? []).map((t) => t['name'] as String).toList(), (v) {
+                  _fMain = v;
+                  if (_fGroup != null && !_groupChoices(main: _fMain).contains(_fGroup)) _fGroup = null;
+                  if (_fSub != null && !_subChoices(main: _fMain, group: _fGroup).contains(_fSub)) _fSub = null;
+                  _runFilter();
+                }, width: w),
+                const SizedBox(height: 8),
+                _grpFilter('Group', _fGroup, _groupChoices(main: _fMain), (v) {
+                  _fGroup = v;
+                  if (_fSub != null && !_subChoices(main: _fMain, group: _fGroup).contains(_fSub)) _fSub = null;
+                  _runFilter();
+                }, width: w),
+                const SizedBox(height: 8),
+                _grpFilter('Sub Group', _fSub, _subChoices(main: _fMain, group: _fGroup), (v) {
+                  _fSub = v;
+                  _runFilter();
+                }, width: w),
+              ]);
+            }),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(spacing: 8, runSpacing: 6, children: [
+                if (_productSuperviseEnabled)
+                  FilterChip(
+                    label: const Text('Supervision pending', style: TextStyle(fontSize: 12)),
+                    selected: _superviseFilter,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (v) { setState(() => _superviseFilter = v); _runFilter(); },
+                  ),
+                FilterChip(
+                  label: const Text('No low-stock limit', style: TextStyle(fontSize: 12)),
+                  selected: _noLowStockLimit,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (v) { setState(() => _noLowStockLimit = v); _runFilter(); },
+                ),
+              ]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _mobileList() {
+    if (_filtered.isEmpty) {
+      return const Center(child: Text('No products match', style: TextStyle(color: AppTheme.textSecondary)));
+    }
+    return Column(children: [
+      Row(children: [
+        Checkbox(
+          tristate: true,
+          visualDensity: VisualDensity.compact,
+          value: _selected.isEmpty ? false : (_selected.length == _filtered.length ? true : null),
+          onChanged: (v) => setState(() {
+            if (v == true) {
+              _selected.addAll(_filtered.map((p) => p['id'] as String));
+            } else {
+              _selected.clear();
+            }
+          }),
+        ),
+        const Text('Select all', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      ]),
+      Expanded(
+        child: ListView.separated(
+          itemCount: _filtered.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (_, i) {
+            final p = _filtered[i];
+            final isActive = p['is_active'] as bool? ?? true;
+            final inPos = _posProductIds.contains(p['id']);
+            final uom = p['uoms'] != null ? (p['uoms']['abbreviation'] as String? ?? '') : '';
+            final grp = [p['product_group'], p['product_sub_group']]
+                .whereType<String>().where((x) => x.trim().isNotEmpty).join(' › ');
+            final pending = _productSuperviseEnabled && p['supervised_at'] == null;
+            return Opacity(
+              opacity: isActive ? 1 : 0.55,
+              child: InkWell(
+                onTap: () => _showDialog(context, p),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Checkbox(
+                      visualDensity: VisualDensity.compact,
+                      value: _selected.contains(p['id']),
+                      onChanged: (v) => setState(() => v == true ? _selected.add(p['id'] as String) : _selected.remove(p['id'])),
+                    ),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(p['name'] as String? ?? '', maxLines: 2, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                        const SizedBox(height: 3),
+                        Wrap(spacing: 6, runSpacing: 3, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                          if ((p['sku'] as String? ?? '').isNotEmpty)
+                            Text(p['sku'] as String, style: const TextStyle(fontSize: 11.5, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                          if (uom.isNotEmpty) Text('· $uom', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                          if (inPos)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(color: Colors.purple.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                              child: const Text('POS', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.purple)),
+                            ),
+                          if (pending)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(color: Colors.amber.shade700.withOpacity(0.14), borderRadius: BorderRadius.circular(4)),
+                              child: Text('Supervision pending', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.amber.shade800)),
+                            ),
+                          if (!isActive)
+                            const Text('Inactive', style: TextStyle(fontSize: 10.5, color: AppTheme.danger, fontWeight: FontWeight.w600)),
+                        ]),
+                        if (grp.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(grp, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                          ),
+                        const SizedBox(height: 4),
+                        Text('Sell ${p['selling_price'] ?? 0}   ·   Cost ${p['cost_price'] ?? 0}',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      ]),
+                    ),
+                    PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert, size: 20),
+                      onSelected: (v) {
+                        switch (v) {
+                          case 'edit': _showDialog(context, p); break;
+                          case 'pos': _pushToPOS(context, p); break;
+                          case 'timeline':
+                            final orgId = ref.read(currentUserProvider)?.orgId;
+                            if (orgId != null) showProductTimeline(context, orgId: orgId, product: Map<String, dynamic>.from(p as Map));
+                            break;
+                          case 'label': _printBarcodeLabels([p]); break;
+                          case 'supervise': _superviseProduct(p); break;
+                          case 'active': _toggleActive(p); break;
+                          case 'delete': _delete(p['id'] as String); break;
+                        }
+                      },
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(value: 'edit', child: ListTile(dense: true, leading: Icon(Icons.edit_outlined), title: Text('Edit'))),
+                        if (pending && _canDelete)
+                          const PopupMenuItem(value: 'supervise', child: ListTile(dense: true, leading: Icon(Icons.verified_user_outlined), title: Text('Supervise'))),
+                        PopupMenuItem(value: 'pos', child: ListTile(dense: true, leading: const Icon(Icons.point_of_sale), title: Text(inPos ? 'Add to another POS branch' : 'Push to POS'))),
+                        const PopupMenuItem(value: 'timeline', child: ListTile(dense: true, leading: Icon(Icons.timeline), title: Text('Timeline'))),
+                        const PopupMenuItem(value: 'label', child: ListTile(dense: true, leading: Icon(Icons.qr_code_2), title: Text('Barcode label'))),
+                        PopupMenuItem(value: 'active', child: ListTile(dense: true, leading: Icon(isActive ? Icons.block : Icons.check_circle_outline), title: Text(isActive ? 'Deactivate' : 'Activate'))),
+                        if (_canDelete)
+                          const PopupMenuItem(value: 'delete', child: ListTile(dense: true, leading: Icon(Icons.delete_outline, color: AppTheme.danger), title: Text('Delete'))),
+                      ],
+                    ),
+                  ]),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
   }
 }
 
