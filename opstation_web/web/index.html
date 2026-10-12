@@ -112,6 +112,31 @@
       };
     })();
   </script>
+<!-- opstation:splash-white -->
+<style>
+  html, body { background: #ffffff !important; background-color: #ffffff !important; }
+</style>
+<script>
+  (function () {
+    function whiten() {
+      var all = document.body ? document.body.getElementsByTagName('*') : [];
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (el.children.length === 0 && /loading your workspace/i.test(el.textContent || '')) {
+          var n = el;
+          while (n && n !== document.body) {
+            var bg = getComputedStyle(n).backgroundColor;
+            if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') n.style.backgroundColor = '#ffffff';
+            n = n.parentElement;
+          }
+        }
+      }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', whiten);
+    else whiten();
+  })();
+</script>
+<!-- /opstation:splash-white -->
 </head>
 <body>
   <div id="app-loading">
