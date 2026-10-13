@@ -440,7 +440,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/files', builder: (_, __) => _deferred(_s071.loadLibrary(), () => _s071.RetailerFilesScreen(audience: 'erpUser'))),
           GoRoute(path: '/operations/notifications', builder: (_, __) => _deferred(_s072.loadLibrary(), () => _s072.NotificationsComposerScreen())),
           GoRoute(path: '/operations/retailers', builder: (_, __) => _deferred(_s073.loadLibrary(), () => _s073.RetailersAdminScreen())),
-          GoRoute(path: '/assets', builder: (_, __) => _deferred(_s074.loadLibrary(), () => _s074.ErpAssetsScreen())),
+          GoRoute(path: '/assets', builder: (_, st) => _deferred(_s074.loadLibrary(), () => _s074.ErpAssetsScreen(focusId: st.uri.queryParameters['focus']))),
           GoRoute(path: '/assets/report', builder: (_, __) => _deferred(_s148.loadLibrary(), () => _s148.ErpAssetReportScreen())),
           GoRoute(path: '/facility', builder: (_, __) => _deferred(_s075.loadLibrary(), () => _s075.ErpFacilityScreen())),
           GoRoute(path: '/orgs', builder: (_, __) => _deferred(_s064.loadLibrary(), () => _s064.OrgsScreen())),

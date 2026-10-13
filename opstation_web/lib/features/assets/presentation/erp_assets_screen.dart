@@ -13,7 +13,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
-import '../../../core/layout/main_layout.dart' show assetsDueCountProvider;
+import '../../../core/layout/main_layout.dart' show assetsDueCountProvider, assetSupervisePendingProvider;
 import '../../erp/services/asset_pdf.dart';
 
 /// Public asset page (static, Firebase-hosted). The QR encodes
@@ -29,7 +29,9 @@ const String _kAssetViewBase = 'https://opstation-f06c7.web.app/asset.html';
 /// asset_assignments / asset_files / asset_maintenance and the
 /// next_asset_code + asset_reassign RPCs.
 class ErpAssetsScreen extends ConsumerStatefulWidget {
-  const ErpAssetsScreen({super.key});
+  /// Opens this asset on load (notification links: /assets?focus=<id>).
+  final String? focusId;
+  const ErpAssetsScreen({super.key, this.focusId});
   @override
   ConsumerState<ErpAssetsScreen> createState() => _ErpAssetsScreenState();
 }
@@ -97,6 +99,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   String _custodianFilter = 'all';
   String _dueFilter = 'all'; // all | due | overdue | soon
 
+  // ── Supervision (org.asset_supervise_flow, SQL 348) — non-blocking check on
+  // every new asset and every change. Only users in org.asset_supervisor_users.
+  bool _supFlow = false;
+  bool _canSupervise = false;
+  bool _supBusy = false;
+  String _supFilter = 'all'; // all | pending | rejected | supervised
+  bool _focusDone = false;
+
   // detail sub-data
   bool _detailLoading = false;
   List<Map<String, dynamic>> _history = [];
@@ -158,6 +168,16 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
           .order('name');
       await _loadOptionLists(orgId);
+      var supFlow = false, canSup = false;
+      try {
+        final cfg = await client.from('app_config').select('key,value').eq('org_id', orgId)
+            .inFilter('key', ['org.asset_supervise_flow', 'org.asset_supervisor_users']);
+        final m = {for (final r in cfg as List) r['key'] as String: '${r['value'] ?? ''}'};
+        supFlow = m['org.asset_supervise_flow'] == 'true';
+        final me = ref.read(currentUserProvider)?.id;
+        canSup = me != null &&
+            (m['org.asset_supervisor_users'] ?? '').split(',').map((e) => e.trim()).contains(me);
+      } catch (_) {}
       final custodians = await client
           .from('asset_custodians')
           .select()
@@ -193,11 +213,21 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           ..addEntries(_custodians.map((c) =>
               MapEntry(c['id'] as String, (c['name'] as String?) ?? '—')));
         _loading = false;
+        _supFlow = supFlow;
+        _canSupervise = canSup;
+        if (!_supFlow) _supFilter = 'all';
         if (_selectedId != null &&
             !_assets.any((a) => a['id'] == _selectedId)) {
           _selectedId = null;
         }
       });
+      ref.invalidate(assetSupervisePendingProvider);
+      // Opened from a notification: jump straight to that asset.
+      final f = widget.focusId;
+      if (!_focusDone && f != null && _assets.any((a) => a['id'] == f)) {
+        _focusDone = true;
+        _select(f);
+      }
       // Keep the menu's maintenance-due counter in step with what's on screen
       // (servicing an asset or changing its due date updates it right away).
       ref.invalidate(assetsDueCountProvider);
@@ -268,6 +298,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           return false;
         }
       }
+      if (_supFlow && _supFilter != 'all' && _supState(a) != _supFilter) return false;
       if (_dueFilter != 'all') {
         final st = _dueState(a);
         if (_dueFilter == 'due' && st == null) return false;
@@ -286,6 +317,279 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       }
       return true;
     }).toList();
+  }
+
+  // ───────────────────────────────────────────────────── supervision
+  /// supervised · rejected (back with whoever changed it) · pending.
+  String _supState(Map<String, dynamic> a) {
+    if (a['supervised_at'] != null) return 'supervised';
+    if (a['rejected_at'] != null) return 'rejected';
+    // Before SQL 348 the column doesn't exist — treat as checked.
+    if (!a.containsKey('supervised_at')) return 'supervised';
+    return 'pending';
+  }
+
+  int _supCount(String st) => _assets.where((a) => _supState(a) == st).length;
+
+  static const _supFieldLabels = {
+    'asset_code': 'Asset code', 'name': 'Name', 'description': 'Description',
+    'category_id': 'Category', 'status': 'Status', 'condition': 'Condition',
+    'branch_id': 'Branch', 'location_text': 'Location', 'assigned_to': 'Custodian',
+    'serial_no': 'Serial no.', 'model': 'Model', 'manufacturer': 'Manufacturer',
+    'supplier_id': 'Supplier', 'purchase_cost': 'Purchase cost',
+    'purchase_date': 'Purchase date', 'warranty_expiry': 'Warranty till', 'notes': 'Notes',
+  };
+
+  String _supValue(String field, dynamic v) {
+    if (v == null || '$v'.trim().isEmpty) return '—';
+    final s = '$v';
+    switch (field) {
+      case 'branch_id': return _branchNames[s] ?? s;
+      case 'category_id': return _catNames[s] ?? s;
+      case 'assigned_to': return _custodianNames[s] ?? s;
+      case 'status':
+      case 'condition': return _optLabel(s);
+      case 'purchase_cost': final n = num.tryParse(s); return n == null ? s : 'Rs ${_money.format(n)}';
+      case 'purchase_date':
+      case 'warranty_expiry': return _fmtDate(s) ?? s;
+    }
+    return s;
+  }
+
+  String _when(dynamic ts) {
+    final d = DateTime.tryParse('${ts ?? ''}');
+    return d == null ? '' : DateFormat('d MMM y, h:mm a').format(d.toLocal());
+  }
+
+  Future<void> _supervise(List<String> ids) async {
+    if (ids.isEmpty || !_canSupervise) return;
+    final user = ref.read(currentUserProvider);
+    setState(() => _supBusy = true);
+    try {
+      await Supabase.instance.client.from('assets').update({
+        'supervised_at': DateTime.now().toUtc().toIso8601String(),
+        'supervised_by': user?.id,
+        'supervised_by_name': user?.name,
+      }).inFilter('id', ids).filter('supervised_at', 'is', null).filter('rejected_at', 'is', null);
+      _snack(ids.length == 1 ? 'Asset supervised' : '${ids.length} assets supervised');
+      await _load();
+    } catch (e) {
+      _snack(e.toString().contains('supervised_at')
+          ? 'Run SQL 348 in Supabase first.'
+          : 'Could not supervise: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _supBusy = false);
+    }
+  }
+
+  Future<void> _confirmSupervise(List<String> ids) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(ids.length == 1 ? 'Supervise this asset?' : 'Supervise ${ids.length} assets?'),
+        content: const Text('Marks the asset (and the changes shown) as checked.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.verified_outlined, size: 16),
+              label: const Text('Supervise')),
+        ],
+      ),
+    );
+    if (ok == true) await _supervise(ids);
+  }
+
+  Future<void> _rejectAsset(Map<String, dynamic> a) async {
+    if (!_canSupervise) return;
+    final ctrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject asset change'),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('It goes back to ${a['sup_changed_by_name'] ?? 'the person who changed it'} to fix and resend.',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLines: 3,
+              decoration: const InputDecoration(labelText: 'Reason *', border: OutlineInputBorder()),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
+            onPressed: () {
+              if (ctrl.text.trim().isEmpty) return;
+              Navigator.pop(ctx, ctrl.text.trim());
+            },
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    if (reason == null || reason.isEmpty) return;
+    final user = ref.read(currentUserProvider);
+    setState(() => _supBusy = true);
+    try {
+      await Supabase.instance.client.from('assets').update({
+        'rejected_at': DateTime.now().toUtc().toIso8601String(),
+        'rejected_by': user?.id,
+        'rejected_by_name': user?.name,
+        'reject_reason': reason,
+      }).eq('id', a['id']).filter('supervised_at', 'is', null);
+      _snack('Rejected — sent back');
+      await _load();
+    } catch (e) {
+      _snack('Could not reject: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _supBusy = false);
+    }
+  }
+
+  /// Resend a rejected asset without further changes.
+  Future<void> _resendAsset(Map<String, dynamic> a) async {
+    setState(() => _supBusy = true);
+    try {
+      await Supabase.instance.client.from('assets').update({'rejected_at': null}).eq('id', a['id']);
+      _snack('Resent for supervision');
+      await _load();
+    } catch (e) {
+      _snack('Could not resend: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _supBusy = false);
+    }
+  }
+
+  Widget _supervisionPanel(Map<String, dynamic> a) {
+    final st = _supState(a);
+    if (st == 'supervised') {
+      final by = a['supervised_by_name'];
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Row(children: [
+          Icon(Icons.verified, size: 16, color: Colors.green.shade700),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Supervised${by == null ? '' : ' by $by'}${_when(a['supervised_at']).isEmpty ? '' : ' · ${_when(a['supervised_at'])}'}',
+              style: TextStyle(fontSize: 12, color: Colors.green.shade800, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ]),
+      );
+    }
+    final rejected = st == 'rejected';
+    final color = rejected ? AppTheme.danger : Colors.orange.shade800;
+    final diff = (a['sup_diff'] is Map) ? Map<String, dynamic>.from(a['sup_diff'] as Map) : <String, dynamic>{};
+    final reason = '${a['sup_reason'] ?? ''}';
+    final what = reason == 'created'
+        ? 'New asset'
+        : reason == 'resubmitted'
+            ? 'Resent after rejection'
+            : 'Edited';
+    final me = ref.read(currentUserProvider)?.id;
+    final mine = a['sup_changed_by'] != null && a['sup_changed_by'] == me;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(rejected ? Icons.undo : Icons.hourglass_top, size: 16, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(rejected ? 'Rejected by supervisor' : 'Awaiting supervision',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Text(
+          '$what${a['sup_changed_by_name'] == null ? '' : ' by ${a['sup_changed_by_name']}'}'
+          '${_when(a['sup_changed_at']).isEmpty ? '' : ' · ${_when(a['sup_changed_at'])}'}',
+          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+        ),
+        if (rejected) ...[
+          const SizedBox(height: 6),
+          Text(
+            '${a['rejected_by_name'] ?? 'Supervisor'}${_when(a['rejected_at']).isEmpty ? '' : ' · ${_when(a['rejected_at'])}'}: '
+            '${a['reject_reason'] ?? ''}',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.danger),
+          ),
+          const SizedBox(height: 2),
+          const Text('Fix it with Edit and save — or Resend as is. It goes back to the supervisor.',
+              style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ],
+        if (diff.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          const Text('CHANGED SINCE LAST CHECK',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.6, color: AppTheme.textSecondary)),
+          const SizedBox(height: 4),
+          for (final e in diff.entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text.rich(TextSpan(style: const TextStyle(fontSize: 12), children: [
+                TextSpan(text: '${_supFieldLabels[e.key] ?? e.key}: ',
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                TextSpan(
+                    text: _supValue(e.key, (e.value is Map) ? (e.value as Map)['from'] : null),
+                    style: const TextStyle(color: AppTheme.textSecondary, decoration: TextDecoration.lineThrough)),
+                const TextSpan(text: '  →  '),
+                TextSpan(text: _supValue(e.key, (e.value is Map) ? (e.value as Map)['to'] : null),
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+              ])),
+            ),
+        ],
+        if ((_canSupervise && !rejected) || (rejected && (mine || _canSupervise))) ...[
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 6, children: [
+            if (_canSupervise && !rejected) ...[
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white),
+                onPressed: _supBusy ? null : () => _confirmSupervise([a['id'] as String]),
+                icon: const Icon(Icons.verified_outlined, size: 16),
+                label: const Text('Supervise'),
+              ),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger),
+                onPressed: _supBusy ? null : () => _rejectAsset(a),
+                icon: const Icon(Icons.undo, size: 16),
+                label: const Text('Reject'),
+              ),
+            ],
+            if (rejected)
+              OutlinedButton.icon(
+                onPressed: _supBusy ? null : () => _resendAsset(a),
+                icon: const Icon(Icons.send_outlined, size: 16),
+                label: const Text('Resend as is'),
+              ),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _supIcon(Map<String, dynamic> a) {
+    switch (_supState(a)) {
+      case 'pending':
+        return const Tooltip(message: 'Awaiting supervision',
+            child: Icon(Icons.hourglass_top, size: 15, color: Colors.orange));
+      case 'rejected':
+        return const Tooltip(message: 'Rejected by supervisor',
+            child: Icon(Icons.undo, size: 15, color: AppTheme.danger));
+    }
+    return const SizedBox.shrink();
   }
 
   void _snack(String m) {
@@ -1442,6 +1746,32 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 },
                 onChanged: (v) => setState(() => _dueFilter = v),
               ),
+              if (_supFlow) ...[
+                const SizedBox(height: 8),
+                _filterDropdown(
+                  value: _supFilter,
+                  hint: 'Supervision',
+                  items: {
+                    'all': 'All',
+                    'pending': 'Awaiting supervision (${_supCount('pending')})',
+                    'rejected': 'Rejected (${_supCount('rejected')})',
+                    'supervised': 'Supervised',
+                  },
+                  onChanged: (v) => setState(() => _supFilter = v),
+                ),
+                if (_canSupervise && _supFilter == 'pending' && rows.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(foregroundColor: Colors.green.shade800),
+                      onPressed: _supBusy ? null : () => _confirmSupervise([for (final a in rows) a['id'] as String]),
+                      icon: const Icon(Icons.done_all, size: 16),
+                      label: Text('Supervise all ${rows.length} shown'),
+                    ),
+                  ),
+                ],
+              ],
             ]),
           ),
           const Divider(height: 1),
@@ -1476,6 +1806,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          if (_supFlow && _supState(a) != 'supervised') ...[
+                            _supIcon(a),
+                            const SizedBox(width: 6),
+                          ],
                           if (_dueState(a) != null) ...[
                             Icon(Icons.build_circle,
                                 size: 16,
@@ -1597,6 +1931,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               ]),
             ]),
             const SizedBox(height: 16),
+            if (_supFlow) _supervisionPanel(a),
             // placement
             _section('Current placement', [
               _kv('Branch',
@@ -2061,7 +2396,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
             if (isEdit) {
               await client
                   .from('assets')
-                  .update(payload)
+                  .update({
+                    ...payload,
+                    // Saving a rejected asset sends it back to the supervisor.
+                    if (_supFlow && existing['rejected_at'] != null && existing['supervised_at'] == null)
+                      'rejected_at': null,
+                  })
                   .eq('id', existing['id']);
             } else {
               final id = 'asset_${DateTime.now().millisecondsSinceEpoch}';

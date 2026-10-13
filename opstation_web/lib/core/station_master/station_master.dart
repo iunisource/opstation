@@ -41,6 +41,7 @@ import '../layout/main_layout.dart'
         grnSupervisePendingProvider,
         customerSupervisePendingProvider,
         productSupervisePendingProvider,
+        assetSupervisePendingProvider,
         piReviewPendingProvider,
         priReviewPendingProvider,
         siReviewPendingProvider,
@@ -1647,6 +1648,10 @@ Future<_Msg> _pending(_Ctx c) async {
   if (c.can('/erp/products')) {
     final n = await read(productSupervisePendingProvider);
     if (n > 0) items.add('$n product${n == 1 ? '' : 's'} awaiting supervision');
+  }
+  if (c.can('/assets')) {
+    final n = await read(assetSupervisePendingProvider);
+    if (n > 0) items.add('$n asset${n == 1 ? '' : 's'} awaiting supervision');
   }
   if (c.can('/customers') || c.can('/erp/customer-ledger')) {
     final n = await read(customerSupervisePendingProvider);

@@ -582,6 +582,23 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.asset_supervise_flow',
+    'Supervision for assets (add & edit)',
+    'When ON, every new asset AND every change to an existing asset (details, '
+        'branch, custodian, status — including Reassign / move and CSV import) '
+        'goes to the supervisors picked below for a check. The asset shows '
+        '"Awaiting supervision" with exactly what changed (old → new) since the '
+        'last check; a supervisor presses Supervise, or Reject with a reason — it '
+        'then goes back to the person who changed it to fix and resend. A '
+        'pendency counter shows on Management → Assets, and alerts can be set in '
+        'Admin Settings → Notifications (Assets). Supervision is NON-BLOCKING — '
+        'the asset works as normal while it waits. Existing assets were '
+        'auto-supervised. Only the users picked below can supervise (admins are '
+        'not included automatically — add them here if they should).',
+    users: _UsersField('org.asset_supervisor_users', 'Asset supervisors'),
+  ),
+
+  _AdminToggle(
     'org.schemes_enabled',
     'Schemes & Offers engine',
     'When ON, the Schemes & Offers tool goes live: as a salesperson builds a '
@@ -681,6 +698,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Alerts, Data & Assets', Icons.notifications_active_outlined, [
     'org.asset_maintenance_reminder',
     'org.asset_custodian_reminder',
+    'org.asset_supervise_flow',
     'org.backup_enabled',
   ]),
   _ToggleGroup('Assistant', Icons.hub_outlined, [

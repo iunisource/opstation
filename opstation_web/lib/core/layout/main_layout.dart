@@ -250,6 +250,38 @@ final assetsDueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Asset supervision counter (org.asset_supervise_flow): supervisors see assets
+// waiting for a check; whoever last changed an asset sees it if it was rejected.
+final assetSupervisePendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfgRows = await client.from('app_config').select('key,value')
+        .eq('org_id', user.orgId!)
+        .inFilter('key', ['org.asset_supervise_flow', 'org.asset_supervisor_users']);
+    final cfgM = {for (final r in cfgRows as List) r['key'] as String: (r['value']?.toString() ?? '')};
+    if (cfgM['org.asset_supervise_flow'] != 'true') return 0;
+    final supervisorIds = (cfgM['org.asset_supervisor_users'] ?? '')
+        .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+    var total = 0;
+    if (supervisorIds.contains(user.id)) {
+      final res = await client.from('assets').select('id')
+          .eq('org_id', user.orgId!).eq('is_active', true)
+          .filter('supervised_at', 'is', null)
+          .filter('rejected_at', 'is', null);
+      total += (res as List).length;
+    }
+    final mine = await client.from('assets').select('id')
+        .eq('org_id', user.orgId!).eq('is_active', true).eq('sup_changed_by', user.id)
+        .filter('supervised_at', 'is', null)
+        .not('rejected_at', 'is', null);
+    total += (mine as List).length;
+    return total;
+  } catch (_) { return 0; }
+});
+
 // Count of facility tasks open & overdue for the current org (nav badge).
 final facilityDueCountProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
@@ -1123,6 +1155,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
   final supplierPending = ref.watch(supplierPendingCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
+  final assetSupervisePending = ref.watch(assetSupervisePendingProvider).valueOrNull ?? 0;
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
       (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0);
@@ -1454,13 +1487,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/assets', '/assets/report', '/facility'],
           [
             if (show('/assets'))
-              _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue),
+              _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue + assetSupervisePending),
             if (show('/assets/report'))
               _menuItem(context, 'Asset Report', Icons.summarize_outlined, '/assets/report', location),
             if (show('/facility'))
               _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
           ],
-          badge: assetsDue + facilityDue,
+          badge: assetsDue + assetSupervisePending + facilityDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/automation', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/ai-connector', '/erp/audit-log'],
