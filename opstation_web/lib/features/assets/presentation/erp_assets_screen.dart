@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../../../core/widgets/camera_capture.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1639,6 +1640,11 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
           const Spacer(),
           TextButton.icon(
+            icon: const Icon(Icons.photo_camera_outlined, size: 16),
+            label: const Text('Camera'),
+            onPressed: _detailLoading ? null : () => _cameraFile(a),
+          ),
+          TextButton.icon(
             icon: const Icon(Icons.upload_file, size: 16),
             label: const Text('Upload'),
             onPressed: _detailLoading ? null : () => _uploadFile(a),
@@ -1741,38 +1747,46 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       reader.onLoad.listen((_) async {
         final r = reader.result;
         final bytes = r is ByteBuffer ? r.asUint8List() : r as Uint8List;
-        try {
-          final client = Supabase.instance.client;
-          final orgId = _orgId ?? 'org';
-          final safe = f.name.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-          final path =
-              '$orgId/${a['id']}/${DateTime.now().millisecondsSinceEpoch}_$safe';
-          final isImg = (f.type).startsWith('image/');
-          await client.storage.from(_bucket).uploadBinary(path, bytes,
-              fileOptions: FileOptions(
-                  contentType: f.type.isEmpty ? null : f.type, upsert: false));
-          await client.from('asset_files').insert({
-            'id': 'afil_${DateTime.now().millisecondsSinceEpoch}',
-            'org_id': orgId,
-            'asset_id': a['id'],
-            'file_type': isImg ? 'image' : 'pdf',
-            'storage_path': path,
-            'title': f.name,
-            'uploaded_by': client.auth.currentUser?.id,
-          });
-          // first image becomes the primary thumbnail
-          if (isImg && (a['image_path'] == null)) {
-            await client
-                .from('assets')
-                .update({'image_path': path}).eq('id', a['id']);
-          }
-          _loadDetail(a['id'] as String);
-          _load();
-        } catch (e) {
-          _snack('Upload failed: ${e.toString().split('\n').first}');
-        }
+        await _storeAssetFile(a, bytes, f.name, f.type);
       });
     });
+  }
+
+  /// Live camera photo → stored like an uploaded image.
+  Future<void> _cameraFile(Map<String, dynamic> a) async {
+    final bytes = await showCameraCapture(context, title: 'Asset photo');
+    if (bytes == null || bytes.isEmpty) return;
+    final name = 'photo_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.jpg';
+    await _storeAssetFile(a, bytes, name, 'image/jpeg');
+  }
+
+  Future<void> _storeAssetFile(Map<String, dynamic> a, Uint8List bytes, String name, String type) async {
+    try {
+      final client = Supabase.instance.client;
+      final orgId = _orgId ?? 'org';
+      final safe = name.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+      final path = '$orgId/${a['id']}/${DateTime.now().millisecondsSinceEpoch}_$safe';
+      final isImg = type.startsWith('image/');
+      await client.storage.from(_bucket).uploadBinary(path, bytes,
+          fileOptions: FileOptions(contentType: type.isEmpty ? null : type, upsert: false));
+      await client.from('asset_files').insert({
+        'id': 'afil_${DateTime.now().millisecondsSinceEpoch}',
+        'org_id': orgId,
+        'asset_id': a['id'],
+        'file_type': isImg ? 'image' : 'pdf',
+        'storage_path': path,
+        'title': name,
+        'uploaded_by': client.auth.currentUser?.id,
+      });
+      // first image becomes the primary thumbnail
+      if (isImg && (a['image_path'] == null)) {
+        await client.from('assets').update({'image_path': path}).eq('id', a['id']);
+      }
+      _loadDetail(a['id'] as String);
+      _load();
+    } catch (e) {
+      _snack('Upload failed: ${e.toString().split('\n').first}');
+    }
   }
 
   // ───────────────────────────────────────────────────── history

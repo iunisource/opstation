@@ -52,6 +52,21 @@ class CatalogImageUploader {
     return storage.getPublicUrl(path);
   }
 
+  /// Upload already-captured bytes (e.g. a live camera photo) to the same place.
+  static Future<String> uploadBytes({
+    required String orgId,
+    required String folder,
+    required String keyHint,
+    required Uint8List bytes,
+    String ext = 'jpg',
+  }) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final path = '$orgId/$folder/$keyHint-$ts.$ext';
+    final storage = Supabase.instance.client.storage.from(bucket);
+    await storage.uploadBinary(path, bytes, fileOptions: FileOptions(contentType: _mime(ext), upsert: true));
+    return storage.getPublicUrl(path);
+  }
+
   static String _mime(String ext) {
     switch (ext) {
       case 'jpg':

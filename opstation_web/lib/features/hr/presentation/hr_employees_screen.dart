@@ -14,6 +14,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import 'employee_history_section.dart';
+import '../../../core/widgets/camera_capture.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -80,6 +81,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   String? _deptId, _desigId, _branchId, _gender, _empType;
   String? _bloodGroup;
   String _bloodFilter = 'all'; // directory list filter: all | none | A+ …
+  Map<String, int> _docCount = {}; // employee_id -> supporting documents on file
   DateTime? _dob, _joinDate, _leftOn;
   String _status = 'active';
   String? _shiftId;
@@ -142,6 +144,15 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_employees').select().eq('org_id', orgId).order('full_name');
     if (mounted) setState(() => _employees = List<Map<String, dynamic>>.from(rows));
+    try {
+      final docs = await Supabase.instance.client.from('hr_employee_documents').select('employee_id').eq('org_id', orgId);
+      final m = <String, int>{};
+      for (final d in docs as List) {
+        final k = d['employee_id'] as String?;
+        if (k != null) m[k] = (m[k] ?? 0) + 1;
+      }
+      if (mounted) setState(() => _docCount = m);
+    } catch (_) {}
     // Auto-select the employee passed in (e.g. tapped on the Attendance Board),
     // once, after the list is available.
     final fid = widget.focusId;
@@ -738,7 +749,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (id == null) { if (mounted) setState(() => _docs = []); return; }
     try {
       final rows = await Supabase.instance.client.from('hr_employee_documents').select().eq('employee_id', id).order('uploaded_at', ascending: false);
-      if (mounted) setState(() => _docs = List<Map<String, dynamic>>.from(rows));
+      if (mounted) setState(() { _docs = List<Map<String, dynamic>>.from(rows); _docCount[id] = _docs.length; });
     } catch (_) { /* table may not exist yet */ }
   }
 
@@ -1420,6 +1431,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                     const SizedBox(height: 2),
                     Text('${e['employee_code'] ?? ''}  \u00b7  ${_desigName[e['designation_id']] ?? '\u2014'}', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
                     Text(_deptName[e['department_id']] ?? '', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 4),
+                    _listCompletion(e, sel),
                   ]),
                 ));
               })),
@@ -1430,6 +1443,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         Expanded(child: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(padding: EdgeInsets.all(isNarrow(context) ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (_current != null) _completionBar(),
             _photoSection(),
             const SizedBox(height: 16),
             _card('Employment', [
@@ -1740,6 +1754,109 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         const Icon(Icons.calendar_today_outlined, size: 13, color: AppTheme.textSecondary),
       ])));
 
+  // ── Profile completion ────────────────────────────────────────────────
+  // Photo = 10%. The other 90% is shared equally by the sections; a section
+  // counts as complete once at least one of its fields is filled. Name / code /
+  // status (always present) and the salary-advance account carry no score.
+  static const _photoWeight = 10.0;
+  static const _sectionFields = <String, List<String>>{
+    'Employment': ['department_id', 'designation_id', 'branch_id', 'employment_type', 'join_date', 'basic_salary',
+        'shift_id', 'card_uid', 'reports_to', 'accommodation', 'paid_leave_days'],
+    'Personal & contact': ['father_name', 'cnic', 'gender', 'date_of_birth', 'blood_group', 'phone', 'email',
+        'emergency_contact', 'address'],
+    'Bank & notes': ['bank_name', 'bank_account', 'notes'],
+  };
+
+  static bool _filled(dynamic v) {
+    if (v == null) return false;
+    if (v is num) return v != 0;
+    final t = '$v'.trim();
+    return t.isNotEmpty && t != '0';
+  }
+
+  /// (percent, missing section names)
+  static (int, List<String>) _completion(Map<String, dynamic> e, int docs) {
+    final sections = _sectionFields.length + 1; // + Supporting documents
+    final each = (100 - _photoWeight) / sections;
+    var pct = 0.0;
+    final missing = <String>[];
+    if (_filled(e['photo_url'])) { pct += _photoWeight; } else { missing.add('Photo'); }
+    _sectionFields.forEach((name, fields) {
+      if (fields.any((f) => _filled(e[f]))) { pct += each; } else { missing.add(name); }
+    });
+    if (docs > 0) { pct += each; } else { missing.add('Documents'); }
+    return (pct.round(), missing);
+  }
+
+  /// The profile as currently typed (unsaved edits count straight away).
+  Map<String, dynamic> _formValues() => {
+        'photo_url': _photoUrl,
+        'department_id': _deptId, 'designation_id': _desigId, 'branch_id': _branchId, 'employment_type': _empType,
+        'join_date': _joinDate?.toIso8601String(), 'basic_salary': _salary.text, 'shift_id': _shiftId,
+        'card_uid': _cardUid.text, 'reports_to': _reportsTo.text, 'accommodation': _accommodation,
+        'paid_leave_days': _plDays.text,
+        'father_name': _father.text, 'cnic': _cnic.text, 'gender': _gender, 'date_of_birth': _dob?.toIso8601String(),
+        'blood_group': _bloodGroup, 'phone': _phone.text, 'email': _email.text, 'emergency_contact': _emergency.text,
+        'address': _address.text,
+        'bank_name': _bankName.text, 'bank_account': _bankAcct.text, 'notes': _notes.text,
+      };
+
+  Listenable get _formListenable => Listenable.merge([
+        _salary, _cardUid, _reportsTo, _plDays, _father, _cnic, _phone, _email, _emergency, _address,
+        _bankName, _bankAcct, _notes,
+      ]);
+
+  Color _pctColor(int p) => p >= 80 ? Colors.green.shade600 : (p >= 50 ? Colors.amber.shade700 : Colors.red.shade400);
+
+  Widget _completionBar() => AnimatedBuilder(
+        animation: _formListenable,
+        builder: (_, __) {
+          final (pct, missing) = _completion(_formValues(), _docs.length);
+          final c = _pctColor(pct);
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                const Text('Profile completion', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                Text('$pct%', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c)),
+              ]),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(value: pct / 100, minHeight: 6, color: c, backgroundColor: AppTheme.background),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                  missing.isEmpty
+                      ? 'All sections have information.'
+                      : 'Still missing: ${missing.join(', ')}  ·  photo 10%, each section ${((100 - _photoWeight) / (_sectionFields.length + 1)).toStringAsFixed(1)}%',
+                  style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+            ]),
+          );
+        },
+      );
+
+  Widget _listCompletion(Map<String, dynamic> e, bool sel) {
+    Widget bar(int pct) => Row(children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(value: pct / 100, minHeight: 4, color: _pctColor(pct), backgroundColor: AppTheme.background),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text('$pct%', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: _pctColor(pct))),
+        ]);
+    if (sel) {
+      // the open profile updates live while typing
+      return AnimatedBuilder(animation: _formListenable, builder: (_, __) => bar(_completion(_formValues(), _docs.length).$1));
+    }
+    return bar(_completion(e, _docCount[e['id']] ?? 0).$1);
+  }
+
   Widget _photoSection() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1751,21 +1868,26 @@ class _State extends ConsumerState<HrEmployeesScreen> {
           alignment: Alignment.center,
           child: (_photoUrl == null || _photoUrl!.isEmpty) ? const Icon(Icons.person_outline, size: 30, color: AppTheme.textSecondary) : null),
         const SizedBox(width: 14),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
           const Text('Photo', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
-          Row(children: [
+          Wrap(spacing: 0, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
             OutlinedButton.icon(
               icon: _photoUploading ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.upload_outlined, size: 15),
               label: Text(_photoUrl != null && _photoUrl!.isNotEmpty ? 'Change' : 'Upload', style: const TextStyle(fontSize: 12)),
               onPressed: (!_canWrite || _photoUploading) ? null : _uploadPhoto),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.photo_camera_outlined, size: 15),
+              label: const Text('Camera', style: TextStyle(fontSize: 12)),
+              onPressed: (!_canWrite || _photoUploading) ? null : _cameraPhoto),
             if (_canWrite && _photoUrl != null && _photoUrl!.isNotEmpty) ...[
               const SizedBox(width: 8),
               TextButton.icon(icon: const Icon(Icons.delete_outline, size: 15, color: Colors.red), label: const Text('Remove', style: TextStyle(fontSize: 12, color: Colors.red)), onPressed: () => setState(() => _photoUrl = null)),
             ],
           ]),
-          const Text('JPG/PNG. Saved with the employee.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
-        ]),
+          const Text('Upload a JPG/PNG or take one with the camera. Saved with the employee.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+        ])),
       ]),
     );
   }
@@ -1802,6 +1924,20 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       }
     } catch (e) { _snack('Could not process image: $e'); setState(() => _photoUploading = false); return; }
     if (bytes.isEmpty) { _snack('Selected file is empty'); setState(() => _photoUploading = false); return; }
+    await _storePhoto(bytes, contentType, ext);
+  }
+
+  /// Live camera → same storage as an uploaded photo.
+  Future<void> _cameraPhoto() async {
+    if (!_canWrite) return;
+    final bytes = await showCameraCapture(context, title: 'Employee photo', preferFront: true);
+    if (bytes == null || bytes.isEmpty || !mounted) return;
+    setState(() => _photoUploading = true);
+    await _storePhoto(bytes, 'image/jpeg', 'jpg');
+  }
+
+  Future<void> _storePhoto(Uint8List bytes, String contentType, String ext) async {
+    final orgId = _orgId; if (orgId == null) { if (mounted) setState(() => _photoUploading = false); return; }
     final path = '$orgId/${_current?['id'] ?? 'new'}_${DateTime.now().millisecondsSinceEpoch}.$ext';
     try {
       await Supabase.instance.client.storage.from('hr-photos').uploadBinary(path, bytes,

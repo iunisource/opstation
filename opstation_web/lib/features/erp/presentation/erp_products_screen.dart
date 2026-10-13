@@ -3,6 +3,7 @@
 import 'dart:html' as html;
 import 'package:barcode/barcode.dart' as bc;
 import 'package:flutter/material.dart';
+import '../../../core/widgets/camera_capture.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart' as xls;
@@ -1188,6 +1189,33 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                         },
                         child: Text(imageUrl == null ? 'Add photo' : 'Change',
                             style: const TextStyle(fontSize: 11)),
+                      ),
+                    ),
+                    SizedBox(
+                      height: 24,
+                      child: TextButton.icon(
+                        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6)),
+                        icon: const Icon(Icons.photo_camera_outlined, size: 13),
+                        label: const Text('Camera', style: TextStyle(fontSize: 11)),
+                        onPressed: () async {
+                          final orgId = ref.read(currentUserProvider)?.orgId;
+                          if (orgId == null) return;
+                          final bytes = await showCameraCapture(context, title: 'Product photo');
+                          if (bytes == null) return;
+                          try {
+                            final url = await CatalogImageUploader.uploadBytes(
+                              orgId: orgId,
+                              folder: 'products',
+                              keyHint: product?['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
+                              bytes: bytes,
+                            );
+                            setS(() => imageUrl = url);
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+                            }
+                          }
+                        },
                       ),
                     ),
                     if (imageUrl != null)
