@@ -6,6 +6,7 @@ import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/camera_capture.dart';
+import '../../../core/storage/image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1806,7 +1807,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       reader.onLoad.listen((_) async {
         final r = reader.result;
         final bytes = r is ByteBuffer ? r.asUint8List() : r as Uint8List;
-        await _storeAssetFile(a, bytes, f.name, f.type);
+        if (f.type.startsWith('image/')) {
+          // Shrink photos (≤1600 px, JPEG 82%) before storing.
+          final (cb, cm, ce) = await compressImageBytes(bytes, mime: f.type);
+          final base = f.name.contains('.') ? f.name.substring(0, f.name.lastIndexOf('.')) : f.name;
+          await _storeAssetFile(a, cb, '$base.$ce', cm);
+        } else {
+          await _storeAssetFile(a, bytes, f.name, f.type);
+        }
       });
     });
   }

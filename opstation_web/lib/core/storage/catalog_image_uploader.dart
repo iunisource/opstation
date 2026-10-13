@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'image_compress.dart';
+
 /// Uploads catalogue imagery (brand logos, product photos) to the public
 /// `opstation-photos` bucket and returns the public URL.
 ///
@@ -36,16 +38,21 @@ class CatalogImageUploader {
     final Uint8List? bytes = file.bytes;
     if (bytes == null) return null;
 
-    final ext = (file.extension ?? 'png').toLowerCase();
+    // Shrink large photos (≤1600 px, JPEG 82%) — still sharp on screen/print.
+    // Brand logos keep their original file (often transparent PNGs).
+    final srcExt = (file.extension ?? 'png').toLowerCase();
+    final (outBytes, outMime, ext) = folder == 'products'
+        ? await compressImageBytes(bytes, mime: _mime(srcExt))
+        : (bytes, _mime(srcExt), srcExt);
     final ts = DateTime.now().millisecondsSinceEpoch;
     final path = '$orgId/$folder/$keyHint-$ts.$ext';
 
     final storage = Supabase.instance.client.storage.from(bucket);
     await storage.uploadBinary(
       path,
-      bytes,
+      outBytes,
       fileOptions: FileOptions(
-        contentType: _mime(ext),
+        contentType: outMime,
         upsert: true,
       ),
     );
