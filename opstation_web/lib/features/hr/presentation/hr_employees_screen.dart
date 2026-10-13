@@ -753,6 +753,54 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     } catch (_) { /* table may not exist yet */ }
   }
 
+  /// Photograph a document (CNIC, contract…) with the live camera.
+  Future<void> _cameraDoc() async {
+    if (!_canWrite || _current == null) return;
+    final orgId = _orgId; if (orgId == null) return;
+    // Higher resolution than a profile photo so small print stays readable.
+    final bytes = await showCameraCapture(context, title: 'Photograph document', maxSide: 1800);
+    if (bytes == null || bytes.isEmpty || !mounted) return;
+    final nameCtrl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: const Text('Name this document'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(controller: nameCtrl, autofocus: true,
+              decoration: const InputDecoration(hintText: 'e.g. CNIC (front)', border: OutlineInputBorder(), isDense: true)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 4, children: [
+            for (final n in const ['CNIC (front)', 'CNIC (back)', 'Contract', 'Certificate', 'Police verification'])
+              ActionChip(label: Text(n, style: const TextStyle(fontSize: 11.5)), visualDensity: VisualDensity.compact,
+                  onPressed: () => setD(() => nameCtrl.text = n)),
+          ]),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim()), child: const Text('Save')),
+        ],
+      )),
+    );
+    nameCtrl.dispose();
+    if (name == null || !mounted) return;
+    setState(() => _docUploading = true);
+    try {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final label = name.isEmpty ? 'Document ${DateFormat('d MMM yyyy').format(DateTime.now())}' : name;
+      final path = '$orgId/docs/${_current!['id']}_$ts.jpg';
+      final client = Supabase.instance.client;
+      await client.storage.from('hr-photos').uploadBinary(path, bytes, fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'));
+      final url = client.storage.from('hr-photos').getPublicUrl(path);
+      await client.from('hr_employee_documents').insert({
+        'id': 'doc_$ts', 'org_id': orgId, 'employee_id': _current!['id'],
+        'name': '$label.jpg', 'url': url, 'file_type': 'image/jpeg', 'size_bytes': bytes.length, 'uploaded_by': _userId,
+      });
+      await _loadDocs();
+      _snack('Document saved');
+    } catch (e) { _snack('Upload failed: $e'); }
+    if (mounted) setState(() => _docUploading = false);
+  }
+
   Future<void> _uploadDoc() async {
     if (!_canWrite) { _snack('You do not have edit access'); return; }
     if (_current == null) { _snack('Save the employee first, then attach documents'); return; }
@@ -1307,13 +1355,18 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       if (_current == null)
         const Text('Save the employee profile first, then attach documents (CNIC, contract, certificates).', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))
       else ...[
-        Row(children: [
+        Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           OutlinedButton.icon(
             icon: _docUploading ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.attach_file, size: 15),
             label: const Text('Upload document', style: TextStyle(fontSize: 12)),
             onPressed: (!_canWrite || _docUploading) ? null : _uploadDoc),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.document_scanner_outlined, size: 15),
+            label: const Text('Camera', style: TextStyle(fontSize: 12)),
+            onPressed: (!_canWrite || _docUploading) ? null : _cameraDoc),
           const SizedBox(width: 10),
-          const Expanded(child: Text('Images are compressed automatically. PDFs upload as-is.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary))),
+          const Text('Images are compressed automatically. PDFs upload as-is.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
         ]),
         const SizedBox(height: 10),
         if (_docs.isEmpty)

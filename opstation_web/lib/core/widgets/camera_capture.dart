@@ -9,16 +9,16 @@ import 'package:flutter/material.dart';
 /// Take a photo with the device camera (web). Shows a live preview with
 /// Capture / Retake / Use photo, and a front/back switch when the device has
 /// more than one camera. Returns JPEG bytes, or null if cancelled / no camera.
-Future<Uint8List?> showCameraCapture(BuildContext context, {String title = 'Take photo', bool preferFront = false}) {
+Future<Uint8List?> showCameraCapture(BuildContext context, {String title = 'Take photo', bool preferFront = false, int maxSide = 1280}) {
   final narrow = MediaQuery.of(context).size.width < 600;
   return showDialog<Uint8List>(
     context: context,
     barrierDismissible: false,
     builder: (_) => narrow
-        ? Dialog.fullscreen(child: _CameraCapture(title: title, preferFront: preferFront, fullScreen: true))
+        ? Dialog.fullscreen(child: _CameraCapture(title: title, preferFront: preferFront, maxSide: maxSide, fullScreen: true))
         : Dialog(
             insetPadding: const EdgeInsets.all(24),
-            child: SizedBox(width: 560, height: 560, child: _CameraCapture(title: title, preferFront: preferFront)),
+            child: SizedBox(width: 560, height: 560, child: _CameraCapture(title: title, preferFront: preferFront, maxSide: maxSide)),
           ),
   );
 }
@@ -27,7 +27,8 @@ class _CameraCapture extends StatefulWidget {
   final String title;
   final bool preferFront;
   final bool fullScreen;
-  const _CameraCapture({required this.title, required this.preferFront, this.fullScreen = false});
+  final int maxSide;
+  const _CameraCapture({required this.title, required this.preferFront, this.maxSide = 1280, this.fullScreen = false});
   @override
   State<_CameraCapture> createState() => _CameraCaptureState();
 }
@@ -77,7 +78,7 @@ class _CameraCaptureState extends State<_CameraCapture> {
       final media = html.window.navigator.mediaDevices;
       if (media == null) throw 'This browser has no camera access.';
       _stream = await media.getUserMedia({
-        'video': {'facingMode': _facing, 'width': {'ideal': 1280}, 'height': {'ideal': 960}},
+        'video': {'facingMode': _facing, 'width': {'ideal': widget.maxSide > 1280 ? 1920 : 1280}, 'height': {'ideal': widget.maxSide > 1280 ? 1440 : 960}},
         'audio': false,
       });
       _video.srcObject = _stream;
@@ -113,8 +114,9 @@ class _CameraCaptureState extends State<_CameraCapture> {
   void _capture() {
     final w = _video.videoWidth, h = _video.videoHeight;
     if (w == 0 || h == 0) return;
-    // Keep files small: longest side max 1280px.
-    final scale = (w > h ? w : h) > 1280 ? 1280 / (w > h ? w : h) : 1.0;
+    // Keep files small: longest side max [maxSide] px.
+    final m = widget.maxSide;
+    final scale = (w > h ? w : h) > m ? m / (w > h ? w : h) : 1.0;
     final cw = (w * scale).round(), ch = (h * scale).round();
     final canvas = html.CanvasElement(width: cw, height: ch);
     final ctx = canvas.context2D;
