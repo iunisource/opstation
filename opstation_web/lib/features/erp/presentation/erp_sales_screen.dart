@@ -4458,7 +4458,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 bucket: 'si-documents',
                 orgId: _orgId ?? '',
                 userId: ref.read(currentUserProvider)?.id,
-                canWrite: !_isLocked,
+                // Approval/review flow: unchanged — editable only until posted.
+                // Supervision flow (non-blocking): the invoice is already posted,
+                // so attaching stays open (like GRNs); removing stops once supervised.
+                canWrite: !_isLocked || (_superviseFlow && !_reviewFlow && !(_detail['is_voided'] as bool? ?? false)),
+                canRemove: !_isLocked ||
+                    (_superviseFlow && !_reviewFlow && !(_detail['is_voided'] as bool? ?? false) && _detail['supervised_at'] == null),
+                onAudit: (action, fileName) => _logAudit(_detail['id'] as String,
+                    action, fileName),
               ),
               const SizedBox(height: 12),
               VoucherRemarksPanel(

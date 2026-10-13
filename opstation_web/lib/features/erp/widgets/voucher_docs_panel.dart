@@ -21,6 +21,10 @@ class VoucherDocsPanel extends StatefulWidget {
   final String orgId;
   final String? userId;
   final bool canWrite;
+  /// Whether existing documents can be removed. Defaults to [canWrite]. The
+  /// supervision flow keeps attaching open on a posted voucher but stops
+  /// removals once it has been supervised, so the checked evidence stays.
+  final bool? canRemove;
   /// Optional audit hook — fired after a successful add/remove of a document.
   /// action is 'document_added' | 'document_removed'; fileName is the doc name.
   final void Function(String action, String fileName)? onAudit;
@@ -34,8 +38,11 @@ class VoucherDocsPanel extends StatefulWidget {
     required this.orgId,
     required this.userId,
     required this.canWrite,
+    this.canRemove,
     this.onAudit,
   });
+
+  bool get _canRemove => canRemove ?? canWrite;
 
   @override
   State<VoucherDocsPanel> createState() => _VoucherDocsPanelState();
@@ -158,7 +165,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
   }
 
   Future<void> _delete(Map<String, dynamic> d) async {
-    if (!widget.canWrite) return;
+    if (!widget._canRemove) return;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Remove document?'),
       content: Text('Remove "${d['name'] ?? 'document'}"?'),
@@ -278,7 +285,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
         ),
         Positioned(top: 2, right: 2, child: Row(children: [
           _iconChip(Icons.open_in_new, () => _openNewTab(url)),
-          if (widget.canWrite) ...[const SizedBox(width: 2), _iconChip(Icons.close, () => _delete(d))],
+          if (widget._canRemove) ...[const SizedBox(width: 2), _iconChip(Icons.close, () => _delete(d))],
         ])),
       ]),
       const SizedBox(height: 2),
@@ -302,7 +309,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
         Text(_fmtSize((d['size_bytes'] as num?)?.toInt() ?? 0), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
       ])),
       IconButton(icon: const Icon(Icons.open_in_new, size: 16, color: AppTheme.primary), tooltip: 'Open', onPressed: () => _openNewTab(d['url'] as String?)),
-      if (widget.canWrite)
+      if (widget._canRemove)
         IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.danger), tooltip: 'Remove', onPressed: () => _delete(d)),
     ]),
   );

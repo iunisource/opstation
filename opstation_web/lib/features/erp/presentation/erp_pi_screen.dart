@@ -1101,7 +1101,13 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
             bucket: 'pi-documents',
             orgId: _orgId ?? '',
             userId: ref.read(currentUserProvider)?.id,
-            canWrite: _isDraft,
+            // Approval/review flow: unchanged — editable only while draft.
+            // Supervision flow (non-blocking): attaching stays open on the posted
+            // invoice (like GRNs); removing stops once supervised.
+            canWrite: _isDraft || (_superviseFlow && !_reviewFlow && !(_detail['is_voided'] as bool? ?? false)),
+            canRemove: _isDraft ||
+                (_superviseFlow && !_reviewFlow && !(_detail['is_voided'] as bool? ?? false) && _detail['supervised_at'] == null),
+            onAudit: (action, fileName) => _logAudit(_detail['id'] as String, action, fileName),
           ),
           const SizedBox(height: 12),
           VoucherRemarksPanel(
