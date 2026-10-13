@@ -95,9 +95,11 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
           'p_branch_id': null,
         },
       );
+      var rows = List<Map<String, dynamic>>.from(res as List);
+      rows = await _dropExplainedByPpv(orgId, rows);
       if (!mounted) return;
       setState(() {
-        _docRows = List<Map<String, dynamic>>.from(res as List);
+        _docRows = rows;
         _docLoading = false;
       });
     } catch (e) {
@@ -105,6 +107,69 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
       setState(() => _docLoading = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Reconciliation error: $e')));
+    }
+  }
+
+  /// A Purchase Invoice whose price differs from the received cost posts the
+  /// difference on units ALREADY SOLD/USED to Purchase Price Variance (an
+  /// expense), not to inventory. That is correct — but the reconciliation
+  /// compares the invoice's whole GL value with the cost ledger, so the PPV
+  /// shows up as a "difference" (e.g. PI-2026-0117, Rs 99.75). Drop rows whose
+  /// gap is exactly the PPV the invoice booked.
+  Future<List<Map<String, dynamic>>> _dropExplainedByPpv(
+      String orgId, List<Map<String, dynamic>> rows) async {
+    final piNos = rows
+        .map((r) => '${r['voucher_no'] ?? ''}')
+        .where((v) => v.startsWith('PI-') || v.startsWith('PRI-'))
+        .toSet()
+        .toList();
+    if (piNos.isEmpty) return rows;
+    try {
+      final client = Supabase.instance.client;
+      // Match the invoice's journal by reference number, or by its entry
+      // number ("PINV-PI-2026-0117").
+      final byRef = await client
+          .from('journal_entries')
+          .select('id, reference_number, entry_number')
+          .eq('org_id', orgId)
+          .eq('status', 'posted')
+          .inFilter('reference_number', piNos);
+      final byNo = await client
+          .from('journal_entries')
+          .select('id, reference_number, entry_number')
+          .eq('org_id', orgId)
+          .eq('status', 'posted')
+          .inFilter('entry_number', [for (final v in piNos) 'PINV-$v']);
+      final entryToVoucher = <String, String>{};
+      for (final e in [...(byRef as List), ...(byNo as List)]) {
+        final ref = '${e['reference_number'] ?? ''}';
+        final no = '${e['entry_number'] ?? ''}';
+        final v = piNos.contains(ref) ? ref : (no.startsWith('PINV-') ? no.substring(5) : ref);
+        if (piNos.contains(v)) entryToVoucher[e['id'] as String] = v;
+      }
+      if (entryToVoucher.isEmpty) return rows;
+      final lines = await client
+          .from('journal_lines')
+          .select('entry_id, debit, credit, account_name, description')
+          .inFilter('entry_id', entryToVoucher.keys.toList());
+      final ppv = <String, double>{};
+      for (final l in (lines as List)) {
+        final name = '${l['account_name'] ?? ''} ${l['description'] ?? ''}'.toLowerCase();
+        if (!name.contains('price variance')) continue;
+        final v = entryToVoucher[l['entry_id']];
+        if (v == null) continue;
+        final amt = ((l['debit'] as num?)?.toDouble() ?? 0) - ((l['credit'] as num?)?.toDouble() ?? 0);
+        ppv[v] = (ppv[v] ?? 0) + amt;
+      }
+      return rows.where((r) {
+        final v = '${r['voucher_no'] ?? ''}';
+        final p = ppv[v];
+        if (p == null || p == 0) return true;
+        final diff = ((r['difference'] as num?)?.toDouble() ?? 0).abs();
+        return (diff - p.abs()).abs() > 0.05; // keep only if PPV doesn't explain it
+      }).toList();
+    } catch (_) {
+      return rows; // if the lookup fails, show everything
     }
   }
 
