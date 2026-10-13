@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -53,6 +54,30 @@ class AdaptiveMasterDetail extends StatefulWidget {
 class _AdaptiveMasterDetailState extends State<AdaptiveMasterDetail> {
   bool _detailRouteOpen = false;
 
+  /// The pushed mobile route lives outside this widget's subtree, so a
+  /// setState in the owning screen (photo uploaded, document added, saved…)
+  /// never rebuilt it — the phone showed stale content until a refresh.
+  /// We now hand the latest detail to the route through this notifier.
+  late final ValueNotifier<Widget?> _detailLive = ValueNotifier<Widget?>(widget.detail);
+  bool _syncQueued = false;
+
+  void _syncDetail() {
+    if (_syncQueued) return;
+    _syncQueued = true;
+    // Notifying another route mid-build is not allowed; do it right after.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncQueued = false;
+      if (!mounted) return;
+      _detailLive.value = widget.detail;
+    });
+  }
+
+  @override
+  void dispose() {
+    _detailLive.dispose();
+    super.dispose();
+  }
+
   @override
   void didUpdateWidget(AdaptiveMasterDetail old) {
     super.didUpdateWidget(old);
@@ -67,14 +92,15 @@ class _AdaptiveMasterDetailState extends State<AdaptiveMasterDetail> {
 
   Future<void> _pushDetail() async {
     if (!mounted || widget.detail == null) return;
+    _detailLive.value = widget.detail;
     _detailRouteOpen = true;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => _MobileDetailPage(
           title: widget.detailTitle,
-          // Rebuilds with the live detail rather than a stale snapshot, so edits
-          // and saves inside the detail are reflected.
-          builder: () => widget.detail ?? const SizedBox.shrink(),
+          // Rebuilds with the live detail whenever the owning screen rebuilds,
+          // so uploads, edits and saves show up immediately.
+          detail: _detailLive,
         ),
       ),
     );
@@ -84,6 +110,7 @@ class _AdaptiveMasterDetailState extends State<AdaptiveMasterDetail> {
 
   @override
   Widget build(BuildContext context) {
+    if (_detailRouteOpen) _syncDetail();
     if (context.isCompact) {
       // The list IS the page. The detail lives on its own route.
       return Container(color: AppTheme.background, child: widget.list);
@@ -108,8 +135,8 @@ class _AdaptiveMasterDetailState extends State<AdaptiveMasterDetail> {
 
 class _MobileDetailPage extends StatefulWidget {
   final String title;
-  final Widget Function() builder;
-  const _MobileDetailPage({required this.title, required this.builder});
+  final ValueListenable<Widget?> detail;
+  const _MobileDetailPage({required this.title, required this.detail});
 
   @override
   State<_MobileDetailPage> createState() => _MobileDetailPageState();
@@ -128,7 +155,10 @@ class _MobileDetailPageState extends State<_MobileDetailPage> {
         elevation: 0,
         shape: const Border(bottom: BorderSide(color: AppTheme.border)),
       ),
-      body: widget.builder(),
+      body: ValueListenableBuilder<Widget?>(
+        valueListenable: widget.detail,
+        builder: (_, d, __) => d ?? const SizedBox.shrink(),
+      ),
     );
   }
 }
