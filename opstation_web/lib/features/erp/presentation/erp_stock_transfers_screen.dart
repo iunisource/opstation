@@ -1433,7 +1433,6 @@ class _StockTransferVoucherScreenState
   // ── Reject (in_transit) / Cancel (draft) ──────────────────────────────────
   Future<void> _rejectOrCancel() async {
     final client = Supabase.instance.client;
-    final orgId = _orgId!;
     final inTransit = _isInTransit;
     final fromBranchId = _transfer!['from_branch_id'] as String;
     final confirm = await showDialog<bool>(
@@ -1459,54 +1458,39 @@ class _StockTransferVoucherScreenState
     setState(() => _busy = true);
     try {
       final now = DateTime.now().toUtc().toIso8601String();
-      // Claim the status change FIRST, and only if the transfer is still in the
-      // state we think it is. If it was already rejected/cancelled (a second
-      // click, a retry after an error, or another user), nothing is returned
-      // and we stop — previously each Reject re-added the stock to the source
-      // branch, so a transfer rejected 3 times put the goods back 3 times.
-      final claimed = await client.from('stock_transfers').update({
-        'status': inTransit ? 'rejected' : 'cancelled',
-        'updated_at': now,
-      }).eq('id', _transfer!['id']).eq('status', inTransit ? 'in_transit' : 'draft').select('id');
-      if ((claimed as List).isEmpty) {
-        _snack('This transfer was already ${inTransit ? 'rejected' : 'cancelled'} — nothing changed.');
-        widget.onUpdated();
-        await _load();
-        return;
-      }
       if (inTransit) {
-        // Return stock to source.
-        for (var i = 0; i < _items.length; i++) {
-          final item = _items[i];
-          final qty = (item['quantity'] as num).toDouble();
-          final productId = item['product_id'] as String;
-          final uomId = item['uom_id'] as String;
-          await client.from('inventory_movements').insert({
-            'id': 'im_${DateTime.now().microsecondsSinceEpoch}_${i}_ret',
-            'org_id': orgId,
-            'product_id': productId,
-            'branch_id': fromBranchId,
-            'uom_id': uomId,
-            'quantity': qty,
-            'movement_type': 'transfer',
-            'reference_id': _transfer!['id'],
-            'reference_type': 'stock_transfer',
-            'moved_at': _movedAt(),
-            'created_by': _userId,
+        // Reject + return the stock to the source in ONE database transaction
+        // (SQL 356). Before, the status flipped first and the stock came back
+        // line by line from the browser — if the page closed or the connection
+        // dropped in between, the goods never returned (ST-2026-0183).
+        try {
+          await client.rpc('reject_stock_transfer', params: {
+            'p_transfer_id': _transfer!['id'],
+            'p_user_id': _userId,
           });
-          final fromStock = await client
-              .from('inventory_stock')
-              .select()
-              .eq('org_id', orgId)
-              .eq('product_id', productId)
-              .eq('branch_id', fromBranchId)
-              .maybeSingle();
-          if (fromStock != null) {
-            await client.from('inventory_stock').update({
-              'quantity': (fromStock['quantity'] as num).toDouble() + qty,
-              'updated_at': now,
-            }).eq('id', fromStock['id']);
+        } catch (e) {
+          if (e.toString().contains('already')) {
+            _snack('This transfer was already received, rejected or cancelled — nothing changed.');
+            widget.onUpdated();
+            await _load();
+            return;
           }
+          if (e.toString().contains('reject_stock_transfer')) {
+            _snack('Run SQL 356 in Supabase first.');
+            return;
+          }
+          rethrow;
+        }
+      } else {
+        final claimed = await client.from('stock_transfers').update({
+          'status': 'cancelled',
+          'updated_at': now,
+        }).eq('id', _transfer!['id']).eq('status', 'draft').select('id');
+        if ((claimed as List).isEmpty) {
+          _snack('This transfer was already cancelled — nothing changed.');
+          widget.onUpdated();
+          await _load();
+          return;
         }
       }
       _snack(inTransit ? 'Rejected — stock returned to source' : 'Cancelled');

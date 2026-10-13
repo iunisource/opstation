@@ -454,6 +454,24 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
 
   Future<void> _toggleLock() async {
     if (_isLocked && !_canUnlock) { _showSnack('Only admins can unlock'); return; }
+    // A draft GRN must be CONFIRMED, not locked: locking alone posts the cost
+    // and the ledger but never adds the stock (GRN-2026-0137, Oct 2026).
+    if (!_isLocked && !_isConfirmed) {
+      await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('Confirm the receipt instead'),
+        content: const Text('This GRN has not been received yet. Locking it would book the cost '
+            'without adding the goods to stock.\n\nUse "Confirm Receipt" — it adds the stock, '
+            'posts the cost and locks the GRN in one step.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () { Navigator.of(ctx, rootNavigator: true).pop(); _confirmReceipt(); },
+            child: const Text('Confirm Receipt'),
+          ),
+        ],
+      ));
+      return;
+    }
     final newLocked = !_isLocked;
     final userId = ref.read(currentUserProvider)?.id;
     try {
