@@ -10,6 +10,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../widgets/voucher_docs_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
@@ -719,6 +720,22 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
             _tr('Grand Total', (_detail['grand_total'] as num?)?.toDouble() ?? 0, bold: true),
           ]))),
         const SizedBox(height: 16),
+        // Supervision flow (non-blocking): support documents, like GRNs.
+        // Attach any time (unless voided); removing stops once supervised.
+        if (_superviseFlow && _detail['id'] != null) ...[
+          VoucherDocsPanel(
+            voucherType: 'SRI',
+            voucherId: _detail['id'] as String,
+            voucherNumber: _detail['voucher_number'] as String? ?? '',
+            bucket: 'si-documents',
+            orgId: _orgId ?? '',
+            userId: ref.read(currentUserProvider)?.id,
+            canWrite: !_isVoided,
+            canRemove: !_isVoided && _detail['supervised_at'] == null,
+            onAudit: (action, fileName) => _logAudit(_detail['id'] as String, action, fileName),
+          ),
+          const SizedBox(height: 16),
+        ],
         _SriAuditTrail(voucherId: _selectedId ?? ''),
       ]))),
     ]);

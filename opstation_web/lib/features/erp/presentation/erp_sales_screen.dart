@@ -3011,6 +3011,22 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   : null,
             ),
             const SizedBox(height: 16),
+            // Supervision flow (non-blocking): support documents, like GRNs.
+            // Attach any time (unless voided); removing stops once supervised.
+            if (_doSuperviseFlow) ...[
+              VoucherDocsPanel(
+                voucherType: 'DO',
+                voucherId: _detail['id'] as String,
+                voucherNumber: _detail['voucher_number'] as String? ?? '',
+                bucket: 'si-documents',
+                orgId: _orgId ?? '',
+                userId: ref.read(currentUserProvider)?.id,
+                canWrite: !(_detail['is_voided'] as bool? ?? false),
+                canRemove: !(_detail['is_voided'] as bool? ?? false) && _detail['supervised_at'] == null,
+                onAudit: (action, fileName) => _logAudit(_detail['id'] as String, 'DO', action, fileName),
+              ),
+              const SizedBox(height: 12),
+            ],
             VoucherRemarksPanel(
               voucherType: 'DO',
               voucherId: _detail['id'] as String,
