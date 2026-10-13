@@ -1214,12 +1214,65 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   // ───────────────────────────────────────────────────── build
   @override
   Widget build(BuildContext context) {
+    final narrow = MediaQuery.of(context).size.width < 800;
+    final sel = _selected;
+    final showDetail = narrow && sel != null && sel.isNotEmpty;
+    // Phone: title row + one "more" menu; list OR detail (with back), never
+    // both squeezed side by side (that hid the detail, so taps "did nothing").
+    final mobileHeader = Row(children: [
+      if (showDetail)
+        IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back to list',
+          onPressed: () => setState(() => _selectedId = null),
+        ),
+      Expanded(
+        child: Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          Text(showDetail ? 'Asset' : 'Assets', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+          if (!_loading && !showDetail)
+            Text('${_assets.length} total', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          if (!_loading && !showDetail && (_dueCount > 0 || _dueFilter != 'all')) _dueBadgeButton(),
+        ]),
+      ),
+      if (!showDetail)
+        IconButton.filled(
+          icon: const Icon(Icons.add),
+          tooltip: 'New asset',
+          onPressed: () => _assetDialog(),
+        ),
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert),
+        onSelected: (v) {
+          switch (v) {
+            case 'cat': _categoriesDialog(); break;
+            case 'qr': _printLabelsDialog(); break;
+            case 'cust': _custodiansDialog(); break;
+            case 'export': _exportCsv(); break;
+            case 'import': _importCsv(); break;
+            case 'template': _exportCsv(templateOnly: true); break;
+            case 'refresh': _load(); break;
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'cat', child: ListTile(dense: true, leading: Icon(Icons.category_outlined), title: Text('Categories'))),
+          const PopupMenuItem(value: 'qr', child: ListTile(dense: true, leading: Icon(Icons.qr_code_2), title: Text('QR labels'))),
+          const PopupMenuItem(value: 'cust', child: ListTile(dense: true, leading: Icon(Icons.badge_outlined), title: Text('Custodians'))),
+          if (_canBulk) ...const [
+            PopupMenuItem(value: 'export', child: ListTile(dense: true, leading: Icon(Icons.download_outlined), title: Text('Export CSV'))),
+            PopupMenuItem(value: 'import', child: ListTile(dense: true, leading: Icon(Icons.upload_file_outlined), title: Text('Import CSV'))),
+            PopupMenuItem(value: 'template', child: ListTile(dense: true, leading: Icon(Icons.description_outlined), title: Text('Download template'))),
+          ],
+          const PopupMenuItem(value: 'refresh', child: ListTile(dense: true, leading: Icon(Icons.refresh), title: Text('Refresh'))),
+        ],
+      ),
+    ]);
     return Container(
       color: AppTheme.background,
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(narrow ? 12 : 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (narrow) mobileHeader else
           Row(children: [
             const Text('Assets',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
@@ -1285,11 +1338,13 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh'),
           ]),
-          const SizedBox(height: 16),
+          SizedBox(height: narrow ? 10 : 16),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : Row(
+                : narrow
+                    ? (showDetail ? _detailPane() : _listPane())
+                    : Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       SizedBox(width: 360, child: _listPane()),
@@ -1475,6 +1530,18 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     );
   }
 
+  Widget _flexName(Map<String, dynamic> a, bool narrow) {
+    final col = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(a['name'] as String? ?? '—', style: TextStyle(fontSize: narrow ? 18 : 20, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 2),
+        Text(a['asset_code'] as String? ?? '', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+      ],
+    );
+    return narrow ? Padding(padding: const EdgeInsets.only(bottom: 6), child: col) : Expanded(child: col);
+  }
+
   // ───────────────────────────────────────────────────── detail pane
   Widget _detailPane() {
     final a = _selected;
@@ -1498,25 +1565,16 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         border: Border.all(color: AppTheme.border),
       ),
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(MediaQuery.of(context).size.width < 800 ? 14 : 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(a['name'] as String? ?? '—',
-                        style: const TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 2),
-                    Text(a['asset_code'] as String? ?? '',
-                        style: const TextStyle(
-                            fontSize: 13, color: AppTheme.textSecondary)),
-                  ],
-                ),
-              ),
+            Flex(
+              direction: MediaQuery.of(context).size.width < 800 ? Axis.vertical : Axis.horizontal,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+              _flexName(a, MediaQuery.of(context).size.width < 800),
+              Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
               _statusChip(a['status'] as String?),
               const SizedBox(width: 8),
               IconButton(
@@ -1535,6 +1593,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   onPressed: () => _reassignDialog(a),
                   icon: const Icon(Icons.swap_horiz),
                   tooltip: 'Reassign / move'),
+              ]),
             ]),
             const SizedBox(height: 16),
             // placement
@@ -1611,7 +1670,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
 
   Widget _kv(String k, String? v) {
     return SizedBox(
-      width: 200,
+      width: MediaQuery.of(context).size.width < 800 ? 140 : 200,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

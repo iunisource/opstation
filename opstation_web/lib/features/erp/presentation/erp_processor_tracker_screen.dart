@@ -192,12 +192,11 @@ class _ErpProcessorTrackerScreenState
 
     return Container(
       color: AppTheme.background,
-      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
+      padding: EdgeInsets.all(_narrow ? 12 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('Out for Processing',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-          const Spacer(),
+          Expanded(child: Text('Out for Processing',
+              style: TextStyle(fontSize: _narrow ? 21 : 28, fontWeight: FontWeight.w800))),
           if (_isAdmin && overdueRows.isNotEmpty)
             OutlinedButton.icon(
               onPressed: _sending ? null : _sendReminderNow,
@@ -207,7 +206,7 @@ class _ErpProcessorTrackerScreenState
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.notifications_active_outlined, size: 16),
-              label: const Text('Send reminder now'),
+              label: Text(_narrow ? 'Remind' : 'Send reminder now'),
             ),
           const SizedBox(width: 8),
           IconButton(
@@ -217,17 +216,17 @@ class _ErpProcessorTrackerScreenState
           ),
         ]),
         const SizedBox(height: 4),
-        const Text(
+        Text(
             'Stock sent to processor / off-site locations that has not yet come '
             'back. Lines past their return-due date are flagged overdue.',
-            style: TextStyle(color: AppTheme.textSecondary)),
-        const SizedBox(height: 16),
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: _narrow ? 12 : 14)),
+        SizedBox(height: _narrow ? 10 : 16),
         _tabBar(),
-        const SizedBox(height: 16),
+        SizedBox(height: _narrow ? 10 : 16),
         if (_tab == 1)
           Expanded(child: _conversionsView())
         else ...[
-        Wrap(spacing: 12, runSpacing: 12, children: [
+        Wrap(spacing: _narrow ? 8 : 12, runSpacing: _narrow ? 8 : 12, children: [
           _card('Stock with Processors', 'Rs. ${money(totalValue)}',
               AppTheme.primary),
           _card('Overdue value', 'Rs. ${money(overdueValue)}',
@@ -288,13 +287,18 @@ class _ErpProcessorTrackerScreenState
                               : 'No stock is currently out at processors.',
                           style: const TextStyle(
                               color: AppTheme.textSecondary, fontSize: 14)))
-                  : HScrollOnNarrow(
-                      minWidth: 900,
-                      child: ListView(children: [
-                        for (final pName in processorNames)
-                          _processorSection(pName, byProcessor[pName]!),
-                      ]),
-                    ),
+                  : _narrow
+                      ? ListView(children: [
+                          for (final pName in processorNames)
+                            _processorSection(pName, byProcessor[pName]!),
+                        ])
+                      : HScrollOnNarrow(
+                          minWidth: 900,
+                          child: ListView(children: [
+                            for (final pName in processorNames)
+                              _processorSection(pName, byProcessor[pName]!),
+                          ]),
+                        ),
         ),
         ],
       ]),
@@ -326,10 +330,9 @@ class _ErpProcessorTrackerScreenState
         ),
       );
     }
-    return Row(children: [
+    return Wrap(spacing: 8, runSpacing: 6, children: [
       seg('Currently out', Icons.inventory_2_outlined, 0),
-      const SizedBox(width: 8),
-      seg('Conversions (job-work)', Icons.sync_alt, 1),
+      seg(_narrow ? 'Conversions' : 'Conversions (job-work)', Icons.sync_alt, 1),
     ]);
   }
 
@@ -391,14 +394,28 @@ class _ErpProcessorTrackerScreenState
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
+        Wrap(spacing: 10, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('${r['voucher']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 10),
           Text('${r['date']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          const Spacer(),
           Text('Received at: ${r['home_name']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         ]),
         const SizedBox(height: 8),
+        if (_narrow) ...[
+          _convLabel('Consumed at processor', AppTheme.danger),
+          const SizedBox(height: 3),
+          Text(linesText(inputs), style: const TextStyle(fontSize: 12.5)),
+          const SizedBox(height: 8),
+          _convLabel('Received at home', AppTheme.success),
+          const SizedBox(height: 3),
+          Text(linesText(outputs), style: const TextStyle(fontSize: 12.5)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 12, runSpacing: 2, children: [
+            Text('Fee Rs. ${money(_n(r['fee']))}', style: const TextStyle(fontSize: 12)),
+            if (_n(r['overhead']) > 0) Text('OH Rs. ${money(_n(r['overhead']))}', style: const TextStyle(fontSize: 12)),
+            Text('Output Rs. ${money(_n(r['total']))}',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+          ]),
+        ] else
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _convLabel('Consumed at processor', AppTheme.danger),
@@ -443,17 +460,18 @@ class _ErpProcessorTrackerScreenState
       child: Column(children: [
         // Section header: processor name + subtotal + overdue chip.
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: const BoxDecoration(
             color: AppTheme.background,
             borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
           ),
+          padding: EdgeInsets.symmetric(horizontal: _narrow ? 12 : 20, vertical: 12),
           child: Row(children: [
             const Icon(Icons.factory_outlined, size: 18, color: Colors.purple),
             const SizedBox(width: 8),
-            Text(name,
+            Flexible(child: Text(name,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                    fontWeight: FontWeight.w800, fontSize: 15)),
+                    fontWeight: FontWeight.w800, fontSize: 15))),
             if (overdue > 0) ...[
               const SizedBox(width: 10),
               Container(
@@ -478,8 +496,8 @@ class _ErpProcessorTrackerScreenState
           ]),
         ),
         const Divider(height: 1),
-        // Column header.
-        const Padding(
+        // Column header (desktop only — phone rows are self-labelled cards).
+        if (!_narrow) const Padding(
           padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           child: Row(children: [
             Expanded(flex: 2, child: _H('Transfer')),
@@ -491,11 +509,47 @@ class _ErpProcessorTrackerScreenState
             Expanded(flex: 2, child: _H('Status')),
           ]),
         ),
-        const Divider(height: 1),
+        if (!_narrow) const Divider(height: 1),
         for (int i = 0; i < lines.length; i++) ...[
           if (i > 0) const Divider(height: 1),
-          _lineRow(lines[i]),
+          _narrow ? _lineCard(lines[i]) : _lineRow(lines[i]),
         ],
+      ]),
+    );
+  }
+
+  bool get _narrow => MediaQuery.of(context).size.width < 700;
+
+  /// Phone version of a line: product on top, transfer + dates, qty / value / status.
+  Widget _lineCard(Map<String, dynamic> r) {
+    final overdue = r['is_overdue'] == true;
+    final daysOverdue = (r['days_overdue'] as num?)?.toInt() ?? 0;
+    final daysOut = (r['days_out'] as num?)?.toInt() ?? 0;
+    return Container(
+      color: overdue ? AppTheme.danger.withOpacity(0.05) : null,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(r['product_name'] as String? ?? '—', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              if ((r['sku'] as String? ?? '').isNotEmpty)
+                Text(r['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          overdue ? _chip('${daysOverdue}d overdue', AppTheme.danger) : _chip('out ${daysOut}d', AppTheme.textSecondary),
+        ]),
+        const SizedBox(height: 4),
+        Text('${r['voucher_number'] ?? '—'}  ·  sent ${r['transfer_date'] ?? ''}  ·  due ${r['due_date'] ?? '—'}',
+            style: TextStyle(fontSize: 11.5, color: overdue ? AppTheme.danger : AppTheme.textSecondary)),
+        const SizedBox(height: 4),
+        Row(children: [
+          Text('Open qty ${_qty(r['open_qty'])}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          const Spacer(),
+          Text('Rs. ${money(_n(r['open_value']))}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+        ]),
       ]),
     );
   }
@@ -580,7 +634,8 @@ class _ErpProcessorTrackerScreenState
       );
 
   Widget _card(String label, String value, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        width: _narrow ? (MediaQuery.of(context).size.width - 24 - 8) / 2 : null,
+        padding: EdgeInsets.symmetric(horizontal: _narrow ? 10 : 16, vertical: _narrow ? 8 : 10),
         decoration: BoxDecoration(
             color: color.withOpacity(0.08),
             borderRadius: BorderRadius.circular(10),
@@ -597,7 +652,7 @@ class _ErpProcessorTrackerScreenState
               const SizedBox(height: 2),
               Text(value,
                   style: TextStyle(
-                      fontSize: 18,
+                      fontSize: _narrow ? 15 : 18,
                       fontWeight: FontWeight.w800,
                       color: color)),
             ]),

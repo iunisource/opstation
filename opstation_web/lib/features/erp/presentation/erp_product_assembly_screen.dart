@@ -635,6 +635,17 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   }
 
   @override
+  bool get _narrow => MediaQuery.of(context).size.width < 760;
+
+  /// Header: one row on desktop; on a phone the title gets its own line and
+  /// the buttons wrap underneath instead of crushing the title.
+  Widget _hdr(bool narrow, List<Widget> kids) => narrow
+      ? Wrap(spacing: 2, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: kids)
+      : Row(children: kids);
+  Widget _listBox(bool narrow, Widget w) => narrow ? Expanded(child: w) : w;
+  Widget _hdrTitle(bool narrow, Widget t) =>
+      narrow ? SizedBox(width: MediaQuery.of(context).size.width - 80, child: t) : Expanded(child: t);
+
   Widget build(BuildContext context) {
     final filtered = (_listSearch.isEmpty ? _boms : _boms.where((b) {
       return matchesQuery('${b['code'] ?? ''} ${b['name'] ?? ''} ${_prodLabel[b['product_id']] ?? ''}', _listSearch);
@@ -650,9 +661,14 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     final rejectedCount = _boms.where(_isRejected).length;
     final pendingShown = filtered.where(_isPendingBom).map((b) => b['id'] as String).toList();
     final canBulk = _superviseFlow && _canSupervise;
+    final narrow = _narrow;
+    // Phone: the BOM list and the BOM form take turns (list ⇄ form), never
+    // side by side.
+    final showList = _drawerOpen;
+    final showForm = !narrow || !_drawerOpen;
 
     return Container(color: AppTheme.background, child: Row(children: [
-      if (_drawerOpen) Container(width: 300,
+      if (showList) _listBox(narrow, Container(width: narrow ? null : 300,
         decoration: const BoxDecoration(color: Colors.white, border: Border(right: BorderSide(color: AppTheme.border))),
         child: Column(children: [
           Container(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
@@ -662,7 +678,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                 const Expanded(child: Text('Bills of Material', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
                 ElevatedButton.icon(icon: const Icon(Icons.add, size: 13), label: const Text('New', style: TextStyle(fontSize: 11)),
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero),
-                  onPressed: _newBom),
+                  onPressed: () { _newBom(); if (_narrow) setState(() => _drawerOpen = false); }),
               ]),
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search BOMs...', prefixIcon: Icon(Icons.search, size: 15), isDense: true),
@@ -733,7 +749,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                 return InkWell(
                   onTap: pickable
                       ? () => setState(() => picked ? _sel.remove(b['id']) : _sel.add(b['id'] as String))
-                      : () => _loadBom(b),
+                      : () { _loadBom(b); if (_narrow) setState(() => _drawerOpen = false); },
                   child: Container(
                   color: picked ? Colors.green.withOpacity(0.08) : (sel ? AppTheme.primary.withOpacity(0.07) : null),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -774,16 +790,18 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                   ]),
                 ));
               })),
-        ])),
+        ]))),
 
-      Expanded(child: Column(children: [
-        Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      if (showForm) Expanded(child: Column(children: [
+        Container(padding: EdgeInsets.symmetric(horizontal: narrow ? 8 : 16, vertical: narrow ? 6 : 10),
           decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            IconButton(icon: Icon(_drawerOpen ? Icons.chevron_left : Icons.chevron_right, size: 18), onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+          child: _hdr(narrow, [
+            IconButton(icon: Icon(narrow ? Icons.arrow_back : (_drawerOpen ? Icons.chevron_left : Icons.chevron_right), size: narrow ? 20 : 18),
+                tooltip: narrow ? 'Back to list' : null,
+                onPressed: () => setState(() => _drawerOpen = !_drawerOpen), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
             const SizedBox(width: 8),
-            Expanded(child: Text(_current?['code'] as String? ?? 'New Bill of Materials', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
-            Row(children: [
+            _hdrTitle(narrow, Text(_current?['code'] as String? ?? 'New Bill of Materials', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+            Row(mainAxisSize: MainAxisSize.min, children: [
               const Text('Active', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               Switch(value: _isActive, onChanged: (v) => setState(() => _status = v ? 'active' : 'inactive')),
             ]),
@@ -876,8 +894,32 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           ])),
         Expanded(child: _loadingProducts
           ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading products...', style: TextStyle(color: AppTheme.textSecondary))]))
-          : SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          : SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (_superviseFlow && _current != null && _isRejected(_current!)) _rejectBanner(_current!),
+            if (narrow) ...[
+              const Text('Finished Product *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              _ProductField(key: ValueKey('fgm_${_current?['id'] ?? 'new'}_$_fgId'),
+                initialLabel: _fgLabel, filterFn: _filterProducts,
+                onPick: _onPickFinished),
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SizedBox(width: 110, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Output Qty *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  TextField(controller: _outputQtyCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                    decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))),
+                ])),
+                const SizedBox(width: 10),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Name / Notes', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  TextField(controller: _nameCtrl,
+                    decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))),
+                ])),
+              ]),
+            ] else
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(flex: 3, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Finished Product *', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
@@ -932,26 +974,26 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
             const SizedBox(width: 8),
             Text(title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            Expanded(child: Text(hint, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            if (!_narrow) Expanded(child: Text(hint, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
           ])),
-        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        Container(padding: EdgeInsets.symmetric(horizontal: _narrow ? 8 : 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-          child: const Row(children: [
-            SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            Expanded(child: Text('Product', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 12),
-            SizedBox(width: 130, child: Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            SizedBox(width: 30),
+          child: Row(children: [
+            const SizedBox(width: 22, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const Expanded(child: Text('Product', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 8),
+            SizedBox(width: _narrow ? 80 : 130, child: const Text('Quantity', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+            const SizedBox(width: 30),
           ])),
         for (var i = 0; i < lines.length; i++)
-          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          Container(padding: EdgeInsets.symmetric(horizontal: _narrow ? 8 : 12, vertical: 5),
             decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SizedBox(width: 26, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
+              SizedBox(width: 22, child: Padding(padding: const EdgeInsets.only(top: 8), child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
               Expanded(child: _ProductField(key: ValueKey(lines[i].id), initialLabel: lines[i].productLabel, filterFn: _filterProducts,
                 onPick: (p) => setState(() { lines[i].productId = p['id'] as String?; lines[i].productLabel = p['label'] as String? ?? ''; }))),
-              const SizedBox(width: 12),
-              SizedBox(width: 130, child: TextField(controller: lines[i].qtyCtrl, textAlign: TextAlign.right,
+              const SizedBox(width: 8),
+              SizedBox(width: _narrow ? 80 : 130, child: TextField(controller: lines[i].qtyCtrl, textAlign: TextAlign.right,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                 decoration: const InputDecoration(hintText: '0', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
@@ -980,12 +1022,12 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
             const SizedBox(width: 8),
             const Text('Labor & Overhead (absorbed)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            const Expanded(child: Text('Pick a rate type and a quantity. Amount = quantity × rate. Change a rate once in Manage rates and every BOM updates.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+            Expanded(child: _narrow ? const SizedBox() : const Text('Pick a rate type and a quantity. Amount = quantity × rate. Change a rate once in Manage rates and every BOM updates.', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
             TextButton.icon(icon: const Icon(Icons.tune, size: 14), label: const Text('Manage rates', style: TextStyle(fontSize: 11)),
               onPressed: _openManageRates),
             if (total > 0) Text(_money(total), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.teal)),
           ])),
-        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        if (!_narrow) Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
           child: const Row(children: [
             SizedBox(width: 26, child: Text('#', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
@@ -1071,11 +1113,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     // Ensure the currently selected id is a valid dropdown value.
     final ids = types.map((t) => t['id'] as String).toSet();
     final selValue = (l.rateId != null && ids.contains(l.rateId)) ? l.rateId : null;
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4)))),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        SizedBox(width: 26, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-        SizedBox(width: 120, child: DropdownButtonFormField<String>(
+    final typeField = DropdownButtonFormField<String>(
           value: l.costType,
           isDense: true,
           decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
@@ -1090,9 +1128,8 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
             l.costType = v ?? 'overhead';
             final newIds = _typesFor(l.costType).map((t) => t['id'] as String).toSet();
             if (!newIds.contains(l.rateId)) l.rateId = null;
-          }))),
-        const SizedBox(width: 12),
-        Expanded(child: Builder(builder: (_) {
+          }));
+    final rateField = Builder(builder: (_) {
           Map<String, dynamic>? sel;
           for (final t in types) { if (t['id'] == selValue) { sel = t; break; } }
           return InkWell(
@@ -1112,20 +1149,51 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                 style: TextStyle(fontSize: 12, color: sel == null ? AppTheme.textSecondary : AppTheme.textPrimary)),
             ),
           );
-        })),
-        const SizedBox(width: 12),
-        SizedBox(width: 90, child: TextField(controller: l.qtyCtrl, textAlign: TextAlign.right,
+        });
+    final qtyField = TextField(controller: l.qtyCtrl, textAlign: TextAlign.right,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
           decoration: const InputDecoration(hintText: '1', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
             border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))),
             enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
-          style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}))),
+          style: const TextStyle(fontSize: 12), onChanged: (_) => setState(() {}));
+    final amount = Text(_money(_amountOf(l)), textAlign: TextAlign.right,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: rate == 0 ? AppTheme.textSecondary : AppTheme.textPrimary));
+    final remove = SizedBox(width: 30, child: IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red),
+          onPressed: () => _removeOverhead(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact));
+    final border = BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border.withOpacity(0.4))));
+    if (_narrow) {
+      // Phone: rate on its own line; type · qty · amount underneath.
+      return Container(padding: const EdgeInsets.fromLTRB(8, 6, 4, 6), decoration: border,
+        child: Column(children: [
+          Row(children: [
+            SizedBox(width: 22, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+            Expanded(child: rateField),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            const SizedBox(width: 22),
+            SizedBox(width: 108, child: typeField),
+            const SizedBox(width: 8),
+            SizedBox(width: 70, child: qtyField),
+            const SizedBox(width: 8),
+            Expanded(child: amount),
+            remove,
+          ]),
+        ]));
+    }
+    return Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: border,
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        SizedBox(width: 26, child: Text('${i + 1}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+        SizedBox(width: 120, child: typeField),
         const SizedBox(width: 12),
-        SizedBox(width: 110, child: Text(_money(_amountOf(l)), textAlign: TextAlign.right,
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: rate == 0 ? AppTheme.textSecondary : AppTheme.textPrimary))),
-        SizedBox(width: 30, child: IconButton(icon: const Icon(Icons.close, size: 14, color: Colors.red),
-          onPressed: () => _removeOverhead(i), padding: EdgeInsets.zero, visualDensity: VisualDensity.compact)),
+        Expanded(child: rateField),
+        const SizedBox(width: 12),
+        SizedBox(width: 90, child: qtyField),
+        const SizedBox(width: 12),
+        SizedBox(width: 110, child: amount),
+        remove,
       ]));
   }
 }
