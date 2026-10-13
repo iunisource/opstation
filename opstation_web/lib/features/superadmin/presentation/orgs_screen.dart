@@ -7,6 +7,7 @@ import '../../../core/auth/password_hasher.dart';
 import '../../../core/modules/app_modules.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
+import 'storage_usage_widgets.dart';
 
 class OrgsScreen extends ConsumerStatefulWidget {
   const OrgsScreen({super.key});
@@ -449,6 +450,14 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                           : 'Takes effect immediately; locks after the first inventory transaction.',
                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   ),
+                  if (isEdit) ...[
+                    const SizedBox(height: 24),
+                    const Divider(height: 1),
+                    const SizedBox(height: 12),
+                    OrgStoragePanel(orgId: org!['id'] as String),
+                    const SizedBox(height: 12),
+                    const Divider(height: 1),
+                  ],
                   const SizedBox(height: 24),
                   Text(isEdit ? 'MASTER ADMIN' : 'MASTER ADMIN (created with org)',
                       style: const TextStyle(
@@ -684,6 +693,12 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
               style: TextStyle(fontSize: MediaQuery.of(context).size.width < 700 ? 22 : 28, fontWeight: FontWeight.w800),
               overflow: TextOverflow.ellipsis)),
           const SizedBox(width: 12),
+          OutlinedButton.icon(
+            onPressed: () => showServerOverview(context),
+            icon: const Icon(Icons.storage_outlined, size: 18),
+            label: Text(MediaQuery.of(context).size.width < 700 ? 'Usage' : 'Server usage'),
+          ),
+          const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: () => _showDialog(context, null),
             icon: const Icon(Icons.add, size: 18),
@@ -789,6 +804,22 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     tooltip: 'Manage Modules',
                     icon: const Icon(Icons.extension_outlined, size: 18),
                     onPressed: () => _showModulesDialog(context, o['id'] as String, o['name'] as String),
+                  ),
+                  IconButton(
+                    tooltip: 'Storage & document tenure',
+                    icon: const Icon(Icons.storage_outlined, size: 18),
+                    onPressed: () => showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+                        title: Text('Storage — ${o['name']}'),
+                        content: SizedBox(
+                          width: MediaQuery.of(ctx).size.width < 560 ? MediaQuery.of(ctx).size.width : 480,
+                          child: SingleChildScrollView(child: OrgStoragePanel(orgId: o['id'] as String)),
+                        ),
+                        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+                      ),
+                    ),
                   ),
                   IconButton(
                     tooltip: 'Edit',
