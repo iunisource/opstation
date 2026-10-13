@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
 
@@ -202,7 +203,7 @@ class _OrgStoragePanelState extends State<OrgStoragePanel> {
     setState(() => _purging = true);
     try {
       final res = await Supabase.instance.client.functions
-          .invoke('purge-support-docs', body: {'org_id': widget.orgId});
+          .invoke('purge-support-docs', body: {'org_id': widget.orgId, 'kind': 'docs'});
       final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : <String, dynamic>{};
       final o = (data['orgs'] as Map?)?[widget.orgId] as Map?;
       _snack(o == null ? 'Nothing was due' : 'Deleted ${o['files']} file(s), freed ${fmtBytes(o['bytes'] as num?)}');
@@ -347,7 +348,408 @@ class _OrgStoragePanelState extends State<OrgStoragePanel> {
         ].join('  '),
         style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
       ),
+      const SizedBox(height: 18),
+      _KioskSection(orgId: widget.orgId),
+      const SizedBox(height: 18),
+      _AuditSection(orgId: widget.orgId),
     ]);
+  }
+}
+
+String _lastRunLine(Map? last, {String unit = 'file(s)', String verb = 'freed'}) {
+  final at = DateTime.tryParse('${last?['run_at'] ?? ''}');
+  if (at == null) return '';
+  final note = (last?['note'] as String?) ?? '';
+  return 'Last run ${DateFormat('d MMM y, h:mm a').format(at.toLocal())}: '
+      '${last?['files'] ?? 0} $unit, ${fmtBytes(last?['bytes'] as num?)} $verb'
+      '${note.isNotEmpty ? ' ($note)' : ''}.';
+}
+
+Future<bool> _confirm(BuildContext context, String title, String body, String action, {bool danger = true}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(
+          style: danger ? ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white) : null,
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(action),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
+}
+
+/// Attendance kiosk punch photos — kept 40 days by default (SQL 351).
+class _KioskSection extends StatefulWidget {
+  final String orgId;
+  const _KioskSection({required this.orgId});
+  @override
+  State<_KioskSection> createState() => _KioskSectionState();
+}
+
+class _KioskSectionState extends State<_KioskSection> {
+  static const _choices = <int, String>{
+    0: 'Keep forever',
+    14: '14 days',
+    30: '30 days',
+    40: '40 days (default)',
+    60: '60 days',
+    90: '90 days',
+    180: '180 days',
+    365: '1 year',
+  };
+  Map<String, dynamic>? _d;
+  String? _err;
+  int _days = 40;
+  bool _custom = false;
+  final _customCtrl = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _customCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _snack(String m) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await Supabase.instance.client.rpc('org_kiosk_usage', params: {'p_org': widget.orgId});
+      final m = Map<String, dynamic>.from(r as Map);
+      if (!mounted) return;
+      setState(() {
+        _d = m;
+        _err = null;
+        final d = (m['retention_days'] as num?)?.toInt() ?? 40;
+        _days = d;
+        _custom = !_choices.containsKey(d);
+        if (_custom) _customCtrl.text = '$d';
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _err = e.toString().contains('org_kiosk_usage')
+            ? 'Run SQL 351 in Supabase first.'
+            : e.toString().split('\n').first);
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    var days = _days;
+    if (_custom) {
+      final c = int.tryParse(_customCtrl.text.trim());
+      if (c == null || c < 7) { _snack('Enter at least 7 days.'); return; }
+      days = c;
+    }
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.rpc('set_org_kiosk_retention',
+          params: {'p_org': widget.orgId, 'p_days': days == 40 ? null : days});
+      _snack(days == 0 ? 'Kiosk photos will be kept forever' : 'Kiosk photos kept $days days');
+      await _load();
+    } catch (e) {
+      _snack('Could not save: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _purgeNow() async {
+    final n = _d?['due_files'] ?? 0;
+    if (!await _confirm(context, 'Delete old kiosk photos now?',
+        '$n photo(s) older than ${_d?['retention_days']} days will be permanently deleted. '
+        'Attendance times stay; only the photo is removed.', 'Delete now')) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('purge-support-docs', body: {'org_id': widget.orgId, 'kind': 'kiosk'});
+      final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : <String, dynamic>{};
+      final o = (data['kiosk'] as Map?)?[widget.orgId] as Map?;
+      _snack(o == null ? 'Nothing was due' : 'Deleted ${o['files']} photo(s), freed ${fmtBytes(o['bytes'] as num?)}');
+      await _load();
+    } catch (e) {
+      _snack('Purge failed — is the purge-support-docs function deployed? ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_err != null) return Text('Kiosk photos: $_err', style: const TextStyle(fontSize: 12, color: AppTheme.danger));
+    final d = _d;
+    if (d == null) return const SizedBox(height: 24);
+    final oldest = DateTime.tryParse('${d['oldest'] ?? ''}');
+    final due = (d['due_files'] as num?) ?? 0;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _sectionTitle('ATTENDANCE KIOSK PHOTOS — OVERWRITE TENURE'),
+      const SizedBox(height: 4),
+      Text(
+        '${d['files'] ?? 0} photo(s), ${fmtBytes(d['bytes'] as num?)}'
+        '${oldest == null ? '' : ' · oldest ${DateFormat('d MMM y').format(oldest.toLocal())}'}. '
+        'Older photos are deleted every night; the attendance record stays.',
+        style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+      ),
+      const SizedBox(height: 8),
+      DropdownButtonFormField<int>(
+        value: _custom ? -1 : _days,
+        isExpanded: true,
+        decoration: const InputDecoration(labelText: 'Delete kiosk photos older than', isDense: true),
+        items: [
+          for (final e in _choices.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+          const DropdownMenuItem(value: -1, child: Text('Custom (days)…')),
+        ],
+        onChanged: (v) => setState(() {
+          _custom = v == -1;
+          if (!_custom) _days = v ?? 40;
+        }),
+      ),
+      if (_custom) ...[
+        const SizedBox(height: 8),
+        TextField(
+          controller: _customCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Days (minimum 7)', isDense: true),
+        ),
+      ],
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 6, children: [
+        ElevatedButton.icon(
+          onPressed: _busy ? null : _save,
+          icon: const Icon(Icons.save_outlined, size: 16),
+          label: const Text('Save'),
+        ),
+        if (due > 0)
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger),
+            onPressed: _busy ? null : _purgeNow,
+            icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+            label: Text('Purge now ($due · ${fmtBytes(d['due_bytes'] as num?)})'),
+          ),
+      ]),
+      const SizedBox(height: 6),
+      Text(
+        [
+          (d['retention_days'] as num? ?? 40) == 0
+              ? 'Currently: kept forever.'
+              : 'Currently: ${d['retention_days']} days${d['is_default'] == true ? ' (default)' : ''} — $due due now.',
+          _lastRunLine(d['last_purge'] as Map?, unit: 'photo(s)'),
+        ].where((e) => e.isNotEmpty).join('  '),
+        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+      ),
+    ]);
+  }
+}
+
+/// Audit-log archive (SQL 352): old audit rows → compressed files.
+class _AuditSection extends StatefulWidget {
+  final String orgId;
+  const _AuditSection({required this.orgId});
+  @override
+  State<_AuditSection> createState() => _AuditSectionState();
+}
+
+class _AuditSectionState extends State<_AuditSection> {
+  static const _choices = <int, String>{
+    0: 'Off — keep everything live',
+    12: 'Older than 1 year',
+    24: 'Older than 2 years (recommended)',
+    36: 'Older than 3 years',
+    60: 'Older than 5 years',
+  };
+  Map<String, dynamic>? _d;
+  String? _err;
+  int _months = 0;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _snack(String m) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await Supabase.instance.client.rpc('org_audit_usage', params: {'p_org': widget.orgId});
+      final m = Map<String, dynamic>.from(r as Map);
+      if (!mounted) return;
+      setState(() {
+        _d = m;
+        _err = null;
+        final v = (m['months'] as num?)?.toInt() ?? 0;
+        _months = _choices.containsKey(v) ? v : 24;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _err = e.toString().contains('org_audit_usage')
+            ? 'Run SQL 352 in Supabase first.'
+            : e.toString().split('\n').first);
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    if (_months > 0 &&
+        !await _confirm(
+            context,
+            'Archive audit history?',
+            'Every night, audit-log rows older than ${_months ~/ 12} year(s) will be moved out of the live '
+                'tables into compressed files you can download here. They will no longer show on screens '
+                'such as a voucher\'s history.',
+            'Confirm',
+            danger: false)) return;
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client
+          .rpc('set_org_audit_archive', params: {'p_org': widget.orgId, 'p_months': _months});
+      _snack(_months == 0 ? 'Audit archiving is off' : 'Audit history older than ${_months ~/ 12} year(s) will be archived');
+      await _load();
+    } catch (e) {
+      _snack('Could not save: ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _archiveNow() async {
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('purge-support-docs', body: {'org_id': widget.orgId, 'kind': 'audit'});
+      final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : <String, dynamic>{};
+      final o = (data['audit'] as Map?)?[widget.orgId] as Map?;
+      final errs = (data['auditErrors'] as List?) ?? const [];
+      _snack(o != null
+          ? 'Archived ${o['rows']} row(s) into ${o['files']} file(s) (${fmtBytes(o['bytes'] as num?)})'
+          : (errs.isNotEmpty ? 'Archive failed: ${errs.first}' : 'Nothing was due'));
+      await _load();
+    } catch (e) {
+      _snack('Archive failed — is the purge-support-docs function deployed? ${e.toString().split('\n').first}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _download(String path) async {
+    try {
+      final url = await Supabase.instance.client.storage.from('audit-archive').createSignedUrl(path, 600);
+      await launchUrl(Uri.parse(url), webOnlyWindowName: '_blank');
+    } catch (e) {
+      _snack('Could not open file: ${e.toString().split('\n').first}');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_err != null) return Text('Audit archive: $_err', style: const TextStyle(fontSize: 12, color: AppTheme.danger));
+    final d = _d;
+    if (d == null) return const SizedBox(height: 24);
+    final tables = ((d['tables'] as List?) ?? const []).cast<Map>();
+    final files = ((d['files'] as List?) ?? const []).cast<Map>();
+    final due = tables.fold<num>(0, (s, t) => s + ((t['due'] as num?) ?? 0));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _sectionTitle('AUDIT HISTORY ARCHIVE'),
+      const SizedBox(height: 4),
+      const Text(
+        'Old audit-log rows (who changed what, when) can be moved out of the live database into compressed '
+        'files. Nothing is lost — every file can be downloaded below. Business records are never archived.',
+        style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+      ),
+      const SizedBox(height: 6),
+      for (final t in tables)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Text(
+            '${t['table']}: ${NumberFormat('#,##0').format(t['rows'] ?? 0)} rows'
+            '${DateTime.tryParse('${t['oldest'] ?? ''}') == null ? '' : ' · oldest ${DateFormat('d MMM y').format(DateTime.parse('${t['oldest']}').toLocal())}'}'
+            '${((t['due'] as num?) ?? 0) > 0 ? ' · ${t['due']} due' : ''}',
+            style: const TextStyle(fontSize: 11.5),
+          ),
+        ),
+      const SizedBox(height: 8),
+      DropdownButtonFormField<int>(
+        value: _months,
+        isExpanded: true,
+        decoration: const InputDecoration(labelText: 'Archive audit history', isDense: true),
+        items: [for (final e in _choices.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+        onChanged: (v) => setState(() => _months = v ?? 0),
+      ),
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 6, children: [
+        ElevatedButton.icon(
+          onPressed: _busy ? null : _save,
+          icon: const Icon(Icons.save_outlined, size: 16),
+          label: const Text('Save'),
+        ),
+        if (d['months'] != null && due > 0)
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _archiveNow,
+            icon: _busy
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.archive_outlined, size: 16),
+            label: Text('Archive now ($due rows)'),
+          ),
+      ]),
+      const SizedBox(height: 6),
+      Text(
+        [
+          d['months'] == null ? 'Currently: off.' : 'Currently: older than ${(d['months'] as num) ~/ 12} year(s).',
+          _lastRunLine(d['last_run'] as Map?, unit: 'row(s)', verb: 'archived (compressed)'),
+        ].where((e) => e.isNotEmpty).join('  '),
+        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+      ),
+      if (files.isNotEmpty)
+        Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            dense: true,
+            title: Text('Archive files (${files.length})', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            children: [
+              for (final f in files)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.inventory_2_outlined, size: 18),
+                  title: Text('${f['table']} · ${NumberFormat('#,##0').format(f['rows'] ?? 0)} rows',
+                      style: const TextStyle(fontSize: 12)),
+                  subtitle: Text(
+                    '${_d8(f['from'])} → ${_d8(f['to'])} · ${fmtBytes(f['bytes'] as num?)}',
+                    style: const TextStyle(fontSize: 10.5),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Download (.json.gz)',
+                    icon: const Icon(Icons.download_outlined, size: 18),
+                    onPressed: () => _download('${f['path']}'),
+                  ),
+                ),
+            ],
+          ),
+        ),
+    ]);
+  }
+
+  static String _d8(dynamic v) {
+    final d = DateTime.tryParse('${v ?? ''}');
+    return d == null ? '—' : DateFormat('d MMM y').format(d.toLocal());
   }
 }
 

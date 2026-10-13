@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -590,97 +591,8 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
     );
   }
 
-  Future<void> _showModulesDialog(BuildContext ctx, String orgId, String orgName) async {
-    final client = Supabase.instance.client;
-    final res = await client
-        .from('org_modules')
-        .select('module, is_enabled')
-        .eq('org_id', orgId);
-    final Map<String, bool> states = {
-      for (final row in res as List)
-        row['module'] as String: row['is_enabled'] as bool,
-    };
-    if (!ctx.mounted) return;
-    await showDialog(
-      context: ctx,
-      builder: (dCtx) => StatefulBuilder(
-        builder: (dCtx, setS) => AlertDialog(
-          title: Text('Modules — $orgName'),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          content: SizedBox(
-            width: MediaQuery.of(dCtx).size.width < 420 ? MediaQuery.of(dCtx).size.width : 340,
-            child: SingleChildScrollView(
-              child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: kAppModules.map((m) => SwitchListTile(
-                title: Row(
-                  children: [
-                    Flexible(child: Text(m.label)),
-                    if (!m.live) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppTheme.textSecondary.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text('Soon',
-                            style: TextStyle(
-                                fontSize: 10, fontWeight: FontWeight.w600)),
-                      ),
-                    ],
-                  ],
-                ),
-                value: states[m.key] ?? false,
-                onChanged: (val) async {
-                  setS(() => states[m.key] = val);
-                  try {
-                    await client.from('org_modules').upsert({
-                      'org_id': orgId,
-                      'module': m.key,
-                      'is_enabled': val,
-                      'updated_at': DateTime.now().toUtc().toIso8601String(),
-                    }, onConflict: 'org_id,module');
-                    if (dCtx.mounted) {
-                      ScaffoldMessenger.of(dCtx)
-                        ..clearSnackBars()
-                        ..showSnackBar(SnackBar(
-                          content: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Icon(val ? Icons.check_circle : Icons.remove_circle,
-                                color: Colors.white, size: 18),
-                            const SizedBox(width: 10),
-                            Text('${m.label} ${val ? 'enabled' : 'disabled'}'),
-                          ]),
-                          duration: const Duration(milliseconds: 1200),
-                          behavior: SnackBarBehavior.floating,
-                          width: 280,
-                          backgroundColor:
-                              val ? AppTheme.success : AppTheme.textSecondary,
-                        ));
-                    }
-                  } catch (err) {
-                    if (dCtx.mounted) {
-                      setS(() => states[m.key] = !val);
-                      ScaffoldMessenger.of(dCtx).showSnackBar(
-                        SnackBar(content: Text(friendlyError('That did not work', err))),
-                      );
-                    }
-                  }
-                },
-              )).toList(),
-            ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dCtx).pop(),
-              child: const Text('Done'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Future<void> _showModulesDialog(BuildContext ctx, String orgId, String orgName) =>
+      showOrgModulesDialog(ctx, orgId, orgName);
 
   @override
   Widget build(BuildContext context) {
@@ -752,8 +664,13 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                 final info = Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(o['name'] as String? ?? '',
-                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                      InkWell(
+                        onTap: () => context.go('/orgs/profile?id=${Uri.encodeComponent(o['id'] as String)}'),
+                        child: Text(o['name'] as String? ?? '',
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16,
+                                color: AppTheme.primary, decoration: TextDecoration.underline,
+                                decorationColor: AppTheme.primary)),
+                      ),
                       const SizedBox(height: 2),
                       Text(
                         master != null
@@ -800,6 +717,11 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                   ),
                 );
                 final actionButtons = <Widget>[
+                  IconButton(
+                    tooltip: 'Open profile',
+                    icon: const Icon(Icons.badge_outlined, size: 18),
+                    onPressed: () => context.go('/orgs/profile?id=${Uri.encodeComponent(o['id'] as String)}'),
+                  ),
                   IconButton(
                     tooltip: 'Manage Modules',
                     icon: const Icon(Icons.extension_outlined, size: 18),
@@ -900,4 +822,97 @@ class _Chip extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Super Admin: switch modules on/off for an org (used by the list and the profile).
+Future<void> showOrgModulesDialog(BuildContext ctx, String orgId, String orgName) async {
+  final client = Supabase.instance.client;
+  final res = await client
+      .from('org_modules')
+      .select('module, is_enabled')
+      .eq('org_id', orgId);
+  final Map<String, bool> states = {
+    for (final row in res as List)
+      row['module'] as String: row['is_enabled'] as bool,
+  };
+  if (!ctx.mounted) return;
+  await showDialog(
+    context: ctx,
+    builder: (dCtx) => StatefulBuilder(
+      builder: (dCtx, setS) => AlertDialog(
+        title: Text('Modules — $orgName'),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        content: SizedBox(
+          width: MediaQuery.of(dCtx).size.width < 420 ? MediaQuery.of(dCtx).size.width : 340,
+          child: SingleChildScrollView(
+            child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: kAppModules.map((m) => SwitchListTile(
+              title: Row(
+                children: [
+                  Flexible(child: Text(m.label)),
+                  if (!m.live) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppTheme.textSecondary.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text('Soon',
+                          style: TextStyle(
+                              fontSize: 10, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ],
+              ),
+              value: states[m.key] ?? false,
+              onChanged: (val) async {
+                setS(() => states[m.key] = val);
+                try {
+                  await client.from('org_modules').upsert({
+                    'org_id': orgId,
+                    'module': m.key,
+                    'is_enabled': val,
+                    'updated_at': DateTime.now().toUtc().toIso8601String(),
+                  }, onConflict: 'org_id,module');
+                  if (dCtx.mounted) {
+                    ScaffoldMessenger.of(dCtx)
+                      ..clearSnackBars()
+                      ..showSnackBar(SnackBar(
+                        content: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(val ? Icons.check_circle : Icons.remove_circle,
+                              color: Colors.white, size: 18),
+                          const SizedBox(width: 10),
+                          Text('${m.label} ${val ? 'enabled' : 'disabled'}'),
+                        ]),
+                        duration: const Duration(milliseconds: 1200),
+                        behavior: SnackBarBehavior.floating,
+                        width: 280,
+                        backgroundColor:
+                            val ? AppTheme.success : AppTheme.textSecondary,
+                      ));
+                  }
+                } catch (err) {
+                  if (dCtx.mounted) {
+                    setS(() => states[m.key] = !val);
+                    ScaffoldMessenger.of(dCtx).showSnackBar(
+                      SnackBar(content: Text(friendlyError('That did not work', err))),
+                    );
+                  }
+                }
+              },
+            )).toList(),
+          ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dCtx).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    ),
+  );
 }

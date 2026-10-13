@@ -160,6 +160,7 @@ import '../../features/assets/presentation/erp_asset_report_screen.dart' deferre
 import '../../features/erp/presentation/erp_production_report_screen.dart' deferred as _s149;
 import '../../features/hr/presentation/hr_setup_screen.dart' deferred as _s150;
 import '../../features/operations/presentation/route_roster_screen.dart' deferred as _s151;
+import '../../features/superadmin/presentation/org_profile_screen.dart' deferred as _s152;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -263,7 +264,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         if (loc == '/subscription-expired') return home();
         bool allowed() {
           if (role == WebUserRole.superAdmin) {
-            return loc == '/orgs' || loc == '/subscriptions' || loc == '/account-linking';
+            return loc == '/orgs' || loc == '/orgs/profile' || loc == '/subscriptions' || loc == '/account-linking';
           }
           if (role == WebUserRole.dispatchManager) {
             return loc == '/deliveries' ||
@@ -322,7 +323,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             return access.canAccessRouteAt(permLoc, branchId);
           }
           // admin / masterAdmin — everything except super admin's /orgs
-          return loc != '/orgs';
+          return loc != '/orgs' && loc != '/orgs/profile';
         }
         if (onLogin) {
           final from = state.uri.queryParameters['from'];
@@ -444,6 +445,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/assets/report', builder: (_, __) => _deferred(_s148.loadLibrary(), () => _s148.ErpAssetReportScreen())),
           GoRoute(path: '/facility', builder: (_, __) => _deferred(_s075.loadLibrary(), () => _s075.ErpFacilityScreen())),
           GoRoute(path: '/orgs', builder: (_, __) => _deferred(_s064.loadLibrary(), () => _s064.OrgsScreen())),
+          GoRoute(path: '/orgs/profile', builder: (_, st) => _deferred(_s152.loadLibrary(),
+              () => _s152.OrgProfileScreen(key: ValueKey(st.uri.queryParameters['id']), orgId: st.uri.queryParameters['id'] ?? ''))),
           GoRoute(path: '/subscriptions', builder: (_, __) => _deferred(_s065.loadLibrary(), () => _s065.SubscriptionsScreen())),
           GoRoute(path: '/billing', builder: (_, __) => _deferred(_s067.loadLibrary(), () => _s067.BillingScreen())),
           GoRoute(path: '/erp/products',  builder: (_, state) => _deferred(_s081.loadLibrary(), () => _s081.ErpProductsScreen(focusId: state.uri.queryParameters['focus']))),
