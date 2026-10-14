@@ -37,11 +37,13 @@ import '../layout/main_layout.dart'
         orgModulesProvider,
         selectedBranchProvider,
         poPendingApprovalCountProvider,
+        poCloseRequestCountProvider,
         grnPendingInvoiceCountProvider,
         grnSupervisePendingProvider,
         customerSupervisePendingProvider,
         productSupervisePendingProvider,
         assetSupervisePendingProvider,
+        assetSuggestionCountProvider,
         piReviewPendingProvider,
         priReviewPendingProvider,
         siReviewPendingProvider,
@@ -1626,6 +1628,8 @@ Future<_Msg> _pending(_Ctx c) async {
   if (c.can('/erp/purchase')) {
     final n = await read(poPendingApprovalCountProvider);
     if (n > 0) items.add('$n purchase order${n == 1 ? '' : 's'} to approve');
+    final cr = await read(poCloseRequestCountProvider);
+    if (cr > 0) items.add('$cr PO close request${cr == 1 ? '' : 's'} to decide');
   }
   if (c.can('/erp/grn')) {
     final n = await read(grnPendingInvoiceCountProvider);
@@ -1652,6 +1656,8 @@ Future<_Msg> _pending(_Ctx c) async {
   if (c.can('/assets')) {
     final n = await read(assetSupervisePendingProvider);
     if (n > 0) items.add('$n asset${n == 1 ? '' : 's'} awaiting supervision');
+    final sg = await read(assetSuggestionCountProvider);
+    if (sg > 0) items.add('$sg asset suggestion${sg == 1 ? '' : 's'} to review');
   }
   if (c.can('/customers') || c.can('/erp/customer-ledger')) {
     final n = await read(customerSupervisePendingProvider);

@@ -13,7 +13,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
-import '../../../core/layout/main_layout.dart' show assetsDueCountProvider, assetSupervisePendingProvider;
+import '../../../core/layout/main_layout.dart' show assetsDueCountProvider, assetSupervisePendingProvider, assetSuggestionCountProvider;
 import '../../erp/services/asset_pdf.dart';
 
 /// Public asset page (static, Firebase-hosted). The QR encodes
@@ -107,6 +107,9 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   String _supFilter = 'all'; // all | pending | rejected | supervised
   bool _focusDone = false;
 
+  // ── Asset suggestions (SQL 366): new additions to watched accounts. ──
+  List<Map<String, dynamic>> _suggestions = [];
+
   // detail sub-data
   bool _detailLoading = false;
   List<Map<String, dynamic>> _history = [];
@@ -185,8 +188,20 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           .eq('is_active', true)
           .order('name');
 
+      var suggestions = <Map<String, dynamic>>[];
+      try {
+        suggestions = List<Map<String, dynamic>>.from(await client
+            .from('asset_suggestions')
+            .select()
+            .eq('org_id', orgId)
+            .eq('status', 'pending')
+            .order('entry_date', ascending: false)
+            .order('created_at', ascending: false));
+      } catch (_) {/* not set up yet — no suggestions */}
+
       if (!mounted) return;
       setState(() {
+        _suggestions = suggestions;
         _assets = List<Map<String, dynamic>>.from(assets);
         _categories = List<Map<String, dynamic>>.from(cats);
         // Real branches only for picking — processor / off-site (virtual)
@@ -222,6 +237,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         }
       });
       ref.invalidate(assetSupervisePendingProvider);
+      ref.invalidate(assetSuggestionCountProvider);
       // Opened from a notification: jump straight to that asset.
       final f = widget.focusId;
       if (!_focusDone && f != null && _assets.any((a) => a['id'] == f)) {
@@ -1644,6 +1660,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 tooltip: 'Refresh'),
           ]),
           SizedBox(height: narrow ? 10 : 16),
+          if (!_loading && _suggestions.isNotEmpty && !showDetail) ...[
+            _suggestionsBanner(),
+            SizedBox(height: narrow ? 10 : 14),
+          ],
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -2315,8 +2335,199 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   }
 
   // ───────────────────────────────────────────────────── dialogs
-  Future<void> _assetDialog({Map<String, dynamic>? existing}) async {
+  // ── Asset suggestions (SQL 366) ─────────────────────────────────────────
+  String _suggAmt(dynamic v) => 'Rs ${_money.format((v as num?) ?? 0)}';
+
+  Widget _suggestionsBanner() {
+    final n = _suggestions.length;
+    final total = _suggestions.fold<double>(0, (a, s) =>
+        a + (((s['amount'] as num?) ?? 0) - ((s['assets_cost'] as num?) ?? 0)).clamp(0, double.infinity).toDouble());
+    return Material(
+      color: Colors.amber.shade50,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: _suggestionsDialog,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber.shade700.withOpacity(0.6))),
+          child: Row(children: [
+            Icon(Icons.lightbulb_outline, color: Colors.amber.shade900, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '$n asset suggestion${n == 1 ? '' : 's'} · ${_suggAmt(total)} added to asset accounts '
+                'with no asset recorded yet',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.amber.shade900),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonal(onPressed: _suggestionsDialog, child: const Text('Review')),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _suggestionsDialog() async {
+    await showDialog(
+      context: context,
+      builder: (dlg) => StatefulBuilder(builder: (dlg, setD) {
+        final rows = _suggestions;
+        return AlertDialog(
+          title: Row(children: [
+            Icon(Icons.lightbulb_outline, color: Colors.amber.shade900),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Asset suggestions (${rows.length})')),
+          ]),
+          content: SizedBox(
+            width: 620,
+            child: rows.isEmpty
+                ? const Padding(padding: EdgeInsets.all(24),
+                    child: Text('All done — nothing waiting.', textAlign: TextAlign.center))
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: rows.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) => _suggestionCard(rows[i], dlg, () => setD(() {})),
+                  ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(dlg, rootNavigator: true).pop(), child: const Text('Close')),
+          ],
+        );
+      }),
+    );
+  }
+
+  Widget _suggestionCard(Map<String, dynamic> s, BuildContext dlg, VoidCallback rebuild) {
+    final amount = (s['amount'] as num?)?.toDouble() ?? 0;
+    final covered = (s['assets_cost'] as num?)?.toDouble() ?? 0;
+    final made = (s['asset_ids'] as List?)?.length ?? 0;
+    final remaining = (amount - covered).clamp(0, double.infinity).toDouble();
+    final date = _parseDate(s['entry_date']);
+    final branch = _branchNames[s['branch_id']];
+    final meta = [
+      if (s['source_number'] != null) '${s['source_number']}',
+      if (date != null) DateFormat('d MMM yyyy').format(date),
+      if (branch != null) branch,
+      if (s['party_name'] != null) '${s['party_name']}',
+    ].join(' · ');
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber.shade200),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_suggAmt(amount), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text('to ${s['account_name'] ?? 'asset account'}',
+                  style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            ]),
+          ),
+          if (made > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+              child: Text('$made asset${made == 1 ? '' : 's'} · ${_suggAmt(covered)}',
+                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Colors.green.shade800)),
+            ),
+        ]),
+        const SizedBox(height: 6),
+        if (meta.isNotEmpty) Text(meta, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+        if ((s['narration'] as String?)?.isNotEmpty ?? false)
+          Padding(padding: const EdgeInsets.only(top: 3),
+              child: Text('${s['narration']}', style: const TextStyle(fontSize: 12.5))),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 6, alignment: WrapAlignment.end, children: [
+          TextButton(
+            onPressed: () => _dismissSuggestion(s, rebuild),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            child: const Text('Dismiss'),
+          ),
+          if (made > 0)
+            OutlinedButton(onPressed: () => _finishSuggestion(s, rebuild), child: const Text('Mark done')),
+          FilledButton.icon(
+            icon: const Icon(Icons.add, size: 16),
+            label: Text(made > 0 ? 'Create another' : 'Create asset'),
+            onPressed: () async {
+              Navigator.of(dlg, rootNavigator: true).pop();
+              final narr = (s['narration'] as String?)?.trim() ?? '';
+              await _assetDialog(
+                suggestionId: s['id'] as String,
+                prefill: {
+                  'name': narr.length > 80 ? narr.substring(0, 80) : narr,
+                  'cost': remaining == 0 ? null : (remaining % 1 == 0 ? remaining.toStringAsFixed(0) : remaining.toStringAsFixed(2)),
+                  'date': s['entry_date'],
+                  'supplier': s['party_name'],
+                  'branch_id': s['branch_id'],
+                  'source': s['source_number'],
+                  'notes': 'From ${s['source_number'] ?? 'a posted entry'}'
+                      '${s['account_name'] != null ? ' · ${s['account_name']}' : ''}',
+                },
+              );
+            },
+          ),
+        ]),
+      ]),
+    );
+  }
+
+  Future<void> _dismissSuggestion(Map<String, dynamic> s, VoidCallback rebuild) async {
+    final ctrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (d) => StatefulBuilder(builder: (d, setR) => AlertDialog(
+        title: const Text('Dismiss suggestion'),
+        content: SizedBox(width: 400, child: TextField(
+          controller: ctrl, autofocus: true, minLines: 2, maxLines: 4,
+          onChanged: (_) => setR(() {}),
+          decoration: const InputDecoration(
+              labelText: 'Why is no asset needed? *',
+              hintText: 'e.g. repair cost, already recorded, wrong account',
+              border: OutlineInputBorder()),
+        )),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.of(d, rootNavigator: true).pop(ctrl.text.trim()),
+            child: const Text('Dismiss')),
+        ],
+      )),
+    );
+    if (reason == null || reason.isEmpty) return;
+    await _closeSuggestion(s, true, reason, rebuild);
+  }
+
+  Future<void> _finishSuggestion(Map<String, dynamic> s, VoidCallback rebuild) =>
+      _closeSuggestion(s, false, null, rebuild);
+
+  Future<void> _closeSuggestion(Map<String, dynamic> s, bool dismiss, String? reason, VoidCallback rebuild) async {
+    try {
+      await Supabase.instance.client.rpc('close_asset_suggestion',
+          params: {'p_id': s['id'], 'p_dismiss': dismiss, 'p_reason': reason});
+      setState(() => _suggestions = _suggestions.where((x) => x['id'] != s['id']).toList());
+      rebuild();
+      ref.invalidate(assetSuggestionCountProvider);
+      _snack(dismiss ? 'Suggestion dismissed' : 'Suggestion marked done');
+    } on PostgrestException catch (e) {
+      _snack(e.message);
+    } catch (e) {
+      _snack('Could not save: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _assetDialog({Map<String, dynamic>? existing,
+      Map<String, dynamic>? prefill, String? suggestionId}) async {
     final isEdit = existing != null;
+    final pre = isEdit ? null : prefill;
     final orgId = _orgId;
     if (orgId == null) return;
 
@@ -2332,7 +2543,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     }
 
     final nameCtrl =
-        TextEditingController(text: existing?['name'] as String? ?? '');
+        TextEditingController(text: existing?['name'] as String? ?? pre?['name'] as String? ?? '');
     final descCtrl =
         TextEditingController(text: existing?['description'] as String? ?? '');
     final serialCtrl =
@@ -2342,20 +2553,21 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     final mfgCtrl = TextEditingController(
         text: existing?['manufacturer'] as String? ?? '');
     final supplierCtrl =
-        TextEditingController(text: existing?['supplier_id'] as String? ?? '');
+        TextEditingController(text: existing?['supplier_id'] as String? ?? pre?['supplier'] as String? ?? '');
     final costCtrl = TextEditingController(
-        text: existing?['purchase_cost']?.toString() ?? '');
+        text: existing?['purchase_cost']?.toString() ?? pre?['cost']?.toString() ?? '');
     final locCtrl = TextEditingController(
         text: existing?['location_text'] as String? ?? '');
     final notesCtrl =
-        TextEditingController(text: existing?['notes'] as String? ?? '');
+        TextEditingController(text: existing?['notes'] as String? ?? pre?['notes'] as String? ?? '');
 
     String? categoryId = existing?['category_id'] as String?;
     String status = existing?['status'] as String? ?? 'in_use';
     String? condition = existing?['condition'] as String?;
-    String? branchId = existing?['branch_id'] as String?;
+    String? branchId = existing?['branch_id'] as String? ??
+        (_branches.any((b) => b['id'] == pre?['branch_id']) ? pre!['branch_id'] as String : null);
     String? custodian = existing?['assigned_to'] as String?;
-    DateTime? purchaseDate = _parseDate(existing?['purchase_date']);
+    DateTime? purchaseDate = _parseDate(existing?['purchase_date'] ?? pre?['date']);
     DateTime? warranty = _parseDate(existing?['warranty_expiry']);
     bool saving = false;
 
@@ -2422,6 +2634,16 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 'p_action': 'created',
                 'p_note': 'Asset created',
               });
+              // Created from a suggestion: link it (closes it once covered).
+              if (suggestionId != null) {
+                try {
+                  final st = await client.rpc('link_asset_suggestion',
+                      params: {'p_id': suggestionId, 'p_asset_id': id});
+                  if (mounted && st != 'done') {
+                    _snack('Asset created. The suggestion stays open — create more assets from it, or mark it done.');
+                  }
+                } catch (_) {}
+              }
             }
             if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
             await _load();
@@ -2445,7 +2667,9 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         }
 
         return AlertDialog(
-          title: Text(isEdit ? 'Edit asset · $code' : 'New asset · $code'),
+          title: Text(isEdit ? 'Edit asset · $code'
+              : pre != null ? 'New asset · $code (from ${pre['source'] ?? 'suggestion'})'
+              : 'New asset · $code'),
           content: SizedBox(
             width: 560,
             child: SingleChildScrollView(

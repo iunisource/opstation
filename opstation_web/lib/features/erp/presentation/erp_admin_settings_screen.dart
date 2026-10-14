@@ -49,7 +49,8 @@ class _BranchField {
 class _UsersField {
   final String key; // app_config key, e.g. 'org.sri_price_edit_users'
   final String label;
-  const _UsersField(this.key, this.label);
+  final bool accounts; // pick chart-of-accounts entries instead of users
+  const _UsersField(this.key, this.label, {this.accounts = false});
 }
 
 /// Definition of a single org-level admin toggle.
@@ -599,6 +600,20 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.asset_suggest_flow',
+    'Suggest assets from accounts',
+    'When ON, every NEW entry that adds value to one of the accounts picked below '
+        '(e.g. Plant & Machinery — any account works) shows up on Management → Assets '
+        'as a highlighted suggestion: the amount, the document, the supplier and the '
+        'narration. Press "Create asset" (the form comes pre-filled; one suggestion can '
+        'become several assets) or "Dismiss" with a reason. Only entries made after an '
+        'account is picked count — nothing from the past. Voiding the document removes '
+        'its suggestion. A counter shows on Management → Assets, and alerts can be set in '
+        'Admin Settings → Notifications (Assets → Asset suggestion).',
+    users: _UsersField('org.asset_suggest_accounts', 'Accounts to watch', accounts: true),
+  ),
+
+  _AdminToggle(
     'org.schemes_enabled',
     'Schemes & Offers engine',
     'When ON, the Schemes & Offers tool goes live: as a salesperson builds a '
@@ -699,6 +714,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.asset_maintenance_reminder',
     'org.asset_custodian_reminder',
     'org.asset_supervise_flow',
+    'org.asset_suggest_flow',
     'org.backup_enabled',
   ]),
   _ToggleGroup('Assistant', Icons.hub_outlined, [
@@ -743,6 +759,8 @@ class _ErpAdminSettingsScreenState
   final Map<String, Set<String>> _userValues = {}; // user multi-select companions
   List<Map<String, dynamic>> _branches = [];
   List<Map<String, dynamic>> _orgUsers = [];
+  List<Map<String, dynamic>> _orgAccounts = []; // {id, name: 'code · name', role: ''}
+  List<Map<String, dynamic>> _roster(_UsersField u) => u.accounts ? _orgAccounts : _orgUsers;
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
@@ -819,6 +837,25 @@ class _ErpAdminSettingsScreenState
             .eq('org_id', orgId).or('role.is.null,role.neq.retailer')
             .order('name'));
       } catch (_) {}
+      // Chart of accounts for any account multi-select companions.
+      List<Map<String, dynamic>> orgAccounts = [];
+      try {
+        final acc = await Supabase.instance.client
+            .from('chart_of_accounts')
+            .select('id, code, name')
+            .eq('org_id', orgId)
+            .order('code');
+        orgAccounts = [
+          for (final a in acc as List)
+            {
+              'id': a['id'],
+              'name': [a['code'], a['name']]
+                  .where((x) => x != null && '$x'.trim().isNotEmpty)
+                  .join(' · '),
+              'role': '',
+            }
+        ];
+      } catch (_) {}
       // Serious Zone: negative-stock guard lives on inventory_settings.
       bool blockNeg = false;
       bool blockZeroCost = false;
@@ -834,6 +871,7 @@ class _ErpAdminSettingsScreenState
       setState(() {
         _branches = branches;
         _orgUsers = orgUsers;
+        _orgAccounts = orgAccounts;
         _blockNegStock = blockNeg;
         _blockZeroCostReceipt = blockZeroCost;
         for (final t in _toggles) {
@@ -1296,8 +1334,8 @@ class _ErpAdminSettingsScreenState
         return StatefulBuilder(builder: (ctx, setD) {
           final q = searchCtrl.text.trim().toLowerCase();
           final matches = q.isEmpty
-              ? _orgUsers
-              : _orgUsers
+              ? _roster(u)
+              : _roster(u)
                   .where((us) => matchesQuery('${us['name'] ?? ''}', q))
                   .toList();
           return AlertDialog(
@@ -1312,11 +1350,11 @@ class _ErpAdminSettingsScreenState
                     TextField(
                       controller: searchCtrl,
                       autofocus: true,
-                      decoration: const InputDecoration(
-                          hintText: 'Search user...',
+                      decoration: InputDecoration(
+                          hintText: u.accounts ? 'Search account...' : 'Search user...',
                           isDense: true,
-                          prefixIcon: Icon(Icons.search, size: 18),
-                          border: OutlineInputBorder()),
+                          prefixIcon: const Icon(Icons.search, size: 18),
+                          border: const OutlineInputBorder()),
                       onChanged: (_) => setD(() {}),
                     ),
                     const SizedBox(height: 8),
@@ -1330,7 +1368,7 @@ class _ErpAdminSettingsScreenState
                               controlAffinity: ListTileControlAffinity.leading,
                               title: Text(us['name'] as String? ?? '-',
                                   style: const TextStyle(fontSize: 13.5)),
-                              subtitle: Text('${us['role'] ?? ''}',
+                              subtitle: u.accounts ? null : Text('${us['role'] ?? ''}',
                                   style: const TextStyle(fontSize: 11)),
                               value: sel.contains(us['id']),
                               onChanged: (v) => setD(() {
@@ -1371,7 +1409,7 @@ class _ErpAdminSettingsScreenState
   Widget _usersRow(_UsersField u) {
     final sel = _userValues[u.key] ?? <String>{};
     final names = [
-      for (final us in _orgUsers)
+      for (final us in _roster(u))
         if (sel.contains(us['id'])) (us['name'] as String? ?? '-')
     ];
     return Padding(
@@ -1395,7 +1433,9 @@ class _ErpAdminSettingsScreenState
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
           child: Text(
-            names.isEmpty ? 'No users selected — nobody can edit' : names.join(', '),
+            names.isEmpty
+                ? (u.accounts ? 'No accounts selected' : 'No users selected — nobody can edit')
+                : names.join(', '),
             style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w600,
@@ -1406,8 +1446,8 @@ class _ErpAdminSettingsScreenState
         ),
         const SizedBox(width: 10),
         OutlinedButton.icon(
-          icon: const Icon(Icons.group_outlined, size: 16),
-          label: Text(sel.isEmpty ? 'Select users' : 'Edit (${sel.length})'),
+          icon: Icon(u.accounts ? Icons.account_tree_outlined : Icons.group_outlined, size: 16),
+          label: Text(sel.isEmpty ? (u.accounts ? 'Select accounts' : 'Select users') : 'Edit (${sel.length})'),
           onPressed: () => _pickUsers(u),
         ),
         ]),

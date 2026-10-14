@@ -1020,6 +1020,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       await Supabase.instance.client.rpc('request_po_close', params: {'p_id': id, 'p_reason': reason});
       _showSnack('Close request sent to admins');
+      ref.invalidate(poCloseRequestCountProvider);
       if (mounted) setState(() => _auditRefresh++);
       _loadDetail(id); _loadList();
     } catch (e) { _showSnack(_rpcError(e)); }
@@ -1032,6 +1033,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       await Supabase.instance.client.rpc('withdraw_po_close', params: {'p_id': id});
       _showSnack('Close request withdrawn');
+      ref.invalidate(poCloseRequestCountProvider);
       if (mounted) setState(() => _auditRefresh++);
       _loadDetail(id); _loadList();
     } catch (e) { _showSnack(_rpcError(e)); }
@@ -1065,6 +1067,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await Supabase.instance.client.rpc('decide_po_close',
           params: {'p_id': id, 'p_approve': approve, 'p_note': note});
       _showSnack(approve ? 'PO closed (voided)' : 'Close request declined');
+      ref.invalidate(poCloseRequestCountProvider);
       ref.invalidate(poPendingApprovalCountProvider);
       if (mounted) setState(() => _auditRefresh++);
       _loadDetail(id); _loadList();

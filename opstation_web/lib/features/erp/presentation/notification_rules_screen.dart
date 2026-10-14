@@ -84,6 +84,10 @@ const kNotifEvents = <NotifEvent>[
       'A supervisor rejected an asset change (with the reason).', perm: 'assets', creator: true),
   NotifEvent('asset_supervised', 'Assets', 'Asset supervised', 'A supervisor checked an asset change.',
       perm: 'assets', creator: true),
+  NotifEvent('asset_suggestion', 'Assets', 'Asset suggestion',
+      'A new entry added value to an account picked in Admin Settings (e.g. Plant & Machinery) — '
+          'create the asset or dismiss it. Branch = the document\'s branch.',
+      perm: 'assets'),
   NotifEvent('hr_leave_pending', 'HR', 'Leave request waiting for approval',
       'A leave request was saved. Branch = the employee\'s branch.', perm: 'hr_leave'),
   NotifEvent('hr_leave_approved', 'HR', 'Leave approved', 'A leave request was approved.',

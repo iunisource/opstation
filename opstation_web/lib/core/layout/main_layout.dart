@@ -250,6 +250,24 @@ final assetsDueCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Asset suggestions waiting (SQL 366): a watched account got a new addition and
+// nobody has created the asset or dismissed it yet. 0 when not set up / off.
+final assetSuggestionCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('asset_suggestions')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'pending');
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 // Asset supervision counter (org.asset_supervise_flow): supervisors see assets
 // waiting for a check; whoever last changed an asset sees it if it was rejected.
 final assetSupervisePendingProvider = FutureProvider<int>((ref) async {
@@ -383,6 +401,27 @@ final poRejectedUnackedCountProvider = FutureProvider<int>((ref) async {
   if (user == null || user.orgId == null) return 0;
   try {
     return (await poRejectAlertRows(user.orgId!, user.id)).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
+// PO close requests waiting for an admin (SQL 365). Admins only — they are the
+// only ones who can approve / decline. 0 when the feature isn't set up.
+final poCloseRequestCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final r = user.role;
+  if (r != WebUserRole.admin && r != WebUserRole.masterAdmin && r != WebUserRole.superAdmin) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('purchase_orders')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('close_req_status', 'pending')
+        .filter('voided_at', 'is', null);
+    return (res as List).length;
   } catch (_) {
     return 0;
   }
@@ -1155,10 +1194,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
   final supplierPending = ref.watch(supplierPendingCountProvider).valueOrNull ?? 0;
   final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
-  final assetSupervisePending = ref.watch(assetSupervisePendingProvider).valueOrNull ?? 0;
+  final assetSupervisePending = (ref.watch(assetSupervisePendingProvider).valueOrNull ?? 0) +
+      (ref.watch(assetSuggestionCountProvider).valueOrNull ?? 0);
   final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
   final poPending = (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
-      (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0);
+      (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0) +
+      (ref.watch(poCloseRequestCountProvider).valueOrNull ?? 0);
   final paPending = ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0;
   final jvPending = ref.watch(jvPendingCountProvider).valueOrNull ?? 0;
   final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;

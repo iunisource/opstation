@@ -207,6 +207,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(grnSupervisePendingProvider);
     ref.invalidate(customerSupervisePendingProvider);
     ref.invalidate(poPendingApprovalCountProvider);
+    ref.invalidate(poCloseRequestCountProvider);
     ref.invalidate(supplierPendingCountProvider);
     ref.invalidate(fieldOrderPendingCountProvider);
     ref.invalidate(retailerOrderPendingCountProvider);
@@ -217,6 +218,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(jvPendingCountProvider);
     ref.invalidate(bomSupervisePendingProvider);
     ref.invalidate(assetSupervisePendingProvider);
+    ref.invalidate(assetSuggestionCountProvider); // refreshed by journal_entries / assets events
     _checkPoPing(); // ping admins if a new PO just landed
   }
 
