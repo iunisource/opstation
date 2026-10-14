@@ -750,14 +750,19 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
 
     final selectedIds = Set<String>.from(originalAssignedIds);
     final searchCtrl = TextEditingController();
+    var assignedOnly = false;
 
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setS) {
         final q = searchCtrl.text.trim().toLowerCase();
+        // "Assigned only": the routes ticked for this person right now.
+        final pool = assignedOnly
+            ? routes.where((r) => selectedIds.contains(r['id'] as String)).toList()
+            : routes;
         final visibleRoutes = q.isEmpty
-            ? routes
-            : routes.where((r) {
+            ? pool
+            : pool.where((r) {
                 final name = (r['name'] as String? ?? '').toLowerCase();
                 return name.contains(q);
               }).toList();
@@ -777,12 +782,22 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text('${selectedIds.length} of ${routes.length} selected · routes "With …" belong to someone else — ticking one hands it over',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.textSecondary)),
-              ),
+              Row(children: [
+                Expanded(
+                  child: Text('${selectedIds.length} of ${routes.length} selected · routes "With …" belong to someone else — ticking one hands it over',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppTheme.textSecondary)),
+                ),
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: Text(assignedOnly ? 'Assigned only (${selectedIds.length})' : 'Show assigned only',
+                      style: const TextStyle(fontSize: 12)),
+                  selected: assignedOnly,
+                  showCheckmark: true,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (v) => setS(() => assignedOnly = v),
+                ),
+              ]),
               const SizedBox(height: 8),
               Container(
                 height: 320,
@@ -790,8 +805,10 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                     border: Border.all(color: AppTheme.border),
                     borderRadius: BorderRadius.circular(8)),
                 child: visibleRoutes.isEmpty
-                    ? const Center(
-                        child: Text('No routes match your search.',
+                    ? Center(
+                        child: Text(assignedOnly && selectedIds.isEmpty
+                            ? 'No routes assigned yet.'
+                            : 'No routes match your search.',
                             style: TextStyle(
                                 color: AppTheme.textSecondary,
                                 fontStyle: FontStyle.italic)))
