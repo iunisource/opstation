@@ -2442,6 +2442,14 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         ]),
         const SizedBox(height: 6),
         if (meta.isNotEmpty) Text(meta, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+        if ((s['line_desc'] as String?)?.trim().isNotEmpty ?? false)
+          Padding(padding: const EdgeInsets.only(top: 4),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.notes, size: 15, color: AppTheme.textSecondary),
+                const SizedBox(width: 6),
+                Expanded(child: Text('${s['line_desc']}',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+              ])),
         if ((s['narration'] as String?)?.isNotEmpty ?? false)
           Padding(padding: const EdgeInsets.only(top: 3),
               child: Text('${s['narration']}', style: const TextStyle(fontSize: 12.5))),
@@ -2460,17 +2468,24 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
             onPressed: () async {
               Navigator.of(dlg, rootNavigator: true).pop();
               final narr = (s['narration'] as String?)?.trim() ?? '';
+              // Name: only the line's own description (first item). The narration is
+              // usually system text like "Cash Payment: CPV-…", so it never becomes
+              // the name — the field stays empty for the user to type instead.
+              final lineDesc = (s['line_desc'] as String?)?.trim() ?? '';
+              final nameSrc = lineDesc.isNotEmpty ? lineDesc.split(' · ').first : '';
               await _assetDialog(
                 suggestionId: s['id'] as String,
                 prefill: {
-                  'name': narr.length > 80 ? narr.substring(0, 80) : narr,
+                  'name': nameSrc.length > 80 ? nameSrc.substring(0, 80) : nameSrc,
                   'cost': remaining == 0 ? null : (remaining % 1 == 0 ? remaining.toStringAsFixed(0) : remaining.toStringAsFixed(2)),
                   'date': s['entry_date'],
                   'supplier': s['party_name'],
                   'branch_id': s['branch_id'],
                   'source': s['source_number'],
                   'notes': 'From ${s['source_number'] ?? 'a posted entry'}'
-                      '${s['account_name'] != null ? ' · ${s['account_name']}' : ''}',
+                      '${s['account_name'] != null ? ' · ${s['account_name']}' : ''}'
+                      '${lineDesc.isNotEmpty ? '\n$lineDesc' : ''}'
+                      '${narr.isNotEmpty ? '\n$narr' : ''}',
                 },
               );
             },

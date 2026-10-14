@@ -31,6 +31,7 @@ create table if not exists public.asset_suggestions (
   source_number   text,                       -- document number shown to users
   entry_date      date,
   narration       text,
+  line_desc       text,
   party_name      text,
   amount          numeric not null default 0,
   status          text not null default 'pending', -- pending | done | dismissed | voided | gone
@@ -43,6 +44,7 @@ create table if not exists public.asset_suggestions (
   updated_at      timestamptz not null default now(),
   unique (org_id, source_type, source_id, account_id)
 );
+alter table public.asset_suggestions add column if not exists line_desc text;
 create index if not exists idx_asset_sugg_pending on public.asset_suggestions(org_id) where status = 'pending';
 create index if not exists idx_asset_sugg_entry   on public.asset_suggestions(entry_id);
 
@@ -120,7 +122,7 @@ language plpgsql security definer set search_path to 'public'
 as $$
 declare
   w record; v_e record;
-  v_amt numeric; v_party text; v_acct_name text; v_new boolean;
+  v_amt numeric; v_party text; v_acct_name text; v_new boolean; v_line_desc text;
 begin
   select * into w from public.asset_suggest_watch where org_id = p_org and account_id = p_acct;
   if not found or not public._cfg_on(p_org, 'org.asset_suggest_flow') then return; end if;
@@ -141,6 +143,18 @@ begin
      and coalesce(e.reference_type, '') not in ('void', 'opening_jv')
      and e.created_at >= w.added_at
      and e.entry_date >= ((w.added_at at time zone 'Asia/Karachi')::date - 31);
+
+  -- What the lines on this account say (e.g. "Lathe machine 12in").
+  select string_agg(d, ' · ' order by d) into v_line_desc
+    from (select distinct nullif(btrim(l.description), '') as d
+            from public.journal_lines l
+            join public.journal_entries e on e.id = l.entry_id
+           where e.org_id = p_org
+             and coalesce(e.reference_type, '') = p_type
+             and coalesce(e.reference_id, e.id) = p_src
+             and l.account_id = p_acct and coalesce(l.debit, 0) > 0
+             and e.reverses_id is null and not coalesce(e.is_voided, false)) x
+   where d is not null;
 
   if v_amt <= 0 then
     update public.asset_suggestions
@@ -178,14 +192,14 @@ begin
 
   insert into public.asset_suggestions as s
     (org_id, branch_id, account_id, account_name, source_type, source_id, entry_id,
-     source_number, entry_date, narration, party_name, amount)
+     source_number, entry_date, narration, line_desc, party_name, amount)
   values (p_org, v_e.branch_id, p_acct, v_acct_name, p_type, p_src, v_e.id,
           coalesce(nullif(v_e.reference_number, ''), v_e.entry_number), v_e.entry_date,
-          nullif(btrim(coalesce(v_e.description, '')), ''), v_party, v_amt)
+          nullif(btrim(coalesce(v_e.description, '')), ''), left(v_line_desc, 1000), v_party, v_amt)
   on conflict (org_id, source_type, source_id, account_id) do update
      set amount = excluded.amount, entry_id = excluded.entry_id, branch_id = excluded.branch_id,
          account_name = excluded.account_name, source_number = excluded.source_number,
-         entry_date = excluded.entry_date, narration = excluded.narration,
+         entry_date = excluded.entry_date, narration = excluded.narration, line_desc = excluded.line_desc,
          party_name = excluded.party_name, status = 'pending', updated_at = now()
    where s.status in ('pending', 'gone')
   returning (xmax = 0) into v_new;
@@ -196,7 +210,8 @@ begin
         'Asset suggestion',
         'Rs ' || public._asset_money(v_amt) || ' went to ' || coalesce(v_acct_name, 'an asset account')
           || ' on ' || coalesce(nullif(v_e.reference_number, ''), v_e.entry_number, 'a document')
-          || coalesce(' (' || v_party || ')', '') || ' — create an asset?',
+          || coalesce(' (' || v_party || ')', '') || coalesce(' · ' || left(v_line_desc, 120), '')
+          || ' — create an asset?',
         '/assets');
     exception when others then null;
     end;
