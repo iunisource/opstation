@@ -216,7 +216,7 @@ class SupabasePullService {
       // their customers never did — and a stop whose customer isn't on the
       // phone is hidden, so the route showed "0 customers" until the
       // salesperson logged out and in again. Fetch any missing ones now.
-      final missingCustomers = await _fetchMissingCustomers(stops);
+      final missingCustomers = await _fetchCustomerUpdates(orgId, stops);
       await _db.transaction(() async {
         await _pullCustomers(missingCustomers);
         // Prune this org's routes that vanished from the cloud.
@@ -247,33 +247,66 @@ class SupabasePullService {
     }
   }
 
-  /// Server rows for customers referenced by [stops] that are not yet in the
-  /// local DB (batched so the id list never overflows the request URL).
-  Future<List<Map<String, dynamic>>> _fetchMissingCustomers(
-      List<Map<String, dynamic>> stops) async {
+  /// Keeps the phone's customers current between logins:
+  ///  (a) customers EDITED on the server since the newest one on the phone
+  ///      (location, phone, name …) — with a 10-minute overlap so a clock
+  ///      difference can never skip an edit;
+  ///  (b) customers referenced by [stops] that the phone doesn't have at all.
+  /// Batched so an id list never overflows the request URL.
+  Future<List<Map<String, dynamic>>> _fetchCustomerUpdates(
+      String orgId, List<Map<String, dynamic>> stops) async {
+    final localRows = await (_db.select(_db.customers)
+          ..where((c) => c.orgId.equals(orgId)))
+        .get();
+    final allLocalIds = {
+      for (final c in await _db.select(_db.customers).get()) c.id,
+    };
+    final out = <Map<String, dynamic>>[];
+    final got = <String>{};
+
+    // (a) edited since the newest local copy
+    DateTime? newest;
+    for (final c in localRows) {
+      final u = c.updatedAt;
+      if (u != null && (newest == null || u.isAfter(newest))) newest = u;
+    }
+    if (newest != null) {
+      try {
+        final changed = await _sync.pullCustomersChangedSince(
+            orgId, newest.subtract(const Duration(minutes: 10)));
+        for (final r in changed) {
+          if (got.add('${r['id']}')) out.add(r);
+        }
+      } catch (e) {
+        print('fetch changed customers failed: $e');
+      }
+    }
+
+    // (b) referenced by a stop but not on the phone
     final wanted = {
       for (final s in stops)
         if (s['customer_id'] is String) s['customer_id'] as String,
     };
-    if (wanted.isEmpty) return const [];
-    final local = {
-      for (final c in await _db.select(_db.customers).get()) c.id,
-    };
-    final missing = wanted.difference(local).toList();
-    if (missing.isEmpty) return const [];
-    final out = <Map<String, dynamic>>[];
+    final missing =
+        wanted.difference(allLocalIds).where((id) => !got.contains(id)).toList();
+    if (missing.isEmpty) {
+      if (out.isNotEmpty) print('Routes refresh: ${out.length} customer update(s)');
+      return out;
+    }
     final client = Supabase.instance.client;
     for (var i = 0; i < missing.length; i += 100) {
       final batch =
           missing.sublist(i, i + 100 > missing.length ? missing.length : i + 100);
       try {
         final rows = await client.from('customers').select().inFilter('id', batch);
-        out.addAll(List<Map<String, dynamic>>.from(rows));
+        for (final r in List<Map<String, dynamic>>.from(rows)) {
+          if (got.add('${r['id']}')) out.add(r);
+        }
       } catch (e) {
         print('fetch missing customers failed: $e');
       }
     }
-    print('Routes refresh: pulled ${out.length} new customer(s) for route stops');
+    print('Routes refresh: ${out.length} customer update(s), incl. missing ones');
     return out;
   }
 

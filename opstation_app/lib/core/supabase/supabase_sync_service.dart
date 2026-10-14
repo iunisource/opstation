@@ -274,10 +274,14 @@ class SupabaseSyncService {
     const pageSize = 1000;
     var offset = 0;
     while (true) {
+      // A FIXED sort order is required for paging: without it Postgres may
+      // return rows in a different order on each page, so pages overlap and
+      // some customers are silently never downloaded.
       final page = await _client
           .from('customers')
           .select()
           .eq('org_id', orgId)
+          .order('id')
           .range(offset, offset + pageSize - 1);
       out.addAll(List<Map<String, dynamic>>.from(page));
       if (page.length < pageSize) break;
@@ -298,6 +302,30 @@ class SupabaseSyncService {
           .select(
               'id, org_id, name, sku, selling_price, base_uom_id, product_sub_group, is_active, updated_at')
           .eq('org_id', orgId)
+          .order('id')
+          .range(offset, offset + pageSize - 1);
+      out.addAll(List<Map<String, dynamic>>.from(page));
+      if (page.length < pageSize) break;
+      offset += pageSize;
+    }
+    return out;
+  }
+
+  /// Customers of [orgId] changed on the server at/after [since] (paged,
+  /// stable order). Used by the route refresh so edits made by admins —
+  /// a corrected location, phone, name — reach the phone without a re-login.
+  Future<List<Map<String, dynamic>>> pullCustomersChangedSince(
+      String orgId, DateTime since) async {
+    final out = <Map<String, dynamic>>[];
+    const pageSize = 1000;
+    var offset = 0;
+    while (true) {
+      final page = await _client
+          .from('customers')
+          .select()
+          .eq('org_id', orgId)
+          .gte('updated_at', since.toUtc().toIso8601String())
+          .order('id')
           .range(offset, offset + pageSize - 1);
       out.addAll(List<Map<String, dynamic>>.from(page));
       if (page.length < pageSize) break;
@@ -320,9 +348,9 @@ class SupabaseSyncService {
       _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'), // 1
       _pullAllCustomers(orgId),                                                 // 2
       _pullAllProducts(orgId),                                                  // 3
-      _client.from('sales_routes').select().eq('org_id', orgId),               // 4
-      _client.from('trips').select().or('org_id.eq.$orgId,org_id.is.null'),    // 5
-      _client.from('deliveries').select().or('org_id.eq.$orgId,org_id.is.null'), // 6
+      _pullPaged('sales_routes', eqOrg: orgId),                                 // 4
+      _pullPaged('trips', orFilter: 'org_id.eq.$orgId,org_id.is.null'),         // 5
+      _pullPaged('deliveries', orFilter: 'org_id.eq.$orgId,org_id.is.null'),    // 6
     ]);
     final orgs = List<Map<String, dynamic>>.from(parents[0]);
     final users = List<Map<String, dynamic>>.from(parents[1]);
@@ -364,6 +392,34 @@ class SupabaseSyncService {
   /// list never overflows the request URL and paginated past PostgREST's
   /// 1000-row cap. Scoping by an indexed foreign key keeps each query bounded
   /// and fast — unlike a bare full-table .select() that RLS filters row by row.
+  /// Whole-table fetch for one org, paged past PostgREST's 1000-row cap with a
+  /// stable order. A plain `.select()` silently stopped at 1000 rows, so an
+  /// org with more trips/deliveries than that lost the rest on the phone.
+  Future<List<Map<String, dynamic>>> _pullPaged(String table,
+      {String? eqOrg, String? orFilter}) async {
+    final out = <Map<String, dynamic>>[];
+    const pageSize = 1000;
+    var offset = 0;
+    while (true) {
+      var q = _client.from(table).select();
+      if (eqOrg != null) q = q.eq('org_id', eqOrg);
+      if (orFilter != null) q = q.or(orFilter);
+      final page = await q.order('id').range(offset, offset + pageSize - 1);
+      final rows = List<Map<String, dynamic>>.from(page);
+      out.addAll(rows);
+      if (rows.length < pageSize) break;
+      offset += pageSize;
+    }
+    return out;
+  }
+
+  static const _tieBreaker = <String, String>{
+    'route_stops': 'customer_id',
+    'route_assignments': 'user_id',
+    'trip_stops': 'customer_id',
+    // visits, delivery_stops: have their own 'id'
+  };
+
   Future<List<Map<String, dynamic>>> _pullChildIn(
       String table, String fkColumn, List<String> parentIds) async {
     final out = <Map<String, dynamic>>[];
@@ -376,10 +432,14 @@ class SupabaseSyncService {
       final batch = parentIds.sublist(i, end);
       var offset = 0;
       while (true) {
+        // Stable order (see _pullAllCustomers): parent key, then a column
+        // that is unique within it, so pages never overlap or skip rows.
         final page = await _client
             .from(table)
             .select()
             .inFilter(fkColumn, batch)
+            .order(fkColumn)
+            .order(_tieBreaker[table] ?? 'id')
             .range(offset, offset + pageSize - 1);
         final rows = List<Map<String, dynamic>>.from(page);
         out.addAll(rows);
@@ -400,7 +460,7 @@ class SupabaseSyncService {
       _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'), // 1
       _pullAllCustomers(orgId),                                                 // 2
       _pullAllProducts(orgId),                                                  // 3
-      _client.from('sales_routes').select().eq('org_id', orgId),               // 4
+      _pullPaged('sales_routes', eqOrg: orgId),                                 // 4
     ]);
     final routes = List<Map<String, dynamic>>.from(parents[4]);
     final routeIds = [for (final r in routes) r['id'] as String];
@@ -429,8 +489,8 @@ class SupabaseSyncService {
   /// background after login so it never blocks getting into the app.
   Future<OrgPullData> pullHistory(String orgId) async {
     final parents = await Future.wait([
-      _client.from('trips').select().or('org_id.eq.$orgId,org_id.is.null'),     // 0
-      _client.from('deliveries').select().or('org_id.eq.$orgId,org_id.is.null'), // 1
+      _pullPaged('trips', orFilter: 'org_id.eq.$orgId,org_id.is.null'),         // 0
+      _pullPaged('deliveries', orFilter: 'org_id.eq.$orgId,org_id.is.null'),    // 1
     ]);
     final trips = List<Map<String, dynamic>>.from(parents[0]);
     final deliveries = List<Map<String, dynamic>>.from(parents[1]);
