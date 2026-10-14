@@ -1948,6 +1948,25 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                   onPressed: () => _reassignDialog(a),
                   icon: const Icon(Icons.swap_horiz),
                   tooltip: 'Reassign / move'),
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (v) {
+                  if (v == 'void') _voidAsset(a);
+                  if (v == 'delete') _deleteAsset(a);
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'void', child: ListTile(dense: true,
+                      leading: Icon(Icons.block, color: AppTheme.danger),
+                      title: Text('Void asset'),
+                      subtitle: Text('Remove from the list with a reason'))),
+                  if (_isSuperAdmin)
+                    const PopupMenuItem(value: 'delete', child: ListTile(dense: true,
+                        leading: Icon(Icons.delete_forever_outlined, color: AppTheme.danger),
+                        title: Text('Delete permanently'),
+                        subtitle: Text('Super Admin only'))),
+                ],
+              ),
               ]),
             ]),
             const SizedBox(height: 16),
@@ -3084,6 +3103,78 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
         );
       }),
     );
+  }
+
+  bool get _isSuperAdmin => ref.read(currentUserProvider)?.role == WebUserRole.superAdmin;
+
+  // Void: off the list with a reason, no longer a pending item (SQL 368).
+  Future<void> _voidAsset(Map<String, dynamic> a) async {
+    final ctrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (d) => StatefulBuilder(builder: (d, setR) => AlertDialog(
+        title: Text('Void ${a['asset_code'] ?? 'asset'}?'),
+        content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('"${a['name'] ?? ''}" will be removed from the asset list and will no longer wait for '
+              'supervision. It stays on record.',
+              style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          TextField(controller: ctrl, autofocus: true, minLines: 2, maxLines: 4,
+              onChanged: (_) => setR(() {}),
+              decoration: const InputDecoration(labelText: 'Reason *',
+                  hintText: 'e.g. created by mistake, duplicate', border: OutlineInputBorder())),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.of(d, rootNavigator: true).pop(ctrl.text.trim()),
+            child: const Text('Void')),
+        ],
+      )),
+    );
+    if (reason == null || reason.isEmpty) return;
+    try {
+      await Supabase.instance.client.rpc('void_asset', params: {'p_id': a['id'], 'p_reason': reason});
+      _snack('${a['asset_code'] ?? 'Asset'} voided');
+      setState(() => _selectedId = null);
+      await _load();
+    } on PostgrestException catch (e) {
+      _snack(e.message);
+    } catch (e) {
+      _snack('Could not void: ${e.toString().split('\n').first}');
+    }
+  }
+
+  // Delete for good — Super Admin only (checked again on the server).
+  Future<void> _deleteAsset(Map<String, dynamic> a) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: Text('Delete ${a['asset_code'] ?? 'asset'} permanently?'),
+        content: Text('"${a['name'] ?? ''}" and its history, files list and maintenance log '
+            'will be removed. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(d, rootNavigator: true).pop(true),
+            child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.rpc('delete_asset', params: {'p_id': a['id']});
+      _snack('${a['asset_code'] ?? 'Asset'} deleted');
+      setState(() => _selectedId = null);
+      await _load();
+    } on PostgrestException catch (e) {
+      _snack(e.message);
+    } catch (e) {
+      _snack('Could not delete: ${e.toString().split('\n').first}');
+    }
   }
 
   bool get _isMaster {
