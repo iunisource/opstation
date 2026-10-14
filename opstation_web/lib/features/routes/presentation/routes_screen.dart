@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
@@ -426,6 +427,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                         _showReorderDialog(context, row),
                                     tooltip: 'Reorder stops'),
                               IconButton(
+                                  icon: const Icon(Icons.history,
+                                      size: 18, color: AppTheme.textSecondary),
+                                  tooltip: 'Assignment history',
+                                  onPressed: () => _showAssignmentHistory(
+                                      r['id'] as String, '${r['name'] ?? ''}')),
+                              IconButton(
                                   icon: const Icon(Icons.edit_outlined,
                                       size: 18),
                                   onPressed: () => _showDialog(context, row)),
@@ -445,6 +452,98 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                   ),
           ),
       ]),
+    );
+  }
+
+  /// Route lifecycle: every assignment, hand-over and un-assignment
+  /// (route_assignment_log, SQL 359), newest first.
+  Future<void> _showAssignmentHistory(String routeId, String routeName) async {
+    List<Map<String, dynamic>> rows = [];
+    String? err;
+    try {
+      rows = List<Map<String, dynamic>>.from(await Supabase.instance.client
+          .from('route_assignment_log')
+          .select()
+          .eq('route_id', routeId)
+          .order('changed_at', ascending: false)
+          .limit(200));
+    } catch (e) {
+      err = e.toString().contains('route_assignment_log')
+          ? 'Run SQL 359 in Supabase first.'
+          : 'Could not load: ${e.toString().split('\n').first}';
+    }
+    if (!mounted) return;
+    final names = <String, String>{
+      for (final m in rows)
+        if (m['changed_by'] != null) m['changed_by'] as String: '',
+    };
+    if (names.isNotEmpty) {
+      try {
+        final u = await Supabase.instance.client
+            .from('users').select('id, name').inFilter('id', names.keys.toList());
+        for (final x in (u as List)) {
+          names[x['id'] as String] = '${x['name'] ?? ''}';
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    final df = DateFormat('d MMM y, h:mm a');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Assignment history', style: const TextStyle(fontSize: 18)),
+        content: SizedBox(
+          width: 520,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(routeName, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 10),
+            if (err != null)
+              Text(err, style: const TextStyle(color: AppTheme.danger))
+            else if (rows.isEmpty)
+              const Text('No changes recorded yet. History starts from the day SQL 359 was run.',
+                  style: TextStyle(color: AppTheme.textSecondary))
+            else
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final m = rows[i];
+                    final note = '${m['note'] ?? ''}';
+                    final from = m['from_name'] as String?;
+                    final to = m['to_name'] as String?;
+                    final when = DateTime.tryParse('${m['changed_at'] ?? ''}')?.toLocal();
+                    final by = names[m['changed_by']] ?? '';
+                    final (IconData icon, Color color, String what) = note.startsWith('Handed')
+                        ? (Icons.swap_horiz, Colors.orange.shade800, '${from ?? '—'} → ${to ?? '—'}')
+                        : note == 'Unassigned'
+                            ? (Icons.person_remove_outlined, AppTheme.danger, 'Removed from ${from ?? '—'}')
+                            : note.startsWith('Clean-up')
+                                ? (Icons.cleaning_services_outlined, AppTheme.textSecondary,
+                                    'Kept with ${to ?? '—'}, removed from ${from ?? '—'}')
+                                : (Icons.person_add_alt_1_outlined, AppTheme.success, 'Assigned to ${to ?? '—'}');
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(icon, size: 18, color: color),
+                      title: Text(what, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      subtitle: Text(
+                        [
+                          if (when != null) df.format(when),
+                          if (by.isNotEmpty) 'by $by',
+                          if (note.startsWith('Clean-up')) 'one-time clean-up of a double assignment',
+                        ].join(' · '),
+                        style: const TextStyle(fontSize: 11.5),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+      ),
     );
   }
 

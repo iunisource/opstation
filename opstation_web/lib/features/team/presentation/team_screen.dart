@@ -706,6 +706,8 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
     final client = Supabase.instance.client;
     List<Map<String, dynamic>> routes = [];
     Set<String> originalAssignedIds = {};
+    // route_id -> (user_id, name) of whoever holds it now (if not this user).
+    final ownerElsewhere = <String, (String, String)>{};
 
     try {
       final routesRes = await client
@@ -717,23 +719,24 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
           .from('route_assignments')
           .select('route_id')
           .eq('user_id', user['id']);
-      // Fetch all org-wide assignments so we can hide routes already taken
-      // by other salespersons (one route -> one salesperson rule).
+      // One route -> one owner at a time. Routes held by someone else are
+      // still listed ("With …"): ticking one HANDS IT OVER to this person
+      // (cover for an absent colleague); the database moves it in one step
+      // and logs the hand-over (SQL 359).
       final allAssignmentsRes = await client
           .from('route_assignments')
           .select('user_id, route_id');
-      final assignedElsewhere = <String>{};
+      final namesRes = await client.from('users').select('id, name').eq('org_id', orgId);
+      final nameById = {
+        for (final u in (namesRes as List)) (u as Map)['id'] as String: '${u['name'] ?? ''}',
+      };
       for (final a in (allAssignmentsRes as List)) {
         final m = a as Map;
         final uid = m['user_id'] as String;
         final rid = m['route_id'] as String;
-        if (uid != user['id']) assignedElsewhere.add(rid);
+        if (uid != user['id']) ownerElsewhere[rid] = (uid, nameById[uid] ?? 'someone else');
       }
-      final allRoutes = List<Map<String, dynamic>>.from(routesRes);
-      routes = [
-        for (final r in allRoutes)
-          if (!assignedElsewhere.contains(r['id'] as String)) r,
-      ];
+      routes = List<Map<String, dynamic>>.from(routesRes);
       originalAssignedIds = {
         for (final a in (assignmentsRes as List))
           (a as Map)['route_id'] as String,
@@ -776,7 +779,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
               const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('${selectedIds.length} of ${routes.length} selected',
+                child: Text('${selectedIds.length} of ${routes.length} selected · routes "With …" belong to someone else — ticking one hands it over',
                     style: const TextStyle(
                         fontSize: 12, color: AppTheme.textSecondary)),
               ),
@@ -798,16 +801,22 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                         final selected = selectedIds.contains(id);
                         final kind = r['kind'] as String? ?? 'recurring';
                         final isActive = r['is_active'] as bool? ?? true;
+                        final other = ownerElsewhere[id];
+                        final takingOver = other != null && selected;
                         return CheckboxListTile(
                           dense: true,
                           title: Text(r['name'] as String? ?? '',
                               style: const TextStyle(
                                   fontSize: 13, fontWeight: FontWeight.w600)),
                           subtitle: Text(
-                              '${kind == 'recurring' ? 'Recurring' : 'One-time'}${isActive ? '' : ' · Inactive'}',
-                              style: const TextStyle(
+                              '${kind == 'recurring' ? 'Recurring' : 'One-time'}${isActive ? '' : ' · Inactive'}'
+                              '${other == null ? '' : takingOver ? ' · will move from ${other.$2}' : ' · With ${other.$2}'}',
+                              style: TextStyle(
                                   fontSize: 11,
-                                  color: AppTheme.textSecondary)),
+                                  fontWeight: takingOver ? FontWeight.w700 : FontWeight.w400,
+                                  color: takingOver
+                                      ? Colors.orange.shade800
+                                      : AppTheme.textSecondary)),
                           value: selected,
                           onChanged: (v) => setS(() {
                             if (v == true) {
@@ -837,6 +846,30 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                     ScaffoldMessenger.of(ctx).showSnackBar(
                         const SnackBar(content: Text('No changes.')));
                     return;
+                  }
+                  // Hand-overs: confirm before taking routes from colleagues.
+                  final takeovers = [
+                    for (final id in toAdd)
+                      if (ownerElsewhere[id] != null) id,
+                  ];
+                  if (takeovers.isNotEmpty) {
+                    final nameOf = {for (final r in routes) r['id'] as String: '${r['name'] ?? ''}'};
+                    final ok = await showDialog<bool>(
+                      context: ctx,
+                      builder: (dctx) => AlertDialog(
+                        title: const Text('Hand over routes?'),
+                        content: Text([
+                          for (final id in takeovers)
+                            '• ${nameOf[id]} — from ${ownerElsewhere[id]!.$2} to ${user['name'] ?? 'this person'}',
+                        ].join('\n') +
+                            '\n\nA route has one owner at a time; the previous owner loses it.'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancel')),
+                          ElevatedButton(onPressed: () => Navigator.pop(dctx, true), child: const Text('Hand over')),
+                        ],
+                      ),
+                    );
+                    if (ok != true) return;
                   }
 
                   try {
@@ -887,6 +920,20 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                         );
                       } catch (e, st) {
                         print('FCM notify failed (web route assignment): $e\n$st');
+                      }
+                      // Tell each previous owner their route moved.
+                      for (final id in toAdd) {
+                        final prev = ownerElsewhere[id];
+                        if (prev == null) continue;
+                        try {
+                          final rn = routes.firstWhere((r) => r['id'] == id,
+                              orElse: () => <String, dynamic>{})['name'];
+                          await client.functions.invoke('send-notification', body: {
+                            'userId': prev.$1,
+                            'title': 'Route handed over',
+                            'body': '${rn ?? 'A route'} is now with ${user['name'] ?? 'a colleague'}.',
+                          });
+                        } catch (_) {}
                       }
                     }
 
