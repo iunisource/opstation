@@ -130,7 +130,62 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
     await _openMarkVisit(picked);
   }
 
+  /// Ask before ending a route that looks unfinished, so a mistaken slide
+  /// doesn't close it (and a restart doesn't split the day into two trips).
+  ///  • No visits at all  → strong warning, "Keep going" is the main button.
+  ///  • Some stops still pending → lighter reminder with the count.
+  Future<bool> _confirmEnd() async {
+    final trip = ref.read(tripControllerProvider).valueOrNull?.active;
+    if (trip == null) return true;
+    final visited = trip.visitedCount;
+    final skipped = trip.skippedCount;
+    final pending = trip.pendingCount;
+    final total = trip.stopSnapshot.length;
+    final noActivity = visited == 0 && skipped == 0;
+    if (!noActivity && pending == 0) return true; // finished — no prompt
+
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(
+          noActivity ? Icons.warning_amber_rounded : Icons.flag_outlined,
+          color: noActivity ? const Color(0xFFD97706) : const Color(0xFF2563EB),
+          size: 36,
+        ),
+        title: Text(noActivity ? 'End route with no visits?' : 'End route now?'),
+        content: Text(
+          noActivity
+              ? "You haven't visited anyone on this route yet"
+                  "${total > 0 ? ' (0 of $total)' : ''}.\n\n"
+                  'If you end it now it will show as an abandoned trip. '
+                  'If you slid this by mistake, tap Keep going.'
+              : '$pending of $total stop${total == 1 ? '' : 's'} '
+                  '${pending == 1 ? 'is' : 'are'} still pending.\n\n'
+                  'End the route anyway?',
+          style: const TextStyle(fontSize: 14.5, height: 1.4),
+        ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(
+                foregroundColor: noActivity ? const Color(0xFFDC2626) : null),
+            child: const Text('End route'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep going'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _completeTrip() async {
+    if (!await _confirmEnd()) return;
+    if (!mounted) return;
     // Same gate as marking a visit: a route can't be closed with location
     // switched off or permission denied, otherwise the end-of-route position
     // is unverifiable and the geofencing rules are trivially bypassed. A weak
@@ -954,7 +1009,9 @@ class _MiniChip extends StatelessWidget {
 
 /// Slide-to-confirm bar (replaces the native Slidable for zero deps).
 class _SlideToComplete extends StatefulWidget {
-  final VoidCallback onComplete;
+  /// Awaited; if the route is still open afterwards (e.g. the rider chose
+  /// "Keep going"), the handle springs back.
+  final Future<void> Function() onComplete;
   const _SlideToComplete({required this.onComplete});
 
   @override
@@ -1020,7 +1077,9 @@ class _SlideToCompleteState extends State<_SlideToComplete> {
                       onHorizontalDragEnd: (_) {
                         if (_dragX >= maxDrag * 0.85) {
                           setState(() => _dragX = maxDrag);
-                          widget.onComplete();
+                          widget.onComplete().whenComplete(() {
+                            if (mounted) setState(() => _dragX = 0);
+                          });
                         } else {
                           setState(() => _dragX = 0);
                         }

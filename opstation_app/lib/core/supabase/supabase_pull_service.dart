@@ -211,7 +211,14 @@ class SupabasePullService {
       // wholesale delete+replace below dropped whatever fell outside that
       // window — customers appeared to auto-add and vanish between syncs.
       final stops = await _sync.pullRouteStopsByRouteIds(routeIds);
+      // Customers are otherwise downloaded only at LOGIN. When an admin adds
+      // NEW customers to a route, the stops arrived here in real time but
+      // their customers never did — and a stop whose customer isn't on the
+      // phone is hidden, so the route showed "0 customers" until the
+      // salesperson logged out and in again. Fetch any missing ones now.
+      final missingCustomers = await _fetchMissingCustomers(stops);
       await _db.transaction(() async {
+        await _pullCustomers(missingCustomers);
         // Prune this org's routes that vanished from the cloud.
         final cloudIds = {for (final r in routes) r['id'] as String};
         final local = await (_db.select(_db.salesRoutesTable)
@@ -238,6 +245,36 @@ class SupabasePullService {
     } catch (e) {
       print('pullRoutesAndStops failed: $e');
     }
+  }
+
+  /// Server rows for customers referenced by [stops] that are not yet in the
+  /// local DB (batched so the id list never overflows the request URL).
+  Future<List<Map<String, dynamic>>> _fetchMissingCustomers(
+      List<Map<String, dynamic>> stops) async {
+    final wanted = {
+      for (final s in stops)
+        if (s['customer_id'] is String) s['customer_id'] as String,
+    };
+    if (wanted.isEmpty) return const [];
+    final local = {
+      for (final c in await _db.select(_db.customers).get()) c.id,
+    };
+    final missing = wanted.difference(local).toList();
+    if (missing.isEmpty) return const [];
+    final out = <Map<String, dynamic>>[];
+    final client = Supabase.instance.client;
+    for (var i = 0; i < missing.length; i += 100) {
+      final batch =
+          missing.sublist(i, i + 100 > missing.length ? missing.length : i + 100);
+      try {
+        final rows = await client.from('customers').select().inFilter('id', batch);
+        out.addAll(List<Map<String, dynamic>>.from(rows));
+      } catch (e) {
+        print('fetch missing customers failed: $e');
+      }
+    }
+    print('Routes refresh: pulled ${out.length} new customer(s) for route stops');
+    return out;
   }
 
   /// Pull a single user record into local DB (used for fresh install
@@ -301,12 +338,16 @@ class SupabasePullService {
     for (final r in rows) {
       try {
         await _db.into(_db.customers).insertOnConflictUpdate(CustomersCompanion(
+          // Blank fields can arrive as NULL. A hard `as String` threw here and
+          // the catch below silently dropped the WHOLE customer — so it never
+          // reached the phone and every route stop pointing to it vanished
+          // ("0 customers"). Treat missing text as empty instead.
           id: Value(r['id'] as String),
-          code: Value(r['code'] as String),
-          shopName: Value(r['shop_name'] as String),
-          contactPerson: Value(r['contact_person'] as String),
-          phone: Value(r['phone'] as String),
-          address: Value(r['address'] as String),
+          code: Value(r['code'] as String? ?? ''),
+          shopName: Value(r['shop_name'] as String? ?? ''),
+          contactPerson: Value(r['contact_person'] as String? ?? ''),
+          phone: Value(r['phone'] as String? ?? ''),
+          address: Value(r['address'] as String? ?? ''),
           category: Value(r['category'] as String?),
           groupName: Value(r['group_name'] as String?),
           latitude: Value((r['latitude'] as num?)?.toDouble()),
@@ -371,7 +412,7 @@ class SupabasePullService {
             RouteStopsCompanion(
           routeId: Value(r['route_id'] as String),
           customerId: Value(r['customer_id'] as String),
-          position: Value(r['position'] as int),
+          position: Value((r['position'] as num?)?.toInt() ?? 0),
         ));
       } catch (_) {}
     }
@@ -426,7 +467,7 @@ class SupabasePullService {
             TripStopsCompanion(
           tripId: Value(r['trip_id'] as String),
           customerId: Value(r['customer_id'] as String),
-          position: Value(r['position'] as int),
+          position: Value((r['position'] as num?)?.toInt() ?? 0),
         ));
       } catch (_) {}
     }
