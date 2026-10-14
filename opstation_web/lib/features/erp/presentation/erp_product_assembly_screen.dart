@@ -218,7 +218,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       if (fresh.isNotEmpty && mounted) setState(() => _current = fresh.first);
       ref.invalidate(bomSupervisePendingProvider);
     } catch (e) {
-      _snack(e.toString().contains('rejected_at') ? 'Run SQL 316 in Supabase first.' : 'Could not reject: $e');
+      _snack(e.toString().contains('rejected_at') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not reject: $e');
     }
     if (mounted) setState(() => _supBusy = false);
   }
@@ -267,7 +267,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       }
       ref.invalidate(bomSupervisePendingProvider);
     } catch (e) {
-      _snack(e.toString().contains('supervised_at') ? 'Run SQL 315 in Supabase first.' : 'Could not supervise: $e');
+      _snack(e.toString().contains('supervised_at') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not supervise: $e');
     }
     if (mounted) setState(() => _supBusy = false);
   }

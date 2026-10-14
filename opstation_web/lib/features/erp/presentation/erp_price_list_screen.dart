@@ -556,7 +556,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       _toast('Updated "$name"');
     } catch (e) {
       _toast(e.toString().contains('updated_')
-          ? 'Updating needs SQL 343 — run it in Supabase first.'
+          ? 'This feature isn\'t set up yet — please contact Opstation support.'
           : 'Could not update: $e');
     }
   }
@@ -653,7 +653,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       _toast('Saved "$name"');
     } catch (e) {
       _toast(e.toString().contains('price_list_snapshots')
-          ? 'Saving needs SQL 314 — run it in Supabase first.'
+          ? 'This feature isn\'t set up yet — please contact Opstation support.'
           : 'Could not save: $e');
     }
   }
@@ -681,7 +681,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
             .select(cols).eq('org_id', orgId).order('created_at', ascending: false).limit(300));
       }
     } catch (e) {
-      err = e.toString().contains('price_list_snapshots') ? 'Run SQL 314 in Supabase to enable saved lists.' : '$e';
+      err = e.toString().contains('price_list_snapshots') ? 'Saved lists aren\'t set up yet — please contact Opstation support.' : '$e';
     }
     if (!mounted) return;
     final user = ref.read(currentUserProvider);

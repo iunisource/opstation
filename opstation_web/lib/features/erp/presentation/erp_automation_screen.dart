@@ -55,7 +55,7 @@ class _ErpAutomationScreenState extends ConsumerState<ErpAutomationScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
   }
 
-  String _err(Object e) => e.toString().contains('automation_') ? 'Run SQL 324 in Supabase first.' : '$e';
+  String _err(Object e) => e.toString().contains('automation_') ? 'This feature isn\'t set up yet — please contact Opstation support.' : '$e';
 
   Future<void> _load() async {
     final org = _orgId;

@@ -28,6 +28,9 @@ class _DayRow {
   final String salesperson;
   final Set<String> routes = {};
   double km = 0;
+  /// Part of [km] that came from ABANDONED trips (ended with no visits, not
+  /// restarted). Counted, but flagged so a manager can approve or strike it.
+  double abandonedKm = 0;
   int trips = 0;
   _DayRow({required this.date, required this.salesperson});
 }
@@ -42,6 +45,7 @@ class _CombinedTripSummaryScreenState
   List<Map<String, dynamic>> _users = [];
   List<_DayRow> _rows = [];
   double _grandKm = 0;
+  double _grandAbandonedKm = 0;
 
   @override
   void initState() {
@@ -133,12 +137,13 @@ class _CombinedTripSummaryScreenState
 
       // Aggregate distance per (salesperson, calendar day).
       final acc = <String, _DayRow>{};
-      // A quick restart counts as one trip (distance from the FIRST start);
-      // abandoned trips (ended with no visits) are left out.
+      // A quick restart counts as one trip (distance from the FIRST start).
+      // Abandoned trips (ended with no visits, not restarted): their km COUNT
+      // but are flagged for review; they don't count as trips.
       final sessions = TripSessions.collapse(
-              tripList, (id) => (visitsByTrip[id] ?? const []).length)
-          .where((t) => t['_abandoned'] != true);
+          tripList, (id) => (visitsByTrip[id] ?? const []).length);
       for (final t in sessions) {
+        final abandoned = t['_abandoned'] == true;
         final startedAt = t['started_at'] as String?;
         if (startedAt == null) continue;
         final dt = DateTime.parse(startedAt).toLocal();
@@ -155,7 +160,11 @@ class _CombinedTripSummaryScreenState
           customersById: customersById,
         );
         row.km += ctx.totalDistanceKm;
-        row.trips += 1;
+        if (abandoned) {
+          row.abandonedKm += ctx.totalDistanceKm;
+        } else {
+          row.trips += 1;
+        }
         final rn = (t['route_name'] as String?)?.trim() ?? '';
         if (rn.isNotEmpty) row.routes.add(rn);
       }
@@ -166,11 +175,13 @@ class _CombinedTripSummaryScreenState
           return s != 0 ? s : a.date.compareTo(b.date);
         });
       final grand = rows.fold<double>(0, (s, r) => s + r.km);
+      final grandAb = rows.fold<double>(0, (s, r) => s + r.abandonedKm);
 
       setState(() {
         _users = List<Map<String, dynamic>>.from(users);
         _rows = rows;
         _grandKm = grand;
+        _grandAbandonedKm = grandAb;
         _loading = false;
       });
     } catch (e) {
@@ -217,7 +228,10 @@ class _CombinedTripSummaryScreenState
           .map((r) => CombinedSummaryRow(
                 date: r.date,
                 salesperson: r.salesperson,
-                routes: r.routes.join(', '),
+                routes: r.routes.join(', ') +
+                    (r.abandonedKm > 0.005
+                        ? '  [REVIEW: incl. ${r.abandonedKm.toStringAsFixed(2)} km from an abandoned trip — no visits]'
+                        : ''),
                 km: r.km,
               ))
           .toList();
@@ -427,10 +441,30 @@ class _CombinedTripSummaryScreenState
                                           style: const TextStyle(fontSize: 13))),
                                   Expanded(
                                       flex: 2,
-                                      child: Text(r.km.toStringAsFixed(2),
-                                          textAlign: TextAlign.right,
-                                          style: const TextStyle(
-                                              fontWeight: FontWeight.w700))),
+                                      child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.end,
+                                          children: [
+                                            Text(r.km.toStringAsFixed(2),
+                                                textAlign: TextAlign.right,
+                                                style: const TextStyle(
+                                                    fontWeight: FontWeight.w700)),
+                                            if (r.abandonedKm > 0.005)
+                                              Tooltip(
+                                                message: 'A route was started and ended with no visits '
+                                                    '(and not restarted). The distance is counted — '
+                                                    'review before approving reimbursement.',
+                                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                                  Icon(Icons.flag_outlined,
+                                                      size: 13, color: Colors.orange.shade800),
+                                                  const SizedBox(width: 3),
+                                                  Text('incl. ${r.abandonedKm.toStringAsFixed(2)} km abandoned — review',
+                                                      style: TextStyle(
+                                                          fontSize: 10.5,
+                                                          fontWeight: FontWeight.w600,
+                                                          color: Colors.orange.shade800)),
+                                                ]),
+                                              ),
+                                          ])),
                                 ]),
                               );
                             },
@@ -454,11 +488,19 @@ class _CombinedTripSummaryScreenState
                       const Expanded(flex: 3, child: Text('')),
                       Expanded(
                           flex: 2,
-                          child: Text('${_grandKm.toStringAsFixed(2)} km',
-                              textAlign: TextAlign.right,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  color: AppTheme.primary))),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                            Text('${_grandKm.toStringAsFixed(2)} km',
+                                textAlign: TextAlign.right,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    color: AppTheme.primary)),
+                            if (_grandAbandonedKm > 0.005)
+                              Text('incl. ${_grandAbandonedKm.toStringAsFixed(2)} km to review',
+                                  style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.orange.shade800)),
+                          ])),
                     ]),
                   ),
                 ]),

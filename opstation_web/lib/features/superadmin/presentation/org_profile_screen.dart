@@ -48,7 +48,7 @@ class _OrgProfileScreenState extends State<OrgProfileScreen> {
       setState(() {
         _loading = false;
         _err = e.toString().contains('org_profile_summary')
-            ? 'Run SQL 354 in Supabase first.'
+            ? 'This feature isn\'t set up yet — please contact Opstation support.'
             : 'Could not load: ${e.toString().split('\n').first}';
       });
     }

@@ -134,7 +134,7 @@ class _OrgStoragePanelState extends State<OrgStoragePanel> {
       setState(() {
         _loading = false;
         _err = e.toString().contains('org_storage_usage')
-            ? 'Run SQL 350 in Supabase first.'
+            ? 'This feature isn\'t set up yet — please contact Opstation support.'
             : 'Could not load storage: ${e.toString().split('\n').first}';
       });
     }
@@ -442,7 +442,7 @@ class _KioskSectionState extends State<_KioskSection> {
     } catch (e) {
       if (mounted) {
         setState(() => _err = e.toString().contains('org_kiosk_usage')
-            ? 'Run SQL 351 in Supabase first.'
+            ? 'This feature isn\'t set up yet — please contact Opstation support.'
             : e.toString().split('\n').first);
       }
     }
@@ -600,7 +600,7 @@ class _AuditSectionState extends State<_AuditSection> {
     } catch (e) {
       if (mounted) {
         setState(() => _err = e.toString().contains('org_audit_usage')
-            ? 'Run SQL 352 in Supabase first.'
+            ? 'This feature isn\'t set up yet — please contact Opstation support.'
             : e.toString().split('\n').first);
       }
     }
@@ -796,7 +796,7 @@ class _ServerOverviewState extends State<_ServerOverview> {
             Expanded(
               child: Text(
                 snap.error.toString().contains('platform_storage_overview')
-                    ? 'Run SQL 350 in Supabase first.'
+                    ? 'This feature isn\'t set up yet — please contact Opstation support.'
                     : 'Could not load: ${snap.error.toString().split('\n').first}',
                 style: const TextStyle(color: AppTheme.danger, fontSize: 12),
               ),

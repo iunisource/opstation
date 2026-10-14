@@ -375,7 +375,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
       await _load();
     } catch (e) {
       _snack(e.toString().contains('supervised_at')
-          ? 'Run SQL 348 in Supabase first.'
+          ? 'This feature isn\'t set up yet — please contact Opstation support.'
           : 'Could not supervise: ${e.toString().split('\n').first}');
     } finally {
       if (mounted) setState(() => _supBusy = false);

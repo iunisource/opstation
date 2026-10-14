@@ -491,7 +491,7 @@ const List<_AdminToggle> _toggles = [
         'with a reason: the JV stays on record marked VOIDED, and a reversing entry '
         '(JV-…-VOID) is posted on the same date so every ledger it touched nets back '
         'to zero. Draft JVs can still be deleted (they never reached the books). '
-        'When OFF, JVs keep today\'s delete button. Needs SQL 325.',
+        'When OFF, JVs keep today\'s delete button.',
   ),
 
   _AdminToggle(

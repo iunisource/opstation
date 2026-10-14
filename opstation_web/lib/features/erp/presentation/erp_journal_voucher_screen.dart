@@ -547,7 +547,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       await _loadVouchers();
     } catch (e) {
       final m = e.toString();
-      _snack(m.contains('void_journal_voucher') || m.contains('is_voided') ? 'Run SQL 325 in Supabase first.' : 'Void failed: $m');
+      _snack(m.contains('void_journal_voucher') || m.contains('is_voided') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Void failed: $m');
     }
   }
 

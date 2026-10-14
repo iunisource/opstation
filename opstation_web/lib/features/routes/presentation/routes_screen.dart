@@ -31,6 +31,8 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   // route_id -> assigned salesperson name (from route_assignments + users).
   // One route maps to one salesperson under our assignment rule.
   final Map<String, String> _routeAssignee = {};
+  // route_id -> user_id of its current owner (one owner at a time).
+  final Map<String, String> _routeOwnerId = {};
 
   @override
   void initState() {
@@ -69,11 +71,13 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
           (u as Map)['id'] as String: ((u)['name'] as String? ?? '').trim(),
       };
       _routeAssignee.clear();
+      _routeOwnerId.clear();
       for (final a in (assignments as List)) {
         final m = a as Map;
         final rid = m['route_id'] as String?;
         final uid = m['user_id'] as String?;
         if (rid == null || uid == null) continue;
+        _routeOwnerId[rid] = uid;
         final nm = userNameById[uid];
         if (nm == null || nm.isEmpty) continue;
         // Show EVERY assignee — previously the last one silently overwrote the
@@ -374,7 +378,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                           r['id'] as String];
                                       final assigned = assignee != null &&
                                           assignee.isNotEmpty;
-                                      return Row(
+                                      return InkWell(
+                                        onTap: () => _showAssignDialog(
+                                            r['id'] as String,
+                                            '${r['name'] ?? ''}'),
+                                        borderRadius: BorderRadius.circular(4),
+                                        child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
                                             Icon(Icons.person_outline,
@@ -399,7 +408,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                                     fontStyle: assigned
                                                         ? FontStyle.normal
                                                         : FontStyle.italic)),
-                                          ]);
+                                            const SizedBox(width: 4),
+                                            Icon(Icons.edit_outlined,
+                                                size: 12,
+                                                color: AppTheme.textSecondary
+                                                    .withOpacity(0.7)),
+                                          ]));
                                     }),
                                   ])),
                               Container(
@@ -426,6 +440,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                     onPressed: () =>
                                         _showReorderDialog(context, row),
                                     tooltip: 'Reorder stops'),
+                              IconButton(
+                                  icon: const Icon(Icons.person_add_alt_1_outlined,
+                                      size: 18, color: AppTheme.primary),
+                                  tooltip: 'Assign / hand over',
+                                  onPressed: () => _showAssignDialog(
+                                      r['id'] as String, '${r['name'] ?? ''}')),
                               IconButton(
                                   icon: const Icon(Icons.history,
                                       size: 18, color: AppTheme.textSecondary),
@@ -455,6 +475,148 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     );
   }
 
+  /// Assign a route to a salesperson, hand it over, or unassign it — the same
+  /// one-owner rule as Team → Assign Routes (the database moves the route
+  /// from its previous owner in one step and records it in the history).
+  Future<void> _showAssignDialog(String routeId, String routeName) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    final me = ref.read(currentUserProvider)?.id;
+    if (orgId == null) return;
+    final client = Supabase.instance.client;
+    List<Map<String, dynamic>> people = [];
+    try {
+      people = List<Map<String, dynamic>>.from(await client
+          .from('users')
+          .select('id, name, role, is_active')
+          .eq('org_id', orgId)
+          .eq('role', 'salesperson')
+          .order('name'));
+      people = people.where((u) => u['is_active'] != false).toList();
+    } catch (e) {
+      _showSnack('Could not load salespersons: ${e.toString().split('\n').first}');
+      return;
+    }
+    if (!mounted) return;
+    final currentId = _routeOwnerId[routeId];
+    final currentName = _routeAssignee[routeId];
+    String? picked = currentId;
+    final searchCtrl = TextEditingController();
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (_) => StatefulBuilder(builder: (ctx, setS) {
+        final q = searchCtrl.text.trim().toLowerCase();
+        final list = q.isEmpty
+            ? people
+            : people.where((u) => '${u['name'] ?? ''}'.toLowerCase().contains(q)).toList();
+        final changing = picked != null && picked != currentId;
+        final pickedName = people
+            .firstWhere((u) => u['id'] == picked, orElse: () => const {'name': ''})['name'];
+        return AlertDialog(
+          title: const Text('Assign route'),
+          content: SizedBox(
+            width: 460,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(routeName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text(
+                currentName == null || currentName.isEmpty
+                    ? 'Currently unassigned'
+                    : 'Currently with $currentName',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: searchCtrl,
+                onChanged: (_) => setS(() {}),
+                decoration: const InputDecoration(
+                    hintText: 'Search salesperson…', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                height: 260,
+                decoration: BoxDecoration(
+                    border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+                child: list.isEmpty
+                    ? const Center(child: Text('No salespersons found.'))
+                    : ListView(children: [
+                        for (final u in list)
+                          RadioListTile<String>(
+                            dense: true,
+                            value: u['id'] as String,
+                            groupValue: picked,
+                            onChanged: (v) => setS(() => picked = v),
+                            title: Text('${u['name'] ?? ''}', style: const TextStyle(fontSize: 13)),
+                            secondary: u['id'] == currentId
+                                ? const Text('Current', style: TextStyle(fontSize: 11, color: AppTheme.success))
+                                : null,
+                          ),
+                      ]),
+              ),
+              if (changing && currentId != null) ...[
+                const SizedBox(height: 8),
+                Text('This hands the route over: $currentName will no longer have it.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange.shade800, fontWeight: FontWeight.w600)),
+              ],
+              if (changing && pickedName != null && '$pickedName'.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text('New owner: $pickedName', style: const TextStyle(fontSize: 12)),
+              ],
+            ]),
+          ),
+          actions: [
+            if (currentId != null)
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'unassign'),
+                style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+                child: const Text('Unassign'),
+              ),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: changing ? () => Navigator.pop(ctx, 'assign') : null,
+              child: Text(currentId == null ? 'Assign' : 'Hand over'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (action == null || !mounted) return;
+
+    Future<void> notify(String userId, String title, String body) async {
+      try {
+        await client.functions.invoke('send-notification',
+            body: {'userId': userId, 'title': title, 'body': body});
+      } catch (_) {}
+    }
+
+    try {
+      if (action == 'unassign' && currentId != null) {
+        await client.from('route_assignments').delete().eq('route_id', routeId);
+        await notify(currentId, 'Route removed', '$routeName is no longer assigned to you.');
+        _showSnack('Route unassigned');
+      } else if (action == 'assign' && picked != null) {
+        await client.from('route_assignments').insert({
+          'user_id': picked,
+          'route_id': routeId,
+          'assigned_at': DateTime.now().toUtc().toIso8601String(),
+          'assigned_by': me,
+        });
+        final newName = people.firstWhere((u) => u['id'] == picked, orElse: () => const {'name': ''})['name'];
+        await notify(picked!, 'New Route Assigned', '$routeName has been assigned to you.');
+        if (currentId != null) {
+          await notify(currentId, 'Route handed over', '$routeName is now with $newName.');
+        }
+        _showSnack(currentId == null ? 'Assigned to $newName' : 'Handed over to $newName');
+      }
+      await _load();
+    } catch (e) {
+      final m = e.toString();
+      _showSnack(m.contains('duplicate') || m.contains('23505')
+          ? 'This route already has an owner — refresh and try again.'
+          : 'Could not save: ${m.split('\n').first}');
+    }
+  }
+
   /// Route lifecycle: every assignment, hand-over and un-assignment
   /// (route_assignment_log, SQL 359), newest first.
   Future<void> _showAssignmentHistory(String routeId, String routeName) async {
@@ -469,7 +631,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
           .limit(200));
     } catch (e) {
       err = e.toString().contains('route_assignment_log')
-          ? 'Run SQL 359 in Supabase first.'
+          ? 'This feature isn\'t set up yet — please contact Opstation support.'
           : 'Could not load: ${e.toString().split('\n').first}';
     }
     if (!mounted) return;
@@ -500,7 +662,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
             if (err != null)
               Text(err, style: const TextStyle(color: AppTheme.danger))
             else if (rows.isEmpty)
-              const Text('No changes recorded yet. History starts from the day SQL 359 was run.',
+              const Text('No changes recorded yet.',
                   style: TextStyle(color: AppTheme.textSecondary))
             else
               Flexible(

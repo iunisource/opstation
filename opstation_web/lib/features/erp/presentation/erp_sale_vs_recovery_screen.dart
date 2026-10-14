@@ -285,7 +285,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
       setState(() => _running = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(e.toString().contains('rpc_sale_vs_recovery')
-            ? 'Report function missing — run 285_sale_vs_recovery.sql in Supabase.'
+            ? 'This report isn\'t set up yet — please contact Opstation support.'
             : 'Could not run report: $e'),
       ));
     }

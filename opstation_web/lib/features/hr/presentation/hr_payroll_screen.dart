@@ -556,7 +556,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
       _snack('$name excluded from this payroll.');
     } catch (e) {
       _snack(e.toString().contains('excluded_employee_ids')
-          ? 'Run SQL 303 (payroll exclusions) first.' : 'Exclude failed: $e');
+          ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Exclude failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

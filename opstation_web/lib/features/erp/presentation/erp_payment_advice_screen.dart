@@ -1898,7 +1898,7 @@ class _ErpPaymentAdviceScreenState
         onSelected: (v) async {
           final url = _shareUrl(a);
           if (url == null) {
-            _snack('Share link not ready — run SQL 329 and reload.');
+            _snack('Share link isn\'t set up yet — please contact Opstation support.');
             return;
           }
           if (v == 'wa') {

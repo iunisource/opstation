@@ -1476,7 +1476,7 @@ class _StockTransferVoucherScreenState
             return;
           }
           if (e.toString().contains('reject_stock_transfer')) {
-            _snack('Run SQL 356 in Supabase first.');
+            _snack('This feature isn\'t set up yet — please contact Opstation support.');
             return;
           }
           rethrow;

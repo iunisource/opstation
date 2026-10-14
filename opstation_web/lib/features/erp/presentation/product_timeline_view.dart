@@ -272,7 +272,7 @@ class _ProductTimelineDialogState extends State<_ProductTimelineDialog> {
     setState(() {
       _events = ev;
       _loading = false;
-      if (!_historyAvailable) _note = 'Run SQL 317 to start recording changes to product details and prices.';
+      if (!_historyAvailable) _note = 'Change history for products isn\'t switched on yet — please contact Opstation support.';
     });
   }
 

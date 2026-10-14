@@ -154,7 +154,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       } catch (_) {}
       if (mounted) setState(() => _loading = false);
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString().contains('duty_roster') ? 'Run SQL 319 in Supabase first.' : '$e'; });
+      if (mounted) setState(() { _loading = false; _error = e.toString().contains('duty_roster') ? 'This feature isn\'t set up yet — please contact Opstation support.' : '$e'; });
     }
   }
 
@@ -180,7 +180,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       await _c.from('duty_roster').upsert(row, onConflict: 'org_id,employee_id,roster_date');
     } catch (e) {
       setState(() { if (prev == null) { _roster.remove(k); } else { _roster[k] = prev; } });
-      _snack(e.toString().contains('duty_roster') ? 'Run SQL 319 in Supabase first.' : 'Could not save: $e');
+      _snack(e.toString().contains('duty_roster') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not save: $e');
     }
   }
 
@@ -232,7 +232,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
           setState(() => _stations.add(row));
           nameCtrl.clear();
           setD(() => color = _palette[_stations.length % _palette.length]);
-        } catch (e) { _snack(e.toString().contains('duty_stations') ? 'Run SQL 319 in Supabase first.' : 'Could not add: $e'); }
+        } catch (e) { _snack(e.toString().contains('duty_stations') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not add: $e'); }
       }
       Future<void> upd(Map<String, dynamic> s, Map<String, dynamic> patch) async {
         try {
@@ -376,7 +376,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       }
     } catch (e) {
       setState(() { _hidden..clear()..addAll(before); });
-      _snack(e.toString().contains('duty_roster_hidden') ? 'Run SQL 320 in Supabase first.' : 'Could not save: $e');
+      _snack(e.toString().contains('duty_roster_hidden') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not save: $e');
     }
   }
 
@@ -538,7 +538,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       setState(() => _sel.clear());
       await _loadRange();
     } catch (e) {
-      _snack(e.toString().contains('duty_roster') ? 'Run SQL 319 in Supabase first.' : 'Could not save: $e');
+      _snack(e.toString().contains('duty_roster') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not save: $e');
     }
   }
 
@@ -619,7 +619,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       setState(() => _chartNotes = text);
       _snack(text.isEmpty ? 'Notes cleared' : 'Notes saved');
     } catch (e) {
-      _snack(e.toString().contains('duty_chart_notes') ? 'Run SQL 323 in Supabase first.' : 'Could not save: $e');
+      _snack(e.toString().contains('duty_chart_notes') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not save: $e');
     }
   }
 
@@ -645,7 +645,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
   Future<void> _editChart(Map<String, dynamic> e) async {
     final orgId = _orgId;
     if (orgId == null) return;
-    if (_chartMissing) { _snack('Run SQL 321 in Supabase first.'); return; }
+    if (_chartMissing) { _snack('This feature isn\'t set up yet — please contact Opstation support.'); return; }
     if (_stations.isEmpty) { _snack('Add your stations first (Stations button).'); _manageStations(); return; }
     final emp = '${e['id']}';
     final picks = <String>[...?_chartStation[emp]];
@@ -734,8 +734,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       await _loadChart();
       if (mounted) setState(() {});
     } catch (err) {
-      _snack(err.toString().contains('station_ids') ? 'Run SQL 322 in Supabase first.'
-          : err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
+      _snack(err.toString().contains('station_ids') ? 'This feature isn\'t set up yet — please contact Opstation support.'
+          : err.toString().contains('duty_chart') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not save: $err');
     }
   }
 
@@ -744,7 +744,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
     final orgId = _orgId;
     final emps = _sel.toList();
     if (orgId == null || emps.isEmpty) return;
-    if (_chartMissing) { _snack('Run SQL 321 in Supabase first.'); return; }
+    if (_chartMissing) { _snack('This feature isn\'t set up yet — please contact Opstation support.'); return; }
     String choice = 'keep'; // keep | none | s:<id> (add this station)
     final duty = TextEditingController();
     final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
@@ -804,8 +804,8 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       if (mounted) setState(() => _sel.clear());
       _snack('Duty Chart updated for ${emps.length} worker${emps.length == 1 ? '' : 's'}');
     } catch (err) {
-      _snack(err.toString().contains('station_ids') ? 'Run SQL 322 in Supabase first.'
-          : err.toString().contains('duty_chart') ? 'Run SQL 321 in Supabase first.' : 'Could not save: $err');
+      _snack(err.toString().contains('station_ids') ? 'This feature isn\'t set up yet — please contact Opstation support.'
+          : err.toString().contains('duty_chart') ? 'This feature isn\'t set up yet — please contact Opstation support.' : 'Could not save: $err');
     }
   }
 
@@ -839,7 +839,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
 
   Widget _chartView(bool mobile) {
     if (_chartMissing) {
-      return const Center(child: Text('Run SQL 321 in Supabase to start the Duty Chart.', style: TextStyle(color: AppTheme.danger)));
+      return const Center(child: Text('The Duty Chart isn\'t set up yet — please contact Opstation support.', style: TextStyle(color: AppTheme.danger)));
     }
     return _chartMode == 'stations' ? _chartStations() : _chartPeople();
   }
