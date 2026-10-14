@@ -161,6 +161,7 @@ import '../../features/erp/presentation/erp_production_report_screen.dart' defer
 import '../../features/hr/presentation/hr_setup_screen.dart' deferred as _s150;
 import '../../features/operations/presentation/route_roster_screen.dart' deferred as _s151;
 import '../../features/superadmin/presentation/org_profile_screen.dart' deferred as _s152;
+import '../../features/erp/presentation/erp_pending_po_items_screen.dart' deferred as _s153;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -554,6 +555,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/sales-dashboard', builder: (_, __) => _deferred(_s098.loadLibrary(), () => _s098.ErpSalesDashboardScreen())),
           GoRoute(path: '/erp/purchase-dashboard', builder: (_, __) => _deferred(_s098.loadLibrary(), () => _s098.ErpPurchaseDashboardScreen())),
           GoRoute(path: '/erp/purchase-report', builder: (_, __) => _deferred(_s104.loadLibrary(), () => _s104.ErpPurchaseReportScreen())),
+          GoRoute(path: '/erp/pending-po-items', builder: (_, __) => _deferred(_s153.loadLibrary(), () => _s153.ErpPendingPoItemsScreen())),
           GoRoute(path: '/erp/purchase-variance', builder: (_, __) => _deferred(_s105.loadLibrary(), () => _s105.ErpPurchaseVarianceScreen())),
           GoRoute(path: '/erp/sales-returns', builder: (_, __) => _deferred(_s136.loadLibrary(), () => _s136.ErpSalesReturnsScreen())),
           GoRoute(path: '/erp/purchase-returns', builder: (_, __) => _deferred(_s137.loadLibrary(), () => _s137.ErpPurchaseReturnsScreen())),

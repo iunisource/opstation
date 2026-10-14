@@ -72,6 +72,7 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
     PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),
     PermItem('purchase_report', 'Purchase Report', PermKind.report, '/erp/purchase-report'),
+    PermItem('pending_po_items', 'Pending PO Items', PermKind.report, '/erp/pending-po-items'),
     // Same key as before (moved from Reports & Ledgers) so existing grants carry over.
     PermItem('supplier_balance_report', 'Supplier Balance Report', PermKind.report, '/erp/supplier-balance-report'),
     PermItem('suppliers', 'Suppliers', PermKind.doc, '/erp/suppliers'),

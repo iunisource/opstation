@@ -692,6 +692,7 @@ const List<_Feature> _features = [
   _Feature('Supplier Ledger', 'Purchase', '/erp/supplier-ledger', ['supplier ledger']),
   _Feature('Purchase Returns', 'Purchase', '/erp/purchase-returns', ['purchase return']),
   _Feature('Purchase Report', 'Purchase', '/erp/purchase-report', ['purchase report']),
+  _Feature('Pending PO Items', 'Purchase', '/erp/pending-po-items', ['pending po', 'pending items', 'open po', 'po pending', 'items to receive']),
   _Feature('Supplier Balance Report', 'Purchase', '/erp/supplier-balance-report', ['supplier balance']),
   // Inventory
   _Feature('Products', 'Inventory', '/erp/products', ['product', 'item', 'sku']),

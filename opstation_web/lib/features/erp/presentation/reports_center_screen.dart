@@ -42,6 +42,7 @@ const List<_Cat> _kCatalog = [
   ]),
   _Cat('Purchases & Suppliers', Icons.shopping_cart_outlined, [
     _Card('Purchase Report', '/erp/purchase-report', Icons.summarize_outlined, 'Purchases by supplier or period'),
+    _Card('Pending PO Items', '/erp/pending-po-items', Icons.pending_actions_outlined, 'What is still to arrive, per item, across open POs'),
     _Card('Purchase Dashboard', '/erp/purchase-dashboard', Icons.space_dashboard_outlined, 'Headline purchasing KPIs'),
     _Card('Supplier Ledger', '/erp/supplier-ledger', Icons.menu_book_outlined, 'Every transaction for a supplier'),
     _Card('Supplier Aging', '/erp/supplier-aging', Icons.hourglass_bottom_outlined, 'Payables by age bucket'),

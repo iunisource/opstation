@@ -1281,6 +1281,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/supplier-ledger')) _menuItem(context, 'Supplier Ledger', Icons.people_outline, '/erp/supplier-ledger', location),
       if (show('/erp/supplier-aging')) _menuItem(context, 'Supplier Aging', Icons.hourglass_bottom_outlined, '/erp/supplier-aging', location),
       if (show('/erp/purchase-report')) _menuItem(context, 'Purchase Report', Icons.summarize_outlined, '/erp/purchase-report', location),
+      if (show('/erp/pending-po-items')) _menuItem(context, 'Pending PO Items', Icons.pending_actions_outlined, '/erp/pending-po-items', location),
       if (show('/erp/supplier-balance-report')) _menuItem(context, 'Supplier Balance Report', Icons.account_balance_outlined, '/erp/supplier-balance-report', location),
     ];
     final purchaseItems = <Widget>[
@@ -1480,7 +1481,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
-           '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report',
+           '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report', '/erp/pending-po-items',
            '/erp/supplier-ledger', '/erp/supplier-aging', '/erp/supplier-balance-report'],
           _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice + piSupervisePending),
       if (_hasItems(salesItems))
