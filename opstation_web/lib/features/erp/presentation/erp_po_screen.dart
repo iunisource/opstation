@@ -77,6 +77,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     ));
   }
   bool _hasGrn = false; // true if any GRN exists against this PO (cascade lock)
+  Set<String> _closeReqIds = {}; // POs with a close request waiting for an admin (SQL 365)
   bool _listLoading = true;
   bool _detailLoading = false;
   int _auditRefresh = 0; // bump to force the audit trail to reload
@@ -202,6 +203,11 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
+  // ── Close requests (SQL 365). Non-admins can't void, so they ask for it. ──
+  bool get _closeReqSupported => _detail.containsKey('close_req_status');
+  bool get _closeReqPending => _detail['close_req_status'] == 'pending' && !_isVoided;
+  bool get _canRequestClose => _closeReqSupported && !_isAdmin && !_isVoided && !_hasGrn &&
+      !_closeReqPending && _detail['status'] != 'received' && _detail['status'] != 'invoiced';
   bool get _canEditDate => (_datesEditable || _isAdmin) && !_isLocked && !_isVoided;
   bool get _canApprove {
     final access = ref.read(accessSyncProvider);
@@ -277,7 +283,15 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             .eq('org_id', orgId).eq('key', 'org.po_approval_required').maybeSingle();
         orgApproval = (cfg?['value'] as String?) == 'true';
       } catch (_) {}
-      setState(() { _pos = List<Map<String, dynamic>>.from(r); _orgApprovalRequired = orgApproval; _listLoading = false; });
+      Set<String> closeReq = {};
+      try {
+        var cq = Supabase.instance.client.from('purchase_orders').select('id')
+            .eq('org_id', orgId).eq('close_req_status', 'pending').isFilter('voided_at', null);
+        if (branchId != null) cq = cq.eq('branch_id', branchId);
+        closeReq = {for (final x in (await cq) as List) x['id'] as String};
+      } catch (_) {/* feature not set up yet — no close-request markers */}
+      setState(() { _pos = List<Map<String, dynamic>>.from(r); _orgApprovalRequired = orgApproval;
+        _closeReqIds = closeReq; if (closeReq.isEmpty && _filter == 'closereq') _filter = 'all'; _listLoading = false; });
     } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
   }
 
@@ -971,6 +985,141 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
+  // ── Close request flow (SQL 365) ───────────────────────────────────────
+  String _rpcError(Object e) => e is PostgrestException ? e.message : friendlyError('That did not save', e);
+
+  Future<String?> _askText({required String title, required String hint, required String label,
+      required String action, required Color color}) {
+    final ctrl = TextEditingController();
+    return showDialog<String>(context: context, builder: (dlg) => StatefulBuilder(builder: (dlg, setD) => AlertDialog(
+      title: Text(title),
+      content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(hint, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        TextField(controller: ctrl, autofocus: true, minLines: 3, maxLines: 6, onChanged: (_) => setD(() {}),
+            decoration: InputDecoration(labelText: label, border: const OutlineInputBorder())),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(dlg, rootNavigator: true).pop(), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: color),
+            onPressed: ctrl.text.trim().isEmpty ? null : () => Navigator.of(dlg, rootNavigator: true).pop(ctrl.text.trim()),
+            child: Text(action)),
+      ],
+    )));
+  }
+
+  Future<void> _requestClose() async {
+    final reason = await _askText(
+      title: 'Request to close ${_detail['voucher_number'] ?? 'this PO'}',
+      hint: 'Only an admin can close (void) a Purchase Order. Your request goes to them with this reason — '
+          'they will approve or decline it and you will be notified.',
+      label: 'Why should this PO be closed? *', action: 'Send request', color: Colors.deepOrange.shade700);
+    if (reason == null || reason.isEmpty) return;
+    final id = _detail['id'] as String;
+    SavingOverlay.show(context, label: 'Sending…');
+    try {
+      await Supabase.instance.client.rpc('request_po_close', params: {'p_id': id, 'p_reason': reason});
+      _showSnack('Close request sent to admins');
+      if (mounted) setState(() => _auditRefresh++);
+      _loadDetail(id); _loadList();
+    } catch (e) { _showSnack(_rpcError(e)); }
+    finally { SavingOverlay.hide(); }
+  }
+
+  Future<void> _withdrawClose() async {
+    final id = _detail['id'] as String;
+    SavingOverlay.show(context, label: 'Withdrawing…');
+    try {
+      await Supabase.instance.client.rpc('withdraw_po_close', params: {'p_id': id});
+      _showSnack('Close request withdrawn');
+      if (mounted) setState(() => _auditRefresh++);
+      _loadDetail(id); _loadList();
+    } catch (e) { _showSnack(_rpcError(e)); }
+    finally { SavingOverlay.hide(); }
+  }
+
+  Future<void> _decideClose(bool approve) async {
+    final id = _detail['id'] as String;
+    String? note;
+    if (approve) {
+      final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+        title: Text('Close ${_detail['voucher_number'] ?? 'this PO'}?'),
+        content: const Text('The PO will be voided and can no longer be received. '
+            'The person who asked will be notified.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Approve & close')),
+        ],
+      ));
+      if (ok != true) return;
+    } else {
+      note = await _askText(
+        title: 'Decline close request',
+        hint: 'The PO stays open. ${_detail['close_req_by_name'] ?? 'The requester'} will be notified with your reason.',
+        label: 'Reason for declining *', action: 'Decline', color: AppTheme.danger);
+      if (note == null || note.isEmpty) return;
+    }
+    SavingOverlay.show(context, label: approve ? 'Closing…' : 'Declining…');
+    try {
+      await Supabase.instance.client.rpc('decide_po_close',
+          params: {'p_id': id, 'p_approve': approve, 'p_note': note});
+      _showSnack(approve ? 'PO closed (voided)' : 'Close request declined');
+      ref.invalidate(poPendingApprovalCountProvider);
+      if (mounted) setState(() => _auditRefresh++);
+      _loadDetail(id); _loadList();
+    } catch (e) { _showSnack(_rpcError(e)); }
+    finally { SavingOverlay.hide(); }
+  }
+
+  Widget _closeRequestBanner() {
+    final pending = _closeReqPending;
+    final at = DateTime.tryParse('${_detail['close_req_at'] ?? ''}')?.toLocal();
+    final decidedAt = DateTime.tryParse('${_detail['close_req_decided_at'] ?? ''}')?.toLocal();
+    final me = ref.read(currentUserProvider)?.id;
+    final isRequester = me != null && me == _detail['close_req_by'];
+    final c = pending ? Colors.deepOrange : Colors.blueGrey;
+    String fmt(DateTime d) => DateFormat('d MMM yyyy, HH:mm').format(d);
+    final buttons = <Widget>[
+      if (pending && _isAdmin) ...[
+        OutlinedButton(onPressed: () => _decideClose(false),
+            style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger), child: const Text('Decline')),
+        ElevatedButton.icon(icon: const Icon(Icons.check, size: 16), label: const Text('Approve & close'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange.shade700), onPressed: () => _decideClose(true)),
+      ] else if (pending && isRequester)
+        TextButton(onPressed: _withdrawClose, child: const Text('Withdraw')),
+    ];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      decoration: BoxDecoration(color: c.withOpacity(0.06), borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: c.withOpacity(0.35))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(pending ? Icons.outbox_outlined : Icons.do_not_disturb_on_outlined, size: 18, color: c.shade700),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(pending
+                    ? 'Close requested by ${_detail['close_req_by_name'] ?? '—'}${at != null ? ' · ${fmt(at)}' : ''}'
+                    : 'Close request declined by ${_detail['close_req_decided_by_name'] ?? '—'}'
+                        '${decidedAt != null ? ' · ${fmt(decidedAt)}' : ''}',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: c.shade800)),
+            const SizedBox(height: 3),
+            Text(pending ? '${_detail['close_req_reason'] ?? ''}' : '${_detail['close_req_decline_reason'] ?? ''}',
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 4),
+            Text(pending
+                    ? (_isAdmin ? 'Approve to void this PO, or decline with a reason.' : 'Waiting for an admin to approve or decline.')
+                    : 'Asked by ${_detail['close_req_by_name'] ?? '—'}: ${_detail['close_req_reason'] ?? ''}',
+                style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          ])),
+        ]),
+        if (buttons.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8),
+            child: Align(alignment: Alignment.centerRight, child: Wrap(spacing: 8, runSpacing: 6, children: buttons))),
+      ]),
+    );
+  }
+
   // Short-close: the vendor order is finished but less arrived than ordered.
   // Marks the PO received (closed) so the outstanding qty stops hanging in the
   // pending/open views. No inventory effect — only GRNs move stock.
@@ -1095,7 +1244,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           || (_filter == 'received' && disp == 'Received')
           || (_filter == 'invoiced' && disp == 'Invoiced')
           || (_filter == 'voided' && disp == 'Voided')
-          || (_filter == 'rejected' && disp == 'Rejected');
+          || (_filter == 'rejected' && disp == 'Rejected')
+          || (_filter == 'closereq' && _closeReqIds.contains(r['id']));
       return matchSearch && matchFilter;
     }).toList();
     return Container(
@@ -1131,6 +1281,11 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
             _PoFilterTab(label: 'Rejected', value: 'rejected', current: _filter, onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             _PoFilterTab(label: 'Voided',   value: 'voided',   current: _filter, onTap: (v) => setState(() => _filter = v)),
+            if (_closeReqIds.isNotEmpty) ...[
+              const SizedBox(width: 5),
+              _PoFilterTab(label: 'Close requested (${_closeReqIds.length})', value: 'closereq', current: _filter,
+                  onTap: (v) => setState(() => _filter = v)),
+            ],
           ])),
         const SizedBox(height: 12),
         Expanded(child: _listLoading ? const Center(child: BrandSpinner())
@@ -1144,6 +1299,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                   return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.06),
                     title: Row(children: [
                       Expanded(child: Text(r['voucher_number'] as String? ?? '-', style: TextStyle(fontWeight: FontWeight.w700, color: sel ? AppTheme.primary : null, decoration: voided ? TextDecoration.lineThrough : null))),
+                      if (!voided && _closeReqIds.contains(r['id']))
+                        const Padding(padding: EdgeInsets.only(right: 4), child: _PoCloseReqChip()),
                       voided ? const _PoVoidChip() : (_poIsPending(r, _orgApprovalRequired) ? const _PoPendingChip() : _PoStatusBadge(status: poDisplayStatus(r))),
                     ]),
                     subtitle: Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
@@ -1184,6 +1341,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                 _detail['status'] != 'invoiced' && _detail['status'] != 'received')
               OutlinedButton.icon(icon: const Icon(Icons.playlist_add_check, size: 16), label: const Text('Close remaining'),
                   style: OutlinedButton.styleFrom(foregroundColor: Colors.orange.shade800), onPressed: _shortClose),
+            if (_canRequestClose)
+              OutlinedButton.icon(icon: const Icon(Icons.outbox_outlined, size: 16), label: const Text('Request close'),
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.deepOrange.shade700), onPressed: _requestClose),
             if (_canEditDate)
               IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
             if (!_isDraft || !_isLocked || _canUnlock)
@@ -1239,6 +1399,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         ),
         const SizedBox(height: 20),
         if (_isRejected) _rejectionBanner(),
+        if (_closeReqPending || (_detail['close_req_status'] == 'declined' && !_isVoided)) _closeRequestBanner(),
         if (_isDraft && !_isLocked)
           Container(margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(color: Colors.blue.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withOpacity(0.25))),
@@ -1577,6 +1738,16 @@ bool _poIsPending(Map<String, dynamic> r, bool orgApprovalRequired) {
   final status = r['status'] as String? ?? '';
   final locked = r['is_locked'] as bool? ?? false;
   return locked && r['approved_at'] == null && r['voided_at'] == null && status != 'received';
+}
+
+class _PoCloseReqChip extends StatelessWidget {
+  const _PoCloseReqChip();
+  @override Widget build(BuildContext context) => Tooltip(message: 'Close requested — waiting for an admin',
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(color: Colors.deepOrange.withOpacity(0.12), borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.deepOrange.withOpacity(0.5))),
+      child: Icon(Icons.outbox_outlined, size: 11, color: Colors.deepOrange.shade700)));
 }
 
 class _PoPendingChip extends StatelessWidget {
