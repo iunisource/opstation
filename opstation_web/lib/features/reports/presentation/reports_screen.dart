@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -134,7 +135,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
       setState(() {
         _users = List<Map<String, dynamic>>.from(users);
-        _trips = tripList;
+        // Quick restarts fold into one trip; empty trips are marked abandoned.
+        _trips = TripSessions.collapse(tripList, (id) => (visitsByTrip[id] ?? const []).length);
         _visitsByTrip = visitsByTrip;
         _customersById = customersById;
         _loading = false;
@@ -324,19 +326,25 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                       final t = _trips[i];
                       final date = t['started_at'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(t['started_at'] as String).toLocal()) : '-';
                       final isCompleted = t['ended_at'] != null;
-                      return Padding(
+                      final abandoned = t['_abandoned'] == true;
+                      final note = TripSessions.note(t);
+                      return Opacity(opacity: abandoned ? 0.45 : 1, child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                         child: Row(children: [
                           Expanded(flex: 2, child: Text(date, style: const TextStyle(fontSize: 13))),
                           Expanded(flex: 2, child: Text(t['user_name'] as String? ?? '-', style: const TextStyle(fontWeight: FontWeight.w600))),
-                          Expanded(flex: 2, child: Text(t['route_name'] as String? ?? '-', style: const TextStyle(fontSize: 13))),
+                          Expanded(flex: 2, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(t['route_name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
+                            if (note != null)
+                              Text(note, style: TextStyle(fontSize: 10.5, color: abandoned ? AppTheme.textSecondary : AppTheme.primary)),
+                          ])),
                           Expanded(flex: 1, child: Text(_visitsReady ? '${(_visitsByTrip[t['id']] ?? const []).length}' : '…', style: const TextStyle(fontSize: 13))),
                           Expanded(flex: 1, child: Text(_visitsReady ? '${(_visitsByTrip[t['id']] ?? const []).where((v) => v['status'] == 'verified').length}' : '…', style: const TextStyle(fontSize: 13))),
                           Expanded(flex: 2, child: Text(_visitsReady ? 'Rs ${(_visitsByTrip[t['id']] ?? const []).fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0))}' : '…', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.success))),
                           Expanded(flex: 1, child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(color: isCompleted ? AppTheme.success.withOpacity(0.1) : AppTheme.warning.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-                            child: Text(isCompleted ? 'Done' : 'Active', style: TextStyle(color: isCompleted ? AppTheme.success : AppTheme.warning, fontSize: 11, fontWeight: FontWeight.w600)),
+                            decoration: BoxDecoration(color: abandoned ? AppTheme.border : (isCompleted ? AppTheme.success.withOpacity(0.1) : AppTheme.warning.withOpacity(0.1)), borderRadius: BorderRadius.circular(6)),
+                            child: Text(abandoned ? 'Abandoned' : (isCompleted ? 'Done' : 'Active'), style: TextStyle(color: abandoned ? AppTheme.textSecondary : (isCompleted ? AppTheme.success : AppTheme.warning), fontSize: 11, fontWeight: FontWeight.w600)),
                           )),
                           SizedBox(
                             width: 110,
@@ -358,7 +366,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                             ]),
                           ),
                         ]),
-                      );
+                      ));
                     },
                   ),
               ),

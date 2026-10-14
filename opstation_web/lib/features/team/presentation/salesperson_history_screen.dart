@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/trip_sessions.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -90,7 +91,8 @@ class _SalespersonHistoryScreenState
       }
 
       setState(() {
-        _trips = trips;
+        // Quick restarts fold into one trip; empty trips are marked abandoned.
+        _trips = TripSessions.collapse(trips, (id) => (visitsByTrip[id] ?? const []).length);
         _visitsByTrip = visitsByTrip;
         _customers = customers;
         _loading = false;
@@ -163,7 +165,7 @@ class _SalespersonHistoryScreenState
                     onTap: () => _pickDate(isFrom: false),
                   ),
                   const SizedBox(width: 16),
-                  _StatPill(label: 'Trips', value: '${_trips.length}'),
+                  _StatPill(label: 'Trips', value: '${_trips.where((t) => t['_abandoned'] != true).length}'),
                   const SizedBox(width: 8),
                   _StatPill(label: 'Visits', value: '$_totalVisits'),
                   const SizedBox(width: 8),
@@ -205,7 +207,8 @@ class _SalespersonHistoryScreenState
         final t = _trips[i];
         final tripId = t['id'] as String;
         final visits = _visitsByTrip[tripId] ?? const [];
-        return _TripCard(
+        final note = TripSessions.note(t);
+        final card = _TripCard(
           trip: t,
           visits: visits,
           customers: _customers,
@@ -217,6 +220,21 @@ class _SalespersonHistoryScreenState
               _expanded.add(tripId);
             }
           }),
+        );
+        if (note == null) return card;
+        return Opacity(
+          opacity: t['_abandoned'] == true ? 0.5 : 1,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 4),
+              child: Text(note,
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: t['_abandoned'] == true ? AppTheme.textSecondary : AppTheme.primary)),
+            ),
+            card,
+          ]),
         );
       },
     );

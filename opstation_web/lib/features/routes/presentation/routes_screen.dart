@@ -74,7 +74,15 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
         final uid = m['user_id'] as String?;
         if (rid == null || uid == null) continue;
         final nm = userNameById[uid];
-        if (nm != null && nm.isNotEmpty) _routeAssignee[rid] = nm;
+        if (nm == null || nm.isEmpty) continue;
+        // Show EVERY assignee — previously the last one silently overwrote the
+        // others, so a route assigned to two people showed only one name.
+        final cur = _routeAssignee[rid];
+        if (cur == null || cur.isEmpty) {
+          _routeAssignee[rid] = nm;
+        } else if (!cur.split(', ').contains(nm)) {
+          _routeAssignee[rid] = '$cur, $nm';
+        }
       }
       // Group stops by route
       final byRoute = <String, List<Map<String, dynamic>>>{};
@@ -641,15 +649,23 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
       for (final s in route?.stops ?? const []) s['customer_id'] as String,
     ];
     final customerSearchCtrl = TextEditingController();
+    var selectedOnly = false;
 
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setS) {
         // Filter customer list by code/name as the user types
         final q = customerSearchCtrl.text.trim().toLowerCase();
+        // "Selected only": the route's customers, in stop order.
+        final pool = selectedOnly
+            ? [
+                for (final id in selectedIds)
+                  ..._customers.where((c) => c['id'] == id).take(1),
+              ]
+            : _customers;
         final visibleCustomers = q.isEmpty
-            ? _customers
-            : _customers.where((c) {
+            ? pool
+            : pool.where((c) {
                 final code =
                     (c['code'] as String? ?? '').toLowerCase();
                 final name =
@@ -679,14 +695,24 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                 onChanged: (v) => setS(() => kind = v!),
               ),
               const SizedBox(height: 16),
-              Align(
-                  alignment: Alignment.centerLeft,
+              Row(children: [
+                Expanded(
                   child: Text(
                       'Customers (${selectedIds.length} selected · ${_customers.length} total)',
                       style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
-                          color: AppTheme.textSecondary))),
+                          color: AppTheme.textSecondary)),
+                ),
+                FilterChip(
+                  label: Text(selectedOnly ? 'Selected only (${selectedIds.length})' : 'Show selected only',
+                      style: const TextStyle(fontSize: 12)),
+                  selected: selectedOnly,
+                  showCheckmark: true,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (v) => setS(() => selectedOnly = v),
+                ),
+              ]),
               const SizedBox(height: 8),
               TextField(
                 controller: customerSearchCtrl,
@@ -704,8 +730,10 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                     border: Border.all(color: AppTheme.border),
                     borderRadius: BorderRadius.circular(8)),
                 child: visibleCustomers.isEmpty
-                    ? const Center(
-                        child: Text('No customers match your search.'))
+                    ? Center(
+                        child: Text(selectedOnly && selectedIds.isEmpty
+                            ? 'No customers selected yet.'
+                            : 'No customers match your search.'))
                     : ListView(
                         children: visibleCustomers.map((c) {
                         final id = c['id'] as String;

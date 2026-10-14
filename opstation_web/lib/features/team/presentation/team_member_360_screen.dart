@@ -13,6 +13,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'salesperson_history_screen.dart';
+import '../services/trip_sessions.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import 'package:opstation_web/features/reports/pdf/report_pdf_builder.dart';
 
@@ -481,7 +482,13 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       if (!mounted) return;
       setState(() {
         _routes = routes;
-        _trips = trips;
+        // Quick restarts fold into one trip; empty trips are marked abandoned.
+        _trips = TripSessions.collapse(trips, (id) {
+          for (final t in trips) {
+            if (t['id'] == id) return (t['_visits'] as int?) ?? 0;
+          }
+          return 0;
+        });
         _visitCount = visitCount;
         _collected = collected;
         _tasks = tasks;
@@ -662,7 +669,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         Wrap(spacing: 12, runSpacing: 12, children: [
           _statTile('Routes', '${_routes.length}'),
           _statTile('Route shops', '${_routeCustomerIds.length}'),
-          _statTile('Trips (30d)', '${_trips.length}'),
+          _statTile('Trips (30d)', '${_trips.where((t) => t['_abandoned'] != true).length}'),
           _statTile('Visits (30d)', '$_visitCount'),
           _statTile('Collected (30d)', 'Rs $_collected',
               color: AppTheme.success),
@@ -1678,6 +1685,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       (_trips.isEmpty && _surveyEvents.isNotEmpty);
 
   String _tripStatus(Map<String, dynamic> t) {
+    if (t['_abandoned'] == true) return 'Abandoned';
     if (t['ended_at'] == null) return 'Active';
     return (t['close_reason'] as String?) == 'cutoff' ? 'Cutoff' : 'Completed';
   }
@@ -1911,7 +1919,8 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                 final s = DateTime.tryParse(t['started_at'] as String? ?? '')
                     ?.toLocal();
                 final status = _tripStatus(t);
-                return Padding(
+                final note = TripSessions.note(t);
+                return Opacity(opacity: status == 'Abandoned' ? 0.45 : 1, child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   child: Row(children: [
@@ -1921,9 +1930,18 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                             style: const TextStyle(fontSize: 12.5))),
                     Expanded(
                         flex: 4,
-                        child: Text(t['route_name'] as String? ?? '—',
-                            style: const TextStyle(
-                                fontSize: 12.5, fontWeight: FontWeight.w600))),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(t['route_name'] as String? ?? '—',
+                              style: const TextStyle(
+                                  fontSize: 12.5, fontWeight: FontWeight.w600)),
+                          if (note != null)
+                            Text(note,
+                                style: TextStyle(
+                                    fontSize: 10.5,
+                                    color: status == 'Abandoned'
+                                        ? AppTheme.textSecondary
+                                        : AppTheme.primary)),
+                        ])),
                     Expanded(
                         flex: 2,
                         child: Text('${t['_visits'] ?? 0}',
@@ -1948,7 +1966,9 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                                     ? AppTheme.warning
                                     : status == 'Cutoff'
                                         ? AppTheme.danger
-                                        : AppTheme.success))),
+                                        : status == 'Abandoned'
+                                            ? AppTheme.textSecondary
+                                            : AppTheme.success))),
                     SizedBox(
                       width: 44,
                       child: IconButton(
@@ -1959,7 +1979,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                       ),
                     ),
                   ]),
-                );
+                ));
               },
             ),
           ),
@@ -2140,7 +2160,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         memberName: _uname,
         period: '${df.format(_visitsFrom)} \u2013 ${df.format(_visitsTo)}',
         surveyMode: _isSurveyMode,
-        trips: _isSurveyMode ? const [] : _tripsFiltered(),
+        trips: _isSurveyMode ? const [] : _tripsFiltered().where((t) => t['_abandoned'] != true).toList(),
         surveyDays: _isSurveyMode ? _surveyDayRows() : const [],
       );
       await outputPdf(bytes, 'Team Report - $_uname', date: _visitsTo);

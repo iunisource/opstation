@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -132,7 +133,12 @@ class _CombinedTripSummaryScreenState
 
       // Aggregate distance per (salesperson, calendar day).
       final acc = <String, _DayRow>{};
-      for (final t in tripList) {
+      // A quick restart counts as one trip (distance from the FIRST start);
+      // abandoned trips (ended with no visits) are left out.
+      final sessions = TripSessions.collapse(
+              tripList, (id) => (visitsByTrip[id] ?? const []).length)
+          .where((t) => t['_abandoned'] != true);
+      for (final t in sessions) {
         final startedAt = t['started_at'] as String?;
         if (startedAt == null) continue;
         final dt = DateTime.parse(startedAt).toLocal();
