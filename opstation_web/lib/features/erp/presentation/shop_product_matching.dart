@@ -6,10 +6,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/product_picker.dart';
 
 /// Bulk "store item ⇄ Opstation product" matching for a connected store.
-/// Suggestions come from the item codes (ALO 202, ALA 301 (S) …) in the store
-/// SKU and the Opstation product name, looking only at finished products
-/// (the main groups chosen at the top). A store item with several codes is a
-/// bundle of several products.
+/// Suggestions come from the store SKU compared with each Opstation product's
+/// barcode, SKU and the start of its name (any store's code style), looking
+/// only at finished products (the main groups chosen at the top). A store SKU
+/// with several codes ("A + B") is a bundle. A choice made for a code is
+/// remembered and reused for that code everywhere, bundles included.
 Future<void> showShopProductMatching(
   BuildContext context, {
   required Map<String, dynamic> store,
@@ -23,12 +24,14 @@ Future<void> showShopProductMatching(
 }
 
 class _Part {
-  String? code; // item code from the store SKU, e.g. "ALA 301 (S)"
+  String? code; // item code as written in the store SKU
+  String? key; // normalised code, used to remember choices
   double qty;
   String? pid;
   List<String> choices;
-  _Part({this.code, this.qty = 1, this.pid, this.choices = const []});
-  _Part copy() => _Part(code: code, qty: qty, pid: pid, choices: choices);
+  bool chosen = false; // picked by hand → remembered for this code
+  _Part({this.code, this.key, this.qty = 1, this.pid, this.choices = const []});
+  _Part copy() => _Part(code: code, key: key, qty: qty, pid: pid, choices: choices);
 }
 
 class _Row {
@@ -97,6 +100,7 @@ class _MatchDialogState extends State<_MatchDialog> {
         for (final x in (list as List? ?? const []))
           _Part(
             code: auto ? (x as Map)['code'] as String? : null,
+            key: auto ? (x as Map)['key'] as String? : null,
             qty: ((x as Map)['qty'] as num?)?.toDouble() ?? 1,
             pid: x['product_id'] as String?,
             choices: auto ? [for (final c in (x['choices'] as List? ?? const [])) '$c'] : const [],
@@ -195,6 +199,19 @@ class _MatchDialogState extends State<_MatchDialog> {
             },
         ], onConflict: 'store_id,ext_key');
       }
+      // Remember hand-picked codes so every store item using them follows.
+      final learned = <String, String>{};
+      for (final r in _rows) {
+        for (final p in r.parts) {
+          if (p.chosen && p.key != null && p.pid != null) learned[p.key!] = p.pid!;
+        }
+      }
+      if (learned.isNotEmpty) {
+        await client.from('shop_product_map').upsert([
+          for (final e in learned.entries)
+            {'org_id': orgId, 'store_id': storeId, 'ext_key': 'code:${e.key}', 'product_id': e.value, 'components': null},
+        ], onConflict: 'store_id,ext_key');
+      }
       for (var i = 0; i < drop.length; i += 200) {
         await client.from('shop_product_map').delete().eq('store_id', storeId).inFilter('ext_key', drop.skip(i).take(200).toList());
       }
@@ -242,7 +259,19 @@ class _MatchDialogState extends State<_MatchDialog> {
       if (p == null || p.isEmpty) return;
       pick = p['id'] as String;
     }
-    setState(() { part.pid = pick; r.manual = true; });
+    setState(() {
+      part.pid = pick;
+      part.chosen = true;
+      r.manual = true;
+      // Same code elsewhere (other items, bundles) still open → fill it too.
+      if (part.key != null) {
+        for (final o in _rows) {
+          for (final x in o.parts) {
+            if (x != part && x.key == part.key && x.pid == null) { x.pid = pick; x.chosen = true; o.manual = true; }
+          }
+        }
+      }
+    });
   }
 
   Widget _howChip(_Row r) {
@@ -331,8 +360,8 @@ class _MatchDialogState extends State<_MatchDialog> {
                 ? Center(child: Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.danger)))
                 : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('${_rows.length} store items · $todo not saved yet${unsure > 0 ? ' · $unsure need a choice' : ''}. '
-                        'Matched by the item code (e.g. ALA 301, "(S)" = special quality); several codes in one SKU make a bundle. '
-                        'Tap any product to change it.',
+                        'Matched by the store SKU against your product codes and names; several codes in one SKU (A + B) make a bundle. '
+                        'Tap any product to change it — a choice for a code is used everywhere that code appears.',
                         style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                     const SizedBox(height: 8),
                     Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [

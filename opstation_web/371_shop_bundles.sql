@@ -1,6 +1,7 @@
 -- 371 — Online store matching: bundles + finished-products-only.
 -- A store item can now be one Opstation product OR a bundle of several
--- (components = [{"product_id": "...", "qty": 1}, ...]). match_groups = the
+-- (components = [{"product_id": "...", "qty": 1}, ...]); rows keyed "code:<code>"
+-- remember a choice made for an item code. match_groups = the
 -- product main groups the store's items are matched against (empty = the
 -- finished-goods group). Safe to run again.
 

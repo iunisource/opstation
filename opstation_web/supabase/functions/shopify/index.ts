@@ -114,48 +114,58 @@ async function gqlOrders(admin: SupabaseClient, store: Store, sec: Secret, build
 }
 
 // ── Matching store items to Opstation products ───────────────────────────────
-// Alfa-style item codes: "ALO 202", "ALA 301 (S)", "2x ALC 300". A store SKU
-// with several codes ("ALO 202 + ALA 301 (S) + ALC 300") is a bundle.
-// On the Opstation side the code is the one the product NAME starts with
-// ("ALA 301-ALFA Honda Civic … - FG"); codes mentioned later in a name
-// ("Base Plate (ALO 202)") are parts, not the product. "(S)" = special quality.
+// Works with any store's SKU style — nothing is hard-wired to one brand:
+//   • exact: store SKU / barcode = Opstation barcode or SKU
+//   • code:  the store SKU is the start of an Opstation product name or equals
+//            its SKU, ignoring spaces / dashes / case ("ALA301" = "ALA 301-…",
+//            "TS-001" = "TS 001 Blue T-shirt")
+//   • a qualifier in brackets — "X 12 (S)" — picks, among the same-code
+//            products, the one with a word starting with it ("Special …")
+//   • several codes joined with + , ; & | make a bundle; "2x CODE" / "CODE x2"
+//   • every choice made by hand is remembered per code and reused everywhere
+//     (also inside bundles), so the store teaches itself.
 // Only products in the store's chosen main groups are considered (default:
 // the finished-goods group), so boxes, raw and parts never get picked.
-const CODE_RE = /(?:(\d+)\s*[X×]\s*)?\b([A-Z]{2,4})\s*-?\s*(\d{2,5})(?!\d)(?:\s*\(\s*([A-Z0-9]{1,3})\s*\))?(?:\s*[X×]\s*(\d{1,3})\b)?/g;
-const LEAD_RE = /^\s*([A-Z]{2,4})\s*-?\s*(\d{2,5})(?!\d)(?:\s*\(\s*([A-Z0-9]{1,3})\s*\))?/;
-type Code = { code: string; base: string; suffix: string | null; qty: number };
-function parseCodes(s: string): Code[] {
-  const out: Code[] = [];
-  for (const m of String(s ?? "").toUpperCase().matchAll(CODE_RE)) {
-    const base = `${m[2]} ${m[3]}`;
-    const suffix = m[4] ?? null;
-    const code = suffix ? `${base} (${suffix})` : base;
-    const qty = m[1] ? Math.max(1, Number(m[1])) : (m[5] ? Math.max(1, Number(m[5])) : 1);
-    const ex = out.find((c) => c.code === code);
-    if (ex) ex.qty += qty; else out.push({ code, base, suffix, qty });
+function toks(s: string): string[] {
+  return String(s ?? "").toUpperCase()
+    .replace(/([A-Z])(?=\d)|(\d)(?=[A-Z])/g, "$1$2 ")
+    .split(/[^A-Z0-9]+/).filter(Boolean);
+}
+type Seg = { code: string; core: string; key: string; base: string; q: string | null; qty: number };
+function parseSegs(s: string): Seg[] {
+  const out: Seg[] = [];
+  for (let part of String(s ?? "").split(/\s*[+,;&|]\s*/)) {
+    part = part.trim();
+    if (!part) continue;
+    let qty = 1;
+    let m = part.match(/^(\d{1,3})\s*[xX×*]\s+|^(\d{1,3})\s*[xX×*](?=[A-Za-z])/);
+    if (m) { qty = Number(m[1] ?? m[2]); part = part.slice(m[0].length); }
+    else if ((m = part.match(/\s*[xX×*]\s*(\d{1,3})$/)) && part.length > m[0].length) { qty = Number(m[1]); part = part.slice(0, -m[0].length); }
+    let q: string | null = null;
+    const qm = part.match(/\(\s*([^()]{1,12}?)\s*\)\s*$/);
+    if (qm) { q = qm[1].toUpperCase(); part = part.slice(0, -qm[0].length).trim(); }
+    const base = toks(part).join(" ");
+    if (!base) continue;
+    const key = q ? `${base}|${toks(q).join(" ")}` : base;
+    const ex = out.find((x) => x.key === key);
+    if (ex) { ex.qty += Math.max(1, qty); continue; }
+    out.push({ code: q ? `${part.trim()} (${q})` : part.trim(), core: part.trim(), key, base, q, qty: Math.max(1, qty) });
   }
   return out;
-}
-// The code a product is (from its name's start, or its own SKU).
-function productCode(name: string, sku: string): { base: string; suffix: string | null } | null {
-  const up = String(name ?? "").toUpperCase();
-  const m = up.match(LEAD_RE);
-  const special = /\bSPECIAL\b/.test(up);
-  if (m) return { base: `${m[1]} ${m[2]}`, suffix: m[3] ?? (special ? "S" : null) };
-  const s = parseCodes(sku);
-  if (s.length === 1) return { base: s[0].base, suffix: s[0].suffix ?? (special ? "S" : null) };
-  return null;
 }
 
 type Part = { product_id: string; qty: number };
 type Mapped = { product_id: string | null; components: Part[] | null };
-type SuggestPart = { code: string | null; qty: number; product_id: string | null; choices: string[] };
+type SuggestPart = { code: string | null; key: string | null; qty: number; product_id: string | null; choices: string[] };
 type Suggestion = { how: string; parts: SuggestPart[] };
+type Prod = { id: string; name: string; nt: string[]; words: string[]; sk: string; bc: string };
 type Catalog = {
-  byCode: Map<string, string>;                                         // exact barcode / SKU
-  idx: Map<string, Array<{ id: string; suffix: string | null }>>;     // code → finished products
-  map: Map<string, Mapped>;                                            // saved matches
-  groups: string[];                                                    // main groups in use
+  byCode: Map<string, string>;          // exact barcode / SKU (any product)
+  byFirst: Map<string, Prod[]>;         // first name/SKU token → finished products
+  learned: Map<string, string>;         // code key → product chosen before
+  claimed: Map<string, Set<string>>;    // base code → products taken by a qualifier
+  map: Map<string, Mapped>;             // saved matches per store item
+  groups: string[];
   allGroups: Record<string, number>;
 };
 
@@ -173,49 +183,111 @@ async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog
     prods.push(...(data ?? []));
     if (!data || data.length < 1000) break;
   }
+  const grp = (p: { product_main_group?: string | null }) => String(p.product_main_group ?? "").trim() || "(none)";
   const allGroups: Record<string, number> = {};
-  for (const p of prods) { const g = String(p.product_main_group ?? "").trim() || "(none)"; allGroups[g] = (allGroups[g] ?? 0) + 1; }
+  for (const p of prods) allGroups[grp(p)] = (allGroups[grp(p)] ?? 0) + 1;
   const chosen = Array.isArray(store.match_groups) && store.match_groups.length
     ? store.match_groups : finishedDefault(Object.keys(allGroups));
   const inGroup = new Set(chosen);
 
   const byCode = new Map<string, string>();
-  const idx = new Map<string, Array<{ id: string; suffix: string | null }>>();
+  const byFirst = new Map<string, Prod[]>();
+  const push = (k: string, p: Prod) => { if (!byFirst.has(k)) byFirst.set(k, []); if (!byFirst.get(k)!.includes(p)) byFirst.get(k)!.push(p); };
   for (const p of prods) {
     if (p.barcode) byCode.set(`b:${String(p.barcode).trim().toLowerCase()}`, p.id);
     if (p.sku) byCode.set(`s:${String(p.sku).trim().toLowerCase()}`, p.id);
-    if (!inGroup.has(String(p.product_main_group ?? "").trim() || "(none)")) continue;
-    const c = productCode(p.name ?? "", p.sku ?? "");
-    if (!c) continue;
-    if (!idx.has(c.base)) idx.set(c.base, []);
-    idx.get(c.base)!.push({ id: p.id, suffix: c.suffix });
+    if (!inGroup.has(grp(p))) continue;
+    const nt = toks(p.name ?? "");
+    const pr: Prod = { id: p.id, name: p.name ?? "", nt, words: nt, sk: toks(p.sku ?? "").join(" "),
+      bc: String(p.barcode ?? "").trim().toUpperCase() };
+    if (nt.length) push(nt[0], pr);
+    const st = toks(p.sku ?? "");
+    if (st.length) push(st[0], pr);
   }
   const map = new Map<string, Mapped>();
+  const learned = new Map<string, string>();
+  const claimed = new Map<string, Set<string>>();
   const { data: m } = await admin.from("shop_product_map").select("ext_key, product_id, components").eq("store_id", store.id);
-  for (const r of m ?? []) map.set(r.ext_key, { product_id: r.product_id ?? null, components: (r.components as Part[] | null) ?? null });
-  return { byCode, idx, map, groups: chosen, allGroups };
+  for (const r of m ?? []) {
+    if (String(r.ext_key).startsWith("code:")) {
+      if (!r.product_id) continue;
+      const key = String(r.ext_key).slice(5);
+      learned.set(key, r.product_id);
+      const [base, q] = key.split("|");
+      if (q) { if (!claimed.has(base)) claimed.set(base, new Set()); claimed.get(base)!.add(r.product_id); }
+      continue;
+    }
+    map.set(r.ext_key, { product_id: r.product_id ?? null, components: (r.components as Part[] | null) ?? null });
+  }
+  return { byCode, byFirst, learned, claimed, map, groups: chosen, allGroups };
 }
 
-function resolveCode(cat: Catalog, c: Code): SuggestPart {
-  const cands = cat.idx.get(c.base) ?? [];
-  const same = cands.filter((p) => (p.suffix ?? null) === (c.suffix ?? null));
-  const pool = same.length ? same : cands;
-  return { code: c.code, qty: c.qty, product_id: same.length === 1 ? same[0].id : null, choices: pool.map((p) => p.id) };
+// Finished products this code could be.
+function candidates(cat: Catalog, s: Seg): Prod[] {
+  const t = s.base.split(" ");
+  const out: Prod[] = [];
+  for (const p of cat.byFirst.get(t[0]) ?? []) {
+    const starts = t.length <= p.nt.length && t.every((x, i) => p.nt[i] === x);
+    if (starts || p.sk === s.base || (p.bc && p.bc === s.core.toUpperCase())) out.push(p);
+  }
+  return out;
+}
+
+function resolveSeg(cat: Catalog, s: Seg): SuggestPart {
+  const part = (pid: string | null, choices: Prod[]): SuggestPart =>
+    ({ code: s.code, key: s.key, qty: s.qty, product_id: pid, choices: choices.map((p) => p.id) });
+  const known = cat.learned.get(s.key);
+  if (known) return part(known, []);
+  const cands = candidates(cat, s);
+  if (cands.length <= 1) return part(cands[0]?.id ?? null, cands);
+  if (s.q) {
+    // "(S)": the one with a word starting with S that the others don't all share.
+    const q = toks(s.q);
+    const has = (p: Prod) => q.every((x) => p.words.slice(s.base.split(" ").length).some((w) => w.startsWith(x)));
+    const hit = cands.filter(has);
+    if (hit.length && hit.length < cands.length) return part(hit.length === 1 ? hit[0].id : null, hit);
+    return part(null, cands);
+  }
+  // Plain code: leave out the ones a qualifier already took ("ALA 301" vs "ALA 301 (S)").
+  const taken = cat.claimed.get(s.base);
+  const rest = taken ? cands.filter((p) => !taken.has(p.id)) : cands;
+  if (rest.length === 1) return part(rest[0].id, rest);
+  // Shortest name = the plain version, if the others only add words to it.
+  const sorted = [...rest].sort((a, b) => a.nt.length - b.nt.length);
+  return part(null, sorted.length ? sorted : cands);
 }
 
 // What a store item should be, without any saved choice.
 function autoSuggest(cat: Catalog, sku: string, barcode: string, title: string): Suggestion {
-  const one = (how: string, id?: string): Suggestion => ({ how, parts: [{ code: null, qty: 1, product_id: id ?? null, choices: [] }] });
+  const one = (how: string, id?: string): Suggestion => ({ how, parts: [{ code: null, key: null, qty: 1, product_id: id ?? null, choices: [] }] });
   const b = barcode.toLowerCase(), s = sku.toLowerCase();
   if (b && cat.byCode.has(`b:${b}`)) return one("barcode", cat.byCode.get(`b:${b}`));
   if (s && cat.byCode.has(`b:${s}`)) return one("barcode", cat.byCode.get(`b:${s}`));
   if (s && cat.byCode.has(`s:${s}`)) return one("sku", cat.byCode.get(`s:${s}`));
-  let codes = parseCodes(sku);
-  if (codes.length === 0) codes = parseCodes(title).filter((c) => cat.idx.has(c.base)); // titles: known codes only
-  if (codes.length === 0) return { how: "none", parts: [] };
-  const parts = codes.map((c) => resolveCode(cat, c));
+  let parts = parseSegs(sku).map((x) => resolveSeg(cat, x));
+  if (parts.length === 0 || parts.every((p) => !p.product_id && !p.choices.length)) {
+    // No usable SKU: try the store title as one code, only if it clearly fits.
+    const t = parseSegs(title.replace(/[+,;&|]/g, " ")).map((x) => resolveSeg(cat, x)).filter((p) => p.product_id);
+    if (t.length) parts = t;
+  }
+  if (parts.length === 0) return { how: "none", parts: [] };
   if (parts.some((p) => !p.product_id)) return { how: parts.some((p) => p.choices.length) ? "unsure" : "none", parts };
   return { how: parts.length > 1 || parts[0].qty > 1 ? "bundle" : "code", parts };
+}
+
+// Two passes over a whole store list: qualified codes first, so the plain code
+// knows which product the qualifier took.
+function primeClaims(cat: Catalog, skus: string[]) {
+  for (const sku of skus) {
+    for (const s of parseSegs(sku)) {
+      if (!s.q || cat.learned.has(s.key)) continue;
+      const r = resolveSeg(cat, s);
+      if (r.product_id) {
+        if (!cat.claimed.has(s.base)) cat.claimed.set(s.base, new Set());
+        cat.claimed.get(s.base)!.add(r.product_id);
+      }
+    }
+  }
 }
 
 function savedFor(cat: Catalog, variantId: string | null, sku: string): Mapped | null {
@@ -673,6 +745,7 @@ Deno.serve(async (req) => {
       }
       // Suggestions from the item codes (finished products only) + any saved choice.
       const cat = await loadCatalog(admin, store);
+      primeClaims(cat, out.map((v) => String(v.sku ?? "")));
       for (const v of out) {
         const sku = String(v.sku ?? "").trim();
         const auto = autoSuggest(cat, sku, String(v.barcode ?? "").trim(), String(v.product ?? ""));
