@@ -103,7 +103,7 @@ const ORDER_EXTRA = `
   tags customAttributes { key value }
   subtotalPriceSet { shopMoney { amount } } totalShippingPriceSet { shopMoney { amount } }
   totalDiscountsSet { shopMoney { amount } } totalOutstandingSet { shopMoney { amount } }
-  fulfillments(first: 10) { trackingInfo(first: 5) { company number url } }
+  fulfillments(first: 10) { status trackingInfo(first: 5) { company number url } }
   metafields(first: 30) { nodes { namespace key value } }`;
 
 /// Runs an orders query with as much detail as this connection is allowed:
@@ -144,6 +144,7 @@ type ShipInfo = { company: string | null; number: string; url: string | null; so
 function findShipping(o: any): ShipInfo | null {
   // 1) A fulfilment with tracking (the courier app already fulfilled it)
   for (const f of o.fulfillments ?? []) {
+    if (/CANCELLED|ERROR|FAILURE/i.test(String(f?.status ?? ""))) continue; // undone in Shopify
     for (const t of f.trackingInfo ?? []) {
       if (t?.number) {
         // Use our courier name when we recognise it ("Daraz Express" → DEX Logistics).
@@ -487,6 +488,22 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     // anything else (old / packed) is simply done.
     if (!(prev && (prev.status === "new" || prev.status === "picking"))) status = "fulfilled";
   }
+  // Un-fulfilled again in Shopify (fulfilment cancelled / undone): bring it
+  // back to the work queue so it can be shipped again.
+  let reopened = false;
+  const OPEN_AGAIN = ["UNFULFILLED", "PARTIALLY_FULFILLED", "OPEN", "IN_PROGRESS", "PENDING_FULFILLMENT", "ON_HOLD", "SCHEDULED"];
+  if (!o.cancelledAt && prev?.status === "fulfilled" && OPEN_AGAIN.includes(String(o.displayFulfillmentStatus ?? ""))) {
+    reopened = true;
+    // Items already counted stay counted: all picked → Packed, some → Picking.
+    // deno-lint-ignore no-explicit-any
+    const done = (l: any) => l.components?.length
+      // deno-lint-ignore no-explicit-any
+      ? l.components.every((c: any) => Number(c.picked ?? 0) >= Number(c.qty ?? 0))
+      : Number(l.picked ?? 0) >= Number(l.qty ?? 0);
+    // deno-lint-ignore no-explicit-any
+    const any = (l: any) => Number(l.picked ?? 0) > 0 || (l.components ?? []).some((c: any) => Number(c.picked ?? 0) > 0);
+    status = lines.length && lines.every(done) ? "packed" : (lines.some(any) ? "picking" : "new");
+  }
 
   const a = o.shippingAddress;
   const row = {
@@ -503,6 +520,13 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     currency: o.totalPriceSet?.shopMoney?.currencyCode ?? null,
     lines, status, updated_at: new Date().toISOString(),
   };
+  if (reopened) {
+    Object.assign(row, {
+      reopened_at: new Date().toISOString(),
+      fulfilled_at: null, fulfilled_by_name: null,
+      tracking_company: null, tracking_number: null, tracking_url: null, fulfil_error: null,
+    });
+  }
   // Money breakdown + courier booking — only when Shopify sent the extras.
   if (o.subtotalPriceSet || o.fulfillments || o.tags) {
     const money = (x: { shopMoney?: { amount?: string } } | null | undefined) =>

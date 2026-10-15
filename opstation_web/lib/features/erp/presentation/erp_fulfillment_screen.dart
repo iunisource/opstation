@@ -217,7 +217,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final problems = <String>[];
     for (final s in stores) {
       try {
-        final r = await _call({'action': 'sync', 'store_id': s['id']});
+        // Look back 14 days so changes made in Shopify (e.g. an order
+        // un-fulfilled there) are picked up even if a notification was missed.
+        final r = await _call({'action': 'sync', 'store_id': s['id'], 'days': 14});
         total += (r['synced'] as num?)?.toInt() ?? 0;
         if (r['webhook_warning'] != null) problems.add('${s['name']}: live updates not active');
       } catch (e) {
@@ -1252,6 +1254,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                           child: const Text('JUST IN', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Colors.white)),
                         ),
                       ],
+                      if (o['reopened_at'] != null && st != 'fulfilled' && st != 'cancelled') ...[
+                        const SizedBox(width: 6),
+                        const Tooltip(message: 'Un-fulfilled in Shopify — back in the queue',
+                            child: Icon(Icons.undo, size: 15, color: Colors.deepPurple)),
+                      ],
                       if (_hasUnmatched(o)) ...[
                         const SizedBox(width: 6),
                         const Tooltip(message: 'Has items not matched to a product',
@@ -1439,6 +1446,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ].join(' ')),
           if ((o['fulfil_error'] as String?)?.isNotEmpty == true && st != 'fulfilled')
             _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
+          if (canWork && o['reopened_at'] != null)
+            _banner(Colors.deepPurple, Icons.undo, 'Un-fulfilled in Shopify '
+                '${DateFormat('d MMM, HH:mm').format(DateTime.parse('${o['reopened_at']}').toLocal())} — back in the queue. '
+                'Picked items were kept; use Restart to count again.'),
           if (canWork && '${o['ext_fulfillment'] ?? ''}'.toUpperCase() == 'FULFILLED')
             _bookedBanner(o),
           if (_hasUnmatched(o) && canWork)
