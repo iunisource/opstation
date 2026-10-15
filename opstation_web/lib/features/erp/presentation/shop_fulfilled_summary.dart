@@ -57,7 +57,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
   String _courier = 'all';
   String _payment = 'all'; // all | cod | paid
   String _by = 'all';
-  String _city = 'all';
+  String _cityF = 'all';
   String _so = 'all'; // all | copied | not_copied
   String? _productId;
   String _q = '';
@@ -140,7 +140,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
       if (_payment == 'cod' && _collect(o) <= 0) return false;
       if (_payment == 'paid' && _collect(o) > 0) return false;
       if (_by != 'all' && '${o['fulfilled_by_name'] ?? ''}' != _by) return false;
-      if (_city != 'all' && _city(o) != _city) return false;
+      if (_cityF != 'all' && _city(o) != _cityF) return false;
       if (_so == 'copied' && o['so_id'] == null) return false;
       if (_so == 'not_copied' && o['so_id'] != null) return false;
       if (_productId != null && !_lines(o).any((l) =>
@@ -211,7 +211,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
         if (_courier != 'all') 'Courier: $_courier',
         if (_payment != 'all') _payment == 'cod' ? 'COD only' : 'Paid only',
         if (_by != 'all') 'By: $_by',
-        if (_city != 'all') 'City: $_city',
+        if (_cityF != 'all') 'City: $_cityF',
         if (_so == 'copied') 'Copied to SO',
         if (_so == 'not_copied') 'Not copied to SO',
         if (_productId != null) 'Product: ${widget.products[_productId]?['name'] ?? ''}',
@@ -276,8 +276,8 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
             style: const pw.TextStyle(fontSize: 7.5, color: grey)),
         pw.SizedBox(height: 4),
         pw.Table(
-          border: const pw.TableBorder(horizontalInside: pw.BorderSide(color: line, width: 0.5),
-              bottom: pw.BorderSide(color: line, width: 0.5)),
+          border: pw.TableBorder(horizontalInside: const pw.BorderSide(color: line, width: 0.5),
+              bottom: const pw.BorderSide(color: line, width: 0.5)),
           columnWidths: {
             0: const pw.FixedColumnWidth(18), 1: const pw.FlexColumnWidth(), 2: const pw.FixedColumnWidth(40),
             3: const pw.FixedColumnWidth(40), 4: const pw.FixedColumnWidth(62), 5: const pw.FixedColumnWidth(70),
@@ -300,8 +300,8 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
         pw.Text('Orders', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 4),
         pw.Table(
-          border: const pw.TableBorder(horizontalInside: pw.BorderSide(color: line, width: 0.5),
-              bottom: pw.BorderSide(color: line, width: 0.5)),
+          border: pw.TableBorder(horizontalInside: const pw.BorderSide(color: line, width: 0.5),
+              bottom: const pw.BorderSide(color: line, width: 0.5)),
           columnWidths: {
             0: const pw.FixedColumnWidth(48), 1: const pw.FixedColumnWidth(54), 2: const pw.FlexColumnWidth(),
             3: const pw.FixedColumnWidth(58), 4: const pw.FixedColumnWidth(80), 5: const pw.FixedColumnWidth(60), 6: const pw.FixedColumnWidth(36),
@@ -356,7 +356,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
     if (branch != null && !widget.branches.any((b) => b['id'] == branch)) branch = null;
     branch ??= widget.branches.isNotEmpty ? widget.branches.first['id'] as String : null;
     Map<String, dynamic>? customer;
-    final List<Map<String, dynamic>> custs;
+    var custs = <Map<String, dynamic>>[];
     try {
       custs = await _customers();
     } catch (e) {
@@ -584,7 +584,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
             _dd('Courier', _courier, [('all', 'All couriers'), for (final c in couriers.toList()..sort()) (c, c)], (v) => _courier = v),
             _dd('Payment', _payment, const [('all', 'COD + paid'), ('cod', 'COD only'), ('paid', 'Paid only')], (v) => _payment = v, width: 130),
             _dd('Fulfilled by', _by, [('all', 'Anyone'), for (final b in bys.toList()..sort()) (b, b)], (v) => _by = v),
-            _dd('City', _city, [('all', 'All cities'), for (final c in cities.toList()..sort()) (c, c)], (v) => _city = v, width: 140),
+            _dd('City', _cityF, [('all', 'All cities'), for (final c in cities.toList()..sort()) (c, c)], (v) => _cityF = v, width: 140),
             _dd('Sales order', _so, const [('all', 'All'), ('not_copied', 'Not copied'), ('copied', 'Copied')], (v) => _so = v, width: 130),
             SizedBox(width: 220, child: DropdownButtonFormField<String?>(
               value: productIds.contains(_productId) ? _productId : null, isExpanded: true,
