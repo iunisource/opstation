@@ -49,6 +49,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   bool _busy = false;
   RealtimeChannel? _channel;
   final Set<String> _autoBusy = {}; // orders being auto-fulfilled right now
+  final Set<String> _fresh = {};    // arrived while this screen is open ("JUST IN")
+  Set<String>? _known;              // order ids seen so far (null until first load)
+  final _searchCtrl = TextEditingController();
   Timer? _debounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -76,6 +79,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _searchCtrl.dispose();
     final c = _channel;
     if (c != null) Supabase.instance.client.removeChannel(c);
     super.dispose();
@@ -113,11 +117,21 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         } catch (_) {}
       }
       if (!mounted) return;
+      final list = List<Map<String, dynamic>>.from(orders);
+      final ids = {for (final o in list) o['id'] as String};
+      final arrived = _known == null ? <Map<String, dynamic>>[] : list.where((o) => !_known!.contains(o['id'])).toList();
       setState(() {
         _stores = List<Map<String, dynamic>>.from(stores);
-        _orders = List<Map<String, dynamic>>.from(orders);
+        _orders = list;
         _loading = false;
+        _fresh.addAll(arrived.map((o) => o['id'] as String));
+        _known = {...?_known, ...ids};
       });
+      if (arrived.length == 1) {
+        _snack('New order ${arrived.first['order_no'] ?? ''} from ${arrived.first['customer_name'] ?? 'a customer'}');
+      } else if (arrived.length > 1) {
+        _snack('${arrived.length} new orders');
+      }
       ref.invalidate(shopNewOrdersCountProvider);
     } catch (e) {
       if (!mounted) return;
@@ -146,18 +160,25 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
 
   List<Map<String, dynamic>> get _visible {
     final q = _search.trim().toLowerCase();
-    return _orders.where((o) {
+    final list = _orders.where((o) {
       final st = o['status'] as String? ?? 'new';
       final okF = switch (_filter) {
         'open' => st == 'new' || st == 'picking' || st == 'packed',
+        'unmatched' => (st == 'new' || st == 'picking' || st == 'packed') && _hasUnmatched(o),
+        'today' => _shippedToday(o),
         'all' => true,
         _ => st == _filter,
       };
       if (!okF) return false;
       if (_storeFilter != 'all' && o['store_id'] != _storeFilter) return false;
       if (q.isEmpty) return true;
-      return '${o['order_no']} ${o['customer_name']} ${o['phone']} ${o['email']}'.toLowerCase().contains(q);
+      return '${o['order_no']} ${o['customer_name']} ${o['phone']} ${o['email']} ${_city(o)}'.toLowerCase().contains(q);
     }).toList();
+    // Work queues oldest first (first in, first out); history newest first.
+    if (const ['open', 'new', 'picking', 'packed', 'unmatched'].contains(_filter)) {
+      list.sort((a, b) => '${a['placed_at'] ?? ''}'.compareTo('${b['placed_at'] ?? ''}'));
+    }
+    return list;
   }
 
   int _count(String st) => _orders.where((o) =>
@@ -859,19 +880,96 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       );
 
   // ── UI ───────────────────────────────────────────────────────────────────
+  String _ago(DateTime? t) {
+    if (t == null) return '';
+    final d = DateTime.now().difference(t);
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+    if (d.inHours < 24) return '${d.inHours} h ago';
+    if (d.inDays < 7) return '${d.inDays} d ago';
+    return DateFormat('d MMM').format(t);
+  }
+
+  /// Units picked / needed across the order (bundles count each product inside).
+  (double, double) _units(Map<String, dynamic> o) {
+    var p = 0.0, n = 0.0;
+    for (final l in _lines(o)) {
+      if (_isBundle(l)) {
+        for (final c in _comps(l)) { p += _num(c['picked']); n += _num(c['qty']); }
+      } else {
+        p += _num(l['picked']); n += _num(l['qty']);
+      }
+    }
+    return (p, n);
+  }
+
+  double _collect(Map<String, dynamic> o) {
+    final paid = '${o['financial_status'] ?? ''}'.toUpperCase() == 'PAID';
+    return o['outstanding'] != null ? _num(o['outstanding']) : (paid ? 0 : _num(o['total']));
+  }
+
+  String _city(Map<String, dynamic> o) => '${((o['ship_to'] as Map?) ?? const {})['city'] ?? ''}'.trim();
+
+  bool _hasUnmatched(Map<String, dynamic> o) => _lines(o).any((l) => !_lineMapped(l));
+
+  bool _shippedToday(Map<String, dynamic> o) {
+    final t = DateTime.tryParse('${o['fulfilled_at'] ?? ''}')?.toLocal();
+    final n = DateTime.now();
+    return o['status'] == 'fulfilled' && t != null && t.year == n.year && t.month == n.month && t.day == n.day;
+  }
+
+  /// Order number typed / scanned (e.g. from a packing slip) → open it.
+  void _openByNumber(String v) {
+    final q = v.trim().replaceAll('#', '').toLowerCase();
+    if (q.isEmpty) return;
+    final hit = _orders.where((o) => '${o['order_no'] ?? ''}'.replaceAll('#', '').toLowerCase() == q).toList();
+    if (hit.isNotEmpty) {
+      setState(() { _selId = hit.first['id'] as String; _fresh.remove(_selId); _search = ''; _searchCtrl.clear(); });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final narrow = MediaQuery.of(context).size.width < 900;
     final sel = _sel;
     final showDetail = narrow && sel != null;
+    final autoAll = _scopeStores.isNotEmpty && _scopeStores.every((s) => s['auto_fulfil'] == true);
     return Container(
       color: AppTheme.background,
-      padding: EdgeInsets.all(narrow ? 10 : 24),
+      padding: EdgeInsets.all(narrow ? 10 : 20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── header ──
         Row(children: [
           if (showDetail)
             IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _selId = null)),
-          const Expanded(child: Text('Fulfillment', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800))),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Fulfillment', style: TextStyle(fontSize: narrow ? 22 : 26, fontWeight: FontWeight.w800)),
+            if (!narrow)
+              const Text('Scan to pick, pack and ship online-store orders.',
+                  style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          ])),
+          if (_scopeStores.isNotEmpty)
+            Tooltip(
+              message: 'When on, an order is packed and fulfilled in the store automatically '
+                  'as soon as every item has been scanned right.',
+              child: Container(
+                padding: const EdgeInsets.only(left: 10, right: 2),
+                decoration: BoxDecoration(
+                  color: autoAll ? Colors.green.withOpacity(0.08) : Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: autoAll ? Colors.green : AppTheme.border),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.bolt, size: 16, color: autoAll ? Colors.green.shade700 : null),
+                  if (!narrow) ...[
+                    const SizedBox(width: 4),
+                    const Text('Auto-fulfil', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  ],
+                  Switch(value: autoAll, onChanged: _setAuto),
+                ]),
+              ),
+            ),
+          const SizedBox(width: 6),
           IconButton(
             tooltip: 'Sync orders now',
             onPressed: _busy ? null : _syncNow,
@@ -879,52 +977,28 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.sync),
           ),
-          if (_scopeStores.isNotEmpty) ...[
-            Tooltip(
-              message: 'When on, an order is packed and fulfilled in the store automatically '
-                  'as soon as every item has been scanned right.',
-              child: Container(
-                padding: const EdgeInsets.only(left: 10, right: 2),
-                decoration: BoxDecoration(
-                  color: _scopeStores.every((s) => s['auto_fulfil'] == true) ? Colors.green.withOpacity(0.08) : Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _scopeStores.every((s) => s['auto_fulfil'] == true) ? Colors.green : AppTheme.border),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.bolt, size: 16),
-                  if (!narrow) ...[
-                    const SizedBox(width: 4),
-                    const Text('Auto-fulfil', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  ],
-                  Switch(
-                    value: _scopeStores.every((s) => s['auto_fulfil'] == true),
-                    onChanged: _setAuto,
-                  ),
-                ]),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
-          if (_orders.isNotEmpty) ...[
+          if (_orders.isNotEmpty)
             IconButton(tooltip: 'Print packing slips', icon: const Icon(Icons.print_outlined), onPressed: _printSlipsPicker),
-          ],
-          if (_stores.any((s) => s['is_active'] == true)) ...[
-            OutlinedButton.icon(
-              icon: const Icon(Icons.link, size: 18),
-              label: const Text('Match products'),
-              onPressed: _openMatching,
-            ),
-            const SizedBox(width: 8),
-          ],
-          OutlinedButton.icon(
-            icon: const Icon(Icons.storefront_outlined, size: 18),
-            label: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'),
-            onPressed: () => _stores.isEmpty && _isAdmin ? _connectDialog() : _storesDialog(),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (v) {
+              if (v == 'match') _openMatching();
+              if (v == 'stores') _stores.isEmpty && _isAdmin ? _connectDialog() : _storesDialog();
+            },
+            itemBuilder: (_) => [
+              if (_stores.any((s) => s['is_active'] == true))
+                const PopupMenuItem(value: 'match', child: ListTile(dense: true, leading: Icon(Icons.link), title: Text('Match products'))),
+              PopupMenuItem(value: 'stores', child: ListTile(dense: true, leading: const Icon(Icons.storefront_outlined),
+                  title: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'))),
+            ],
           ),
         ]),
-        const Text('Orders from your online store(s): scan to pick, pack, and fulfil with tracking.',
-            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
+        if (!_loading && _stores.isNotEmpty && !showDetail) ...[
+          _statsStrip(narrow),
+          const SizedBox(height: 12),
+        ],
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
@@ -944,34 +1018,93 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                   : narrow
                       ? (showDetail ? _detail(sel) : _list())
                       : Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                          SizedBox(width: 380, child: _list()),
+                          SizedBox(width: 400, child: _list()),
                           const SizedBox(width: 16),
-                          Expanded(child: sel == null
-                              ? Container(
-                                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: AppTheme.border)),
-                                  child: const Center(child: Text('Select an order', style: TextStyle(color: AppTheme.textSecondary))))
-                              : _detail(sel)),
+                          Expanded(child: sel == null ? _emptyDetail() : _detail(sel)),
                         ]),
         ),
       ]),
     );
   }
 
+  Widget _statsStrip(bool narrow) {
+    final scoped = _orders.where((o) => _storeFilter == 'all' || o['store_id'] == _storeFilter).toList();
+    final unmatched = scoped.where((o) => ['new', 'picking', 'packed'].contains(o['status']) && _hasUnmatched(o)).length;
+    final tiles = <(String, String, int, Color, IconData)>[
+      ('new', 'To pick', _count('new'), Colors.blue, Icons.inbox_outlined),
+      ('picking', 'Picking', _count('picking'), Colors.orange, Icons.qr_code_scanner),
+      ('packed', 'Ready to ship', _count('packed'), Colors.purple, Icons.inventory_2_outlined),
+      ('today', 'Shipped today', scoped.where(_shippedToday).length, Colors.green, Icons.local_shipping_outlined),
+      if (unmatched > 0) ('unmatched', 'Need matching', unmatched, Colors.deepOrange, Icons.link_off),
+    ];
+    Widget tile((String, String, int, Color, IconData) t) {
+      final on = _filter == t.$1;
+      return InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => setState(() => _filter = on ? 'open' : t.$1),
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: 14, vertical: narrow ? 8 : 12),
+          decoration: BoxDecoration(
+            color: on ? t.$4.withOpacity(0.10) : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: on ? t.$4 : AppTheme.border, width: on ? 1.5 : 1),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(color: t.$4.withOpacity(0.12), borderRadius: BorderRadius.circular(9)),
+              child: Icon(t.$5, size: 18, color: t.$4),
+            ),
+            const SizedBox(width: 10),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text('${t.$3}', style: TextStyle(fontSize: narrow ? 18 : 22, fontWeight: FontWeight.w800, height: 1.1)),
+              Text(t.$2, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ]),
+          ]),
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        for (final t in tiles) ...[tile(t), const SizedBox(width: 10)],
+      ]),
+    );
+  }
+
+  Widget _emptyDetail() => Container(
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border)),
+        child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.qr_code_scanner, size: 44, color: AppTheme.textSecondary.withOpacity(0.6)),
+          const SizedBox(height: 10),
+          const Text('Pick an order from the list', style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          const Text('or scan the order barcode on its packing slip into the search box.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        ])),
+      );
+
   Widget _list() {
     final rows = _visible;
     return Container(
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border)),
       child: Column(children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
           child: Column(children: [
             TextField(
-              decoration: const InputDecoration(hintText: 'Search order no, customer, phone…', prefixIcon: Icon(Icons.search), isDense: true),
+              controller: _searchCtrl,
+              decoration: InputDecoration(
+                hintText: 'Search or scan order no, customer, phone…',
+                prefixIcon: const Icon(Icons.search), isDense: true,
+                suffixIcon: _search.isEmpty ? null : IconButton(icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => setState(() { _search = ''; _searchCtrl.clear(); })),
+              ),
               onChanged: (v) => setState(() => _search = v),
+              onSubmitted: _openByNumber,
             ),
-            const SizedBox(height: 8),
-            if (_stores.length > 1)
+            if (_stores.length > 1) ...[
+              const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 value: _storeFilter, isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Store', isDense: true),
@@ -981,59 +1114,196 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 ],
                 onChanged: (v) => setState(() => _storeFilter = v ?? 'all'),
               ),
+            ],
             const SizedBox(height: 8),
-            Wrap(spacing: 6, runSpacing: 6, children: [
-              for (final f in const ['open', 'new', 'picking', 'packed', 'fulfilled', 'cancelled', 'all'])
-                ChoiceChip(
-                  label: Text(f == 'open' ? 'To do (${_count('open')})'
-                      : f == 'all' ? 'All' : '${_statusLabels[f]} (${_count(f)})', style: const TextStyle(fontSize: 12)),
-                  selected: _filter == f,
-                  onSelected: (_) => setState(() => _filter = f),
-                ),
-            ]),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                for (final f in const [('open', 'To do'), ('fulfilled', 'Fulfilled'), ('cancelled', 'Cancelled'), ('all', 'All')]) ...[
+                  ChoiceChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(f.$1 == 'all' ? f.$2 : '${f.$2} (${_count(f.$1)})', style: const TextStyle(fontSize: 12)),
+                    selected: _filter == f.$1,
+                    onSelected: (_) => setState(() => _filter = f.$1),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+              ]),
+            ),
           ]),
         ),
         const Divider(height: 1),
         Expanded(
           child: rows.isEmpty
-              ? const Center(child: Text('No orders here.', style: TextStyle(color: AppTheme.textSecondary)))
-              : ListView.separated(
+              ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(_filter == 'open' || _filter == 'new' ? Icons.celebration_outlined : Icons.inbox_outlined,
+                      size: 36, color: AppTheme.textSecondary.withOpacity(0.6)),
+                  const SizedBox(height: 8),
+                  Text(_filter == 'open' || _filter == 'new' ? 'All caught up — no orders waiting.' : 'No orders here.',
+                      style: const TextStyle(color: AppTheme.textSecondary)),
+                ]))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(8),
                   itemCount: rows.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final o = rows[i];
-                    final st = o['status'] as String? ?? 'new';
-                    final lines = _lines(o);
-                    final unmapped = lines.where((l) => !_lineMapped(l)).length;
-                    final placed = DateTime.tryParse('${o['placed_at'] ?? ''}')?.toLocal();
-                    return ListTile(
-                      selected: o['id'] == _selId,
-                      selectedTileColor: AppTheme.primary.withOpacity(0.06),
-                      onTap: () => setState(() => _selId = o['id'] as String),
-                      title: Row(children: [
-                        Text('${o['order_no'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w700)),
-                        const SizedBox(width: 8),
-                        _chip(st),
-                        if (unmapped > 0) ...[
-                          const SizedBox(width: 6),
-                          const Tooltip(message: 'Has items not matched to a product',
-                              child: Icon(Icons.link_off, size: 15, color: Colors.orange)),
-                        ],
-                        const Spacer(),
-                        Text(_money(o), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-                      ]),
-                      subtitle: Text([
-                        '${o['customer_name'] ?? '—'}',
-                        '${lines.length} item${lines.length == 1 ? '' : 's'}',
-                        if (placed != null) DateFormat('d MMM, HH:mm').format(placed),
-                        if (_stores.length > 1) _storeName(o['store_id'] as String?),
-                      ].join(' · '), style: const TextStyle(fontSize: 11.5)),
-                    );
-                  }),
+                  itemBuilder: (_, i) => _orderCard(rows[i]),
+                ),
         ),
       ]),
     );
   }
+
+  Widget _orderCard(Map<String, dynamic> o) {
+    final st = o['status'] as String? ?? 'new';
+    final c = _statusColor(st);
+    final selected = o['id'] == _selId;
+    final placed = DateTime.tryParse('${o['placed_at'] ?? ''}')?.toLocal();
+    final (p, n) = _units(o);
+    final collect = _collect(o);
+    final fresh = _fresh.contains(o['id']);
+    final city = _city(o);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: selected ? AppTheme.primary.withOpacity(0.06) : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => setState(() { _selId = o['id'] as String; _fresh.remove(o['id']); }),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: selected ? AppTheme.primary : (fresh ? Colors.blue.shade300 : AppTheme.border),
+                  width: selected || fresh ? 1.5 : 1),
+            ),
+            child: IntrinsicHeight(
+              child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Container(width: 4, decoration: BoxDecoration(color: c,
+                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)))),
+                Expanded(child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Text('${o['order_no'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
+                      const SizedBox(width: 6),
+                      _chip(st),
+                      if (fresh) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(color: Colors.blue, borderRadius: BorderRadius.circular(8)),
+                          child: const Text('JUST IN', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: Colors.white)),
+                        ),
+                      ],
+                      if (_hasUnmatched(o)) ...[
+                        const SizedBox(width: 6),
+                        const Tooltip(message: 'Has items not matched to a product',
+                            child: Icon(Icons.link_off, size: 15, color: Colors.deepOrange)),
+                      ],
+                      const Spacer(),
+                      Text(_money(o), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    ]),
+                    const SizedBox(height: 3),
+                    Row(children: [
+                      Expanded(child: Text([
+                        '${o['customer_name'] ?? '—'}',
+                        if (city.isNotEmpty) city,
+                        if (_stores.length > 1) _storeName(o['store_id'] as String?),
+                      ].join(' · '), overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                      const SizedBox(width: 6),
+                      Text(_ago(placed), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                    ]),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      if (st != 'fulfilled' && st != 'cancelled') ...[
+                        Expanded(child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: n == 0 ? 0 : (p / n).clamp(0, 1).toDouble(), minHeight: 5,
+                            backgroundColor: AppTheme.border.withOpacity(0.6),
+                            valueColor: AlwaysStoppedAnimation(p >= n && n > 0 ? Colors.green : c),
+                          ),
+                        )),
+                        const SizedBox(width: 8),
+                        Text('${_q(p)}/${_q(n)}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                        const SizedBox(width: 8),
+                      ] else
+                        Expanded(child: Text(
+                          st == 'fulfilled'
+                              ? [if (o['tracking_company'] != null) '${o['tracking_company']}', if (o['tracking_number'] != null) '${o['tracking_number']}']
+                                  .join(' · ')
+                              : 'Cancelled in the store',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
+                      _payPill(collect),
+                    ]),
+                  ]),
+                )),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _payPill(double collect) {
+    final cod = collect > 0;
+    final c = cod ? Colors.orange.shade800 : Colors.green.shade700;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+      child: Text(cod ? 'COD' : 'PAID', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: c)),
+    );
+  }
+
+  Widget _stepper(String st) {
+    const steps = [('new', 'New'), ('picking', 'Picking'), ('packed', 'Packed'), ('fulfilled', 'Fulfilled')];
+    final idx = steps.indexWhere((s) => s.$1 == st);
+    return Row(children: [
+      for (var i = 0; i < steps.length; i++) ...[
+        Container(
+          width: 22, height: 22,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: i < idx || st == 'fulfilled' ? Colors.green : (i == idx ? _statusColor(st) : Colors.white),
+            border: Border.all(color: i <= idx ? Colors.transparent : AppTheme.border, width: 1.5),
+          ),
+          child: Center(child: i < idx || st == 'fulfilled'
+              ? const Icon(Icons.check, size: 14, color: Colors.white)
+              : Text('${i + 1}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800,
+                  color: i == idx ? Colors.white : AppTheme.textSecondary))),
+        ),
+        const SizedBox(width: 6),
+        Text(steps[i].$2, style: TextStyle(fontSize: 12.5,
+            fontWeight: i == idx ? FontWeight.w800 : FontWeight.w500,
+            color: i <= idx ? null : AppTheme.textSecondary)),
+        if (i < steps.length - 1)
+          Expanded(child: Container(height: 2, margin: const EdgeInsets.symmetric(horizontal: 8),
+              color: i < idx ? Colors.green : AppTheme.border)),
+      ],
+    ]);
+  }
+
+  Widget _infoCard(IconData icon, String title, List<Widget> body, {Color? accent}) => Container(
+        constraints: const BoxConstraints(minWidth: 200, maxWidth: 340),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: accent?.withOpacity(0.06) ?? AppTheme.background,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: accent?.withOpacity(0.5) ?? AppTheme.border),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(icon, size: 15, color: accent ?? AppTheme.textSecondary),
+            const SizedBox(width: 6),
+            Text(title.toUpperCase(), style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.4,
+                color: accent ?? AppTheme.textSecondary)),
+          ]),
+          const SizedBox(height: 6),
+          ...body,
+        ]),
+      );
 
   Widget _detail(Map<String, dynamic> o) {
     final st = o['status'] as String? ?? 'new';
@@ -1044,104 +1314,154 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final placed = DateTime.tryParse('${o['placed_at'] ?? ''}')?.toLocal();
     final pickedAll = lines.isNotEmpty && lines.every(_lineDone);
     final canWork = st != 'fulfilled' && st != 'cancelled';
-    final paid = '${o['financial_status'] ?? ''}'.toUpperCase();
+    final collect = _collect(o);
+    final (p, n) = _units(o);
+    final auto = _autoOn(o['store_id'] as String?);
+    final phone = '${o['phone'] ?? ''}'.trim();
     return Container(
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
-      child: ListView(padding: const EdgeInsets.all(18), children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Text('${o['order_no'] ?? ''}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-              const SizedBox(width: 10),
-              _chip(st),
-            ]),
-            Text([
-              _storeName(o['store_id'] as String?),
-              if (placed != null) DateFormat('d MMM yyyy, HH:mm').format(placed),
-            ].join(' · '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          ])),
-          IconButton(tooltip: 'Print packing slip', icon: const Icon(Icons.print_outlined),
-              onPressed: () => _printSlips([o])),
-          IconButton(tooltip: 'Refresh from the store', icon: const Icon(Icons.refresh),
-              onPressed: _busy ? null : () async {
-                try { await _call({'action': 'refresh_order', 'order_id': o['id']}); await _load(quiet: true); }
-                catch (e) { _snack('$e'); }
-              }),
-        ]),
-        const SizedBox(height: 12),
-        Wrap(spacing: 24, runSpacing: 10, children: [
-          _kv('Customer', '${o['customer_name'] ?? '—'}'),
-          _kv('Phone', '${o['phone'] ?? '—'}'),
-          if ((o['email'] as String?)?.isNotEmpty == true) _kv('Email', '${o['email']}'),
-          _kv('Payment', [
-            paid == 'PAID' ? 'Paid' : (paid == 'PENDING' ? 'Not paid (COD?)' : (paid.isEmpty ? '—' : paid[0] + paid.substring(1).toLowerCase())),
-            if ((o['payment_methods'] as String?)?.isNotEmpty == true) '${o['payment_methods']}',
-          ].join(' · ')),
-          _kv('Total', _money(o)),
-        ]),
-        if (address.isNotEmpty) ...[const SizedBox(height: 10), _kv('Ship to', address)],
-        if ((o['note'] as String?)?.isNotEmpty == true) ...[const SizedBox(height: 10), _kv('Customer note', '${o['note']}')],
-        if (st == 'cancelled')
-          _banner(Colors.red, Icons.cancel_outlined, 'This order was cancelled in the store. Do not ship it.'),
-        if (st == 'fulfilled')
-          _banner(Colors.green, Icons.check_circle_outline, [
-            'Fulfilled',
-            if (o['fulfilled_by_name'] != null) 'by ${o['fulfilled_by_name']}',
-            if (o['tracking_company'] != null) '· ${o['tracking_company']}',
-            if (o['tracking_number'] != null) '${o['tracking_number']}',
-          ].join(' ')),
-        if ((o['fulfil_error'] as String?)?.isNotEmpty == true && st != 'fulfilled')
-          _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
-        const SizedBox(height: 16),
-        if (canWork) ...[
-          ScanBar(onScan: _onScan, hint: 'Scan each item to pick it', strongFeedback: true),
-          if (_autoBusy.contains(o['id']))
-            _banner(Colors.blue, Icons.local_shipping_outlined, 'All items scanned — fulfilling in the store…'),
-          const SizedBox(height: 12),
-        ],
-        const Text('Items', style: TextStyle(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        for (var i = 0; i < lines.length; i++) _lineRow(o, lines, i, canWork),
-        const SizedBox(height: 16),
-        if (canWork)
-          Wrap(spacing: 10, runSpacing: 10, children: [
-            if (st != 'packed')
-              OutlinedButton.icon(
-                icon: const Icon(Icons.inventory_2_outlined, size: 18),
-                label: const Text('Mark packed'),
-                onPressed: _busy || !pickedAll ? null : () => _markPacked(o),
-              ),
-            FilledButton.icon(
-              icon: const Icon(Icons.local_shipping_outlined, size: 18),
-              label: const Text('Fulfil in store'),
-              onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
-            ),
-            if (!pickedAll)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(_autoOn(o['store_id'] as String?)
-                    ? 'Auto-fulfil is on: the order is fulfilled as soon as the last item is scanned.'
-                    : 'Scan every item to enable Packed and Fulfil.',
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-              ),
-            if (st == 'picking' || st == 'packed')
-              TextButton(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border)),
+      child: Column(children: [
+        Expanded(child: ListView(padding: const EdgeInsets.all(18), children: [
+          // title
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Wrap(spacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                Text('${o['order_no'] ?? ''}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                _chip(st),
+                _payPill(collect),
+              ]),
+              Text([
+                _storeName(o['store_id'] as String?),
+                if (placed != null) '${DateFormat('d MMM yyyy, HH:mm').format(placed)} (${_ago(placed)})',
+              ].join(' · '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ])),
+            IconButton(tooltip: 'Print packing slip', icon: const Icon(Icons.print_outlined), onPressed: () => _printSlips([o])),
+            IconButton(tooltip: 'Open in Shopify', icon: const Icon(Icons.open_in_new), onPressed: () => _openInShopify(o)),
+            IconButton(tooltip: 'Refresh from the store', icon: const Icon(Icons.refresh),
                 onPressed: _busy ? null : () async {
-                  final ls = _lines(o);
-                  for (final l in ls) {
-                    l['picked'] = 0;
-                    if (_isBundle(l)) l['components'] = [for (final c in _comps(l)) {...c, 'picked': 0}];
-                  }
-                  await _saveLines(o, ls, status: 'new');
-                },
-                child: const Text('Restart picking'),
-              ),
+                  try { await _call({'action': 'refresh_order', 'order_id': o['id']}); await _load(quiet: true); }
+                  catch (e) { _snack('$e'); }
+                }),
           ]),
-        if (o['packed_at'] != null)
-          Padding(padding: const EdgeInsets.only(top: 10),
-              child: Text('Packed ${o['packed_by_name'] != null ? 'by ${o['packed_by_name']} ' : ''}'
+          const SizedBox(height: 14),
+          if (st != 'cancelled') ...[_stepper(st), const SizedBox(height: 16)],
+          // info cards
+          Wrap(spacing: 10, runSpacing: 10, children: [
+            _infoCard(Icons.person_outline, 'Customer', [
+              Text('${o['customer_name'] ?? '—'}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              if (phone.isNotEmpty)
+                InkWell(
+                  onTap: () => html.window.open('tel:${phone.replaceAll(' ', '')}', '_self'),
+                  child: Text(phone, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppTheme.primary)),
+                ),
+              if ((o['email'] as String?)?.isNotEmpty == true)
+                Text('${o['email']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ]),
+            _infoCard(Icons.place_outlined, 'Ship to', [
+              Text(address.isEmpty ? '—' : address, style: const TextStyle(fontSize: 13)),
+            ]),
+            _infoCard(collect > 0 ? Icons.payments_outlined : Icons.verified_outlined,
+                collect > 0 ? 'Collect on delivery' : 'Paid', [
+              Text(collect > 0 ? '${o['currency'] ?? ''} ${NumberFormat('#,##0.##').format(collect)}'.trim() : _money(o),
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              if ((o['payment_methods'] as String?)?.isNotEmpty == true)
+                Text('${o['payment_methods']}', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ], accent: collect > 0 ? Colors.orange.shade800 : Colors.green.shade700),
+          ]),
+          if ((o['note'] as String?)?.isNotEmpty == true)
+            _banner(Colors.amber.shade800, Icons.sticky_note_2_outlined, 'Customer note: ${o['note']}'),
+          if (st == 'cancelled')
+            _banner(Colors.red, Icons.cancel_outlined, 'This order was cancelled in the store. Do not ship it.'),
+          if (st == 'fulfilled')
+            _banner(Colors.green, Icons.check_circle_outline, [
+              'Fulfilled',
+              if (o['fulfilled_by_name'] != null) 'by ${o['fulfilled_by_name']}',
+              if (o['tracking_company'] != null) '· ${o['tracking_company']}',
+              if (o['tracking_number'] != null) '${o['tracking_number']}',
+            ].join(' ')),
+          if ((o['fulfil_error'] as String?)?.isNotEmpty == true && st != 'fulfilled')
+            _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
+          if (_hasUnmatched(o) && canWork)
+            _banner(Colors.deepOrange, Icons.link_off, 'Some items are not matched to a product yet — match them before picking.'),
+          const SizedBox(height: 16),
+          // picking
+          Row(children: [
+            const Text('Items', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+            const SizedBox(width: 10),
+            Expanded(child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: n == 0 ? 0 : (p / n).clamp(0, 1).toDouble(), minHeight: 6,
+                backgroundColor: AppTheme.border.withOpacity(0.6),
+                valueColor: AlwaysStoppedAnimation(pickedAll ? Colors.green : _statusColor(st)),
+              ),
+            )),
+            const SizedBox(width: 10),
+            Text('${_q(p)} of ${_q(n)} picked', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700,
+                color: pickedAll ? Colors.green.shade700 : null)),
+          ]),
+          const SizedBox(height: 10),
+          if (canWork) ...[
+            ScanBar(onScan: _onScan, hint: 'Scan each item to pick it', strongFeedback: true),
+            if (_autoBusy.contains(o['id']))
+              _banner(Colors.blue, Icons.local_shipping_outlined, 'All items scanned — fulfilling in the store…'),
+            const SizedBox(height: 10),
+          ],
+          for (var i = 0; i < lines.length; i++) _lineRow(o, lines, i, canWork),
+          const SizedBox(height: 8),
+          Text([
+            if (o['picked_by_name'] != null) 'Picked by ${o['picked_by_name']}',
+            if (o['packed_at'] != null)
+              'Packed ${o['packed_by_name'] != null ? 'by ${o['packed_by_name']} ' : ''}'
                   '${DateFormat('d MMM, HH:mm').format(DateTime.parse(o['packed_at'] as String).toLocal())}',
-                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
+          ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        ])),
+        // sticky action bar
+        if (canWork)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: AppTheme.border)),
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(14)),
+              color: Colors.white,
+            ),
+            child: Row(children: [
+              Expanded(child: Text(
+                pickedAll
+                    ? (st == 'packed' ? 'Packed — fulfil it with the courier details.' : 'All picked — pack it and fulfil.')
+                    : auto
+                        ? 'Auto-fulfil is on: it ships as soon as the last item is scanned.'
+                        : '${_q(n - p)} item${n - p == 1 ? '' : 's'} left to scan.',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600,
+                    color: pickedAll ? Colors.green.shade800 : AppTheme.textSecondary),
+              )),
+              if (st == 'picking' || st == 'packed')
+                TextButton(
+                  onPressed: _busy ? null : () async {
+                    final ls = _lines(o);
+                    for (final l in ls) {
+                      l['picked'] = 0;
+                      if (_isBundle(l)) l['components'] = [for (final c in _comps(l)) {...c, 'picked': 0}];
+                    }
+                    await _saveLines(o, ls, status: 'new');
+                  },
+                  child: const Text('Restart'),
+                ),
+              const SizedBox(width: 6),
+              if (st != 'packed')
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                  label: const Text('Packed'),
+                  onPressed: _busy || !pickedAll ? null : () => _markPacked(o),
+                ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                label: const Text('Fulfil'),
+                onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
+              ),
+            ]),
+          ),
       ]),
     );
   }

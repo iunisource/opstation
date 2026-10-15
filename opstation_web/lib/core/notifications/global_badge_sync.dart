@@ -37,6 +37,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
   bool _audioUnlocked = false;
   StreamSubscription<html.Event>? _gestureSub;
   int? _lastPoPending;            // last seen pending-PO count (null until first read)
+  Set<String>? _shopSeen;         // online-store order ids already seen (null until first read)
 
   bool get _isAdmin {
     final r = ref.read(currentUserProvider)?.role;
@@ -62,6 +63,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'journal_entries', // jvPendingCountProvider (JV approval / supervision)
     'bom_headers', // bomSupervisePendingProvider
     'assets', // assetSupervisePendingProvider
+    'shop_orders', // shopNewOrdersCountProvider + new-order ping
   ];
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -125,6 +127,50 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     } catch (_) {}
   }
 
+  // Online-store order ping: a bright three-note "ding" when an order arrives.
+  // Only for users who can open Sales → Fulfillment.
+  void _shopPing() {
+    if (!_audioUnlocked) return;
+    final ctx = _audio;
+    if (ctx == null) return;
+    try {
+      final now = js_util.getProperty(ctx, 'currentTime') as num;
+      final dest = js_util.getProperty(ctx, 'destination');
+      void tone(double freq, double start, double dur, double vol) {
+        final osc = js_util.callMethod(ctx, 'createOscillator', const []);
+        final gain = js_util.callMethod(ctx, 'createGain', const []);
+        js_util.callMethod(osc, 'connect', [gain]);
+        js_util.callMethod(gain, 'connect', [dest]);
+        js_util.setProperty(osc, 'type', 'triangle');
+        js_util.setProperty(js_util.getProperty(osc, 'frequency'), 'value', freq);
+        final g = js_util.getProperty(gain, 'gain');
+        final t0 = now + start;
+        js_util.callMethod(g, 'setValueAtTime', [vol, t0]);
+        js_util.callMethod(g, 'exponentialRampToValueAtTime', [0.001, t0 + dur]);
+        js_util.callMethod(osc, 'start', [t0]);
+        js_util.callMethod(osc, 'stop', [t0 + dur]);
+      }
+      tone(1319, 0.00, 0.18, 0.45); // E6
+      tone(1568, 0.12, 0.18, 0.45); // G6
+      tone(2093, 0.24, 0.35, 0.45); // C7
+    } catch (_) {}
+  }
+
+  Future<void> _checkShopPing() async {
+    final org = _orgId;
+    if (org == null) return;
+    if (!canOpenRoute(ref, '/erp/fulfillment')) { _shopSeen = null; return; }
+    try {
+      final rows = await Supabase.instance.client.from('shop_orders').select('id')
+          .eq('org_id', org).eq('status', 'new').order('created_at', ascending: false).limit(200);
+      final ids = {for (final r in rows as List) '${r['id']}'};
+      final seen = _shopSeen;
+      // Ping only for orders never seen before (not for one sent back to "new").
+      if (seen != null && ids.difference(seen).isNotEmpty) _shopPing();
+      _shopSeen = {...?seen, ...ids};
+    } catch (_) {}
+  }
+
   // After a refresh, ping admins if the pending-PO count went UP (a PO landed).
   Future<void> _checkPoPing() async {
     if (!_isAdmin) return;
@@ -145,6 +191,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     _booted = true;
     _subscribe(orgId);
     _checkPoPing(); // seed the PO baseline (no ping on first read)
+    _checkShopPing(); // seed the online-order baseline (no ping on first read)
     // Safety net: re-check every 90s even if a realtime event is missed.
     _safety = Timer.periodic(const Duration(seconds: 90), (_) => _refresh());
   }
@@ -221,6 +268,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(assetSuggestionCountProvider); // refreshed by journal_entries / assets events
     ref.invalidate(shopNewOrdersCountProvider); // 90-second safety refresh
     _checkPoPing(); // ping admins if a new PO just landed
+    _checkShopPing(); // ping Fulfillment users if a new online order landed
   }
 
   @override

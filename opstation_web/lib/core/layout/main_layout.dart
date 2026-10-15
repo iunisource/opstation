@@ -1184,6 +1184,21 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
 
 // ─── Shared role-based nav builders (single source for both layouts) ───────
 
+/// Same rule as the menu, for use outside build (e.g. sounds / pings):
+/// can the signed-in user open this page right now?
+bool canOpenRoute(WidgetRef ref, String route) {
+  final user = ref.read(currentUserProvider);
+  final modules = ref.read(orgModulesProvider).valueOrNull ?? {};
+  final mod = kRouteToModule[route];
+  if (mod != null && !modules.contains(mod)) return false;
+  final r = user?.role;
+  if (r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin) return true;
+  final access = ref.read(accessSyncProvider);
+  if (access == null) return false;
+  final branchId = ref.read(selectedBranchProvider)?['id'] as String?;
+  return access.canAccessRouteAt(route, branchId);
+}
+
 bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
   final access = ref.watch(accessSyncProvider);
