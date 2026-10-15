@@ -3,6 +3,7 @@
 import 'dart:html' as html;
 import 'package:barcode/barcode.dart' as bc;
 import '../../../core/printing/label_printer.dart';
+import '../../../core/widgets/camera_scanner.dart' show scanOneCode;
 import 'package:flutter/material.dart';
 import '../../../core/widgets/camera_capture.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1280,9 +1281,15 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                               helperText: product == null
                                   ? 'Leave empty to generate one'
                                   : 'You can change it — old printed labels stop working',
-                              suffixIcon: Icon(Icons.qr_code_2,
-                                  size: 16,
-                                  color: AppTheme.textSecondary.withOpacity(0.6))))),
+                              suffixIcon: IconButton(
+                                  tooltip: 'Scan with camera',
+                                  icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                                  onPressed: () async {
+                                    final code = await scanOneCode(ctx, title: 'Scan the product barcode');
+                                    if (code != null && code.trim().isNotEmpty) {
+                                      setS(() => barcodeCtrl.text = code.trim());
+                                    }
+                                  })))),
                 ]),
                 const SizedBox(height: 12),
                 _SearchSelect(

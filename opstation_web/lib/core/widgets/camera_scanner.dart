@@ -32,6 +32,20 @@ Future<void> showCameraScanner(
   );
 }
 
+/// Read ONE code with the camera and return it (null if closed without one) —
+/// e.g. to fill a barcode box.
+Future<String?> scanOneCode(BuildContext context, {String title = 'Scan barcode'}) async {
+  String? got;
+  await showCameraScanner(context, title: title, onCode: (code) async {
+    if (got == null) {
+      got = code;
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    return ScanOutcome(true, code);
+  });
+  return got;
+}
+
 class _CameraScanner extends StatefulWidget {
   final Future<ScanOutcome> Function(String code) onCode;
   final String title;
