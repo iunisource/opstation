@@ -72,6 +72,25 @@ class PrintHelper {
   static const base = 'http://127.0.0.1:9123';
   static const downloadPath = '/downloads/OpstationPrint-Windows.zip';
 
+  /// Fallback when the browser won't let this page call the helper: open the
+  /// helper's own page in a small window (a normal navigation, which browsers
+  /// allow). That page prints and closes itself. Must run inside the click.
+  static void openJobWindow(String printer, String data, String job) {
+    final payload = base64Url.encode(utf8.encode(jsonEncode({'printer': printer, 'data': data, 'job_name': job})));
+    html.window.open('$base/job#$payload', 'opstation_print', 'width=440,height=280');
+  }
+
+  static void openSetupPage() => html.window.open('$base/', '_blank');
+
+  /// Remember the printer inside the helper too (used by the window fallback).
+  static Future<void> saveDefault(String printer) async {
+    try {
+      await html.HttpRequest.request('$base/config', method: 'POST',
+              requestHeaders: {'Content-Type': 'application/json'}, sendData: jsonEncode({'printer': printer}))
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
+
   static Future<bool> isRunning() async {
     try {
       final r = await html.HttpRequest.request('$base/health').timeout(const Duration(seconds: 2));
@@ -291,21 +310,34 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
       name: d.name, code: d.code, codeText: d.codeText, batch: d.batch, date: d.date,
       qty: widget.allowQtyEdit ? _qtyCtrl.text.trim() : d.qty);
 
+  void _done(String text) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(context, rootNavigator: true).pop();
+    messenger.showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating));
+  }
+
   Future<void> _print() async {
     final copies = int.tryParse(_copiesCtrl.text.trim()) ?? 0;
     if (copies < 1) { setState(() => _error = 'Enter how many labels to print.'); return; }
-    if (_s.printer.isEmpty) { setState(() => _error = 'Pick the label printer first (gear icon).'); return; }
+    final total = copies * widget.items.length;
+    final data = widget.items.map((d) => Tspl.build(_withQty(d), _size, _code, copies, _s)).join();
+    // Browser won't let us call the helper directly → print through its window.
+    if (_helper != true) {
+      PrintHelper.openJobWindow(_s.printer, data, widget.title);
+      _done('Printing $total label${total == 1 ? '' : 's'} through the helper window…');
+      return;
+    }
     setState(() { _printing = true; _error = null; });
     try {
-      final data = widget.items.map((d) => Tspl.build(_withQty(d), _size, _code, copies, _s)).join();
       await PrintHelper.send(_s.printer, data, job: widget.title);
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Sent ${copies * widget.items.length} label${copies * widget.items.length == 1 ? '' : 's'} to ${_s.printer}'),
-            behavior: SnackBarBehavior.floating));
-      }
+      _done('Sent $total label${total == 1 ? '' : 's'} to ${_s.printer.isEmpty ? 'the label printer' : _s.printer}');
     } catch (e) {
+      if ('$e'.startsWith('Could not reach')) {
+        PrintHelper.openJobWindow(_s.printer, data, widget.title);
+        _done('Printing $total label${total == 1 ? '' : 's'} through the helper window…');
+        return;
+      }
       if (mounted) setState(() { _printing = false; _error = '$e'; });
     }
   }
@@ -320,12 +352,14 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
         IconButton(
           tooltip: 'Label printer setup',
           icon: const Icon(Icons.settings_outlined),
-          onPressed: _helper == true
-              ? () async {
-                  final s = await showLabelPrinterSetup(context);
-                  if (s != null) setState(() => _s = s);
-                }
-              : null,
+          onPressed: _helper == null
+              ? null
+              : _helper == true
+                  ? () async {
+                      final s = await showLabelPrinterSetup(context);
+                      if (s != null) setState(() => _s = s);
+                    }
+                  : PrintHelper.openSetupPage,
         ),
       ]),
       content: SizedBox(
@@ -391,7 +425,7 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
               ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.print_outlined, size: 18),
           label: const Text('Print'),
-          onPressed: _helper == true && !_printing ? _print : null,
+          onPressed: _helper != null && !_printing ? _print : null,
         ),
       ],
     );
@@ -415,7 +449,7 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
           Icon(has ? Icons.check_circle_outline : Icons.info_outline, size: 18,
               color: has ? Colors.green.shade700 : Colors.orange.shade800),
           const SizedBox(width: 8),
-          Expanded(child: Text(has ? 'Printer: ${_s.printer}' : 'Connected. Pick the label printer with the gear icon.',
+          Expanded(child: Text(has ? 'Printer: ${_s.printer}' : 'Connected — prints to the printer chosen in the helper (gear icon to change).',
               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600))),
         ]),
       );
@@ -425,16 +459,20 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
       decoration: BoxDecoration(color: Colors.orange.withOpacity(0.08), borderRadius: BorderRadius.circular(8),
           border: Border.all(color: Colors.orange.withOpacity(0.4))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Opstation Print Helper is not running on this PC',
+        const Text('Printing will open a small helper window',
             style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
-        const Text('1. On the PC with the label printer: download, unzip and double-click OpstationPrint.exe '
-            '(a message confirms "Installed and running").\n'
-            '2. Press Retry. If Chrome asks to allow access to devices on your local network, press Allow.\n'
-            'Blocked it earlier? Click the icon left of the address bar → Site settings → Local network access → Allow, then reload.',
+        const Text('The browser isn\'t letting this page reach the Opstation Print Helper directly, so Print opens a '
+            'small window that sends the labels and closes itself. Allow pop-ups for Opstation if the browser asks.\n'
+            'First time on this PC? Download and double-click OpstationPrint.exe, then use "Printer setup" to pick the TSC.',
             style: TextStyle(fontSize: 12)),
         const SizedBox(height: 8),
         Wrap(spacing: 8, children: [
+          OutlinedButton.icon(
+            icon: const Icon(Icons.settings_outlined, size: 16),
+            label: const Text('Printer setup'),
+            onPressed: PrintHelper.openSetupPage,
+          ),
           OutlinedButton.icon(
             icon: const Icon(Icons.download_outlined, size: 16),
             label: const Text('Download helper (Windows)'),
@@ -581,6 +619,7 @@ Future<LabelPrinterSettings?> showLabelPrinterSetup(BuildContext context) async 
           FilledButton(
             onPressed: sel == null ? null : () {
               final c = current()..save();
+              PrintHelper.saveDefault(c.printer);
               Navigator.of(dlg, rootNavigator: true).pop(c);
             },
             child: const Text('Save'),

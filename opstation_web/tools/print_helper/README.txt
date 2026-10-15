@@ -15,5 +15,6 @@ Install (once, on the PC the printer is plugged into):
  4. In Opstation, open a "Print labels" window. If Chrome asks to allow access
     to devices on your local network, press Allow. Then the gear icon ->
     pick your printer -> Test print.
+    (Printer can also be chosen at http://127.0.0.1:9123 - Save, Test print.)
 
 Remove: double-click uninstall.bat.
