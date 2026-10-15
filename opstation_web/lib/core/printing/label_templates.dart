@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:math' as math;
 
+import 'package:barcode/barcode.dart' as bc;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -315,8 +316,63 @@ const Map<String, List<int>> _qrCap = {
   'H': [7, 14, 24, 34, 44, 58, 64, 84, 98, 119, 137, 155, 177, 194],
 };
 
-/// Modules per side of the QR the printer will draw for [data].
+/// The real QR code for [data] as a square grid of dark (true) modules.
+/// Labels draw QR codes from this grid themselves (on screen AND on the
+/// printer, as solid bars), so what you see is exactly what prints and it
+/// does not depend on the printer's own QR support.
+final Map<String, List<List<bool>>> _qrCache = {};
+
+List<List<bool>> qrMatrix(String data, [String ecc = 'M']) {
+  final key = '$ecc|$data';
+  final hit = _qrCache[key];
+  if (hit != null) return hit;
+  if (_qrCache.length > 300) _qrCache.clear();
+  List<List<bool>> grid = const [];
+  try {
+    final level = const {
+          'L': bc.BarcodeQRCorrectionLevel.low,
+          'M': bc.BarcodeQRCorrectionLevel.medium,
+          'Q': bc.BarcodeQRCorrectionLevel.quartile,
+          'H': bc.BarcodeQRCorrectionLevel.high,
+        }[ecc] ??
+        bc.BarcodeQRCorrectionLevel.medium;
+    const size = 1000.0;
+    final bars = bc.Barcode.qrCode(errorCorrectLevel: level)
+        .make(data, width: size, height: size, drawText: false)
+        .whereType<bc.BarcodeBar>()
+        .toList();
+    if (bars.isNotEmpty) {
+      var unit = size;
+      for (final b in bars) {
+        if (b.width > 0 && b.width < unit) unit = b.width;
+        if (b.height > 0 && b.height < unit) unit = b.height;
+      }
+      final n = (size / unit).round();
+      if (n >= 21 && n <= 177) {
+        grid = List.generate(n, (_) => List<bool>.filled(n, false));
+        for (final b in bars) {
+          if (!b.black) continue;
+          final x0 = (b.left / unit).round(), y0 = (b.top / unit).round();
+          final w = math.max(1, (b.width / unit).round()), h = math.max(1, (b.height / unit).round());
+          for (var y = y0; y < y0 + h && y < n; y++) {
+            for (var x = x0; x < x0 + w && x < n; x++) {
+              grid[y][x] = true;
+            }
+          }
+        }
+      }
+    }
+  } catch (_) {
+    grid = const [];
+  }
+  _qrCache[key] = grid;
+  return grid;
+}
+
+/// Modules per side of the QR drawn for [data].
 int qrModules(String data, [String ecc = 'M']) {
+  final m = qrMatrix(data, ecc);
+  if (m.isNotEmpty) return m.length;
   final caps = _qrCap[ecc] ?? _qrCap['M']!;
   final n = data.length;
   for (var v = 0; v < caps.length; v++) {
@@ -449,7 +505,22 @@ String buildTspl(LabelTemplate t, LabelData d, int copies,
         out.add('BARCODE ${p.x},${p.y},"128",${p.h - (p.el.human ? 22 : 0)},${p.el.human ? 1 : 0},0,${p.narrow},${p.narrow},"${p.value}"');
         break;
       case 'qr':
-        out.add('QRCODE ${p.x},${p.y},${p.ecc},${p.cell},A,0,"${p.value}"');
+        final m = qrMatrix(p.value, p.ecc);
+        if (m.isEmpty) {
+          out.add('QRCODE ${p.x},${p.y},${p.ecc},${p.cell},A,0,"${p.value}"');
+          break;
+        }
+        // Draw the QR ourselves: one solid bar per run of dark modules.
+        for (var r = 0; r < m.length; r++) {
+          final row = m[r];
+          var c = 0;
+          while (c < row.length) {
+            if (!row[c]) { c++; continue; }
+            final start = c;
+            while (c < row.length && row[c]) { c++; }
+            out.add('BAR ${p.x + start * p.cell},${p.y + r * p.cell},${(c - start) * p.cell},${p.cell}');
+          }
+        }
         break;
       default:
         out.add('TEXT ${p.x},${p.y},"${p.font}",0,${p.scale},${p.scale},"${p.value}"');
@@ -669,26 +740,15 @@ class _QrPainter extends CustomPainter {
   _QrPainter(this.v, this.ecc);
   @override
   void paint(Canvas c, Size s) {
-    final mods = qrModules(v, ecc);
-    final u = s.width / mods;
+    final m = qrMatrix(v, ecc);
+    if (m.isEmpty) return;
+    final u = s.width / m.length;
     final p = Paint()..color = Colors.black;
-    var seed = v.codeUnits.fold<int>(11, (a, b) => (a * 33 + b) & 0x7fffffff);
-    void finder(int cx, int cy) {
-      c.drawRect(Rect.fromLTWH(cx * u, cy * u, 7 * u, 7 * u), p);
-      c.drawRect(Rect.fromLTWH((cx + 1) * u, (cy + 1) * u, 5 * u, 5 * u), Paint()..color = Colors.white);
-      c.drawRect(Rect.fromLTWH((cx + 2) * u, (cy + 2) * u, 3 * u, 3 * u), p);
-    }
-    for (var y = 0; y < mods; y++) {
-      for (var x = 0; x < mods; x++) {
-        final inFinder = (x < 8 && y < 8) || (x >= mods - 8 && y < 8) || (x < 8 && y >= mods - 8);
-        if (inFinder) continue;
-        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-        if ((seed >> 16) & 1 == 1) c.drawRect(Rect.fromLTWH(x * u, y * u, u, u), p);
+    for (var y = 0; y < m.length; y++) {
+      for (var x = 0; x < m.length; x++) {
+        if (m[y][x]) c.drawRect(Rect.fromLTWH(x * u, y * u, u + 0.3, u + 0.3), p);
       }
     }
-    finder(0, 0);
-    finder(mods - 7, 0);
-    finder(0, mods - 7);
   }
 
   @override
