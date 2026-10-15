@@ -56,6 +56,15 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   final _searchCtrl = TextEditingController();
   String _view = 'queue';           // queue | summary
   bool _fullscreen = false;         // browser full screen (focus mode)
+  bool _infoOpen = false;           // customer strip expanded
+
+  /// "Email the customer" in the Fulfil dialog — remembered on this computer.
+  bool get _notifyPref {
+    try { return html.window.localStorage['ff_notify'] != 'off'; } catch (_) { return true; }
+  }
+  set _notifyPref(bool v) {
+    try { html.window.localStorage['ff_notify'] = v ? 'on' : 'off'; } catch (_) {}
+  }
   Timer? _debounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -370,7 +379,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       await Supabase.instance.client.from('shop_stores').update({'auto_fulfil': on})
           .inFilter('id', [for (final s in scope) s['id']]);
       _snack(on
-          ? 'Auto-fulfil ON — an order is packed and fulfilled in the store as soon as its last item is scanned'
+          ? 'Auto-fulfil ON — when the last item is scanned the order is fulfilled with its courier booking; '
+            'without a booking yet it is packed and waits in Ready to ship'
           : 'Auto-fulfil OFF — press Packed / Fulfil yourself');
     } catch (e) {
       setState(() { for (final s in scope) { s['auto_fulfil'] = !on; } });
@@ -378,10 +388,34 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     }
   }
 
+  /// After an order is done, open the next one in the queue (oldest first):
+  /// orders still to pick first, then packed ones waiting to ship.
+  void _openNext(String doneId) {
+    if (!mounted || _selId != doneId) return; // the user already moved on
+    final queue = _orders.where((o) =>
+        o['id'] != doneId && (_storeFilter == 'all' || o['store_id'] == _storeFilter) &&
+        ['new', 'picking', 'packed'].contains(o['status'])).toList()
+      ..sort((a, b) {
+        int rank(Map<String, dynamic> o) => o['status'] == 'packed' ? 1 : 0;
+        final r = rank(a).compareTo(rank(b));
+        return r != 0 ? r : '${a['placed_at'] ?? ''}'.compareTo('${b['placed_at'] ?? ''}');
+      });
+    setState(() {
+      if (queue.isEmpty) {
+        _selId = null;
+      } else {
+        _selId = queue.first['id'] as String;
+        _fresh.remove(_selId);
+      }
+    });
+    if (queue.isNotEmpty) _snack('Next: ${queue.first['order_no'] ?? ''} · ${queue.first['customer_name'] ?? ''}');
+  }
+
   /// Every item scanned right + auto-fulfil on → pack and fulfil in the store.
   Future<void> _autoFulfil(Map<String, dynamic> o) async {
     final id = o['id'] as String;
     if (_autoBusy.contains(id) || !mounted) return;
+    var done = false;
     setState(() => _autoBusy.add(id));
     final me = ref.read(currentUserProvider);
     try {
@@ -389,22 +423,40 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       await Supabase.instance.client.from('shop_orders').update({
         'status': 'packed', 'packed_at': now, 'packed_by_name': me?.name, 'updated_at': now,
       }).eq('id', id);
-      // Use the courier booking found on the store order, if any.
-      final si = Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+      // Look for the courier booking now (it may have been made after the
+      // order arrived). No booking yet → leave it packed in "Ready to ship",
+      // so a label problem never sends the order out without tracking.
+      var si = Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+      if ('${o['tracking_number'] ?? si['number'] ?? ''}'.isEmpty) {
+        try {
+          await _call({'action': 'refresh_order', 'order_id': id});
+          final fresh = await Supabase.instance.client.from('shop_orders').select('ship_info').eq('id', id).single();
+          si = Map<String, dynamic>.from((fresh['ship_info'] as Map?) ?? const {});
+        } catch (_) {}
+      }
+      if ('${o['tracking_number'] ?? si['number'] ?? ''}'.isEmpty) {
+        ScanFeedback.done();
+        _snack('✓ ${o['order_no'] ?? 'Order'} packed — no courier booking yet, so it waits in "Ready to ship". '
+            'Book it, then press Fulfil.');
+        done = true; // picked and packed — move on to the next order
+        return;
+      }
       final r = await _call({
-        'action': 'fulfill', 'order_id': id, 'notify': true,
+        'action': 'fulfill', 'order_id': id, 'notify': _notifyPref,
         'company': o['tracking_company'] ?? si['company'],
         'number': o['tracking_number'] ?? si['number'],
         'url': o['tracking_url'] ?? si['url'],
       });
       ScanFeedback.done();
       _snack('✓ ${o['order_no'] ?? 'Order'} fulfilled automatically${r['already'] == true ? ' (it was already fulfilled in the store)' : ''}');
+      done = true;
     } catch (e) {
       if (mounted) ScanFeedback.wrong(context);
       _snack('${o['order_no'] ?? 'Order'} was NOT fulfilled: $e');
     } finally {
       if (mounted) setState(() => _autoBusy.remove(id));
       await _load(quiet: true);
+      if (done) _openNext(id);
     }
   }
 
@@ -472,7 +524,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final company = TextEditingController(text: '${o['tracking_company'] ?? si()['company'] ?? ''}');
     final number = TextEditingController(text: '${o['tracking_number'] ?? si()['number'] ?? ''}');
     final url = TextEditingController(text: '${o['tracking_url'] ?? si()['url'] ?? ''}');
-    var notify = true;
+    var notify = _notifyPref;
     var checking = false;
     String? checkMsg;
     final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) {
@@ -558,7 +610,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero, dense: true,
             title: const Text('Email the customer', style: TextStyle(fontSize: 13)),
-            value: notify, onChanged: (v) => setD(() => notify = v),
+            value: notify, onChanged: (v) { setD(() => notify = v); _notifyPref = v; },
           ),
         ])),
         actions: [
@@ -569,6 +621,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       );
     }));
     if (ok != true) return;
+    var ok2 = false;
     setState(() => _busy = true);
     try {
       final r = await _call({
@@ -579,11 +632,13 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         'notify': notify,
       });
       _snack(r['already'] == true ? 'It was already fulfilled in the store — marked fulfilled here.' : 'Fulfilled in the store');
+      ok2 = true;
     } catch (e) {
       _snack('Not fulfilled: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
       await _load(quiet: true);
+      if (ok2) _openNext(o['id'] as String);
     }
   }
 
@@ -992,7 +1047,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           if (_scopeStores.isNotEmpty && _view == 'queue')
             Tooltip(
               message: 'When on, an order is packed and fulfilled in the store automatically '
-                  'as soon as every item has been scanned right.',
+                  'as soon as every item has been scanned right (when a courier booking exists — otherwise it is packed and waits).',
               child: Container(
                 padding: const EdgeInsets.only(left: 10, right: 2),
                 decoration: BoxDecoration(
@@ -1416,31 +1471,59 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                   catch (e) { _snack('$e'); }
                 }),
           ]),
-          const SizedBox(height: 14),
-          if (st != 'cancelled') ...[_stepper(st), const SizedBox(height: 16)],
-          // info cards
-          Wrap(spacing: 10, runSpacing: 10, children: [
-            _infoCard(Icons.person_outline, 'Customer', [
-              Text('${o['customer_name'] ?? '—'}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-              if (phone.isNotEmpty)
-                InkWell(
-                  onTap: () => html.window.open('tel:${phone.replaceAll(' ', '')}', '_self'),
-                  child: Text(phone, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: AppTheme.primary)),
-                ),
-              if ((o['email'] as String?)?.isNotEmpty == true)
-                Text('${o['email']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            ]),
-            _infoCard(Icons.place_outlined, 'Ship to', [
-              Text(address.isEmpty ? '—' : address, style: const TextStyle(fontSize: 13)),
-            ]),
-            _infoCard(collect > 0 ? Icons.payments_outlined : Icons.verified_outlined,
-                collect > 0 ? 'Collect on delivery' : 'Paid', [
-              Text(collect > 0 ? '${o['currency'] ?? ''} ${NumberFormat('#,##0.##').format(collect)}'.trim() : _money(o),
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-              if ((o['payment_methods'] as String?)?.isNotEmpty == true)
-                Text('${o['payment_methods']}', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
-            ], accent: collect > 0 ? Colors.orange.shade800 : Colors.green.shade700),
-          ]),
+          const SizedBox(height: 10),
+          // Customer / address / payment in one compact strip; tap to see all.
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => setState(() => _infoOpen = !_infoOpen),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.border)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Icon(Icons.person_outline, size: 16, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  Flexible(flex: 2, child: Text('${o['customer_name'] ?? '—'}',
+                      overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                  if (phone.isNotEmpty) ...[
+                    const SizedBox(width: 10),
+                    InkWell(
+                      onTap: () => html.window.open('tel:${phone.replaceAll(' ', '')}', '_self'),
+                      child: Text(phone, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.primary)),
+                    ),
+                  ],
+                  const SizedBox(width: 10),
+                  const Icon(Icons.place_outlined, size: 15, color: AppTheme.textSecondary),
+                  const SizedBox(width: 3),
+                  Expanded(flex: 3, child: Text(
+                    _infoOpen ? '' : (_city(o).isNotEmpty ? _city(o) : (address.isEmpty ? '—' : address)),
+                    overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5))),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (collect > 0 ? Colors.orange.shade800 : Colors.green.shade700).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                    child: Text(
+                      collect > 0
+                          ? 'Collect ${'${o['currency'] ?? ''} ${NumberFormat('#,##0.##').format(collect)}'.trim()}'
+                          : 'Paid ${_money(o)}',
+                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800,
+                          color: collect > 0 ? Colors.orange.shade800 : Colors.green.shade700)),
+                  ),
+                  Icon(_infoOpen ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
+                ]),
+                if (_infoOpen) ...[
+                  const SizedBox(height: 6),
+                  Text(address.isEmpty ? 'No address' : address, style: const TextStyle(fontSize: 12.5)),
+                  if ((o['email'] as String?)?.isNotEmpty == true)
+                    Text('${o['email']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  if ((o['payment_methods'] as String?)?.isNotEmpty == true)
+                    Text('${o['payment_methods']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ],
+              ]),
+            ),
+          ),
           if ((o['note'] as String?)?.isNotEmpty == true)
             _banner(Colors.amber.shade800, Icons.sticky_note_2_outlined, 'Customer note: ${o['note']}'),
           if (st == 'cancelled')
@@ -1509,7 +1592,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 pickedAll
                     ? (st == 'packed' ? 'Packed — fulfil it with the courier details.' : 'All picked — pack it and fulfil.')
                     : auto
-                        ? 'Auto-fulfil is on: it ships as soon as the last item is scanned.'
+                        ? 'Auto-fulfil is on: it ships when the last item is scanned (or waits packed if not booked yet).'
                         : '${_q(n - p)} item${n - p == 1 ? '' : 's'} left to scan.',
                 style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600,
                     color: pickedAll ? Colors.green.shade800 : AppTheme.textSecondary),
@@ -1589,6 +1672,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         'tracking_url': o['tracking_url'] ?? si['url'], 'updated_at': now,
       }).eq('id', o['id']);
       await _load(quiet: true);
+      _openNext(o['id'] as String);
     } catch (e) {
       _snack('Could not save: $e');
     }
