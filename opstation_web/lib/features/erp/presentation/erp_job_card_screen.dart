@@ -146,6 +146,10 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   double get _remainingQty => (_plannedQty - _producedQty);
   // Display helpers: never show negative "left"; overproduction shows as "over".
   double get _leftQty => _remainingQty > 0 ? _remainingQty : 0;
+  // Batches can be posted while the job is live and either has qty left OR is
+  // open-ended (no target — planned is 0, so "remaining" is never > 0).
+  bool get _canProduce => _current != null && _status != 'cancelled' && _status != 'completed' &&
+      (_openEnded || _remainingQty > 0);
   String _leftLabel(double planned, double produced) {
     final rem = planned - produced;
     if (rem >= 0) return '${_trim(rem)} left';
@@ -747,7 +751,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       return AlertDialog(
         title: const Text('Produce a batch'),
         content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Remaining on job: ${_trim(_leftQty)}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          Text(_openEnded ? 'Open-ended job · made so far: ${_trim(_producedQty)}' : 'Remaining on job: ${_trim(_leftQty)}',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           const SizedBox(height: 12),
           Row(children: [
             Expanded(child: TextField(controller: producedCtrl, keyboardType: TextInputType.number,
@@ -870,6 +875,40 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         ],
       );
     }));
+  }
+
+  // Open-ended jobs have no target, so they never complete on their own — the
+  // user closes them when production is done. Status-only, like Finish short.
+  Future<void> _closeOpenEnded() async {
+    if (_current == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('Close this job?'),
+      content: Text('${_trim(_producedQty)} made in ${_runs.where((r) => r['status'] == 'posted').length} batch(es). '
+          'Closing marks the job completed — no more batches can be posted. No stock or ledger change.',
+          style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            child: const Text('Close job')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.from('job_cards').update({
+        'status': 'completed', 'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', _current!['id']);
+      await _logJobAudit('closed', notes: 'Open-ended job closed — ${_trim(_producedQty)} made');
+      _snack('Job closed');
+      final updated = await Supabase.instance.client.from('job_cards').select().eq('id', _current!['id']).single();
+      await _loadJobs();
+      await _loadJob(updated);
+    } catch (e) {
+      _snack('Could not close: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   // Close a job as completed with produced < planned (e.g. material ran out).
@@ -2260,11 +2299,11 @@ $runSection
                   icon: _saving ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save_outlined, size: 16),
                   label: const Text('Save'), onPressed: _saving || _busy ? null : () => _save()),
                 const SizedBox(width: 8),
-                if (_current != null && _remainingQty > 0 && _status != 'cancelled' && _status != 'completed') ...[
+                if (_canProduce) ...[
                   OutlinedButton.icon(
-                    icon: const Icon(Icons.flag_outlined, size: 16), label: const Text('Finish short'),
+                    icon: const Icon(Icons.flag_outlined, size: 16), label: Text(_openEnded ? 'Close job' : 'Finish short'),
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-                    onPressed: _busy ? null : _finishShort),
+                    onPressed: _busy ? null : (_openEnded ? _closeOpenEnded : _finishShort)),
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.add_task, size: 16), label: const Text('Produce Batch'),
@@ -2274,7 +2313,7 @@ $runSection
               ],
             ]),
             // Narrow pane: the real buttons get their own full-width row.
-            if (compact && (_editable || (_current != null && _remainingQty > 0 && _status != 'cancelled'))) ...[
+            if (compact && (_editable || _canProduce)) ...[
               const SizedBox(height: 8),
               Row(children: [
                 if (_editable)
@@ -2284,14 +2323,14 @@ $runSection
                     onPressed: _saving || _busy ? null : () => _save(),
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
                   )),
-                if (_editable && _current != null && _remainingQty > 0 && _status != 'cancelled')
+                if (_editable && _canProduce)
                   const SizedBox(width: 8),
-                if (_current != null && _remainingQty > 0 && _status != 'cancelled' && _status != 'completed') ...[
+                if (_canProduce) ...[
                   Expanded(child: OutlinedButton.icon(
                     icon: const Icon(Icons.flag_outlined, size: 16),
-                    label: const Text('Finish short'),
+                    label: Text(_openEnded ? 'Close job' : 'Finish short'),
                     style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
-                    onPressed: _busy ? null : _finishShort,
+                    onPressed: _busy ? null : (_openEnded ? _closeOpenEnded : _finishShort),
                   )),
                   const SizedBox(width: 8),
                   Expanded(flex: 2, child: ElevatedButton.icon(

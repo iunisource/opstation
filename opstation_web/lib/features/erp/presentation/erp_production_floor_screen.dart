@@ -157,7 +157,13 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
 
   double _planned(Map<String, dynamic> j) => (j['planned_qty'] as num? ?? 0).toDouble();
   double _produced(Map<String, dynamic> j) => (j['produced_qty'] as num? ?? 0).toDouble();
-  double _remaining(Map<String, dynamic> j) => _planned(j) - _produced(j);
+  bool _open(Map<String, dynamic> j) => j['is_open_ended'] == true;
+  // Open-ended jobs have no target: nothing is "left", and no negative counts.
+  double _remaining(Map<String, dynamic> j) {
+    if (_open(j)) return 0;
+    final r = _planned(j) - _produced(j);
+    return r > 0 ? r : 0;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -460,7 +466,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           const SizedBox(height: 8),
           ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: pct, minHeight: 6, backgroundColor: const Color(0xFFEDEFF2), color: c)),
           const SizedBox(height: 5),
-          Text('${_trim(produced)} / ${_trim(planned)} done  ·  ${_trim(remaining)} left', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text(_open(j) ? '${_trim(produced)} made  ·  open-ended' : '${_trim(produced)} / ${_trim(planned)} done  ·  ${_trim(remaining)} left', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           if (assignee != null || (wc != null && wc.isNotEmpty)) Padding(padding: const EdgeInsets.only(top: 6), child: Row(children: [
             if (wc != null && wc.isNotEmpty) ...[const Icon(Icons.place_outlined, size: 12, color: AppTheme.textSecondary), const SizedBox(width: 3),
               Flexible(child: Text(wc, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis))],
