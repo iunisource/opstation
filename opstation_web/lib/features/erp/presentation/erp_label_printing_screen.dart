@@ -1,4 +1,6 @@
 // ignore_for_file: deprecated_member_use
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -401,6 +403,16 @@ class _ErpLabelPrintingScreenState extends ConsumerState<ErpLabelPrintingScreen>
                       _syncCtrl('${el.id}.y', y);
                     })
                 : null,
+            onResize: canEdit ? _resize : null,
+            onResizeLabel: canEdit
+                ? (w, h) => _changed(() {
+                      double snap(double v) => (v * 2).round() / 2; // 0.5 mm
+                      t.widthMm = snap(w).clamp(10.0, 110.0);
+                      t.heightMm = snap(h).clamp(5.0, 200.0);
+                      _syncCtrl('${t.id}.w', t.widthMm);
+                      _syncCtrl('${t.id}.h', t.heightMm);
+                    })
+                : null,
           ),
         ),
       )),
@@ -415,7 +427,8 @@ class _ErpLabelPrintingScreenState extends ConsumerState<ErpLabelPrintingScreen>
         ),
       if (canEdit) ...[
         const SizedBox(height: 6),
-        const Center(child: Text('Click an item to edit it · drag to move · positions snap to 0.25 mm',
+        const Center(child: Text('Click an item to edit it · drag to move · drag its corner square to resize · '
+            'drag the label\'s grey corner to change the label size',
             style: TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
         const SizedBox(height: 12),
         Wrap(spacing: 8, runSpacing: 8, children: [
@@ -437,6 +450,56 @@ class _ErpLabelPrintingScreenState extends ConsumerState<ErpLabelPrintingScreen>
         ]),
       ],
     ]));
+  }
+
+  // Corner-handle resize → the matching settings of each kind of item.
+  void _resize(LabelElement e, double wMm, double hMm) {
+    final k = e.id;
+    _changed(() {
+      switch (e.kind) {
+        case 'line':
+          e.width = ((wMm * 4).round() / 4).clamp(1.0, _t.widthMm);
+          e.height = ((hMm * 8).round() / 8).clamp(0.125, 20.0);
+          _syncCtrl('$k.w', e.width);
+          _syncCtrl('$k.h', e.height);
+          break;
+        case 'barcode':
+          // Height → bar height; width → bar thickness (1–4 dots).
+          final digits = e.human ? 22 / kDotsPerMm : 0.0;
+          e.height = ((hMm - digits) * 4).round() / 4;
+          if (e.height < 2) e.height = 2;
+          final code = labelClean(_data.value(e));
+          if (code.isNotEmpty) {
+            e.narrow = ((wMm * kDotsPerMm) / (11 * code.length + 35)).round().clamp(1, 4);
+          }
+          _syncCtrl('$k.h', e.height);
+          break;
+        case 'qr':
+          final data = labelClean(_data.value(e));
+          if (data.isNotEmpty) {
+            final ecc = 'LMQH'.contains(e.ecc) && e.ecc.isNotEmpty ? e.ecc : 'M';
+            final size = math.max(wMm, hMm) * kDotsPerMm;
+            e.cell = (size / qrModules(data, ecc)).round().clamp(2, 10);
+          }
+          break;
+        default:
+          // Height → font size; width → letters per line.
+          final lines = math.max(1, layoutLabel(_t, _data).where((p) => p.el.id == e.id).length);
+          final perLine = ((hMm * kDotsPerMm) - (lines - 1) * e.lineGap * kDotsPerMm) / lines;
+          const steps = [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [4, 2], [5, 2], [5, 3]];
+          var best = steps.first;
+          for (final st in steps) {
+            final h = kTsplFonts[st[0]]![1] * st[1];
+            final bh = kTsplFonts[best[0]]![1] * best[1];
+            if ((h - perLine).abs() < (bh - perLine).abs()) best = st;
+          }
+          e.font = best[0];
+          e.scale = best[1];
+          final cw = kTsplFonts[e.font]![0] * e.scale;
+          e.maxChars = ((wMm * kDotsPerMm) / cw).floor().clamp(2, 200);
+          _syncCtrl('$k.mc', e.maxChars.toDouble());
+      }
+    });
   }
 
   Widget _numField(String key, String label, double value, ValueChanged<double> onChanged,

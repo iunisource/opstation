@@ -468,9 +468,13 @@ class LabelPreview extends StatelessWidget {
   final ValueChanged<String>? onSelect;
   /// Drag to move: called with the element and the new x / y in mm.
   final void Function(LabelElement el, double xMm, double yMm)? onMove;
+  /// Drag the corner handle of the selected item: its new box size in mm.
+  final void Function(LabelElement el, double wMm, double hMm)? onResize;
+  /// Drag the label's own corner: new label size in mm.
+  final void Function(double wMm, double hMm)? onResizeLabel;
 
   const LabelPreview({super.key, required this.template, required this.data, this.pxPerMm = 6,
-      this.selectedId, this.onSelect, this.onMove});
+      this.selectedId, this.onSelect, this.onMove, this.onResize, this.onResizeLabel});
 
   @override
   Widget build(BuildContext context) {
@@ -548,6 +552,36 @@ class LabelPreview extends StatelessWidget {
         ),
       ));
     });
+    // Resize handle on the selected item (bottom-right corner).
+    final selBox = selectedId == null ? null : boxes[selectedId];
+    if (onResize != null && selBox != null) {
+      LabelElement? selEl;
+      for (final e in template.elements) {
+        if (e.id == selectedId) selEl = e;
+      }
+      if (selEl != null) {
+        final el = selEl;
+        children.add(Positioned(
+          left: math.min(selBox.right - 6, w - 12), top: math.min(selBox.bottom - 6, h - 12), width: 12, height: 12,
+          child: _DragHandle(
+            pxPerMm: pxPerMm, startW: selBox.width / pxPerMm, startH: selBox.height / pxPerMm,
+            color: Colors.blue, tooltip: 'Drag to resize',
+            onDrag: (nw, nh) => onResize!(el, nw, nh),
+          ),
+        ));
+      }
+    }
+    // Label size handle (bottom-right corner of the label).
+    if (onResizeLabel != null) {
+      children.add(Positioned(
+        right: 0, bottom: 0, width: 14, height: 14,
+        child: _DragHandle(
+          pxPerMm: pxPerMm, startW: template.widthMm, startH: template.heightMm,
+          color: Colors.grey.shade600, tooltip: 'Drag to change the label size',
+          onDrag: (nw, nh) => onResizeLabel!(nw, nh),
+        ),
+      ));
+    }
     return Container(
       width: w, height: h,
       decoration: BoxDecoration(
@@ -559,6 +593,51 @@ class LabelPreview extends StatelessWidget {
       child: ClipRect(child: Stack(clipBehavior: Clip.hardEdge, children: children)),
     );
   }
+}
+
+/// Small square handle that reports a new width / height (mm) while dragged.
+class _DragHandle extends StatefulWidget {
+  final double pxPerMm, startW, startH;
+  final Color color;
+  final String tooltip;
+  final void Function(double wMm, double hMm) onDrag;
+  const _DragHandle({required this.pxPerMm, required this.startW, required this.startH,
+      required this.color, required this.tooltip, required this.onDrag});
+  @override
+  State<_DragHandle> createState() => _DragHandleState();
+}
+
+class _DragHandleState extends State<_DragHandle> {
+  double _w0 = 0, _h0 = 0;
+  Offset _acc = Offset.zero;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: widget.tooltip,
+        waitDuration: const Duration(milliseconds: 600),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.resizeDownRight,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanStart: (_) {
+              _w0 = widget.startW;
+              _h0 = widget.startH;
+              _acc = Offset.zero;
+            },
+            onPanUpdate: (u) {
+              _acc += u.delta;
+              widget.onDrag(math.max(1.0, _w0 + _acc.dx / widget.pxPerMm), math.max(1.0, _h0 + _acc.dy / widget.pxPerMm));
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: widget.color, width: 2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 class _BarsPainter extends CustomPainter {
