@@ -475,6 +475,14 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                     onSelected: (v) async {
                       Navigator.of(d, rootNavigator: true).pop();
                       if (v == 'reconnect') await _connectDialog(store: s);
+                      if (v == 'approve') {
+                        try {
+                          final r = await _call({'action': 'authorize_url', 'store_id': s['id']});
+                          await _authorizeDialog('${r['authorize_url']}');
+                        } catch (e) {
+                          _snack('$e');
+                        }
+                      }
                       if (v == 'disconnect') {
                         try {
                           await _call({'action': 'disconnect', 'store_id': s['id']});
@@ -486,6 +494,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                       }
                     },
                     itemBuilder: (_) => [
+                      const PopupMenuItem(value: 'approve', child: Text('Approve again in Shopify (after adding permissions)')),
                       const PopupMenuItem(value: 'reconnect', child: Text('Reconnect / change keys')),
                       if (s['is_active'] == true) const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
                     ],

@@ -23,7 +23,7 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 const API_VERSION = "2026-07";
 const FN_URL = "https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/shopify";
 const APP_URL = "https://opstation-f06c7.web.app";
-const SCOPES = "read_orders,read_customers,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders";
+const SCOPES = "read_orders,read_customers,read_products,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -93,6 +93,23 @@ const ORDER_FIELDS = `
   shippingAddress { name address1 address2 city province zip country phone }
   lineItems(first: 100) { nodes { id title variantTitle sku quantity currentQuantity
     originalUnitPriceSet { shopMoney { amount } } variant { id barcode sku } } }`;
+
+// Same, without product details — used when the app doesn't have the
+// read_products permission yet (matching then works by SKU only).
+const ORDER_FIELDS_LITE = ORDER_FIELDS.replace("variant { id barcode sku }", "");
+
+/// Runs an orders query; if Shopify denies product details, retries without them.
+async function gqlOrders(admin: SupabaseClient, store: Store, sec: Secret, build: (fields: string) => string,
+    variables: Record<string, unknown>) {
+  try {
+    return await gql(admin, store, sec, build(ORDER_FIELDS), variables);
+  } catch (e) {
+    if (/read_products|ACCESS_DENIED/i.test((e as Error).message)) {
+      return await gql(admin, store, sec, build(ORDER_FIELDS_LITE), variables);
+    }
+    throw e;
+  }
+}
 
 // ── Saving orders ────────────────────────────────────────────────────────────
 type Catalog = { byCode: Map<string, string>; map: Map<string, string> };
@@ -180,9 +197,9 @@ async function syncStore(admin: SupabaseClient, store: Store, sec: Secret, since
   let after: string | null = null;
   let n = 0;
   for (let page = 0; page < 40; page++) {
-    const data = await gql(admin, store, sec,
-      `query($q: String, $after: String) { orders(first: 50, after: $after, sortKey: UPDATED_AT, query: $q) {
-         pageInfo { hasNextPage endCursor } nodes { ${ORDER_FIELDS} } } }`,
+    const data = await gqlOrders(admin, store, sec,
+      (f) => `query($q: String, $after: String) { orders(first: 50, after: $after, sortKey: UPDATED_AT, query: $q) {
+         pageInfo { hasNextPage endCursor } nodes { ${f} } } }`,
       { q: `updated_at:>='${since}'`, after });
     for (const o of data.orders.nodes) { await saveOrder(admin, store, cat, o); n++; }
     if (!data.orders.pageInfo.hasNextPage) break;
@@ -193,7 +210,7 @@ async function syncStore(admin: SupabaseClient, store: Store, sec: Secret, since
 }
 
 async function refreshOne(admin: SupabaseClient, store: Store, sec: Secret, gid: string) {
-  const data = await gql(admin, store, sec, `query($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`, { id: gid });
+  const data = await gqlOrders(admin, store, sec, (f) => `query($id: ID!) { order(id: $id) { ${f} } }`, { id: gid });
   if (!data.order) return;
   await saveOrder(admin, store, await loadCatalog(admin, store), data.order);
 }
@@ -505,6 +522,11 @@ serve(async (req) => {
         fulfil_error: null, updated_at: new Date().toISOString(),
       }).eq("id", order.id);
       return json({ ok: true, already: r.already });
+    }
+    if (action === "authorize_url") {
+      if (!isAdminRole(mine.role)) return json({ error: "Only an admin can do this." }, 403);
+      if (!sec.client_id) return json({ error: "This store was connected with an access token — reconnect it with the Client ID instead." }, 400);
+      return json({ ok: true, authorize_url: await authorizeUrl(store, sec) });
     }
     if (action === "disconnect") {
       if (!isAdminRole(mine.role)) return json({ error: "Only an admin can disconnect a store." }, 403);
