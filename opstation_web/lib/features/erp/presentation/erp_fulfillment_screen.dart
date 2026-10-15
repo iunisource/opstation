@@ -300,7 +300,16 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     } else {
       lines[i]['picked'] = v.clamp(0, _num(lines[i]['qty']));
     }
+    final wasDone = _lines(o).every(_lineDone);
     await _saveLines(o, lines, status: (o['status'] == 'new' && v > 0) ? 'picking' : null);
+    // Counted the last ones by hand → same as finishing by scan.
+    if (!wasDone && lines.isNotEmpty && lines.every(_lineDone)) {
+      if (_autoOn(o['store_id'] as String?)) {
+        _autoFulfil(o);
+      } else {
+        ScanFeedback.done();
+      }
+    }
   }
 
   bool _autoOn(String? storeId) =>
@@ -961,6 +970,14 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         ]),
       );
 
+  /// "+N": after one good scan, count the rest of that product in one tap.
+  Widget _fillBtn(VoidCallback onTap, double rest) => TextButton(
+        style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6),
+            minimumSize: const Size(0, 28), foregroundColor: Colors.green.shade800),
+        onPressed: onTap,
+        child: Text('+${_q(rest)} all', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+      );
+
   Widget _lineRow(Map<String, dynamic> o, List<Map<String, dynamic>> lines, int i, bool canWork) {
     final l = lines[i];
     final qty = _num(l['qty']);
@@ -1012,11 +1029,13 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 18),
                   onPressed: picked <= 0 ? null : () => _setPicked(o, i, picked - 1)),
               Text('${_q(picked)} / ${_q(qty)}', style: TextStyle(fontWeight: FontWeight.w800, color: done ? Colors.green.shade700 : null)),
-              // Picking is by scanning; adding by hand is an admin override.
-              if (_isAdmin)
+              // Scan the product once to prove it's the right one; then the rest of
+              // the quantity can be counted by hand. Before any scan: admins only.
+              if (_isAdmin || picked >= 1)
                 IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 18),
-                    tooltip: 'Admin: count one without scanning',
+                    tooltip: picked >= 1 ? 'Count one more' : 'Admin: count one without scanning',
                     onPressed: done ? null : () => _setPicked(o, i, picked + 1)),
+              if (picked >= 1 && !done) _fillBtn(() => _setPicked(o, i, qty), qty - picked),
             ] else
               Text('× ${_q(qty)}', style: const TextStyle(fontWeight: FontWeight.w800)),
           ],
@@ -1040,10 +1059,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                   IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 16),
                       onPressed: cp <= 0 ? null : () => _setPicked(o, i, cp - 1, comp: j)),
                   Text('${_q(cp)} / ${_q(cq)}', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: cd ? Colors.green.shade700 : null)),
-                  if (_isAdmin)
+                  if (_isAdmin || cp >= 1)
                     IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 16),
-                        tooltip: 'Admin: count one without scanning',
+                        tooltip: cp >= 1 ? 'Count one more' : 'Admin: count one without scanning',
                         onPressed: cd ? null : () => _setPicked(o, i, cp + 1, comp: j)),
+                  if (cp >= 1 && !cd) _fillBtn(() => _setPicked(o, i, cq, comp: j), cq - cp),
                 ] else
                   Text('× ${_q(cq)}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5)),
               ]),

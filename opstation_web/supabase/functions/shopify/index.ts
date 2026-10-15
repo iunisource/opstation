@@ -141,9 +141,17 @@ function parseSegs(s: string): Seg[] {
     let m = part.match(/^(\d{1,3})\s*[xX×*]\s+|^(\d{1,3})\s*[xX×*](?=[A-Za-z])/);
     if (m) { qty = Number(m[1] ?? m[2]); part = part.slice(m[0].length); }
     else if ((m = part.match(/\s*[xX×*]\s*(\d{1,3})$/)) && part.length > m[0].length) { qty = Number(m[1]); part = part.slice(0, -m[0].length); }
+    // Trailing brackets: a number is the quantity — "(3)", "(x3)", "(3 pcs)";
+    // anything else is a qualifier — "(S)". "ALA 111 (S) (3)" = 3 × ALA 111 (S).
     let q: string | null = null;
-    const qm = part.match(/\(\s*([^()]{1,12}?)\s*\)\s*$/);
-    if (qm) { q = qm[1].toUpperCase(); part = part.slice(0, -qm[0].length).trim(); }
+    for (let i = 0; i < 3; i++) {
+      const qm = part.match(/\(\s*([^()]{1,12}?)\s*\)\s*$/);
+      if (!qm) break;
+      const n = qm[1].match(/^(?:[xX×*]\s*)?(\d{1,3})\s*(?:[xX×*]|pcs?|pieces?|units?|nos?|sets?)?\.?$/i);
+      if (n) qty = Number(n[1]);
+      else if (!q) q = qm[1].toUpperCase();
+      part = part.slice(0, -qm[0].length).trim();
+    }
     const base = toks(part).join(" ");
     if (!base) continue;
     const key = q ? `${base}|${toks(q).join(" ")}` : base;
