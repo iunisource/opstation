@@ -34,7 +34,7 @@ const cors = {
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
-type Store = { id: string; org_id: string; shop_domain: string; name: string | null; branch_id: string | null; is_active: boolean; match_groups?: string[] | null };
+type Store = { id: string; org_id: string; shop_domain: string; name: string | null; branch_id: string | null; is_active: boolean; match_groups?: string[] | null; sku_rules?: unknown };
 type Secret = { store_id: string; client_id: string | null; client_secret: string | null; access_token: string | null; token_expires_at: string | null };
 
 function jwtPayload(token: string): Record<string, unknown> | null {
@@ -131,23 +131,50 @@ function toks(s: string): string[] {
     .replace(/([A-Z])(?=\d)|(\d)(?=[A-Z])/g, "$1$2 ")
     .split(/[^A-Z0-9]+/).filter(Boolean);
 }
+// How a store writes its SKUs — set per store in Match products → SKU rules
+// (shop_stores.sku_rules). Missing keys fall back to these defaults.
+type Rules = {
+  separators: string;            // characters that join a bundle: "+,;&|"
+  qty_before: boolean;           // "3x CODE"
+  qty_after: boolean;            // "CODE x3"
+  qty_brackets: boolean;         // "CODE (3)", "(3 pcs)"
+  tags: Array<{ tag: string; word: string }>;  // "(S)" → product name has "special"
+  auto_tags: boolean;            // unknown "(X)" → a name word starting with X
+};
+const DEFAULT_RULES: Rules = { separators: "+,;&|", qty_before: true, qty_after: true, qty_brackets: true, tags: [], auto_tags: true };
+// deno-lint-ignore no-explicit-any
+function rulesOf(raw: any): Rules {
+  const r = { ...DEFAULT_RULES, ...(raw && typeof raw === "object" ? raw : {}) } as Rules;
+  r.separators = typeof r.separators === "string" ? r.separators.replace(/\s/g, "") : DEFAULT_RULES.separators;
+  r.tags = Array.isArray(r.tags)
+    ? r.tags.filter((t) => t && String(t.tag ?? "").trim() && String(t.word ?? "").trim())
+        .map((t) => ({ tag: String(t.tag).replace(/[()\s]/g, "").toUpperCase(), word: String(t.word).trim().toUpperCase() }))
+    : [];
+  return r;
+}
+const esc = (c: string) => c.replace(/[-\\^\]\[]/g, "\\$&");
+
 type Seg = { code: string; core: string; key: string; base: string; q: string | null; qty: number };
-function parseSegs(s: string): Seg[] {
+function parseSegs(rules: Rules, s: string): Seg[] {
   const out: Seg[] = [];
-  for (let part of String(s ?? "").split(/\s*[+,;&|]\s*/)) {
+  const sep = rules.separators ? new RegExp(`\\s*[${[...rules.separators].map(esc).join("")}]\\s*`) : null;
+  for (let part of (sep ? String(s ?? "").split(sep) : [String(s ?? "")])) {
     part = part.trim();
     if (!part) continue;
     let qty = 1;
-    let m = part.match(/^(\d{1,3})\s*[xX×*]\s+|^(\d{1,3})\s*[xX×*](?=[A-Za-z])/);
-    if (m) { qty = Number(m[1] ?? m[2]); part = part.slice(m[0].length); }
-    else if ((m = part.match(/\s*[xX×*]\s*(\d{1,3})$/)) && part.length > m[0].length) { qty = Number(m[1]); part = part.slice(0, -m[0].length); }
+    let m: RegExpMatchArray | null = null;
+    if (rules.qty_before && (m = part.match(/^(\d{1,3})\s*[xX×*]\s+|^(\d{1,3})\s*[xX×*](?=[A-Za-z])/))) {
+      qty = Number(m[1] ?? m[2]); part = part.slice(m[0].length);
+    } else if (rules.qty_after && (m = part.match(/\s*[xX×*]\s*(\d{1,3})$/)) && part.length > m[0].length) {
+      qty = Number(m[1]); part = part.slice(0, -m[0].length);
+    }
     // Trailing brackets: a number is the quantity — "(3)", "(x3)", "(3 pcs)";
-    // anything else is a qualifier — "(S)". "ALA 111 (S) (3)" = 3 × ALA 111 (S).
+    // anything else is a tag — "(S)". "ALA 111 (S) (3)" = 3 × ALA 111 (S).
     let q: string | null = null;
     for (let i = 0; i < 3; i++) {
       const qm = part.match(/\(\s*([^()]{1,12}?)\s*\)\s*$/);
       if (!qm) break;
-      const n = qm[1].match(/^(?:[xX×*]\s*)?(\d{1,3})\s*(?:[xX×*]|pcs?|pieces?|units?|nos?|sets?)?\.?$/i);
+      const n = rules.qty_brackets ? qm[1].match(/^(?:[xX×*]\s*)?(\d{1,3})\s*(?:[xX×*]|pcs?|pieces?|units?|nos?|sets?)?\.?$/i) : null;
       if (n) qty = Number(n[1]);
       else if (!q) q = qm[1].toUpperCase();
       part = part.slice(0, -qm[0].length).trim();
@@ -175,6 +202,7 @@ type Catalog = {
   map: Map<string, Mapped>;             // saved matches per store item
   groups: string[];
   allGroups: Record<string, number>;
+  rules: Rules;
 };
 
 function finishedDefault(all: string[]): string[] {
@@ -227,7 +255,7 @@ async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog
     }
     map.set(r.ext_key, { product_id: r.product_id ?? null, components: (r.components as Part[] | null) ?? null });
   }
-  return { byCode, byFirst, learned, claimed, map, groups: chosen, allGroups };
+  return { byCode, byFirst, learned, claimed, map, groups: chosen, allGroups, rules: rulesOf(store.sku_rules) };
 }
 
 // Finished products this code could be.
@@ -249,9 +277,17 @@ function resolveSeg(cat: Catalog, s: Seg): SuggestPart {
   const cands = candidates(cat, s);
   if (cands.length <= 1) return part(cands[0]?.id ?? null, cands);
   if (s.q) {
-    // "(S)": the one with a word starting with S that the others don't all share.
-    const q = toks(s.q);
-    const has = (p: Prod) => q.every((x) => p.words.slice(s.base.split(" ").length).some((w) => w.startsWith(x)));
+    // A tag set in the store's rules: "(S)" → name has "special".
+    const tag = cat.rules.tags.find((t) => t.tag === s.q!.replace(/[()\s]/g, ""));
+    let has: ((p: Prod) => boolean) | null = null;
+    if (tag) {
+      has = (p: Prod) => p.name.toUpperCase().includes(tag.word);
+    } else if (cat.rules.auto_tags) {
+      // Otherwise: the one with a word starting with the tag that the others don't all share.
+      const q = toks(s.q);
+      has = (p: Prod) => q.every((x) => p.words.slice(s.base.split(" ").length).some((w) => w.startsWith(x)));
+    }
+    if (!has) return part(null, cands);
     const hit = cands.filter(has);
     if (hit.length && hit.length < cands.length) return part(hit.length === 1 ? hit[0].id : null, hit);
     return part(null, cands);
@@ -272,10 +308,10 @@ function autoSuggest(cat: Catalog, sku: string, barcode: string, title: string):
   if (b && cat.byCode.has(`b:${b}`)) return one("barcode", cat.byCode.get(`b:${b}`));
   if (s && cat.byCode.has(`b:${s}`)) return one("barcode", cat.byCode.get(`b:${s}`));
   if (s && cat.byCode.has(`s:${s}`)) return one("sku", cat.byCode.get(`s:${s}`));
-  let parts = parseSegs(sku).map((x) => resolveSeg(cat, x));
+  let parts = parseSegs(cat.rules, sku).map((x) => resolveSeg(cat, x));
   if (parts.length === 0 || parts.every((p) => !p.product_id && !p.choices.length)) {
     // No usable SKU: try the store title as one code, only if it clearly fits.
-    const t = parseSegs(title.replace(/[+,;&|]/g, " ")).map((x) => resolveSeg(cat, x)).filter((p) => p.product_id);
+    const t = parseSegs({ ...cat.rules, separators: "" }, title).map((x) => resolveSeg(cat, x)).filter((p) => p.product_id);
     if (t.length) parts = t;
   }
   if (parts.length === 0) return { how: "none", parts: [] };
@@ -287,7 +323,7 @@ function autoSuggest(cat: Catalog, sku: string, barcode: string, title: string):
 // knows which product the qualifier took.
 function primeClaims(cat: Catalog, skus: string[]) {
   for (const sku of skus) {
-    for (const s of parseSegs(sku)) {
+    for (const s of parseSegs(cat.rules, sku)) {
       if (!s.q || cat.learned.has(s.key)) continue;
       const r = resolveSeg(cat, s);
       if (r.product_id) {
@@ -764,6 +800,23 @@ Deno.serve(async (req) => {
           : null;
       }
       return json({ ok: true, variants: out, groups: cat.groups, all_groups: cat.allGroups });
+    }
+    if (action === "test_sku") {
+      // Try SKU rules (saved or not) on sample SKUs: how each one is read.
+      const cat = await loadCatalog(admin, store);
+      if (body.rules) cat.rules = rulesOf(body.rules);
+      const ids = new Set<string>();
+      const out = ((body.skus ?? []) as string[]).slice(0, 20).map((sku) => {
+        const segs = parseSegs(cat.rules, String(sku ?? ""));
+        const parts = segs.map((x) => { const r = resolveSeg(cat, x); [r.product_id, ...r.choices].forEach((i) => i && ids.add(i)); return r; });
+        return { sku, parts };
+      });
+      const names: Record<string, string> = {};
+      if (ids.size) {
+        const { data } = await admin.from("products").select("id, name").in("id", [...ids]);
+        for (const p of data ?? []) names[p.id] = p.name;
+      }
+      return json({ ok: true, results: out, names, rules: cat.rules });
     }
     if (action === "rematch") {
       // Re-apply saved / code matches to open orders not yet being picked.

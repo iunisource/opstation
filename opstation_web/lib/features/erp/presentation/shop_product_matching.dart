@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/product_picker.dart';
+import 'shop_sku_rules.dart';
 
 /// Bulk "store item ⇄ Opstation product" matching for a connected store.
 /// Suggestions come from the store SKU compared with each Opstation product's
@@ -148,6 +149,15 @@ class _MatchDialogState extends State<_MatchDialog> {
             : '$e';
       });
     }
+  }
+
+  /// How this store writes SKUs (bundles, quantity, tags) — then re-read everything.
+  Future<void> _openRules() async {
+    final skus = [for (final r in _rows) '${r.v['sku'] ?? ''}'.trim()].where((s) => s.isNotEmpty).toSet().toList();
+    // Show the tricky ones first: bundles, quantities, tags.
+    skus.sort((a, b) => (RegExp(r'[+,;&|()]').hasMatch(b) ? 1 : 0) - (RegExp(r'[+,;&|()]').hasMatch(a) ? 1 : 0));
+    final saved = await showSkuRules(context, store: widget.store, samples: skus, call: widget.call);
+    if (saved) await _load();
   }
 
   Future<void> _setGroups(List<String> g) async {
@@ -365,6 +375,13 @@ class _MatchDialogState extends State<_MatchDialog> {
                         style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                     const SizedBox(height: 8),
                     Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+                        icon: const Icon(Icons.rule, size: 16),
+                        label: const Text('SKU rules'),
+                        onPressed: _openRules,
+                      ),
+                      const SizedBox(width: 6),
                       const Text('Match only with:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                       for (final g in _allGroups.keys)
                         FilterChip(
