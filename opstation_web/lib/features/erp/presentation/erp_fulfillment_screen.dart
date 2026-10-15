@@ -62,6 +62,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     // Back from authorising in Shopify: show what happened.
     final connected = Uri.base.queryParameters['connected'];
     if (connected != null) {
+      // Show it once, then drop it from the address so a reload doesn't repeat it.
+      try { html.window.history.replaceState(null, '', '/erp/fulfillment'); } catch (_) {}
       WidgetsBinding.instance.addPostFrameCallback((_) => _snack('Store connected. $connected'));
     }
   }
