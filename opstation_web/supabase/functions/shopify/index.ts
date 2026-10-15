@@ -14,6 +14,8 @@
 //       {action:"disconnect", store_id}
 //       {action:"list_variants", store_id}   store items + suggested matches
 //       {action:"rematch", store_id}         re-apply matches to open orders
+//       {action:"set_cancel_pin", store_id, pin}            admins
+//       {action:"cancel_item", order_id, line_id, comp?, qty, reason, pin}
 //
 // Deploy (Shopify's notifications carry no Supabase login, so JWT checking is
 // done inside):
@@ -458,6 +460,38 @@ function applyMatch(cat: Catalog, line: any, old: any | null) {
   return { ...line, product_id: comps ? null : (m?.product_id ?? null), components: comps, picked: 0 };
 }
 
+// Items cancelled in Opstation (not available / changed) survive re-syncs.
+// If the order was edited in Shopify meanwhile (its quantity dropped below the
+// one we cancelled from), Shopify is the truth and our cancellation is dropped.
+// deno-lint-ignore no-explicit-any
+function keepCancels(l: any, old: any | null) {
+  if (!old) return l;
+  const shopQty = Number(l.qty ?? 0);
+  const cancelled = Number(old.cancelled ?? 0);
+  if (cancelled > 0) {
+    const base = Number(old.cancel_base ?? (Number(old.qty ?? 0) + cancelled));
+    if (shopQty >= base) {
+      l.qty = Math.max(0, shopQty - cancelled);
+      l.cancelled = cancelled;
+      l.cancel_base = base;
+    }
+  }
+  if (old.cancel_log) l.cancel_log = old.cancel_log;
+  if (Array.isArray(l.components)) {
+    // deno-lint-ignore no-explicit-any
+    const oldC = new Map<string, any>(((old.components ?? []) as any[]).map((c) => [String(c.product_id), c]));
+    for (const c of l.components) {
+      const oc = oldC.get(String(c.product_id));
+      const cc = Number(oc?.cancelled ?? 0);
+      c.qty = Math.max(0, Number(c.per ?? 1) * Number(l.qty) - cc);
+      if (cc > 0) c.cancelled = cc;
+      c.picked = Math.min(Number(c.picked ?? 0), c.qty);
+    }
+  }
+  l.picked = Math.min(Number(l.picked ?? 0), Number(l.qty));
+  return l;
+}
+
 // deno-lint-ignore no-explicit-any
 async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: any): Promise<boolean> {
   const { data: prev } = await admin.from("shop_orders").select("id, status, lines, ext_updated_at, ext_fulfillment, financial_status, cancelled_at")
@@ -473,7 +507,10 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     image: li.image?.url ?? null,
     qty: Number(li.currentQuantity ?? li.quantity ?? 0),
     price: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
-  }, prevLine.get(li.id) ?? null)).filter((l: { qty: number }) => l.qty > 0);
+  }, prevLine.get(li.id) ?? null))
+    // deno-lint-ignore no-explicit-any
+    .map((l: any) => keepCancels(l, prevLine.get(String(l.line_id)) ?? null))
+    .filter((l: { qty: number; cancelled?: number }) => l.qty > 0 || Number(l.cancelled ?? 0) > 0);
 
   // Matches can't change once an order is shipped / cancelled.
   if (prev && (prev.status === "fulfilled" || prev.status === "cancelled")) {
@@ -496,7 +533,10 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
   // back to the work queue so it can be shipped again.
   let reopened = false;
   const OPEN_AGAIN = ["UNFULFILLED", "PARTIALLY_FULFILLED", "OPEN", "IN_PROGRESS", "PENDING_FULFILLMENT", "ON_HOLD", "SCHEDULED"];
-  if (!o.cancelledAt && prev?.status === "fulfilled" && OPEN_AGAIN.includes(String(o.displayFulfillmentStatus ?? ""))) {
+  // (Partly fulfilled because items were cancelled here is expected — not a reopen.)
+  const hasCancels = lines.some((l: { cancelled?: number }) => Number(l.cancelled ?? 0) > 0);
+  if (!o.cancelledAt && prev?.status === "fulfilled" && OPEN_AGAIN.includes(String(o.displayFulfillmentStatus ?? ""))
+      && !(hasCancels && o.displayFulfillmentStatus === "PARTIALLY_FULFILLED")) {
     reopened = true;
     // Items already counted stay counted: all picked → Packed, some → Picking.
     // deno-lint-ignore no-explicit-any
@@ -621,18 +661,40 @@ async function registerWebhooks(admin: SupabaseClient, store: Store, sec: Secret
 }
 
 async function fulfil(admin: SupabaseClient, store: Store, sec: Secret, gid: string,
-    tracking: { company?: string; number?: string; url?: string }, notify: boolean) {
+    tracking: { company?: string; number?: string; url?: string }, notify: boolean,
+    cancelled: Record<string, number> = {}) {
   const d = await gql(admin, store, sec,
-    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 20) { nodes { id status } } } }`, { id: gid });
+    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 20) { nodes { id status
+       lineItems(first: 100) { nodes { id remainingQuantity lineItem { id } } } } } } }`, { id: gid });
   const open = (d.order?.fulfillmentOrders?.nodes ?? [])
     .filter((f: { status: string }) => ["OPEN", "IN_PROGRESS", "SCHEDULED"].includes(f.status));
   if (open.length === 0) return { already: true };
+  // Items cancelled in Opstation are left out (they stay unfulfilled in Shopify).
+  const left = { ...cancelled };
+  // deno-lint-ignore no-explicit-any
+  let byFo: any[] = open.map((f: { id: string }) => ({ fulfillmentOrderId: f.id }));
+  if (Object.values(left).some((n) => n > 0)) {
+    byFo = [];
+    // deno-lint-ignore no-explicit-any
+    for (const f of open as any[]) {
+      const items: Array<{ id: string; quantity: number }> = [];
+      for (const it of f.lineItems?.nodes ?? []) {
+        const lid = String(it.lineItem?.id ?? "");
+        let q = Number(it.remainingQuantity ?? 0);
+        const skip = Math.min(q, left[lid] ?? 0);
+        if (skip > 0) { q -= skip; left[lid] -= skip; }
+        if (q > 0) items.push({ id: it.id, quantity: q });
+      }
+      if (items.length) byFo.push({ fulfillmentOrderId: f.id, fulfillmentOrderLineItems: items });
+    }
+    if (byFo.length === 0) throw new Error("Every item on this order was cancelled — nothing to ship.");
+  }
   const trackingInfo: Record<string, string> = {};
   if (tracking.company) trackingInfo.company = tracking.company;
   if (tracking.number) trackingInfo.number = tracking.number;
   if (tracking.url) trackingInfo.url = tracking.url;
   const input = {
-    lineItemsByFulfillmentOrder: open.map((f: { id: string }) => ({ fulfillmentOrderId: f.id })),
+    lineItemsByFulfillmentOrder: byFo,
     notifyCustomer: notify,
     ...(Object.keys(trackingInfo).length ? { trackingInfo } : {}),
   };
@@ -655,6 +717,11 @@ async function fulfil(admin: SupabaseClient, store: Store, sec: Secret, gid: str
 
 // ── Install / authorise (for stores outside the app's organisation, or any
 //    install started from Shopify) ───────────────────────────────────────────
+async function pinHash(storeId: string, pin: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`opstation-pin:${storeId}:${pin}`)));
+  return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function hmacHex(secret: string, msg: string): Promise<string> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg)));
@@ -902,14 +969,71 @@ Deno.serve(async (req) => {
       if (short.length > 0) {
         return json({ error: `Pick every item first — ${short.length} item(s) not fully picked.` }, 400);
       }
+      const cancelled: Record<string, number> = {};
+      for (const l of (order.lines ?? []) as Array<Record<string, unknown>>) {
+        if (Number(l.cancelled ?? 0) > 0) cancelled[String(l.line_id)] = Number(l.cancelled);
+      }
       const r = await fulfil(admin, store, sec, order.external_id,
-        { company: body.company, number: body.number, url: body.url }, body.notify !== false);
+        { company: body.company, number: body.number, url: body.url }, body.notify !== false, cancelled);
       await admin.from("shop_orders").update({
         status: "fulfilled", fulfilled_at: new Date().toISOString(), fulfilled_by_name: mine.name ?? null,
         tracking_company: body.company ?? null, tracking_number: body.number ?? null, tracking_url: body.url ?? null,
         fulfil_error: null, updated_at: new Date().toISOString(),
       }).eq("id", order.id);
       return json({ ok: true, already: r.already });
+    }
+    if (action === "set_cancel_pin") {
+      // Admins: the passcode needed to cancel an item while picking. Only a
+      // fingerprint of it is kept, where app users can't read it.
+      if (!isAdminRole(mine.role)) return json({ error: "Only an admin can set the passcode." }, 403);
+      const pin = String(body.pin ?? "").trim();
+      if (pin && !/^\d{4,8}$/.test(pin)) return json({ error: "Use 4 to 8 digits." }, 400);
+      await admin.from("shop_store_secrets").update({ cancel_pin_hash: pin ? await pinHash(store.id, pin) : null }).eq("store_id", store.id);
+      await admin.from("shop_stores").update({ cancel_pin_set: !!pin }).eq("id", store.id);
+      return json({ ok: true });
+    }
+    if (action === "cancel_item") {
+      // Cancel an item (or part of it) on an open order — passcode needed.
+      const { data: k } = await admin.from("shop_store_secrets").select("cancel_pin_hash").eq("store_id", store.id).maybeSingle();
+      if (!k?.cancel_pin_hash) return json({ error: "No passcode set yet — ask an admin (⋮ → Item cancel passcode)." }, 400);
+      if (k.cancel_pin_hash !== await pinHash(store.id, String(body.pin ?? "").trim())) {
+        return json({ error: "Wrong passcode." }, 403);
+      }
+      if (["fulfilled", "cancelled"].includes(order.status)) return json({ error: "This order is closed." }, 400);
+      // deno-lint-ignore no-explicit-any
+      const lines = (order.lines ?? []) as any[];
+      const l = lines.find((x) => String(x.line_id) === String(body.line_id));
+      if (!l) return json({ error: "Item not found on this order." }, 404);
+      const want = Math.max(1, Math.floor(Number(body.qty ?? 1)));
+      const comp = body.comp == null ? null : Number(body.comp);
+      let done = 0;
+      let what = String(l.title ?? "item");
+      if (comp != null) {
+        const c = (l.components ?? [])[comp];
+        if (!c) return json({ error: "Item not found in this bundle." }, 404);
+        done = Math.min(want, Number(c.qty ?? 0));
+        c.qty = Number(c.qty) - done;
+        c.cancelled = Number(c.cancelled ?? 0) + done;
+        c.picked = Math.min(Number(c.picked ?? 0), c.qty);
+        what = String(c.product_id);
+      } else {
+        done = Math.min(want, Number(l.qty ?? 0));
+        if (!l.cancel_base) l.cancel_base = Number(l.qty ?? 0) + Number(l.cancelled ?? 0);
+        l.qty = Number(l.qty) - done;
+        l.cancelled = Number(l.cancelled ?? 0) + done;
+        l.picked = Math.min(Number(l.picked ?? 0), l.qty);
+        for (const c of l.components ?? []) {
+          c.qty = Math.max(0, Number(c.per ?? 1) * l.qty - Number(c.cancelled ?? 0));
+          c.picked = Math.min(Number(c.picked ?? 0), c.qty);
+        }
+      }
+      if (done <= 0) return json({ error: "Nothing left to cancel on that item." }, 400);
+      l.cancel_log = [...(l.cancel_log ?? []), {
+        at: new Date().toISOString(), by: mine.name ?? null, qty: done, reason: String(body.reason ?? "").slice(0, 200),
+        ...(comp != null ? { product_id: what } : {}),
+      }];
+      await admin.from("shop_orders").update({ lines, updated_at: new Date().toISOString() }).eq("id", order.id);
+      return json({ ok: true, cancelled: done });
     }
     if (action === "slip_images") {
       // Pictures for packing slips, fetched here (not in the browser, which

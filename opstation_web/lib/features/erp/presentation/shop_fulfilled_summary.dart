@@ -43,7 +43,7 @@ class _Agg {
   double amount = 0;
   final Set<String> orders = {};
   _Agg(this.key, this.productId, this.name);
-  double get avg => qty == 0 ? 0 : amount / qty;
+  double get avg => qty == 0 ? 0.0 : amount / qty;
 }
 
 class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
@@ -84,7 +84,11 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
 
   double _collect(Map<String, dynamic> o) {
     final paid = '${o['financial_status'] ?? ''}'.toUpperCase() == 'PAID';
-    return o['outstanding'] != null ? _n(o['outstanding']) : (paid ? 0 : _n(o['total']));
+    final base = o['outstanding'] != null ? _n(o['outstanding']) : (paid ? 0.0 : _n(o['total']));
+    if (base <= 0) return 0;
+    // Items cancelled while picking were not sent — not collected either.
+    final removed = _lines(o).fold<double>(0, (a, l) => a + _n(l['cancelled']) * _n(l['price']));
+    return base - removed < 0 ? 0.0 : base - removed;
   }
 
   String _city(Map<String, dynamic> o) => '${((o['ship_to'] as Map?) ?? const {})['city'] ?? ''}'.trim();
@@ -176,7 +180,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
             final pid = '${comps[i]['product_id']}';
             final a = m.putIfAbsent(pid, () => _Agg(pid, pid, '${widget.products[pid]?['name'] ?? 'Product'}'));
             a.qty += _n(comps[i]['qty']) > 0 ? _n(comps[i]['qty']) : _n(comps[i]['per']) * qty;
-            a.amount += wsum == 0 ? 0 : amount * weights[i] / wsum;
+            a.amount += wsum == 0 ? 0.0 : amount * weights[i] / wsum;
             a.orders.add('${o['id']}');
           }
         } else if (l['product_id'] != null) {

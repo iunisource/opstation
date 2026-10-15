@@ -1060,9 +1060,16 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     return (p, n);
   }
 
+  /// Value of items cancelled here (not in Shopify yet) — taken off the COD amount.
+  double _removedValue(Map<String, dynamic> o) =>
+      _lines(o).fold<double>(0, (a, l) => a + _num(l['cancelled']) * _num(l['price']));
+
   double _collect(Map<String, dynamic> o) {
     final paid = '${o['financial_status'] ?? ''}'.toUpperCase() == 'PAID';
-    return o['outstanding'] != null ? _num(o['outstanding']) : (paid ? 0 : _num(o['total']));
+    final base = o['outstanding'] != null ? _num(o['outstanding']) : (paid ? 0.0 : _num(o['total']));
+    if (base <= 0) return 0;
+    final v = base - _removedValue(o);
+    return v < 0 ? 0.0 : v;
   }
 
   String _city(Map<String, dynamic> o) => '${((o['ship_to'] as Map?) ?? const {})['city'] ?? ''}'.trim();
@@ -1159,6 +1166,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (v == 'match') _openMatching();
               if (v == 'recheck' && !_busy) _syncNow(days: 14);
               if (v == 'scan') _scanSettings();
+              if (v == 'pin') _pinDialog();
               if (v == 'stores') _stores.isEmpty && _isAdmin ? _connectDialog() : _storesDialog();
             },
             itemBuilder: (_) => [
@@ -1170,6 +1178,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (_isAdmin && _stores.any((s) => s['is_active'] == true))
                 const PopupMenuItem(value: 'scan', child: ListTile(dense: true, leading: Icon(Icons.qr_code_scanner),
                     title: Text('Scan settings'), subtitle: Text('Which barcodes count when picking'))),
+              if (_isAdmin && _stores.any((s) => s['is_active'] == true))
+                const PopupMenuItem(value: 'pin', child: ListTile(dense: true, leading: Icon(Icons.password),
+                    title: Text('Item cancel passcode'), subtitle: Text('Needed to cancel an item while picking'))),
               PopupMenuItem(value: 'stores', child: ListTile(dense: true, leading: const Icon(Icons.storefront_outlined),
                   title: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'))),
             ],
@@ -1423,7 +1434,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                         Expanded(child: ClipRRect(
                           borderRadius: BorderRadius.circular(4),
                           child: LinearProgressIndicator(
-                            value: n == 0 ? 0 : (p / n).clamp(0, 1).toDouble(), minHeight: 5,
+                            value: n == 0 ? 0.0 : (p / n).clamp(0, 1).toDouble(), minHeight: 5,
                             backgroundColor: AppTheme.border.withOpacity(0.6),
                             valueColor: AlwaysStoppedAnimation(p >= n && n > 0 ? Colors.green : c),
                           ),
@@ -1629,7 +1640,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             Expanded(child: ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
-                value: n == 0 ? 0 : (p / n).clamp(0, 1).toDouble(), minHeight: 6,
+                value: n == 0 ? 0.0 : (p / n).clamp(0, 1).toDouble(), minHeight: 6,
                 backgroundColor: AppTheme.border.withOpacity(0.6),
                 valueColor: AlwaysStoppedAnimation(pickedAll ? Colors.green : _statusColor(st)),
               ),
@@ -1779,6 +1790,163 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         child: Text('+${_q(rest)} all', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
       );
 
+  String _cancelReason(Map<String, dynamic> l) {
+    final log = (l['cancel_log'] as List?) ?? const [];
+    if (log.isEmpty) return '';
+    final r = '${(log.last as Map)['reason'] ?? ''}'.trim();
+    return r.isEmpty ? '' : ' — $r';
+  }
+
+  Widget _cancelBtn(VoidCallback onTap) => IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Cancel this item (passcode)',
+        icon: Icon(Icons.close, size: 17, color: Colors.red.shade400),
+        onPressed: _busy ? null : onTap,
+      );
+
+  /// Cancel an item (or part of it) that isn't available / was changed —
+  /// needs the passcode the admins set in ⋮ → Item cancel passcode.
+  Future<void> _cancelItem(Map<String, dynamic> o, Map<String, dynamic> l, String kind, double max,
+      {int? comp, String? name}) async {
+    final store = _stores.firstWhere((s) => s['id'] == o['store_id'], orElse: () => const {});
+    if (store['cancel_pin_set'] != true) {
+      _snack('No cancel passcode is set yet — an admin can set it in ⋮ → Item cancel passcode. '
+          'Or edit the order in Shopify and press refresh.');
+      return;
+    }
+    var qty = max;
+    var reason = 'Not available';
+    final note = TextEditingController();
+    final pin = TextEditingController();
+    String? err;
+    var working = false;
+    await showDialog(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
+      title: Text('Cancel ${kind == 'bundle' ? 'bundle' : 'item'}'),
+      content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(name ?? _lineName(l), style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Row(children: [
+          const Text('How many:'),
+          IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: qty <= 1 ? null : () => setD(() => qty -= 1)),
+          Text(_q(qty), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: qty >= max ? null : () => setD(() => qty += 1)),
+          Text('of ${_q(max)}', style: const TextStyle(color: AppTheme.textSecondary)),
+        ]),
+        DropdownButtonFormField<String>(
+          value: reason, isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Reason', isDense: true, border: OutlineInputBorder()),
+          items: const [
+            DropdownMenuItem(value: 'Not available', child: Text('Not available / out of stock')),
+            DropdownMenuItem(value: 'Customer changed', child: Text('Customer asked to change / remove')),
+            DropdownMenuItem(value: 'Damaged', child: Text('Damaged')),
+            DropdownMenuItem(value: 'Other', child: Text('Other')),
+          ],
+          onChanged: (v) => setD(() => reason = v ?? 'Other'),
+        ),
+        const SizedBox(height: 8),
+        TextField(controller: note, decoration: const InputDecoration(labelText: 'Note (optional)', isDense: true, border: OutlineInputBorder())),
+        const SizedBox(height: 8),
+        TextField(
+          controller: pin, obscureText: true, keyboardType: TextInputType.number, autofocus: true,
+          decoration: const InputDecoration(labelText: 'Passcode', isDense: true, border: OutlineInputBorder()),
+        ),
+        const SizedBox(height: 8),
+        Text(kind == 'part'
+            ? 'Removed from this bundle here only — the bundle still ships from the store.'
+            : 'Left out when fulfilling (stays unfulfilled in Shopify) and taken off the amount to collect. '
+              'Refund / edit it in Shopify as usual.',
+            style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        if (err != null) Padding(padding: const EdgeInsets.only(top: 8),
+            child: Text(err!, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5))),
+      ])),
+      actions: [
+        TextButton(onPressed: working ? null : () => Navigator.of(d, rootNavigator: true).pop(), child: const Text('Back')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Colors.red.shade600),
+          onPressed: working ? null : () async {
+            setD(() { working = true; err = null; });
+            try {
+              await _call({
+                'action': 'cancel_item', 'order_id': o['id'], 'line_id': l['line_id'],
+                if (comp != null) 'comp': comp,
+                'qty': qty, 'pin': pin.text.trim(),
+                'reason': note.text.trim().isEmpty ? reason : '$reason: ${note.text.trim()}',
+              });
+              if (d.mounted) Navigator.of(d, rootNavigator: true).pop();
+              _snack('${_q(qty)} cancelled');
+              await _load(quiet: true);
+            } catch (e) {
+              setD(() { working = false; err = '$e'; });
+            }
+          },
+          child: const Text('Cancel item'),
+        ),
+      ],
+    )));
+  }
+
+  /// ⋮ → Item cancel passcode (admins), per store.
+  Future<void> _pinDialog() async {
+    final active = _scopeStores.isNotEmpty ? _scopeStores : _stores.where((s) => s['is_active'] == true).toList();
+    if (active.isEmpty) return;
+    var store = active.first;
+    final pin = TextEditingController();
+    String? err;
+    await showDialog(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
+      title: const Text('Item cancel passcode'),
+      content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Needed to cancel an item while picking (not available / changed). Share it only with the people allowed to do that.',
+            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        if (active.length > 1) ...[
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            value: store['id'] as String, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Store', isDense: true, border: OutlineInputBorder()),
+            items: [for (final s in active) DropdownMenuItem(value: s['id'] as String, child: Text('${s['name'] ?? s['shop_domain']}'))],
+            onChanged: (v) => setD(() => store = active.firstWhere((s) => s['id'] == v)),
+          ),
+        ],
+        const SizedBox(height: 10),
+        Text(store['cancel_pin_set'] == true ? 'A passcode is set. Enter a new one to change it.' : 'No passcode set yet.',
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        TextField(controller: pin, obscureText: true, keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'New passcode (4–8 digits)', isDense: true, border: OutlineInputBorder())),
+        if (err != null) Padding(padding: const EdgeInsets.only(top: 8),
+            child: Text(err!, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5))),
+      ])),
+      actions: [
+        if (store['cancel_pin_set'] == true)
+          TextButton(
+            onPressed: () async {
+              try {
+                await _call({'action': 'set_cancel_pin', 'store_id': store['id'], 'pin': ''});
+                store['cancel_pin_set'] = false;
+                if (d.mounted) Navigator.of(d, rootNavigator: true).pop();
+                _snack('Passcode removed — items can no longer be cancelled here');
+              } catch (e) { setD(() => err = '$e'); }
+            },
+            child: const Text('Remove passcode', style: TextStyle(color: Colors.red)),
+          ),
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(), child: const Text('Close')),
+        FilledButton(
+          onPressed: () async {
+            final v = pin.text.trim();
+            if (!RegExp(r'^\d{4,8}$').hasMatch(v)) { setD(() => err = 'Use 4 to 8 digits.'); return; }
+            try {
+              await _call({'action': 'set_cancel_pin', 'store_id': store['id'], 'pin': v});
+              store['cancel_pin_set'] = true;
+              if (d.mounted) Navigator.of(d, rootNavigator: true).pop();
+              _snack('Passcode saved');
+            } catch (e) { setD(() => err = '$e'); }
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    )));
+    if (mounted) setState(() {});
+  }
+
   Widget _lineRow(Map<String, dynamic> o, List<Map<String, dynamic>> lines, int i, bool canWork) {
     final l = lines[i];
     final qty = _num(l['qty']);
@@ -1817,6 +1985,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (codes.isNotEmpty) codes,
               '@ ${NumberFormat('#,##0.##').format(_num(l['price']))}',
             ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            if (_num(l['cancelled']) > 0)
+              Text('${_q(_num(l['cancelled']))} cancelled${_cancelReason(l)}',
+                  style: const TextStyle(fontSize: 11.5, color: Colors.red, fontWeight: FontWeight.w700)),
             if (!mapped)
               TextButton.icon(
                 style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, foregroundColor: Colors.orange.shade800),
@@ -1840,6 +2011,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ] else
               Text('× ${_q(qty)}', style: const TextStyle(fontWeight: FontWeight.w800)),
           ],
+          if (canWork && qty > 0) _cancelBtn(() => _cancelItem(o, l, bundle ? 'bundle' : 'item', qty)),
         ]),
         // Bundle: each product inside is scanned on its own.
         for (var j = 0; j < comps.length; j++)
@@ -1854,8 +2026,14 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               child: Row(children: [
                 Icon(cd ? Icons.check : Icons.subdirectory_arrow_right, size: 15, color: cd ? Colors.green : AppTheme.textSecondary),
                 const SizedBox(width: 6),
-                Expanded(child: Text('${p?['name'] ?? 'Product'}',
-                    style: TextStyle(fontSize: 12.5, color: cd ? Colors.green.shade800 : null))),
+                Expanded(child: Text.rich(TextSpan(children: [
+                  TextSpan(text: '${p?['name'] ?? 'Product'}',
+                      style: TextStyle(fontSize: 12.5, color: cd ? Colors.green.shade800 : null,
+                          decoration: cq == 0 ? TextDecoration.lineThrough : null)),
+                  if (_num(c['cancelled']) > 0)
+                    TextSpan(text: '   ${_q(_num(c['cancelled']))} cancelled',
+                        style: const TextStyle(fontSize: 11.5, color: Colors.red, fontWeight: FontWeight.w700)),
+                ]))),
                 if (canWork) ...[
                   IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 16),
                       onPressed: cp <= 0 ? null : () => _setPicked(o, i, cp - 1, comp: j)),
@@ -1865,6 +2043,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                         tooltip: cp >= 1 ? 'Count one more' : 'Admin: count one without scanning',
                         onPressed: cd ? null : () => _setPicked(o, i, cp + 1, comp: j)),
                   if (cp >= 1 && !cd) _fillBtn(() => _setPicked(o, i, cq, comp: j), cq - cp),
+                  if (cq > 0) _cancelBtn(() => _cancelItem(o, l, 'part', cq, comp: j, name: '${p?['name'] ?? 'Product'}')),
                 ] else
                   Text('× ${_q(cq)}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5)),
               ]),

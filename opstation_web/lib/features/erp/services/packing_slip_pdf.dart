@@ -78,7 +78,11 @@ class PackingSlipPdf {
       final placed = DateTime.tryParse('${o['placed_at'] ?? ''}')?.toLocal();
       final paid = '${o['financial_status'] ?? ''}'.toUpperCase() == 'PAID';
       final total = _n(o['total']);
-      final collect = o['outstanding'] != null ? _n(o['outstanding']) : (paid ? 0.0 : total);
+      // Items cancelled here come off the amount to collect.
+      final removed = [for (final l in (o['lines'] as List? ?? const [])) l as Map]
+          .fold<double>(0, (a, l) => a + _n(l['cancelled']) * _n(l['price']));
+      final base = o['outstanding'] != null ? _n(o['outstanding']) : (paid ? 0.0 : total);
+      final collect = base <= 0 ? 0.0 : (base - removed < 0 ? 0.0 : base - removed);
       final itemsSum = lines.fold<double>(0, (a, l) => a + _n(l['price']) * _n(l['qty']));
       final orderNo = _t(o['order_no'] ?? '');
       final note = storeNote(o['store_id'] as String?);
@@ -132,6 +136,7 @@ class PackingSlipPdf {
                   pw.Text(_t([
                     if (comps.isEmpty && p != null) 'Store: $title',
                     if ('${l['sku'] ?? ''}'.isNotEmpty) 'SKU ${l['sku']}',
+                    if (_n(l['cancelled']) > 0) '${_q(_n(l['cancelled']))} removed (not sent)',
                   ].join('  |  ')), style: st(7.5, color: _grey)),
                 ])),
               ]),
@@ -236,6 +241,7 @@ class PackingSlipPdf {
           if (_n(o['discounts']) > 0) totalRow('Discount', -_n(o['discounts'])),
           if (o['shipping_total'] != null) totalRow('Shipping', _n(o['shipping_total'])),
           totalRow('Total', total, bold: true),
+          if (removed > 0) totalRow('Removed items (not sent)', -removed),
           if (collect > 0) totalRow('To collect', collect, bold: true),
           if ('${o['note'] ?? ''}'.trim().isNotEmpty) ...[
             pw.SizedBox(height: 10),
