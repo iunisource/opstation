@@ -114,6 +114,9 @@ class ScanBarState extends State<ScanBar> {
     return r;
   }
 
+  /// Put the cursor in the scan box (for a hardware scanner).
+  void focusInput() => _focus.requestFocus();
+
   Future<void> openCamera() async {
     await showCameraScanner(context, onCode: (code) async {
       final q = double.tryParse(_qty.text.trim()) ?? 1;

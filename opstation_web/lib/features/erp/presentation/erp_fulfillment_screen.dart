@@ -359,6 +359,40 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     }
   }
 
+  /// Open the right scanner for the next check: camera on phones, the scan
+  /// box (hardware scanner) on desktop.
+  void _startNextScan(bool mobile) {
+    final sb = _scanKey.currentState;
+    if (sb == null) return;
+    if (mobile) {
+      sb.openCamera();
+    } else {
+      sb.focusInput();
+      _snack('Ready — scan it now with the scanner (or use the camera icon in the scan box)');
+    }
+  }
+
+  Widget _nextScanPrompt(Map<String, dynamic> o, bool mobile) {
+    final what = _nextCheck(o) ?? '';
+    final label = what.contains('label');
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(color: Colors.indigo.withOpacity(0.08), borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.indigo, width: 1.5)),
+      child: Row(children: [
+        Icon(label ? Icons.local_shipping_outlined : Icons.receipt_long_outlined, color: Colors.indigo),
+        const SizedBox(width: 10),
+        Expanded(child: Text('Next: scan $what', style: const TextStyle(fontWeight: FontWeight.w800, color: Colors.indigo))),
+        TextButton.icon(
+          icon: Icon(mobile ? Icons.photo_camera_outlined : Icons.qr_code_scanner, size: 18),
+          label: Text(mobile ? 'Open camera' : 'Scan'),
+          onPressed: () => _startNextScan(mobile),
+        ),
+      ]),
+    );
+  }
+
   /// A scan that is a packing slip (order number) or a courier label
   /// (tracking number) rather than a product. Null = not one of those.
   Future<ScanOutcome?> _checkpointScan(Map<String, dynamic> o, String code, bool allPicked) async {
@@ -395,8 +429,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       } catch (e) {
         return ScanOutcome(false, 'Could not save: $e');
       }
+      final next = _nextCheck(o);
       return ScanOutcome(true, '✓ Slip matches — ${o['order_no']} packed'
-          '${_autoOn(o['store_id'] as String?) ? ', fulfilling…' : ''}');
+          '${next != null ? ' — now scan $next' : _autoOn(o['store_id'] as String?) ? ', fulfilling…' : ''}');
     }
     for (final x in _orders) {
       if (x['id'] != o['id'] && _normNo(x['order_no']) == c) {
@@ -613,6 +648,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (_nextCheck(o) != null) {
         ScanFeedback.done();
         _snack('All items picked — now scan ${_nextCheck(o)}');
+        // Open the scanner straight away for the box check.
+        if (mounted) _startNextScan(MediaQuery.of(context).size.width < 700);
       } else if (_autoOn(o['store_id'] as String?)) {
         _autoFulfil(o);
       } else {
@@ -1793,6 +1830,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               ),
               const SizedBox(height: 8),
               scanBar,
+              if (pickedAll && checksNeeded) _nextScanPrompt(o, mobile),
             ]),
           ),
         Expanded(child: ListView(padding: EdgeInsets.all(mobile ? 12 : 18), children: [
@@ -1936,6 +1974,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 color: pickedAll ? Colors.green.shade700 : null)),
           ]),
           const SizedBox(height: 10),
+          if (canWork && pickedAll && checksNeeded) _nextScanPrompt(o, mobile),
           if (canWork) ...[
             if (!mobile) scanBar,
             if (_autoBusy.contains(o['id']))
@@ -1992,11 +2031,19 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                   onPressed: _busy || !pickedAll || slipNeeded ? null : () => _markPacked(o),
                 ),
               const SizedBox(width: 8),
-              FilledButton.icon(
-                icon: const Icon(Icons.local_shipping_outlined, size: 18),
-                label: const Text('Fulfil'),
-                onPressed: _busy || !pickedAll || checksNeeded ? null : () => _fulfil(o),
-              ),
+              if (pickedAll && checksNeeded)
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(backgroundColor: Colors.indigo),
+                  icon: const Icon(Icons.qr_code_scanner, size: 18),
+                  label: Text(_nextCheck(o)!.contains('label') ? 'Scan label' : 'Scan slip'),
+                  onPressed: () => _startNextScan(mobile),
+                )
+              else
+                FilledButton.icon(
+                  icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                  label: const Text('Fulfil'),
+                  onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
+                ),
             ]),
           ),
       ]),
