@@ -1069,7 +1069,8 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
     // In browser full-screen, drop the app chrome (top bar / sidebar) entirely
     // so a wall display (e.g. the Attendance Board) shows only its own content.
     if (_fullscreen) {
-      return Scaffold(body: widget.child);
+      // Keep live counters + new-order pings working in full screen.
+      return Scaffold(body: Stack(children: [widget.child, const GlobalBadgeSync()]));
     }
 
     // ── Mobile: hamburger AppBar + slide-in Drawer (nav as inline expanders) ──

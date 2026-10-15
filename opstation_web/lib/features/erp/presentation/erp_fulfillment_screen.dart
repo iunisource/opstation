@@ -17,6 +17,8 @@ import '../../auth/auth_controller.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../services/packing_slip_pdf.dart';
 import 'shop_product_matching.dart';
+import 'shop_fulfilled_summary.dart';
+import '../../../core/layout/collapsible_list_pane.dart';
 
 /// Sales → Fulfillment: orders from connected online stores (Shopify).
 /// New → Picking (scan each item) → Packed → Fulfilled (sent back to the
@@ -52,6 +54,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   final Set<String> _fresh = {};    // arrived while this screen is open ("JUST IN")
   Set<String>? _known;              // order ids seen so far (null until first load)
   final _searchCtrl = TextEditingController();
+  String _view = 'queue';           // queue | summary
+  bool _fullscreen = false;         // browser full screen (focus mode)
   Timer? _debounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -65,6 +69,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     super.initState();
     _selId = widget.focusId;
     ScanFeedback.install();
+    html.document.addEventListener('fullscreenchange', _onFsChange);
     _load();
     _subscribe();
     // Back from authorising in Shopify: show what happened.
@@ -80,6 +85,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   void dispose() {
     _debounce?.cancel();
     _searchCtrl.dispose();
+    html.document.removeEventListener('fullscreenchange', _onFsChange);
     final c = _channel;
     if (c != null) Supabase.instance.client.removeChannel(c);
     super.dispose();
@@ -112,7 +118,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (_products.isEmpty) {
         try {
           _products = List<Map<String, dynamic>>.from(await client.from('products')
-              .select('id, name, sku, barcode, base_uom_id, product_main_group').eq('org_id', org).eq('is_active', true).order('name').limit(10000));
+              .select('id, name, sku, barcode, base_uom_id, product_main_group, selling_price').eq('org_id', org).eq('is_active', true).order('name').limit(10000));
           _prodById = {for (final p in _products) p['id'] as String: p};
         } catch (_) {}
       }
@@ -879,6 +885,24 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: _statusColor(st).withOpacity(0.9))),
       );
 
+  // ── focus mode ───────────────────────────────────────────────────────────
+  void _onFsChange(html.Event _) {
+    final fs = html.document.fullscreenElement != null;
+    if (mounted && fs != _fullscreen) setState(() => _fullscreen = fs);
+  }
+
+  /// Full screen: hides the browser bar and Opstation's menus — only this
+  /// screen is shown (Esc or the button again to leave).
+  void _toggleFullscreen() {
+    try {
+      if (html.document.fullscreenElement == null) {
+        html.document.documentElement?.requestFullscreen();
+      } else {
+        html.document.exitFullscreen();
+      }
+    } catch (_) {}
+  }
+
   // ── UI ───────────────────────────────────────────────────────────────────
   String _ago(DateTime? t) {
     if (t == null) return '';
@@ -934,6 +958,16 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final sel = _sel;
     final showDetail = narrow && sel != null;
     final autoAll = _scopeStores.isNotEmpty && _scopeStores.every((s) => s['auto_fulfil'] == true);
+    final viewSwitch = SegmentedButton<String>(
+      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(value: 'queue', icon: Icon(Icons.checklist, size: 16), label: Text('Work queue')),
+        ButtonSegment(value: 'summary', icon: Icon(Icons.summarize_outlined, size: 16), label: Text('Fulfilled summary')),
+      ],
+      selected: {_view},
+      onSelectionChanged: (v) => setState(() { _view = v.first; _selId = null; }),
+    );
     return Container(
       color: AppTheme.background,
       padding: EdgeInsets.all(narrow ? 10 : 20),
@@ -948,7 +982,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               const Text('Scan to pick, pack and ship online-store orders.',
                   style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
           ])),
-          if (_scopeStores.isNotEmpty)
+          if (_stores.isNotEmpty && !narrow) ...[viewSwitch, const SizedBox(width: 8)],
+          if (_scopeStores.isNotEmpty && _view == 'queue')
             Tooltip(
               message: 'When on, an order is packed and fulfilled in the store automatically '
                   'as soon as every item has been scanned right.',
@@ -977,8 +1012,13 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.sync),
           ),
-          if (_orders.isNotEmpty)
+          if (_orders.isNotEmpty && _view == 'queue')
             IconButton(tooltip: 'Print packing slips', icon: const Icon(Icons.print_outlined), onPressed: _printSlipsPicker),
+          if (!narrow) IconButton(
+            tooltip: _fullscreen ? 'Exit full screen (Esc)' : 'Full screen — focus mode',
+            icon: Icon(_fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
+            onPressed: _toggleFullscreen,
+          ),
           PopupMenuButton<String>(
             tooltip: 'More',
             icon: const Icon(Icons.more_vert),
@@ -994,8 +1034,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ],
           ),
         ]),
+        if (narrow && _stores.isNotEmpty && !showDetail) ...[const SizedBox(height: 8), viewSwitch],
         const SizedBox(height: 12),
-        if (!_loading && _stores.isNotEmpty && !showDetail) ...[
+        if (!_loading && _stores.isNotEmpty && !showDetail && _view == 'queue') ...[
           _statsStrip(narrow),
           const SizedBox(height: 12),
         ],
@@ -1015,13 +1056,30 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                             onPressed: _connectDialog),
                       ],
                     ]))
-                  : narrow
+                  : _view == 'summary'
+                      ? ShopFulfilledSummary(
+                          key: const ValueKey('fulfilled-summary'),
+                          orgId: _orgId ?? '',
+                          userId: ref.read(currentUserProvider)?.id,
+                          userName: ref.read(currentUserProvider)?.name ?? '',
+                          stores: _stores,
+                          products: _prodById,
+                          branches: ref.read(userBranchesProvider).valueOrNull ?? const [],
+                        )
+                      : narrow
                       ? (showDetail ? _detail(sel) : _list())
-                      : Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                          SizedBox(width: 400, child: _list()),
-                          const SizedBox(width: 16),
-                          Expanded(child: sel == null ? _emptyDetail() : _detail(sel)),
-                        ]),
+                      // The order list folds away (strip in the middle) for a wider work area.
+                      : CollapsibleListPane(
+                          paneWidth: 400,
+                          listChild: OverflowBox(
+                            alignment: Alignment.topLeft, minWidth: 400, maxWidth: 400,
+                            child: Padding(padding: const EdgeInsets.only(right: 8), child: _list()),
+                          ),
+                          detailChild: Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: sel == null ? _emptyDetail() : _detail(sel),
+                          ),
+                        ),
         ),
       ]),
     );
