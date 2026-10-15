@@ -1,5 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -56,6 +58,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     _selId = widget.focusId;
     _load();
     _subscribe();
+    // Back from authorising in Shopify: show what happened.
+    final connected = Uri.base.queryParameters['connected'];
+    if (connected != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _snack('Store connected. $connected'));
+    }
   }
 
   @override
@@ -404,6 +411,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 'access_token': legacy ? token.text.trim() : null, 'days': int.tryParse(days.text.trim()) ?? 7,
               });
               if (d.mounted) Navigator.of(d, rootNavigator: true).pop();
+              if (r['pending'] == true) {
+                await _authorizeDialog('${r['authorize_url']}');
+                await _load();
+                return;
+              }
               _snack('Connected ${r['shop'] ?? ''} — ${r['imported'] ?? 0} order(s) brought in'
                   '${r['webhook_warning'] != null ? '. Live updates could not be switched on; the 10-minute sync still runs.' : ''}');
               await _load();
@@ -417,6 +429,28 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         ),
       ],
     )));
+  }
+
+  /// Keys are saved, but Shopify still has to approve access for this store.
+  Future<void> _authorizeDialog(String url) async {
+    await showDialog(context: context, builder: (d) => AlertDialog(
+      title: const Text('One more step: approve in Shopify'),
+      content: const SizedBox(width: 440, child: Text(
+          'The keys are saved. Now approve Opstation in your Shopify admin: press the button, '
+          'sign in to the store if asked, and click Install / Approve. You will come straight back here '
+          'and the recent orders will load.')),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(), child: const Text('Later')),
+        FilledButton.icon(
+          icon: const Icon(Icons.open_in_new, size: 18),
+          label: const Text('Approve in Shopify'),
+          onPressed: () {
+            Navigator.of(d, rootNavigator: true).pop();
+            html.window.location.href = url;
+          },
+        ),
+      ],
+    ));
   }
 
   Future<void> _storesDialog() async {

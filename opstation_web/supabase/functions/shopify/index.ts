@@ -22,6 +22,8 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 
 const API_VERSION = "2026-07";
 const FN_URL = "https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/shopify";
+const APP_URL = "https://opstation-f06c7.web.app";
+const SCOPES = "read_orders,read_customers,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -255,6 +257,39 @@ async function fulfil(admin: SupabaseClient, store: Store, sec: Secret, gid: str
   throw new Error("Shopify did not accept the fulfilment.");
 }
 
+// ── Install / authorise (for stores outside the app's organisation, or any
+//    install started from Shopify) ───────────────────────────────────────────
+async function hmacHex(secret: string, msg: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg)));
+  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function authorizeUrl(store: Store, sec: Secret): Promise<string> {
+  const state = `${store.id}.${(await hmacHex(sec.client_secret ?? "", store.id)).slice(0, 24)}`;
+  const q = new URLSearchParams({
+    client_id: sec.client_id ?? "", scope: SCOPES, redirect_uri: `${FN_URL}/oauth`, state,
+  });
+  return `https://${store.shop_domain}/admin/oauth/authorize?${q}`;
+}
+
+/// Shopify signs install / callback links: hex HMAC of the sorted query minus hmac.
+async function queryHmacOk(secret: string, params: URLSearchParams): Promise<boolean> {
+  const given = params.get("hmac") ?? "";
+  const pairs = [...params.entries()].filter(([k]) => k !== "hmac" && k !== "signature")
+    .sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("&");
+  const mine = await hmacHex(secret, pairs);
+  return given.length === mine.length && given.toLowerCase() === mine;
+}
+
+const page = (title: string, text: string, status = 200) => new Response(
+  `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head>
+   <body style="font-family:Segoe UI,Arial,sans-serif;background:#f4f6fa;padding:40px">
+   <div style="max-width:520px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px">
+   <h2 style="margin-top:0">${title}</h2><p>${text}</p>
+   <p><a href="${APP_URL}/erp/fulfillment">Open Opstation → Fulfillment</a></p></div></body></html>`,
+  { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
+
 // ── Notifications from Shopify ───────────────────────────────────────────────
 async function verifyHmac(secret: string, raw: Uint8Array, header: string): Promise<boolean> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -280,6 +315,52 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const url = new URL(req.url);
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+  // 0) Install link / authorisation callback (browser comes back from Shopify)
+  if (req.method === "GET" && url.pathname.endsWith("/install")) {
+    const shop = normDomain(url.searchParams.get("shop") ?? "");
+    const { data: rows } = await admin.from("shop_stores").select("*").eq("shop_domain", shop)
+      .order("created_at", { ascending: false }).limit(1);
+    const st = rows?.[0] as Store | undefined;
+    if (!st) return page("Connect the store in Opstation first", `Open Opstation → Sales → Fulfillment → Connect store, enter ${shop || "the store"} with the app's Client ID and secret, then install again.`, 404);
+    const loaded = await loadStore(admin, st.id);
+    if (!loaded || !loaded[1].client_secret || !loaded[1].client_id) return page("Keys missing", "Enter the app's Client ID and secret in Opstation first.", 400);
+    if (url.searchParams.get("hmac") && !(await queryHmacOk(loaded[1].client_secret!, url.searchParams))) {
+      return page("Link not valid", "The Client secret saved in Opstation doesn't match this app. Reconnect the store in Opstation with the right secret.", 401);
+    }
+    return Response.redirect(await authorizeUrl(loaded[0], loaded[1]), 302);
+  }
+  if (req.method === "GET" && url.pathname.endsWith("/oauth")) {
+    const p = url.searchParams;
+    const [sid, sig] = (p.get("state") ?? "").split(".");
+    const loaded = sid ? await loadStore(admin, sid) : null;
+    if (!loaded || !loaded[1].client_secret) return page("Store not found", "Start again from Opstation → Fulfillment.", 404);
+    const [store, sec] = loaded;
+    const expect = (await hmacHex(sec.client_secret!, store.id)).slice(0, 24);
+    if (sig !== expect || !(await queryHmacOk(sec.client_secret!, p)) || normDomain(p.get("shop") ?? "") !== store.shop_domain) {
+      return page("Could not verify", "Shopify's reply could not be verified. Start again from Opstation.", 401);
+    }
+    const r = await fetch(`https://${store.shop_domain}/admin/oauth/access_token`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_id: sec.client_id, client_secret: sec.client_secret, code: p.get("code") }),
+    });
+    const t = await r.text();
+    if (!r.ok) return page("Shopify refused", `Shopify did not give access (${r.status}). ${t.slice(0, 200)}`, 400);
+    const j = JSON.parse(t);
+    sec.access_token = j.access_token;
+    sec.token_expires_at = j.expires_in ? new Date(Date.now() + Number(j.expires_in) * 1000).toISOString() : null;
+    await admin.from("shop_store_secrets").update({ access_token: sec.access_token, token_expires_at: sec.token_expires_at }).eq("store_id", store.id);
+    await admin.from("shop_stores").update({ is_active: true, last_error: null }).eq("id", store.id);
+    let note = "";
+    try {
+      const hp = await registerWebhooks(admin, store, sec);
+      const n = await syncStore(admin, store, sec, new Date(Date.now() - 7 * 86400000).toISOString());
+      note = `${n} order(s) from the last 7 days brought in.${hp ? " Live updates could not be switched on; the 10-minute sync still runs." : ""}`;
+    } catch (e) {
+      note = `Connected, but the first sync had a problem: ${(e as Error).message}`;
+    }
+    return Response.redirect(`${APP_URL}/erp/fulfillment?connected=${encodeURIComponent(note)}`, 302);
+  }
 
   // 1) Shopify notification
   const hmac = req.headers.get("X-Shopify-Hmac-Sha256");
@@ -363,7 +444,19 @@ serve(async (req) => {
       };
       await admin.from("shop_store_secrets").upsert(sec, { onConflict: "store_id" });
       // Test the key, then subscribe to order notifications and pull recent orders.
-      const shopInfo = await gql(admin, store, sec, `{ shop { name } }`);
+      // deno-lint-ignore no-explicit-any
+      let shopInfo: any;
+      try {
+        shopInfo = await gql(admin, store, sec, `{ shop { name } }`);
+      } catch (e) {
+        // Keys saved, but no access yet (app not installed, or the store is not
+        // in the app's organisation): finish by authorising in Shopify.
+        if (sec.client_id) {
+          return json({ ok: true, pending: true, store_id: store.id, authorize_url: await authorizeUrl(store, sec),
+            reason: (e as Error).message.slice(0, 300) });
+        }
+        throw e;
+      }
       if (!existing && !body.name && shopInfo?.shop?.name) {
         await admin.from("shop_stores").update({ name: shopInfo.shop.name }).eq("id", store.id);
       }
