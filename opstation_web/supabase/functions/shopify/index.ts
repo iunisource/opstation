@@ -111,6 +111,9 @@ const ORDER_EXTRA = `
 async function gqlOrders(admin: SupabaseClient, store: Store, sec: Secret, build: (fields: string) => string,
     variables: Record<string, unknown>) {
   const tries = [
+    // + the item picture (packing slip fallback when the product has no photo)
+    ORDER_FIELDS.replace("variant { id barcode sku }",
+      "variant { id barcode sku } image { url(transform: { maxWidth: 240, maxHeight: 240 }) }") + ORDER_EXTRA,
     ORDER_FIELDS + ORDER_EXTRA,
     ORDER_FIELDS,
     ORDER_FIELDS.replace("variant { id barcode sku }", ""),
@@ -467,6 +470,7 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     line_id: li.id, title: li.title, variant_title: li.variantTitle ?? null,
     sku: String(li.sku ?? li.variant?.sku ?? "").trim(), barcode: String(li.variant?.barcode ?? "").trim(),
     variant_id: li.variant?.id ?? null,
+    image: li.image?.url ?? null,
     qty: Number(li.currentQuantity ?? li.quantity ?? 0),
     price: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
   }, prevLine.get(li.id) ?? null)).filter((l: { qty: number }) => l.qty > 0);

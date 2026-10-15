@@ -127,7 +127,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (_products.isEmpty) {
         try {
           _products = List<Map<String, dynamic>>.from(await client.from('products')
-              .select('id, name, sku, barcode, base_uom_id, product_main_group, selling_price').eq('org_id', org).eq('is_active', true).order('name').limit(10000));
+              .select('id, name, sku, barcode, base_uom_id, product_main_group, selling_price, image_url').eq('org_id', org).eq('is_active', true).order('name').limit(10000));
           _prodById = {for (final p in _products) p['id'] as String: p};
         } catch (_) {}
       }

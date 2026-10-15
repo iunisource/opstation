@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart' show networkImage;
 
 /// Packing slips for online-store orders (Sales → Fulfillment), A4 or A5, one
 /// page per order: store + order number (barcode + QR for scanning at
@@ -38,6 +39,44 @@ class PackingSlipPdf {
     bool a5 = false,
   }) async {
     final doc = pw.Document(title: 'Packing slips');
+
+    // Pictures: the Opstation product photo first, the Shopify item picture
+    // if the product has none. Fetched once each, in parallel; any that can't
+    // load in time are simply left out.
+    String? pic(Map<String, dynamic>? prod, [Object? fallback]) {
+      final a = '${prod?['image_url'] ?? ''}'.trim();
+      if (a.isNotEmpty) return a;
+      final b = '${fallback ?? ''}'.trim();
+      return b.isEmpty ? null : b;
+    }
+    final urls = <String>{};
+    for (final o in orders) {
+      for (final l in (o['lines'] as List? ?? const [])) {
+        final m = Map<String, dynamic>.from(l as Map);
+        final comps = (m['components'] as List? ?? const []);
+        final u = comps.isEmpty ? pic(products[m['product_id']], m['image']) : pic(null, m['image']);
+        if (u != null) urls.add(u);
+        for (final c in comps) {
+          final cu = pic(products[(c as Map)['product_id']]);
+          if (cu != null) urls.add(cu);
+        }
+      }
+    }
+    final images = <String, pw.ImageProvider>{};
+    await Future.wait(urls.map((u) async {
+      try {
+        images[u] = await networkImage(u).timeout(const Duration(seconds: 8));
+      } catch (_) {}
+    }));
+    pw.Widget thumb(String? url, double size) {
+      final img = url == null ? null : images[url];
+      return pw.Container(
+        width: size, height: size,
+        margin: const pw.EdgeInsets.only(right: 6),
+        decoration: pw.BoxDecoration(border: pw.Border.all(color: _line, width: 0.5)),
+        child: img == null ? pw.SizedBox() : pw.Image(img, fit: pw.BoxFit.contain),
+      );
+    }
     final fmt = a5 ? PdfPageFormat.a5 : PdfPageFormat.a4;
     final s = a5 ? 0.82 : 1.0; // text scale for A5
     final money = NumberFormat('#,##0.##');
@@ -95,19 +134,31 @@ class PackingSlipPdf {
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              // What to pick, in plain words: "2 x <product>" — the product
-              // name from Opstation (as on the shelf label), not the store title.
-              if (comps.isEmpty)
-                pw.Text(_t('${_q(qty)} x ${p != null ? p['name'] : title}'), style: st(10, bold: true))
-              else ...[
-                pw.Text(_t('${_q(qty)} x ${title}  (bundle)'), style: st(9.5, bold: true)),
-                for (final c in comps)
-                  pw.Text(_t('   ${_q(_n(c['qty']))} x ${products[c['product_id']]?['name'] ?? 'item'}'), style: st(9.5, bold: true)),
-              ],
-              pw.Text(_t([
-                if (comps.isEmpty && p != null) 'Store: $title',
-                if ('${l['sku'] ?? ''}'.isNotEmpty) 'SKU ${l['sku']}',
-              ].join('  |  ')), style: st(7.5, color: _grey)),
+              // What to pick, in plain words: "2 x <product>" with its picture —
+              // the product name from Opstation (as on the shelf label).
+              pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+                thumb(comps.isEmpty ? pic(p, l['image']) : pic(null, l['image']), 36 * s),
+                pw.Expanded(child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                  if (comps.isEmpty)
+                    pw.Text(_t('${_q(qty)} x ${p != null ? p['name'] : title}'), style: st(10, bold: true))
+                  else
+                    pw.Text(_t('${_q(qty)} x $title  (bundle)'), style: st(9.5, bold: true)),
+                  pw.Text(_t([
+                    if (comps.isEmpty && p != null) 'Store: $title',
+                    if ('${l['sku'] ?? ''}'.isNotEmpty) 'SKU ${l['sku']}',
+                  ].join('  |  ')), style: st(7.5, color: _grey)),
+                ])),
+              ]),
+              for (final c in comps)
+                pw.Padding(
+                  padding: pw.EdgeInsets.only(left: 18 * s, top: 3),
+                  child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+                    thumb(pic(products[c['product_id']]), 24 * s),
+                    pw.Expanded(child: pw.Text(
+                        _t('${_q(_n(c['qty']))} x ${products[c['product_id']]?['name'] ?? 'item'}'),
+                        style: st(9.5, bold: true))),
+                  ]),
+                ),
             ]),
           ),
           cell(money.format(_n(l['price'])), align: pw.TextAlign.right),
