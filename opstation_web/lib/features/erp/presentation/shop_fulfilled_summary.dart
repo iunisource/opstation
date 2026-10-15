@@ -87,7 +87,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
     final base = o['outstanding'] != null ? _n(o['outstanding']) : (paid ? 0.0 : _n(o['total']));
     if (base <= 0) return 0;
     // Items cancelled while picking were not sent — not collected either.
-    final removed = _lines(o).fold<double>(0, (a, l) => a + _n(l['cancelled']) * _n(l['price']));
+    final removed = _lines(o).fold<double>(0, (a, l) => a + _n(l['cancelled']) * (_n(l['price']) - _n(l['disc_each'])));
     return base - removed < 0 ? 0.0 : base - removed;
   }
 

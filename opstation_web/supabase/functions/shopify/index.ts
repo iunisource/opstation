@@ -107,12 +107,24 @@ const ORDER_EXTRA = `
   totalDiscountsSet { shopMoney { amount } } totalOutstandingSet { shopMoney { amount } }
   fulfillments(first: 10) { status trackingInfo(first: 5) { company number url } }
   metafields(first: 30) { nodes { namespace key value } }`;
+// Money exactly as Shopify shows it now (after edits): discount codes, tax,
+// and the total after any changes made to the order.
+const ORDER_MONEY = `
+  discountCodes taxesIncluded
+  currentSubtotalPriceSet { shopMoney { amount } } currentTotalDiscountsSet { shopMoney { amount } }
+  currentTotalTaxSet { shopMoney { amount } } currentTotalPriceSet { shopMoney { amount } }`;
+// Per item: the discount given on it (a promo code is shared across items).
+const LINE_EXTRA = "variant { id barcode sku } image { url(transform: { maxWidth: 240, maxHeight: 240 }) }"
+  + " discountAllocations { allocatedAmountSet { shopMoney { amount } } }";
 
 /// Runs an orders query with as much detail as this connection is allowed:
 /// full → without the extras → without product details.
 async function gqlOrders(admin: SupabaseClient, store: Store, sec: Secret, build: (fields: string) => string,
     variables: Record<string, unknown>) {
   const tries = [
+    // + item picture & discount, + Shopify's current money breakdown
+    ORDER_FIELDS.replace("variant { id barcode sku }", LINE_EXTRA) + ORDER_EXTRA + ORDER_MONEY,
+    ORDER_FIELDS.replace("variant { id barcode sku }", LINE_EXTRA) + ORDER_EXTRA,
     // + the item picture (packing slip fallback when the product has no photo)
     ORDER_FIELDS.replace("variant { id barcode sku }",
       "variant { id barcode sku } image { url(transform: { maxWidth: 240, maxHeight: 240 }) }") + ORDER_EXTRA,
@@ -507,6 +519,13 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     image: li.image?.url ?? null,
     qty: Number(li.currentQuantity ?? li.quantity ?? 0),
     price: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
+    // Discount per unit on this item (its share of any promo code), so a
+    // cancelled item comes off at the price the customer actually pays.
+    ...(Array.isArray(li.discountAllocations) ? {
+      disc_each: Math.round(li.discountAllocations.reduce(
+        (a: number, d: { allocatedAmountSet?: { shopMoney?: { amount?: string } } }) => a + Number(d.allocatedAmountSet?.shopMoney?.amount ?? 0), 0)
+        / Math.max(1, Number(li.quantity ?? li.currentQuantity ?? 1)) * 100) / 100,
+    } : {}),
   }, prevLine.get(li.id) ?? null))
     // deno-lint-ignore no-explicit-any
     .map((l: any) => keepCancels(l, prevLine.get(String(l.line_id)) ?? null))
@@ -582,6 +601,16 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
       tags: Array.isArray(o.tags) ? o.tags.join(", ") : null,
       ship_info: ship,
     });
+    if (o.currentTotalPriceSet) {
+      Object.assign(row, {
+        total: money(o.currentTotalPriceSet) ?? row.total,
+        subtotal: money(o.currentSubtotalPriceSet),
+        discounts: money(o.currentTotalDiscountsSet),
+        tax_total: money(o.currentTotalTaxSet),
+        taxes_included: o.taxesIncluded === true,
+        discount_codes: Array.isArray(o.discountCodes) ? o.discountCodes.join(", ") : null,
+      });
+    }
     // Booked / fulfilled outside Opstation: keep its tracking on our side too.
     if (ship && status === "fulfilled") {
       const { data: cur } = await admin.from("shop_orders").select("tracking_number")

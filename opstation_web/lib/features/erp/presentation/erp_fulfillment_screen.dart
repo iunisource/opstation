@@ -1060,9 +1060,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     return (p, n);
   }
 
-  /// Value of items cancelled here (not in Shopify yet) — taken off the COD amount.
+  /// Value of items cancelled here (at the price paid, after any discount) —
+  /// taken off the COD amount.
   double _removedValue(Map<String, dynamic> o) =>
-      _lines(o).fold<double>(0, (a, l) => a + _num(l['cancelled']) * _num(l['price']));
+      _lines(o).fold<double>(0, (a, l) => a + _num(l['cancelled']) * (_num(l['price']) - _num(l['disc_each'])));
 
   double _collect(Map<String, dynamic> o) {
     final paid = '${o['financial_status'] ?? ''}'.toUpperCase() == 'PAID';
