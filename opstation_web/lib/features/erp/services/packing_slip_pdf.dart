@@ -95,11 +95,19 @@ class PackingSlipPdf {
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text(_t(title), style: st(9.5, bold: true)),
-              if ('${l['sku'] ?? ''}'.isNotEmpty) pw.Text(_t('SKU ${l['sku']}'), style: st(8, color: _grey)),
-              if (p != null && '${p['name']}' != title) pw.Text(_t('${p['name']}'), style: st(8, color: _grey)),
-              for (final c in comps)
-                pw.Text(_t('   - ${_q(_n(c['qty']))} x ${products[c['product_id']]?['name'] ?? 'item'}'), style: st(8.5)),
+              // What to pick, in plain words: "2 x <product>" — the product
+              // name from Opstation (as on the shelf label), not the store title.
+              if (comps.isEmpty)
+                pw.Text(_t('${_q(qty)} x ${p != null ? p['name'] : title}'), style: st(10, bold: true))
+              else ...[
+                pw.Text(_t('${_q(qty)} x ${title}  (bundle)'), style: st(9.5, bold: true)),
+                for (final c in comps)
+                  pw.Text(_t('   ${_q(_n(c['qty']))} x ${products[c['product_id']]?['name'] ?? 'item'}'), style: st(9.5, bold: true)),
+              ],
+              pw.Text(_t([
+                if (comps.isEmpty && p != null) 'Store: $title',
+                if ('${l['sku'] ?? ''}'.isNotEmpty) 'SKU ${l['sku']}',
+              ].join('  |  ')), style: st(7.5, color: _grey)),
             ]),
           ),
           cell(money.format(_n(l['price'])), align: pw.TextAlign.right),

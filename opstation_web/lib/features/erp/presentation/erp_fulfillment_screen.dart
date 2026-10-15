@@ -270,11 +270,66 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     return false;
   }
 
-  bool _lineMatches(Map<String, dynamic> l, String code) {
+  /// Strict scanning (store setting): only the Opstation barcode / SKU code
+  /// counts — a code typed on the Shopify product is not trusted.
+  bool _strictScan(String? storeId) =>
+      _stores.any((s) => s['id'] == storeId && s['scan_codes'] == 'system');
+
+  bool _lineMatches(Map<String, dynamic> l, String code, {bool strict = false}) {
     final c = code.trim().toLowerCase();
     if (c.isEmpty) return false;
     if (_prodMatches(l['product_id'] as String?, c)) return true;
+    if (strict) return false;
     return [l['barcode'], l['sku']].any((v) => '${v ?? ''}'.trim().toLowerCase() == c);
+  }
+
+  /// ⋮ → Scan settings (admins): per store, which codes count as a right scan.
+  Future<void> _scanSettings() async {
+    final active = _stores.where((s) => s['is_active'] == true).toList();
+    if (active.isEmpty) return;
+    final choice = {for (final s in active) s['id'] as String: (s['scan_codes'] as String?) == 'system' ? 'system' : 'any'};
+    final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
+      title: const Text('Scan settings'),
+      content: SizedBox(width: 480, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Which barcodes count as a right scan when picking. Products inside bundles always use the Opstation codes.',
+            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        for (final s in active) ...[
+          const SizedBox(height: 12),
+          if (active.length > 1) Text('${s['name'] ?? s['shop_domain']}', style: const TextStyle(fontWeight: FontWeight.w700)),
+          RadioListTile<String>(
+            dense: true, contentPadding: EdgeInsets.zero,
+            value: 'system', groupValue: choice[s['id']],
+            onChanged: (v) => setD(() => choice[s['id'] as String] = v ?? 'system'),
+            title: const Text('Opstation codes only (strict)'),
+            subtitle: const Text('Only the product barcode / SKU code from Opstation — the labels you print. Safest.'),
+          ),
+          RadioListTile<String>(
+            dense: true, contentPadding: EdgeInsets.zero,
+            value: 'any', groupValue: choice[s['id']],
+            onChanged: (v) => setD(() => choice[s['id'] as String] = v ?? 'any'),
+            title: const Text('Opstation + Shopify codes'),
+            subtitle: const Text('Also accepts the barcode / SKU typed on the Shopify product.'),
+          ),
+        ],
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), child: const Text('Save')),
+      ],
+    )));
+    if (ok != true) return;
+    try {
+      for (final s in active) {
+        final v = choice[s['id']] == 'system' ? 'system' : 'any';
+        if ((s['scan_codes'] ?? 'any') == v) continue;
+        await Supabase.instance.client.from('shop_stores').update({'scan_codes': v}).eq('id', s['id']);
+        s['scan_codes'] = v;
+      }
+      if (mounted) setState(() {});
+      _snack('Scan settings saved');
+    } catch (e) {
+      _snack('Could not save: $e');
+    }
   }
 
   /// Bundle lines: one store item made of several products, each picked on its own.
@@ -301,7 +356,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         for (var j = 0; j < cs.length; j++) {
           if (_prodMatches(cs[j]['product_id'] as String?, c)) targets.add((i, j));
         }
-      } else if (_lineMatches(lines[i], code)) {
+      } else if (_lineMatches(lines[i], code, strict: _strictScan(o['store_id'] as String?))) {
         targets.add((i, null));
       }
     }
@@ -1086,6 +1141,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             onSelected: (v) {
               if (v == 'match') _openMatching();
               if (v == 'recheck' && !_busy) _syncNow(days: 14);
+              if (v == 'scan') _scanSettings();
               if (v == 'stores') _stores.isEmpty && _isAdmin ? _connectDialog() : _storesDialog();
             },
             itemBuilder: (_) => [
@@ -1094,6 +1150,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (_stores.any((s) => s['is_active'] == true))
                 const PopupMenuItem(value: 'recheck', child: ListTile(dense: true, leading: Icon(Icons.manage_history),
                     title: Text('Re-check last 14 days'), subtitle: Text('Picks up changes made in Shopify that were missed'))),
+              if (_isAdmin && _stores.any((s) => s['is_active'] == true))
+                const PopupMenuItem(value: 'scan', child: ListTile(dense: true, leading: Icon(Icons.qr_code_scanner),
+                    title: Text('Scan settings'), subtitle: Text('Which barcodes count when picking'))),
               PopupMenuItem(value: 'stores', child: ListTile(dense: true, leading: const Icon(Icons.storefront_outlined),
                   title: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'))),
             ],
