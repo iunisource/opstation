@@ -95,7 +95,7 @@ class _ShopDispatchState extends State<ShopDispatch> {
     if (c.isEmpty) return const ScanOutcome(false, 'Empty scan');
     Map<String, dynamic>? hit;
     for (final o in _ready) {
-      if (_no(o['order_no']) == c || (_tracking(o).isNotEmpty && _tracking(o).toLowerCase() == code.trim().toLowerCase())) {
+      if (_no(o['order_no']) == c || labelMatches(code, _tracking(o))) {
         hit = o;
         break;
       }

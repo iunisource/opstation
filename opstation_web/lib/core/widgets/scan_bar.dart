@@ -22,6 +22,22 @@ Map<String, dynamic>? findProductByCode(List<Map<String, dynamic>> products, Str
   return null;
 }
 
+/// Courier labels often pack several fields into one code, e.g. a DEX QR:
+/// "PK-DEX213512193, 3924.55, B-BTB-PK". True when any part of [scanned] is
+/// the [tracking] number (ignoring case, spaces, dashes and a short prefix
+/// like "PK-").
+bool labelMatches(String scanned, String tracking) {
+  String nz(String x) => x.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  final t = nz(tracking);
+  if (t.length < 5) return false;
+  final parts = <String>{nz(scanned), ...scanned.split(RegExp(r'[\s,;|/]+')).map(nz)}..removeWhere((x) => x.isEmpty);
+  for (final p in parts) {
+    if (p == t) return true;
+    if (p.length >= 6 && t.length >= 6 && (p.endsWith(t) || t.endsWith(p))) return true;
+  }
+  return false;
+}
+
 class ScanOutcome {
   final bool ok;
   final String message;

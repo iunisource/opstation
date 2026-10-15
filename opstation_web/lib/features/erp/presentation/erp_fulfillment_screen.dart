@@ -414,9 +414,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       return ScanOutcome(true, '✓ Courier label matches this order'
           '${_autoOn(o['store_id'] as String?) && _checksDone(o) ? ' — fulfilling…' : ''}');
     }
-    if (trk(o).isNotEmpty && trk(o) == code.trim().toLowerCase()) return labelOk();
+    if (labelMatches(code, trk(o))) return labelOk();
     for (final x in _orders) {
-      if (x['id'] != o['id'] && trk(x).isNotEmpty && trk(x) == code.trim().toLowerCase()) {
+      if (x['id'] != o['id'] && labelMatches(code, trk(x))) {
         return ScanOutcome(false, 'WRONG LABEL — this courier label is for ${x['order_no']} (${x['customer_name'] ?? ''})');
       }
     }
@@ -451,7 +451,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (trk(o).isEmpty) {
         return const ScanOutcome(false, 'No courier booking found for this order yet — book it, then scan the label');
       }
-      if (trk(o) == code.trim().toLowerCase()) return labelOk();
+      if (labelMatches(code, trk(o))) return labelOk();
       return ScanOutcome(false, 'WRONG LABEL — this is not the courier label for ${o['order_no']}');
     }
     return null;
