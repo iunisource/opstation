@@ -456,8 +456,8 @@ function applyMatch(cat: Catalog, line: any, old: any | null) {
 }
 
 // deno-lint-ignore no-explicit-any
-async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: any) {
-  const { data: prev } = await admin.from("shop_orders").select("id, status, lines")
+async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: any): Promise<boolean> {
+  const { data: prev } = await admin.from("shop_orders").select("id, status, lines, ext_updated_at, ext_fulfillment, financial_status, cancelled_at")
     .eq("store_id", store.id).eq("external_id", o.id).maybeSingle();
   // deno-lint-ignore no-explicit-any
   const prevLine = new Map<string, any>();
@@ -547,8 +547,19 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
       }
     }
   }
+  // Nothing changed since last time → don't write. Every write wakes up all
+  // open Fulfillment screens, so re-syncing unchanged orders made them keep
+  // refreshing.
+  if (prev && !reopened
+      && prev.ext_updated_at && o.updatedAt && Date.parse(prev.ext_updated_at) === Date.parse(o.updatedAt)
+      && prev.status === status && prev.ext_fulfillment === o.displayFulfillmentStatus
+      && prev.financial_status === o.displayFinancialStatus
+      && JSON.stringify(prev.lines ?? []) === JSON.stringify(lines)) {
+    return false;
+  }
   const { error } = await admin.from("shop_orders").upsert(row, { onConflict: "store_id,external_id" });
   if (error) throw new Error(error.message);
+  return true;
 }
 
 async function syncStore(admin: SupabaseClient, store: Store, sec: Secret, sinceIso: string | null) {
@@ -565,7 +576,7 @@ async function syncStore(admin: SupabaseClient, store: Store, sec: Secret, since
       (f) => `query($q: String, $after: String) { orders(first: 50, after: $after, sortKey: UPDATED_AT, query: $q) {
          pageInfo { hasNextPage endCursor } nodes { ${f} } } }`,
       { q: `updated_at:>='${since}'`, after });
-    for (const o of data.orders.nodes) { await saveOrder(admin, store, cat, o); n++; }
+    for (const o of data.orders.nodes) { if (await saveOrder(admin, store, cat, o)) n++; }
     if (!data.orders.pageInfo.hasNextPage) break;
     after = data.orders.pageInfo.endCursor;
   }

@@ -125,7 +125,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (!mounted) return;
       final list = List<Map<String, dynamic>>.from(orders);
       final ids = {for (final o in list) o['id'] as String};
-      final arrived = _known == null ? <Map<String, dynamic>>[] : list.where((o) => !_known!.contains(o['id'])).toList();
+      // Announce only orders that land in the work queue — not older orders
+      // brought in by a re-check that are already fulfilled / cancelled.
+      final arrived = _known == null
+          ? <Map<String, dynamic>>[]
+          : list.where((o) => !_known!.contains(o['id']) && ['new', 'picking', 'packed'].contains(o['status'])).toList();
       setState(() {
         _stores = List<Map<String, dynamic>>.from(stores);
         _orders = list;
@@ -209,7 +213,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     return data;
   }
 
-  Future<void> _syncNow() async {
+  /// Sync: changes since the last sync. [days]: re-check that many days back
+  /// (from the ⋮ menu) — catches anything a missed notification left out.
+  Future<void> _syncNow({int? days}) async {
     final stores = _stores.where((s) => s['is_active'] == true && (_storeFilter == 'all' || s['id'] == _storeFilter)).toList();
     if (stores.isEmpty) { _snack('No connected store.'); return; }
     setState(() => _busy = true);
@@ -217,9 +223,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final problems = <String>[];
     for (final s in stores) {
       try {
-        // Look back 14 days so changes made in Shopify (e.g. an order
-        // un-fulfilled there) are picked up even if a notification was missed.
-        final r = await _call({'action': 'sync', 'store_id': s['id'], 'days': 14});
+        final r = await _call({'action': 'sync', 'store_id': s['id'], if (days != null) 'days': days});
         total += (r['synced'] as num?)?.toInt() ?? 0;
         if (r['webhook_warning'] != null) problems.add('${s['name']}: live updates not active');
       } catch (e) {
@@ -1026,11 +1030,15 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             icon: const Icon(Icons.more_vert),
             onSelected: (v) {
               if (v == 'match') _openMatching();
+              if (v == 'recheck' && !_busy) _syncNow(days: 14);
               if (v == 'stores') _stores.isEmpty && _isAdmin ? _connectDialog() : _storesDialog();
             },
             itemBuilder: (_) => [
               if (_stores.any((s) => s['is_active'] == true))
                 const PopupMenuItem(value: 'match', child: ListTile(dense: true, leading: Icon(Icons.link), title: Text('Match products'))),
+              if (_stores.any((s) => s['is_active'] == true))
+                const PopupMenuItem(value: 'recheck', child: ListTile(dense: true, leading: Icon(Icons.manage_history),
+                    title: Text('Re-check last 14 days'), subtitle: Text('Picks up changes made in Shopify that were missed'))),
               PopupMenuItem(value: 'stores', child: ListTile(dense: true, leading: const Icon(Icons.storefront_outlined),
                   title: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'))),
             ],
