@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 const addr = "127.0.0.1:9123"
 
 var allowedOrigins = []string{
@@ -99,6 +99,10 @@ type printReq struct {
 }
 
 func main() {
+	// Double-clicked (no --background): install / start, show a message, exit.
+	if handleInstall() {
+		return
+	}
 	f, err := os.OpenFile(filepath.Join(appDir(), "helper.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err == nil {
 		log.SetOutput(f)
@@ -113,6 +117,14 @@ func main() {
 	log.Printf("Opstation Print Helper %s listening on %s", version, addr)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><body style='font-family:sans-serif;padding:40px'><h2>Opstation Print Helper is running</h2><p>Version %s. You can close this tab and print labels from Opstation.</p></body></html>", version)
+	})
 	mux.HandleFunc("/health", withCors(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": version, "os": runtime.GOOS})
 	}))

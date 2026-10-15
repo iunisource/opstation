@@ -299,7 +299,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc == '/dispatch-orders';
             // Route Roster (Operations) is registry-gated too.
             final permScopedOps = loc == '/operations/route-roster';
-            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps) return false;
+            // Management (Assets / Asset Report / Facility) is registry-gated
+            // and lives outside /erp/ — the menu showed it, but this check used
+            // to bounce the click straight back home.
+            final permScopedMgmt = loc == '/assets' || loc == '/assets/report' || loc == '/facility';
+            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps && !permScopedMgmt) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/ai-connector') return false; // admin-tier only
             // Always-available to every ERP user regardless of grants: their

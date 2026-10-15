@@ -1191,41 +1191,44 @@ bool Function(String) _showFn(WidgetRef ref, WebUser? user) {
 
 List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, String location) {
   final modules = ref.watch(orgModulesProvider).valueOrNull ?? {};
-  final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
-  final supplierPending = ref.watch(supplierPendingCountProvider).valueOrNull ?? 0;
-  final assetsDue = ref.watch(assetsDueCountProvider).valueOrNull ?? 0;
-  final assetSupervisePending = (ref.watch(assetSupervisePendingProvider).valueOrNull ?? 0) +
-      (ref.watch(assetSuggestionCountProvider).valueOrNull ?? 0);
-  final facilityDue = ref.watch(facilityDueCountProvider).valueOrNull ?? 0;
-  final poPending = (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
-      (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0) +
-      (ref.watch(poCloseRequestCountProvider).valueOrNull ?? 0);
-  final paPending = ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0;
-  final jvPending = ref.watch(jvPendingCountProvider).valueOrNull ?? 0;
-  final piReviewPending = ref.watch(piReviewPendingProvider).valueOrNull ?? 0;
-  final grnPendingInvoice = ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0;
-  final priReviewPending = ref.watch(priReviewPendingProvider).valueOrNull ?? 0;
-  final siReviewPending = ref.watch(siReviewPendingProvider).valueOrNull ?? 0;
-  final fieldOrdersPending = ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0;
-  final retailerOrdersPending = ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0;
-  final doRemarkPending = ref.watch(doRemarkPendingProvider).valueOrNull ?? 0;
-  final doSupervisePending = ref.watch(doSupervisePendingProvider).valueOrNull ?? 0;
-  final grnSupervisePending = (ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0) +
-      (ref.watch(grnRemarkPendingProvider).valueOrNull ?? 0);
-  final customerSupervisePending = ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0;
-  final productSupervisePending = ref.watch(productSupervisePendingProvider).valueOrNull ?? 0;
-  final siSupervisePending = ref.watch(siSupervisePendingProvider).valueOrNull ?? 0;
-  final sriSupervisePending = ref.watch(sriSupervisePendingProvider).valueOrNull ?? 0;
-  final piSupervisePending = ref.watch(piSupervisePendingProvider).valueOrNull ?? 0;
-  final jobAckPending = ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0;
-  final bomSupervisePending = ref.watch(bomSupervisePendingProvider).valueOrNull ?? 0;
-  final transferPending = ref.watch(transferPendingCountProvider).valueOrNull ?? 0;
-  final processorOverduePending = ref.watch(processorOverdueCountProvider).valueOrNull ?? 0;
-  final integrityCount = ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0;
-  final attReviewPending = ref.watch(attendanceReviewPendingCountProvider).valueOrNull ?? 0;
-  final leavePending = ref.watch(leavePendingCountProvider).valueOrNull ?? 0;
-  final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final show = _showFn(ref, user);
+  // A pendency count only counts when the user can open that page — otherwise
+  // a parent menu showed a number for work the user can't even see.
+  int gate(String route, int v) => show(route) ? v : 0;
+  final crmOverdue = ref.watch(crmOverdueCountProvider).valueOrNull ?? 0;
+  final supplierPending = gate('/crm/supplier-profile', ref.watch(supplierPendingCountProvider).valueOrNull ?? 0);
+  final assetsDue = gate('/assets', ref.watch(assetsDueCountProvider).valueOrNull ?? 0);
+  final assetSupervisePending = gate('/assets', (ref.watch(assetSupervisePendingProvider).valueOrNull ?? 0) +
+      (ref.watch(assetSuggestionCountProvider).valueOrNull ?? 0));
+  final facilityDue = gate('/facility', ref.watch(facilityDueCountProvider).valueOrNull ?? 0);
+  final poPending = gate('/erp/purchase', (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
+      (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0) +
+      (ref.watch(poCloseRequestCountProvider).valueOrNull ?? 0));
+  final paPending = gate('/financials/payment-advice', ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0);
+  final jvPending = gate('/financials/journal-vouchers', ref.watch(jvPendingCountProvider).valueOrNull ?? 0);
+  final piReviewPending = gate('/erp/purchase-invoices', ref.watch(piReviewPendingProvider).valueOrNull ?? 0);
+  final grnPendingInvoice = gate('/erp/purchase-invoices', ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0);
+  final priReviewPending = gate('/erp/purchase-return-vouchers', ref.watch(priReviewPendingProvider).valueOrNull ?? 0);
+  final siReviewPending = gate('/erp/sales-invoices', ref.watch(siReviewPendingProvider).valueOrNull ?? 0);
+  final fieldOrdersPending = gate('/erp/field-orders', ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0);
+  final retailerOrdersPending = gate('/erp/retailer-orders', ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0);
+  final doRemarkPending = gate('/erp/delivery-orders', ref.watch(doRemarkPendingProvider).valueOrNull ?? 0);
+  final doSupervisePending = gate('/erp/delivery-orders', ref.watch(doSupervisePendingProvider).valueOrNull ?? 0);
+  final grnSupervisePending = gate('/erp/grn', (ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0) +
+      (ref.watch(grnRemarkPendingProvider).valueOrNull ?? 0));
+  final customerSupervisePending = gate('/customers', ref.watch(customerSupervisePendingProvider).valueOrNull ?? 0);
+  final productSupervisePending = gate('/erp/products', ref.watch(productSupervisePendingProvider).valueOrNull ?? 0);
+  final siSupervisePending = gate('/erp/sales-invoices', ref.watch(siSupervisePendingProvider).valueOrNull ?? 0);
+  final sriSupervisePending = gate('/erp/sales-return-invoices', ref.watch(sriSupervisePendingProvider).valueOrNull ?? 0);
+  final piSupervisePending = gate('/erp/purchase-invoices', ref.watch(piSupervisePendingProvider).valueOrNull ?? 0);
+  final jobAckPending = gate('/manufacturing/job-card', ref.watch(jobAckPendingCountProvider).valueOrNull ?? 0);
+  final bomSupervisePending = gate('/manufacturing/product-assembly', ref.watch(bomSupervisePendingProvider).valueOrNull ?? 0);
+  final transferPending = gate('/erp/stock-transfers', ref.watch(transferPendingCountProvider).valueOrNull ?? 0);
+  final processorOverduePending = gate('/erp/processor-tracker', ref.watch(processorOverdueCountProvider).valueOrNull ?? 0);
+  final integrityCount = gate('/erp/inventory-integrity', ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0);
+  final attReviewPending = gate('/hr/attendance-review', ref.watch(attendanceReviewPendingCountProvider).valueOrNull ?? 0);
+  final leavePending = gate('/hr/leave', ref.watch(leavePendingCountProvider).valueOrNull ?? 0);
+  final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
 
   final isAdminTier = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin;
   final isDispatch = user?.role == WebUserRole.dispatchManager;

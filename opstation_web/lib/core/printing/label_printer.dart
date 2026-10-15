@@ -428,8 +428,10 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
         const Text('Opstation Print Helper is not running on this PC',
             style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
-        const Text('Install it once on the computer the label printer is plugged into, then press Retry. '
-            'If Chrome asks to allow access to devices on your network, press Allow.',
+        const Text('1. On the PC with the label printer: download, unzip and double-click OpstationPrint.exe '
+            '(a message confirms "Installed and running").\n'
+            '2. Press Retry. If Chrome asks to allow access to devices on your local network, press Allow.\n'
+            'Blocked it earlier? Click the icon left of the address bar → Site settings → Local network access → Allow, then reload.',
             style: TextStyle(fontSize: 12)),
         const SizedBox(height: 8),
         Wrap(spacing: 8, children: [
