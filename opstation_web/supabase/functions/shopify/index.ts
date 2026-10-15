@@ -911,6 +911,71 @@ Deno.serve(async (req) => {
       }).eq("id", order.id);
       return json({ ok: true, already: r.already });
     }
+    if (action === "slip_images") {
+      // Pictures for packing slips, fetched here (not in the browser, which
+      // other sites may block): the Opstation product photo per product, and
+      // the Shopify picture per order line as the fallback.
+      const ids = ((body.order_ids ?? []) as string[]).slice(0, 60);
+      const { data: ords } = await admin.from("shop_orders").select("id, lines").in("id", ids).eq("store_id", store.id);
+      // deno-lint-ignore no-explicit-any
+      const lines: any[] = [];
+      for (const o of ords ?? []) for (const l of (o.lines ?? [])) lines.push(l);
+      const pids = new Set<string>();
+      for (const l of lines) {
+        if (l.product_id) pids.add(l.product_id);
+        for (const c of l.components ?? []) if (c.product_id) pids.add(c.product_id);
+      }
+      const photo = new Map<string, string>();
+      if (pids.size) {
+        const { data: ps } = await admin.from("products").select("id, image_url").in("id", [...pids]).eq("org_id", store.org_id);
+        for (const p of ps ?? []) if (p.image_url) photo.set(p.id, String(p.image_url));
+      }
+      // Lines that need the Shopify picture: bundles, or a product without a photo.
+      const need = lines.filter((l) => (l.components?.length || !photo.has(l.product_id)));
+      const lineUrl = new Map<string, string>();
+      for (const l of need) if (l.image) lineUrl.set(l.line_id, String(l.image));
+      const varIds = [...new Set(need.filter((l) => !lineUrl.has(l.line_id) && l.variant_id).map((l) => String(l.variant_id)))];
+      if (varIds.length) {
+        try {
+          const d = await gql(admin, store, sec, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on ProductVariant {
+              id image { url } product { featuredImage { url } } } } }`, { ids: varIds.slice(0, 100) });
+          const byVar = new Map<string, string>();
+          for (const n of d.nodes ?? []) {
+            const u = n?.image?.url ?? n?.product?.featuredImage?.url;
+            if (n?.id && u) byVar.set(n.id, u);
+          }
+          for (const l of need) if (!lineUrl.has(l.line_id) && byVar.has(l.variant_id)) lineUrl.set(l.line_id, byVar.get(l.variant_id)!);
+        } catch { /* no product access — skip the fallback */ }
+      }
+      const cache = new Map<string, string | null>();
+      const grab = async (url: string): Promise<string | null> => {
+        if (cache.has(url)) return cache.get(url)!;
+        let u = url;
+        if (/cdn\.shopify\.com|shopify/.test(u)) u += (u.includes("?") ? "&" : "?") + "width=240&format=jpg";
+        let out: string | null = null;
+        try {
+          const r = await fetch(u, { headers: { Accept: "image/jpeg,image/png" }, signal: AbortSignal.timeout(8000) });
+          const ct = r.headers.get("content-type") ?? "";
+          if (r.ok && /jpe?g|png/i.test(ct)) {
+            const b = new Uint8Array(await r.arrayBuffer());
+            if (b.length < 1_500_000) {
+              let bin = "";
+              for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
+              out = btoa(bin);
+            }
+          }
+        } catch { /* skip */ }
+        cache.set(url, out);
+        return out;
+      };
+      const products: Record<string, string> = {};
+      const linePics: Record<string, string> = {};
+      await Promise.all([
+        ...[...photo.entries()].map(async ([id, u]) => { const b = await grab(u); if (b) products[id] = b; }),
+        ...[...lineUrl.entries()].map(async ([id, u]) => { const b = await grab(u); if (b) linePics[id] = b; }),
+      ]);
+      return json({ ok: true, products, lines: linePics });
+    }
     if (action === "granted_scopes") {
       // What the store has actually approved for this connection.
       const d = await gql(admin, store, sec, `{ currentAppInstallation { accessScopes { handle } } }`);

@@ -1,5 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
+import 'dart:convert' show base64Decode;
+import 'dart:typed_data';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
@@ -743,8 +745,23 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         } catch (_) {}
       }
     }
+    // Product pictures, fetched by the server per store (skipped if it fails).
+    final prodPics = <String, Uint8List>{};
+    final linePics = <String, Uint8List>{};
+    for (final sid in storeIds) {
+      try {
+        final r = await _call({
+          'action': 'slip_images', 'store_id': sid,
+          'order_ids': [for (final o in orders) if (o['store_id'] == sid) o['id']],
+        });
+        ((r['products'] as Map?) ?? const {}).forEach((k, v) { try { prodPics['$k'] = base64Decode('$v'); } catch (_) {} });
+        ((r['lines'] as Map?) ?? const {}).forEach((k, v) { try { linePics['$k'] = base64Decode('$v'); } catch (_) {} });
+      } catch (_) {}
+    }
     try {
       final bytes = await PackingSlipPdf.build(
+        productPictures: prodPics,
+        linePictures: linePics,
         orders: orders,
         products: _prodById,
         storeName: _storeName,
