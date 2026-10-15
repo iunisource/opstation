@@ -20,6 +20,7 @@ import '../../../core/pdf/pdf_output.dart';
 import '../services/packing_slip_pdf.dart';
 import 'shop_product_matching.dart';
 import 'shop_fulfilled_summary.dart';
+import 'shop_dispatch.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 
 /// Sales → Fulfillment: orders from connected online stores (Shopify).
@@ -256,12 +257,116 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       upd['picked_by_name'] = ref.read(currentUserProvider)?.name;
       upd['picked_at'] = DateTime.now().toUtc().toIso8601String();
     }
+    // Picking lock: this person is on it now (refreshed with every count).
+    if (picking) {
+      upd['picking_by'] = _meId;
+      upd['picking_by_name'] = ref.read(currentUserProvider)?.name;
+      upd['picking_at'] = DateTime.now().toUtc().toIso8601String();
+    } else {
+      upd['picking_by'] = null; upd['picking_by_name'] = null; upd['picking_at'] = null;
+    }
+    // Counts changed → the box must be checked again.
+    if (o['slip_verified_at'] != null && status == 'new') { upd['slip_verified_at'] = null; upd['label_verified_at'] = null; }
     setState(() {
       o['lines'] = lines;
       if (status != null) o['status'] = status;
       if (upd.containsKey('picked_by_name')) { o['picked_by_name'] = upd['picked_by_name']; o['picked_at'] = upd['picked_at']; }
+      for (final k in ['picking_by', 'picking_by_name', 'picking_at', 'slip_verified_at', 'label_verified_at']) {
+        if (upd.containsKey(k)) o[k] = upd[k];
+      }
     });
     await Supabase.instance.client.from('shop_orders').update(upd).eq('id', o['id']);
+  }
+
+  // ── checkpoints ───────────────────────────────────────────────────────────
+  String? get _meId => ref.read(currentUserProvider)?.id;
+  bool _slipRequired(String? storeId) =>
+      _stores.any((s) => s['id'] == storeId && s['require_slip_scan'] == true);
+  String _normNo(Object? v) => '${v ?? ''}'.replaceAll('#', '').trim().toLowerCase();
+
+  /// Someone else is picking this order right now (lock lapses after 60 min idle).
+  bool _lockedByOther(Map<String, dynamic> o) {
+    final by = o['picking_by'] as String?;
+    if (by == null || by == _meId) return false;
+    if (!['new', 'picking', 'packed'].contains(o['status'])) return false;
+    final at = DateTime.tryParse('${o['picking_at'] ?? ''}');
+    return at != null && DateTime.now().toUtc().difference(at.toUtc()).inMinutes < 60;
+  }
+
+  Future<void> _takeOver(Map<String, dynamic> o) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    final me = ref.read(currentUserProvider);
+    try {
+      await Supabase.instance.client.from('shop_orders').update({
+        'picking_by': me?.id, 'picking_by_name': me?.name, 'picking_at': now,
+      }).eq('id', o['id']);
+      setState(() { o['picking_by'] = me?.id; o['picking_by_name'] = me?.name; o['picking_at'] = now; });
+      _snack('You are now picking ${o['order_no'] ?? 'this order'}');
+    } catch (e) {
+      _snack('Could not take over: $e');
+    }
+  }
+
+  /// Pack check passed (the right slip scanned on the right box): pack it,
+  /// then fulfil straight away if Auto-fulfil is on.
+  Future<void> _slipVerified(Map<String, dynamic> o) async {
+    final me = ref.read(currentUserProvider);
+    final now = DateTime.now().toUtc().toIso8601String();
+    await Supabase.instance.client.from('shop_orders').update({
+      'status': 'packed', 'packed_at': o['packed_at'] ?? now, 'packed_by_name': o['packed_by_name'] ?? me?.name,
+      'slip_verified_at': now, 'slip_verified_by': me?.name, 'updated_at': now,
+    }).eq('id', o['id']);
+    setState(() {
+      o['status'] = 'packed'; o['slip_verified_at'] = now; o['slip_verified_by'] = me?.name;
+      o['packed_at'] ??= now; o['packed_by_name'] ??= me?.name;
+    });
+    if (_autoOn(o['store_id'] as String?)) {
+      Future.delayed(const Duration(milliseconds: 250), () => _autoFulfil(o));
+    } else {
+      Future.delayed(const Duration(milliseconds: 150), ScanFeedback.done);
+    }
+  }
+
+  /// A scan that is a packing slip (order number) or a courier label
+  /// (tracking number) rather than a product. Null = not one of those.
+  Future<ScanOutcome?> _checkpointScan(Map<String, dynamic> o, String code, bool allPicked) async {
+    final c = _normNo(code);
+    if (c.isEmpty) return null;
+    final trk = (Map<String, dynamic> x) =>
+        '${x['tracking_number'] ?? ((x['ship_info'] as Map?) ?? const {})['number'] ?? ''}'.trim().toLowerCase();
+    // Courier label
+    if (trk(o).isNotEmpty && trk(o) == code.trim().toLowerCase()) {
+      if (o['slip_verified_at'] == null && _slipRequired(o['store_id'] as String?)) {
+        return const ScanOutcome(false, 'Scan the packing slip first, then the courier label');
+      }
+      final now = DateTime.now().toUtc().toIso8601String();
+      try { await Supabase.instance.client.from('shop_orders').update({'label_verified_at': now}).eq('id', o['id']); } catch (_) {}
+      setState(() => o['label_verified_at'] = now);
+      return const ScanOutcome(true, '✓ Courier label matches this order');
+    }
+    for (final x in _orders) {
+      if (x['id'] != o['id'] && trk(x).isNotEmpty && trk(x) == code.trim().toLowerCase()) {
+        return ScanOutcome(false, 'WRONG LABEL — this courier label is for ${x['order_no']} (${x['customer_name'] ?? ''})');
+      }
+    }
+    // Packing slip (order number)
+    if (_normNo(o['order_no']) == c) {
+      if (!allPicked) return const ScanOutcome(false, 'Pick every item first, then scan the packing slip');
+      if (o['slip_verified_at'] != null) return const ScanOutcome(true, '✓ Slip already checked for this order');
+      try {
+        await _slipVerified(o);
+      } catch (e) {
+        return ScanOutcome(false, 'Could not save: $e');
+      }
+      return ScanOutcome(true, '✓ Slip matches — ${o['order_no']} packed'
+          '${_autoOn(o['store_id'] as String?) ? ', fulfilling…' : ''}');
+    }
+    for (final x in _orders) {
+      if (x['id'] != o['id'] && _normNo(x['order_no']) == c) {
+        return ScanOutcome(false, 'WRONG SLIP — this slip is for ${x['order_no']} (${x['customer_name'] ?? ''}), not ${o['order_no']}');
+      }
+    }
+    return null;
   }
 
   bool _prodMatches(String? pid, String c) {
@@ -291,6 +396,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final active = _stores.where((s) => s['is_active'] == true).toList();
     if (active.isEmpty) return;
     final choice = {for (final s in active) s['id'] as String: (s['scan_codes'] as String?) == 'system' ? 'system' : 'any'};
+    final slip = {for (final s in active) s['id'] as String: s['require_slip_scan'] == true};
     final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
       title: const Text('Scan settings'),
       content: SizedBox(width: 480, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -313,6 +419,14 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             title: const Text('Opstation + Shopify codes'),
             subtitle: const Text('Also accepts the barcode / SKU typed on the Shopify product.'),
           ),
+          SwitchListTile(
+            dense: true, contentPadding: EdgeInsets.zero,
+            value: slip[s['id']] ?? false,
+            onChanged: (v) => setD(() => slip[s['id'] as String] = v),
+            title: const Text('Pack check: scan the packing slip before packing'),
+            subtitle: const Text('After the last item, the slip going on the box must be scanned — a wrong slip is stopped. '
+                'Auto-fulfil waits for it too.'),
+          ),
         ],
       ])),
       actions: [
@@ -324,9 +438,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     try {
       for (final s in active) {
         final v = choice[s['id']] == 'system' ? 'system' : 'any';
-        if ((s['scan_codes'] ?? 'any') == v) continue;
-        await Supabase.instance.client.from('shop_stores').update({'scan_codes': v}).eq('id', s['id']);
+        final sl = slip[s['id']] ?? false;
+        if ((s['scan_codes'] ?? 'any') == v && (s['require_slip_scan'] == true) == sl) continue;
+        await Supabase.instance.client.from('shop_stores').update({'scan_codes': v, 'require_slip_scan': sl}).eq('id', s['id']);
         s['scan_codes'] = v;
+        s['require_slip_scan'] = sl;
       }
       if (mounted) setState(() {});
       _snack('Scan settings saved');
@@ -349,6 +465,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     if (o == null) return const ScanOutcome(false, 'Open an order first');
     final st = o['status'] as String? ?? 'new';
     if (st == 'fulfilled' || st == 'cancelled') return ScanOutcome(false, 'This order is ${_statusLabels[st]?.toLowerCase()}');
+    if (_lockedByOther(o)) {
+      return ScanOutcome(false, 'Being picked by ${o['picking_by_name'] ?? 'someone else'} — ask them, or take it over');
+    }
     final c = code.trim().toLowerCase();
     final lines = _lines(o);
     // Every pickable thing: plain lines and the parts of bundle lines.
@@ -363,7 +482,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         targets.add((i, null));
       }
     }
-    if (targets.isEmpty) return ScanOutcome(false, 'Not on this order: $code');
+    if (targets.isEmpty) {
+      // Not a product here: maybe the packing slip / courier label (pack check).
+      final cp = await _checkpointScan(o, code, lines.isNotEmpty && lines.every(_lineDone));
+      return cp ?? ScanOutcome(false, 'Not on this order: $code');
+    }
     // Prefer one that still needs items.
     (int, int?) t = targets.first;
     for (final x in targets) {
@@ -386,6 +509,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     } catch (e) {
       return ScanOutcome(false, 'Could not save: $e');
     }
+    if (allDone && _slipRequired(o['store_id'] as String?)) {
+      Future.delayed(const Duration(milliseconds: 150), ScanFeedback.done);
+      return ScanOutcome(true, '$name  ${_q(now)} / ${_q(need)}   ✓ all items picked — now scan the packing slip on the box');
+    }
     if (allDone) {
       final auto = _autoOn(o['store_id'] as String?);
       if (auto) {
@@ -401,6 +528,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   }
 
   Future<void> _setPicked(Map<String, dynamic> o, int i, double v, {int? comp}) async {
+    if (_lockedByOther(o)) {
+      _snack('Being picked by ${o['picking_by_name'] ?? 'someone else'} — ask them, or an admin can take it over.');
+      return;
+    }
     final lines = _lines(o);
     if (comp != null) {
       final cs = _comps(lines[i]);
@@ -413,7 +544,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     await _saveLines(o, lines, status: (o['status'] == 'new' && v > 0) ? 'picking' : null);
     // Counted the last ones by hand → same as finishing by scan.
     if (!wasDone && lines.isNotEmpty && lines.every(_lineDone)) {
-      if (_autoOn(o['store_id'] as String?)) {
+      if (_slipRequired(o['store_id'] as String?)) {
+        ScanFeedback.done();
+        _snack('All items picked — now scan the packing slip on the box');
+      } else if (_autoOn(o['store_id'] as String?)) {
         _autoFulfil(o);
       } else {
         ScanFeedback.done();
@@ -473,6 +607,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   Future<void> _autoFulfil(Map<String, dynamic> o) async {
     final id = o['id'] as String;
     if (_autoBusy.contains(id) || !mounted) return;
+    if (_slipRequired(o['store_id'] as String?) && o['slip_verified_at'] == null) return; // waits for the slip scan
     var done = false;
     setState(() => _autoBusy.add(id));
     final me = ref.read(currentUserProvider);
@@ -551,6 +686,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       // Only what was actually scanned can be packed and shipped.
       _snack('Scan every item first — ${short.length} item${short.length == 1 ? '' : 's'} still to pick: '
           '${short.take(3).map((l) => _isBundle(l) ? '${_lineName(l)} (bundle)' : '${_lineName(l)} (${_q(_num(l['picked']))}/${_q(_num(l['qty']))})').join(', ')}');
+      return;
+    }
+    if (_slipRequired(o['store_id'] as String?) && o['slip_verified_at'] == null) {
+      _snack('Scan the packing slip on the box to pack it (pack check is on for this store).');
       return;
     }
     final me = ref.read(currentUserProvider);
@@ -1105,6 +1244,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       showSelectedIcon: false,
       segments: const [
         ButtonSegment(value: 'queue', icon: Icon(Icons.checklist, size: 16), label: Text('Work queue')),
+        ButtonSegment(value: 'dispatch', icon: Icon(Icons.local_shipping_outlined, size: 16), label: Text('Handover')),
         ButtonSegment(value: 'summary', icon: Icon(Icons.summarize_outlined, size: 16), label: Text('Fulfilled summary')),
       ],
       selected: {_view},
@@ -1210,6 +1350,15 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                             onPressed: _connectDialog),
                       ],
                     ]))
+                  : _view == 'dispatch'
+                      ? ShopDispatch(
+                          key: const ValueKey('handover'),
+                          orgId: _orgId ?? '',
+                          userId: ref.read(currentUserProvider)?.id,
+                          userName: ref.read(currentUserProvider)?.name ?? '',
+                          stores: _stores,
+                          onDone: () => _load(quiet: true),
+                        )
                   : _view == 'summary'
                       ? ShopFulfilledSummary(
                           key: const ValueKey('fulfilled-summary'),
@@ -1534,6 +1683,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final collect = _collect(o);
     final (p, n) = _units(o);
     final auto = _autoOn(o['store_id'] as String?);
+    final slipNeeded = _slipRequired(o['store_id'] as String?) && o['slip_verified_at'] == null;
     final phone = '${o['phone'] ?? ''}'.trim();
     // Phone / tablet: picking mode — the scan bar and a big camera button stay
     // at the top while the item list scrolls, no keyboard popping up.
@@ -1659,6 +1809,23 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ].join(' ')),
           if ((o['fulfil_error'] as String?)?.isNotEmpty == true && st != 'fulfilled')
             _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
+          if (canWork && _lockedByOther(o))
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.red.withOpacity(0.06), borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.withOpacity(0.4))),
+              child: Row(children: [
+                const Icon(Icons.lock_outline, size: 18, color: Colors.red),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Being picked by ${o['picking_by_name'] ?? 'someone else'} — scanning is blocked so two people don\'t pick the same order.',
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.red))),
+                if (_isAdmin) TextButton(onPressed: () => _takeOver(o), child: const Text('Take over')),
+              ]),
+            ),
+          if (canWork && o['slip_verified_at'] != null)
+            _banner(Colors.green, Icons.verified_outlined, 'Box checked — slip scanned by ${o['slip_verified_by'] ?? ''}'
+                '${o['label_verified_at'] != null ? ' · courier label matches' : ''}'),
           if (canWork && o['reopened_at'] != null)
             _banner(Colors.deepPurple, Icons.undo, 'Un-fulfilled in Shopify '
                 '${DateFormat('d MMM, HH:mm').format(DateTime.parse('${o['reopened_at']}').toLocal())} — back in the queue. '
@@ -1712,7 +1879,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             child: Row(children: [
               Expanded(child: Text(
                 pickedAll
-                    ? (st == 'packed' ? 'Packed — fulfil it with the courier details.' : 'All picked — pack it and fulfil.')
+                    ? (slipNeeded
+                        ? 'All picked — scan the packing slip on the box.'
+                        : st == 'packed' ? 'Packed — fulfil it with the courier details.' : 'All picked — pack it and fulfil.')
                     : auto
                         ? 'Auto-fulfil is on: it ships when the last item is scanned (or waits packed if not booked yet).'
                         : '${_q(n - p)} item${n - p == 1 ? '' : 's'} left to scan.',
@@ -1736,13 +1905,13 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 OutlinedButton.icon(
                   icon: const Icon(Icons.inventory_2_outlined, size: 18),
                   label: const Text('Packed'),
-                  onPressed: _busy || !pickedAll ? null : () => _markPacked(o),
+                  onPressed: _busy || !pickedAll || slipNeeded ? null : () => _markPacked(o),
                 ),
               const SizedBox(width: 8),
               FilledButton.icon(
                 icon: const Icon(Icons.local_shipping_outlined, size: 18),
                 label: const Text('Fulfil'),
-                onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
+                onPressed: _busy || !pickedAll || slipNeeded ? null : () => _fulfil(o),
               ),
             ]),
           ),

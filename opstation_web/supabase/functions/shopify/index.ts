@@ -998,6 +998,11 @@ Deno.serve(async (req) => {
       if (short.length > 0) {
         return json({ error: `Pick every item first — ${short.length} item(s) not fully picked.` }, 400);
       }
+      // Store rule: the packing slip must have been scanned (box checked) first.
+      const { data: rule } = await admin.from("shop_stores").select("require_slip_scan").eq("id", store.id).single();
+      if (rule?.require_slip_scan && !order.slip_verified_at) {
+        return json({ error: "Scan the packing slip on the box first (pack check)." }, 400);
+      }
       const cancelled: Record<string, number> = {};
       for (const l of (order.lines ?? []) as Array<Record<string, unknown>>) {
         if (Number(l.cancelled ?? 0) > 0) cancelled[String(l.line_id)] = Number(l.cancelled);
@@ -1006,6 +1011,8 @@ Deno.serve(async (req) => {
         { company: body.company, number: body.number, url: body.url }, body.notify !== false, cancelled);
       await admin.from("shop_orders").update({
         status: "fulfilled", fulfilled_at: new Date().toISOString(), fulfilled_by_name: mine.name ?? null,
+        // Fulfilled straight after picking counts as packed too (for the courier handover list).
+        packed_at: order.packed_at ?? new Date().toISOString(), packed_by_name: order.packed_by_name ?? mine.name ?? null,
         tracking_company: body.company ?? null, tracking_number: body.number ?? null, tracking_url: body.url ?? null,
         fulfil_error: null, updated_at: new Date().toISOString(),
       }).eq("id", order.id);
