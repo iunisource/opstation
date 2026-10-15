@@ -529,6 +529,11 @@ Deno.serve(async (req) => {
       }).eq("id", order.id);
       return json({ ok: true, already: r.already });
     }
+    if (action === "granted_scopes") {
+      // What the store has actually approved for this connection.
+      const d = await gql(admin, store, sec, `{ currentAppInstallation { accessScopes { handle } } }`);
+      return json({ ok: true, scopes: (d.currentAppInstallation?.accessScopes ?? []).map((x: { handle: string }) => x.handle) });
+    }
     if (action === "list_variants") {
       // Every product variant in the store, for bulk matching to Opstation products.
       const out: Array<Record<string, unknown>> = [];

@@ -120,11 +120,21 @@ class _MatchDialogState extends State<_MatchDialog> {
       if (!mounted) return;
       setState(() { _rows = rows; _loading = false; });
     } catch (e) {
+      // Show what this connection is actually allowed to do.
+      String granted = '';
+      try {
+        final g = await widget.call({'action': 'granted_scopes', 'store_id': widget.store['id']});
+        granted = (g['scopes'] as List? ?? const []).join(', ');
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = '$e'.contains('read_products') || '$e'.contains('ACCESS_DENIED')
-            ? 'The store app needs the read_products permission to list products. Add it to the app\'s scopes in Shopify, release, then use "Approve again in Shopify" in Stores.'
+        final denied = '$e'.contains('read_products') || '$e'.contains('ACCESS_DENIED');
+        _error = denied
+            ? 'Shopify says this connection is not allowed to read products yet.\n\n'
+              'Approved for this store right now: ${granted.isEmpty ? '(could not check)' : granted}\n\n'
+              'Adding a permission in the Dev Dashboard is not enough on its own — the store has to approve it: '
+              'release the version, then Stores → ⋮ → "Approve again in Shopify" and approve.'
             : '$e';
       });
     }
