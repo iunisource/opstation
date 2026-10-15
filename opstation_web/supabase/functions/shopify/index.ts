@@ -17,8 +17,8 @@
 // done inside):
 //   supabase functions deploy shopify --project-ref xgptodkasmytddmdnbtb --no-verify-jwt
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+// Pinned npm import: esm.sh's floating "@2" build broke bundling (Oct 2026).
+import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const API_VERSION = "2026-07";
 const FN_URL = "https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/shopify";
@@ -328,7 +328,7 @@ async function loadStore(admin: SupabaseClient, id: string): Promise<[Store, Sec
   return [s as Store, k as Secret];
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const url = new URL(req.url);
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
