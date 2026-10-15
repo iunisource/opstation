@@ -42,6 +42,7 @@ class _Row {
   final List<_Part> auto;
   List<_Part> parts; // what will be saved
   bool manual = false;
+  bool qtyManual = false; // quantities typed by hand → SKU rules won't override them
   _Row(this.v, this.saved, this.autoHow, this.auto, this.parts);
 
   String get title {
@@ -206,6 +207,7 @@ class _MatchDialogState extends State<_MatchDialog> {
               'components': r.isBundle
                   ? [for (final p in r.parts) {'product_id': p.pid, 'qty': p.qty}]
                   : null,
+              'manual_qty': r.qtyManual,
             },
         ], onConflict: 'store_id,ext_key');
       }
@@ -319,7 +321,7 @@ class _MatchDialogState extends State<_MatchDialog> {
                 content: TextField(controller: c, autofocus: true, keyboardType: TextInputType.number),
                 actions: [FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(double.tryParse(c.text.trim())), child: const Text('OK'))],
               ));
-              if (v != null && v > 0) setState(() { part.qty = v; r.manual = true; });
+              if (v != null && v > 0) setState(() { part.qty = v; r.manual = true; r.qtyManual = true; });
             },
             child: Text('${part.qty % 1 == 0 ? part.qty.toInt() : part.qty}×',
                 style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5)),

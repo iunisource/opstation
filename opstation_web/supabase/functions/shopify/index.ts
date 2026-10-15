@@ -288,7 +288,7 @@ function parseSegs(rules: Rules, s: string): Seg[] {
 }
 
 type Part = { product_id: string; qty: number };
-type Mapped = { product_id: string | null; components: Part[] | null };
+type Mapped = { product_id: string | null; components: Part[] | null; manual_qty?: boolean };
 type SuggestPart = { code: string | null; key: string | null; qty: number; product_id: string | null; choices: string[] };
 type Suggestion = { how: string; parts: SuggestPart[] };
 type Prod = { id: string; name: string; nt: string[]; words: string[]; sk: string; bc: string };
@@ -341,7 +341,13 @@ async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog
   const map = new Map<string, Mapped>();
   const learned = new Map<string, string>();
   const claimed = new Map<string, Set<string>>();
-  const { data: m } = await admin.from("shop_product_map").select("ext_key, product_id, components").eq("store_id", store.id);
+  // manual_qty may not exist on older setups — fall back to the basic columns.
+  let m: Array<Record<string, unknown>> | null = null;
+  {
+    const r1 = await admin.from("shop_product_map").select("ext_key, product_id, components, manual_qty").eq("store_id", store.id);
+    if (!r1.error) m = r1.data as Array<Record<string, unknown>>;
+    else m = (await admin.from("shop_product_map").select("ext_key, product_id, components").eq("store_id", store.id)).data as Array<Record<string, unknown>>;
+  }
   for (const r of m ?? []) {
     if (String(r.ext_key).startsWith("code:")) {
       if (!r.product_id) continue;
@@ -351,7 +357,8 @@ async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog
       if (q) { if (!claimed.has(base)) claimed.set(base, new Set()); claimed.get(base)!.add(r.product_id); }
       continue;
     }
-    map.set(r.ext_key, { product_id: r.product_id ?? null, components: (r.components as Part[] | null) ?? null });
+    map.set(String(r.ext_key), { product_id: (r.product_id as string) ?? null, components: (r.components as Part[] | null) ?? null,
+      manual_qty: r.manual_qty === true });
   }
   return { byCode, byFirst, learned, claimed, map, groups: chosen, allGroups, rules: rulesOf(store.sku_rules) };
 }
@@ -446,8 +453,17 @@ function toMapped(s: Suggestion): Mapped | null {
 
 function matchLine(cat: Catalog, variantId: string | null, sku: string, barcode: string, title: string): Mapped | null {
   const saved = savedFor(cat, variantId, sku);
-  if (saved && (saved.product_id || saved.components?.length)) return saved;
-  return toMapped(autoSuggest(cat, sku, barcode, title));
+  const auto = toMapped(autoSuggest(cat, sku, barcode, title));
+  if (saved && (saved.product_id || saved.components?.length)) {
+    // Same products as the SKU says → the quantities come from the SKU rules
+    // (e.g. "(3)"), unless someone set the quantities by hand.
+    if (auto && !saved.manual_qty) {
+      const ids = (x: Mapped) => (x.components?.length ? x.components.map((c) => c.product_id) : [x.product_id]).sort().join("|");
+      if (ids(auto) === ids(saved)) return auto;
+    }
+    return saved;
+  }
+  return auto;
 }
 
 type LineComp = { product_id: string; per: number; qty: number; picked: number };
@@ -633,6 +649,26 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
   const { error } = await admin.from("shop_orders").upsert(row, { onConflict: "store_id,external_id" });
   if (error) throw new Error(error.message);
   return true;
+}
+
+// Re-apply matches (saved choices + SKU rules) to open orders that aren't
+// being picked yet. Cancelled quantities are kept. Returns how many changed.
+async function rematchOpen(admin: SupabaseClient, store: Store): Promise<number> {
+  const cat = await loadCatalog(admin, store);
+  const { data: open } = await admin.from("shop_orders").select("id, lines")
+    .eq("store_id", store.id).in("status", ["new", "picking", "packed"]);
+  let changed = 0;
+  for (const o of open ?? []) {
+    const before = JSON.stringify(o.lines ?? []);
+    // deno-lint-ignore no-explicit-any
+    const lines = ((o.lines ?? []) as any[]).map((l) => keepCancels(
+      applyMatch(cat, { ...l, qty: Number(l.qty ?? 0) + Number(l.cancelled ?? 0) }, l), l));
+    if (JSON.stringify(lines) !== before) {
+      await admin.from("shop_orders").update({ lines, updated_at: new Date().toISOString() }).eq("id", o.id);
+      changed++;
+    }
+  }
+  return changed;
 }
 
 async function syncStore(admin: SupabaseClient, store: Store, sec: Secret, sinceIso: string | null) {
@@ -979,6 +1015,8 @@ Deno.serve(async (req) => {
 
     if (action === "sync") {
       const n = await syncStore(admin, store, sec, body.days ? new Date(Date.now() - Number(body.days) * 86400000).toISOString() : null);
+      // Also bring open orders in line with the current matches / SKU rules.
+      try { await rematchOpen(admin, store); } catch { /* not critical */ }
       const hookProblem = (await admin.from("shop_stores").select("webhooks_ok").eq("id", store.id).single()).data?.webhooks_ok
         ? null : await registerWebhooks(admin, store, sec);
       return json({ ok: true, synced: n, webhook_warning: hookProblem });
@@ -1189,21 +1227,7 @@ Deno.serve(async (req) => {
       return json({ ok: true, results: out, names, rules: cat.rules });
     }
     if (action === "rematch") {
-      // Re-apply saved / code matches to open orders not yet being picked.
-      const cat = await loadCatalog(admin, store);
-      const { data: open } = await admin.from("shop_orders").select("id, lines")
-        .eq("store_id", store.id).in("status", ["new", "picking", "packed"]);
-      let changed = 0;
-      for (const o of open ?? []) {
-        const before = JSON.stringify(o.lines ?? []);
-        // deno-lint-ignore no-explicit-any
-        const lines = ((o.lines ?? []) as any[]).map((l) => applyMatch(cat, l, l));
-        if (JSON.stringify(lines) !== before) {
-          await admin.from("shop_orders").update({ lines, updated_at: new Date().toISOString() }).eq("id", o.id);
-          changed++;
-        }
-      }
-      return json({ ok: true, orders: changed });
+      return json({ ok: true, orders: await rematchOpen(admin, store) });
     }
     if (action === "authorize_url") {
       if (!isAdminRole(mine.role)) return json({ error: "Only an admin can do this." }, 403);
