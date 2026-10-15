@@ -1,0 +1,4 @@
+Opstation Print Helper - build
+  GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -H windowsgui" -o OpstationPrint.exe .
+Package OpstationPrint.exe with install.bat / uninstall.bat / README.txt into
+web/downloads/OpstationPrint-Windows.zip (served at /downloads/OpstationPrint-Windows.zip).

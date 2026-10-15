@@ -2,6 +2,7 @@
 
 import 'dart:html' as html;
 import 'package:barcode/barcode.dart' as bc;
+import '../../../core/printing/label_printer.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/camera_capture.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -559,7 +560,18 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
       _showSnack('No barcodes yet — save the product once (barcodes are auto-generated).');
       return;
     }
+    // Label printer helper on this PC → print straight to the TSC (no dialog).
+    Future<void> toLabelPrinter() => showLabelPrintDialog(
+          context,
+          title: 'Labels · ${withCode.length} product${withCode.length == 1 ? '' : 's'}',
+          items: [for (final p in withCode) LabelData(name: '${p['name'] ?? ''}', code: '${p['barcode']}'.trim())],
+        );
+    if (await PrintHelper.isRunning()) {
+      await toLabelPrinter();
+      return;
+    }
     final copiesCtrl = TextEditingController(text: '1');
+    var wantLabelPrinter = false;
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -580,11 +592,17 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           ),
         ]),
         actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.label_outline, size: 16),
+            label: const Text('Label printer…'),
+            onPressed: () { wantLabelPrinter = true; Navigator.pop(ctx, false); },
+          ),
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Print')),
         ],
       ),
     );
+    if (wantLabelPrinter) { await toLabelPrinter(); return; }
     if (go != true) return;
     final copies = (int.tryParse(copiesCtrl.text.trim()) ?? 1).clamp(1, 500);
     if (withCode.length < prods.length) {

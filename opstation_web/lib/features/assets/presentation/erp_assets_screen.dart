@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../../core/printing/label_printer.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/camera_capture.dart';
 import '../../../core/storage/image_compress.dart';
@@ -772,10 +773,20 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     return '$_kAssetViewBase?t=$t';
   }
 
+  LabelData _assetLabel(Map<String, dynamic> a, String url) => LabelData(
+        name: a['name'] as String? ?? '-', code: url, codeText: a['asset_code'] as String? ?? '');
+
   Future<void> _printLabel(Map<String, dynamic> a) async {
     final url = _assetUrl(a);
     if (url == null) {
       _snack('This asset has no QR token yet — reload after the migration.');
+      return;
+    }
+    // Label printer helper on this PC → straight to the label printer.
+    if (await PrintHelper.isRunning()) {
+      if (!mounted) return;
+      await showLabelPrintDialog(context, title: 'Asset label · ${a['asset_code'] ?? ''}',
+          items: [_assetLabel(a, url)], defaultCode: LabelCode.qr, allowQtyEdit: false);
       return;
     }
     await AssetPdf.printLabel(
@@ -846,12 +857,28 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
             ]),
           ),
           actions: [
+            TextButton.icon(
+              icon: const Icon(Icons.label_outline, size: 16),
+              label: const Text('Label printer'),
+              onPressed: selected.isEmpty
+                  ? null
+                  : () {
+                      final items = <LabelData>[
+                        for (final a in source)
+                          if (selected.contains(a['id']) && _assetUrl(a) != null) _assetLabel(a, _assetUrl(a)!),
+                      ];
+                      Navigator.pop(ctx);
+                      if (items.isEmpty) { _snack('Selected assets have no QR token yet.'); return; }
+                      showLabelPrintDialog(context, title: 'Asset labels · ${items.length}',
+                          items: items, defaultCode: LabelCode.qr, allowQtyEdit: false);
+                    },
+            ),
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('Cancel')),
             ElevatedButton.icon(
               icon: const Icon(Icons.print, size: 18),
-              label: Text('Print ${selected.length}'),
+              label: Text('Print ${selected.length} (PDF)'),
               onPressed: selected.isEmpty
                   ? null
                   : () {

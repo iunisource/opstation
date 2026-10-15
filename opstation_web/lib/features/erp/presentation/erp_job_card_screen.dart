@@ -1,3 +1,4 @@
+import '../../../core/printing/label_printer.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -82,6 +83,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
   String? _fgId; String _fgLabel = '';
+  Map<String, String> _prodName = {}; // product id -> plain name (labels)
+  Map<String, String> _prodCode = {}; // product id -> barcode, else SKU (labels)
   double _bomBaseQty = 1;
   bool _openEnded = false; // open-ended production: no fixed planned target
   final _plannedQtyCtrl = TextEditingController(text: '1');
@@ -239,7 +242,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       int from = 0; const page = 1000;
       while (true) {
         final rows = await Supabase.instance.client.from('products')
-            .select('id, name, sku, cost_price, uoms(abbreviation, name)').eq('org_id', orgId).eq('is_active', true)
+            .select('id, name, sku, barcode, cost_price, uoms(abbreviation, name)').eq('org_id', orgId).eq('is_active', true)
             .order('name').range(from, from + page - 1);
         final list = List<Map<String, dynamic>>.from(rows);
         all.addAll(list);
@@ -251,6 +254,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _products = items;
         _prodLabel = {for (final p in items) p['id'] as String: p['label'] as String};
         _prodCost = {for (final p in all) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
+        _prodName = {for (final p in all) p['id'] as String: '${p['name'] ?? ''}'};
+        _prodCode = {for (final p in all) p['id'] as String:
+            ('${p['barcode'] ?? ''}'.trim().isNotEmpty ? '${p['barcode']}' : '${p['sku'] ?? ''}').trim()};
         _prodUom = {for (final p in all) p['id'] as String: ((p['uoms']?['abbreviation'] as String?)?.trim().isNotEmpty == true ? p['uoms']['abbreviation'] as String : (p['uoms']?['name'] as String? ?? ''))};
         _loadingProducts = false;
       });
@@ -954,6 +960,28 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _snack('Could not close: ${e.toString().split('\n').first}');
     }
     if (mounted) setState(() => _busy = false);
+  }
+
+  // Labels for a posted batch: product, its barcode (else SKU), batch number
+  // (JOB-…-R#) and the batch date. Copies default to the accepted quantity.
+  Future<void> _printRunLabels(Map<String, dynamic> run) async {
+    final pid = _fgId;
+    final name = (pid != null ? _prodName[pid] : null) ?? _fgLabel;
+    final code = pid != null ? _prodCode[pid] : null;
+    final jobNo = _current?['job_number'] as String? ?? '';
+    final d = DateTime.tryParse('${run['run_date'] ?? ''}');
+    final accepted = (run['accepted_qty'] as num? ?? run['produced_qty'] as num? ?? 0).toDouble();
+    await showLabelPrintDialog(
+      context,
+      title: 'Labels · $jobNo R${run['run_no']}',
+      items: [LabelData(
+        name: name,
+        code: (code ?? '').isEmpty ? null : code,
+        batch: jobNo.isEmpty ? 'R${run['run_no']}' : '$jobNo-R${run['run_no']}',
+        date: d == null ? null : DateFormat('dd/MM/yyyy').format(d),
+      )],
+      defaultCopies: accepted > 0 ? accepted.ceil() : 1,
+    );
   }
 
   Future<void> _voidRun(Map<String, dynamic> run) async {
@@ -2568,7 +2596,7 @@ $runSection
             const SizedBox(width: 70, child: Text('Accepted', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             const SizedBox(width: 60, child: Text('Reject', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
             if (_canViewCost) const SizedBox(width: 100, child: Text('Cost', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-            const SizedBox(width: 80, child: Text('', style: TextStyle(fontSize: 11))),
+            const SizedBox(width: 116, child: Text('', style: TextStyle(fontSize: 11))),
           ])),
         if (!context.isMobile)
           for (final r in _runs)
@@ -2580,8 +2608,12 @@ $runSection
                 SizedBox(width: 70, child: Text(_trim((r['accepted_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.green))),
                 SizedBox(width: 60, child: Text(_trim((r['rejected_qty'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, color: Colors.red))),
                 if (_canViewCost) SizedBox(width: 100, child: Text(_money((r['total_cost'] as num? ?? 0).toDouble()), textAlign: TextAlign.right, style: const TextStyle(fontSize: 12))),
-                SizedBox(width: 80, child: Align(alignment: Alignment.centerRight, child: r['status'] == 'posted'
-                  ? TextButton(onPressed: _busy ? null : () => _voidRun(r), style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero), child: const Text('Void', style: TextStyle(fontSize: 12)))
+                SizedBox(width: 116, child: Align(alignment: Alignment.centerRight, child: r['status'] == 'posted'
+                  ? Row(mainAxisSize: MainAxisSize.min, children: [
+                      IconButton(onPressed: () => _printRunLabels(r), icon: const Icon(Icons.label_outline, size: 18),
+                          tooltip: 'Print labels', visualDensity: VisualDensity.compact),
+                      TextButton(onPressed: _busy ? null : () => _voidRun(r), style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero), child: const Text('Void', style: TextStyle(fontSize: 12))),
+                    ])
                   : Text(r['status'] as String? ?? '', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)))),
               ])),
         if (context.isMobile)
@@ -2609,6 +2641,9 @@ $runSection
                   const SizedBox(width: 8),
                   _runChip('Reject', _trim((r['rejected_qty'] as num? ?? 0).toDouble()), Colors.red.shade700),
                   const Spacer(),
+                  if (r['status'] == 'posted')
+                    IconButton(onPressed: () => _printRunLabels(r), icon: const Icon(Icons.label_outline, size: 18),
+                        tooltip: 'Print labels', visualDensity: VisualDensity.compact),
                   if (r['status'] == 'posted')
                     TextButton(onPressed: _busy ? null : () => _voidRun(r),
                       style: TextButton.styleFrom(foregroundColor: Colors.red, padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero),
