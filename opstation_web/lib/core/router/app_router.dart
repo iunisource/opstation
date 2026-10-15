@@ -162,6 +162,7 @@ import '../../features/hr/presentation/hr_setup_screen.dart' deferred as _s150;
 import '../../features/operations/presentation/route_roster_screen.dart' deferred as _s151;
 import '../../features/superadmin/presentation/org_profile_screen.dart' deferred as _s152;
 import '../../features/erp/presentation/erp_pending_po_items_screen.dart' deferred as _s153;
+import '../../features/erp/presentation/erp_label_printing_screen.dart' deferred as _s154;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -494,6 +495,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/qc-station', builder: (_, __) => _deferred(_s019.loadLibrary(), () => _s019.ErpQcStationScreen())),
       GoRoute(path: '/manufacturing/job-kiosk', builder: (_, __) => _deferred(_s020.loadLibrary(), () => _s020.ErpJobKioskScreen())),
       GoRoute(path: '/manufacturing/duty-roster', builder: (_, __) => _deferred(_s146.loadLibrary(), () => _s146.ErpDutyRosterScreen())),
+      GoRoute(path: '/manufacturing/label-printing', builder: (_, __) => _deferred(_s154.loadLibrary(), () => _s154.ErpLabelPrintingScreen())),
       GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => _deferred(_s021.loadLibrary(), () => _s021.ErpProductionFloorScreen())),
       // Registered in the permission registry (so it rendered as a menu item)
       // but had no GoRoute — same pre-existing gap as the HR attendance screens.

@@ -138,6 +138,8 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('qc_station', 'QC Station', PermKind.report, '/manufacturing/qc-station'),
     PermItem('job_kiosk', 'Job Kiosk', PermKind.report, '/manufacturing/job-kiosk'),
     PermItem('duty_roster', 'Duty Roster', PermKind.doc, '/manufacturing/duty-roster'),
+    // Add = print labels; Edit = also design / change label layouts.
+    PermItem('label_printing', 'Label Printing', PermKind.doc, '/manufacturing/label-printing'),
     PermItem('production_inverse', 'Production Inverse Voucher', PermKind.doc, '/manufacturing/production-inverse-voucher'),
     PermItem('damage_stock', 'Damage Stock Voucher', PermKind.doc, '/manufacturing/damage-stock-voucher'),
     PermItem('claim_processing', 'Claim Processing Voucher', PermKind.doc, '/manufacturing/claim-processing-voucher'),

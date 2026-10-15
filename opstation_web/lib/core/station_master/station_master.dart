@@ -714,6 +714,7 @@ const List<_Feature> _features = [
   _Feature('Automation', 'ERP', '/erp/automation', ['automation', 'auto po', 'reorder', 'low stock', 'replenish']),
   _Feature('Production Report', 'Manufacturing', '/manufacturing/production-report', ['production report', 'production runs', 'daily production', 'output report', 'produced']),
   _Feature('Duty Roster', 'Manufacturing', '/manufacturing/duty-roster', ['duty roster', 'roster', 'station', 'line', 'shift']),
+  _Feature('Label Printing', 'Manufacturing', '/manufacturing/label-printing', ['label', 'labels', 'label printer', 'sticker', 'barcode label', 'tsc']),
   _Feature('Product Assembly (BOM)', 'Manufacturing', '/manufacturing/product-assembly', ['bom', 'assembly', 'recipe']),
   _Feature('Production Floor', 'Manufacturing', '/manufacturing/production-floor', ['production floor', 'shop floor', 'floor']),
   _Feature('Production Inverse (Disassembly)', 'Manufacturing', '/manufacturing/production-inverse-voucher', ['disassembly', 'inverse', 'production inverse']),

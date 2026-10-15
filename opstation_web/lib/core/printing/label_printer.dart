@@ -4,8 +4,13 @@ import 'dart:convert';
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../theme/app_theme.dart';
+import '../../features/auth/auth_controller.dart';
+import 'label_templates.dart';
+
+export 'label_templates.dart';
 
 /// Direct label printing (TSC TE200 and other TSPL printers) through the
 /// Opstation Print Helper running on the same PC (127.0.0.1:9123).
@@ -17,16 +22,6 @@ import '../theme/app_theme.dart';
 enum LabelSize { small, large }
 
 enum LabelCode { barcode, qr }
-
-class LabelData {
-  final String name;
-  final String? code; // barcode / QR content (product barcode or SKU, asset URL…)
-  final String? codeText; // text shown under a QR (e.g. asset code); defaults to code
-  final String? batch;
-  final String? date;
-  final String? qty; // e.g. "12 pcs"
-  const LabelData({required this.name, this.code, this.codeText, this.batch, this.date, this.qty});
-}
 
 // ── Settings (per PC — the printer belongs to this computer) ────────────────
 class LabelPrinterSettings {
@@ -134,126 +129,11 @@ class PrintHelper {
   }
 }
 
-// ── TSPL builder ─────────────────────────────────────────────────────────────
-class Tspl {
-  static String _clean(String s) => s
-      .replaceAll('—', '-').replaceAll('–', '-').replaceAll('·', '-')
-      .replaceAll('"', "'")
-      .replaceAll(RegExp(r'[^\x20-\x7E]'), '')
-      .trim();
+// ── Print dialog ─────────────────────────────────────────────────────────────
 
-  static List<String> _wrap(String text, int maxChars, int maxLines) {
-    final words = _clean(text).split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    final lines = <String>[];
-    var cur = '';
-    for (final w0 in words) {
-      var w = w0;
-      while (w.length > maxChars) {
-        if (cur.isNotEmpty) { lines.add(cur); cur = ''; }
-        lines.add(w.substring(0, maxChars));
-        w = w.substring(maxChars);
-      }
-      if (cur.isEmpty) {
-        cur = w;
-      } else if (cur.length + 1 + w.length <= maxChars) {
-        cur = '$cur $w';
-      } else {
-        lines.add(cur);
-        cur = w;
-      }
-    }
-    if (cur.isNotEmpty) lines.add(cur);
-    if (lines.length > maxLines) {
-      final kept = lines.take(maxLines).toList();
-      final last = kept.last;
-      kept[maxLines - 1] = last.length >= maxChars ? '${last.substring(0, maxChars - 2)}..' : '$last..';
-      return kept;
-    }
-    return lines;
-  }
-
-  static String _cut(String s, int max) {
-    final c = _clean(s);
-    return c.length <= max ? c : '${c.substring(0, max - 2)}..';
-  }
-
-  static String _text(int x, int y, String font, String s) => 'TEXT $x,$y,"$font",0,1,1,"${_clean(s)}"';
-
-  /// Code 128 width in dots ≈ (11 × chars + 35) × narrow.
-  static int _barcodeWidth(String code, int narrow) => (11 * code.length + 35) * narrow;
-
-  static String build(LabelData d, LabelSize size, LabelCode codeType, int copies, LabelPrinterSettings s) {
-    final small = size == LabelSize.small;
-    final w = small ? 304 : 406;
-    final out = <String>[
-      small ? 'SIZE 38.1 mm,25.4 mm' : 'SIZE 50.8 mm,50.8 mm',
-      'GAP ${s.gapMm.toStringAsFixed(1)} mm,0 mm',
-      'DIRECTION 1,0',
-      'REFERENCE ${s.offsetX},${s.offsetY}',
-      'SET TEAR ON',
-      'DENSITY ${s.density.clamp(0, 15)}',
-      'SPEED ${s.speed.clamp(2, 6)}',
-      'CLS',
-    ];
-    final code = _clean(d.code ?? '');
-    final codeText = _clean(d.codeText ?? d.code ?? '');
-    final hasCode = code.isNotEmpty;
-    final batch = (d.batch ?? '').trim();
-    final date = (d.date ?? '').trim();
-    final qty = (d.qty ?? '').trim();
-
-    if (small) {
-      if (codeType == LabelCode.qr && hasCode) {
-        final cell = code.length <= 30 ? 4 : 3;
-        out.add('QRCODE 8,${code.length <= 30 ? 40 : 45},M,$cell,A,0,"$code"');
-        const x = 132; // text column to the right of the QR
-        var y = 8;
-        for (final l in _wrap(d.name, 14, 3)) { out.add(_text(x, y, '2', l)); y += 22; }
-        y += 4;
-        if (codeText.isNotEmpty && codeText != code) { out.add(_text(x, y, '1', _cut(codeText, 20))); y += 18; }
-        if (batch.isNotEmpty) { out.add(_text(x, y, '1', _cut('B: $batch', 20))); y += 18; }
-        if (date.isNotEmpty) { out.add(_text(x, y, '1', _cut(date, 20))); }
-      } else {
-        var y = 6;
-        for (final l in _wrap(d.name, 24, 2)) { out.add(_text(8, y, '2', l)); y += 22; }
-        if (hasCode) {
-          final narrow = _barcodeWidth(code, 2) <= w - 16 ? 2 : 1;
-          final bw = _barcodeWidth(code, narrow);
-          final x = ((w - bw) / 2).round().clamp(4, w);
-          out.add('BARCODE $x,54,"128",58,1,0,$narrow,$narrow,"$code"');
-        }
-        final bottom = [if (batch.isNotEmpty) 'B:$batch', if (date.isNotEmpty) date].join('  ');
-        if (bottom.isNotEmpty) out.add(_text(8, 178, '1', _cut(bottom, 36)));
-      }
-    } else {
-      var y = 12;
-      for (final l in _wrap(d.name, 23, 2)) { out.add(_text(12, y, '3', l)); y += 30; }
-      if (qty.isNotEmpty) out.add(_text(12, 76, '3', _cut('Qty: $qty', 23)));
-      if (hasCode) {
-        if (codeType == LabelCode.qr) {
-          final cell = code.length <= 30 ? 7 : 5;
-          final modules = code.length <= 14 ? 21 : code.length <= 26 ? 25 : code.length <= 42 ? 29 : 33;
-          final qw = modules * cell;
-          out.add('QRCODE ${((w - qw) / 2).round().clamp(4, w)},112,M,$cell,A,0,"$code"');
-          if (codeText.isNotEmpty && codeText != code) out.add(_text(12, 112 + qw + 6, '2', _cut(codeText, 31)));
-        } else {
-          final narrow = _barcodeWidth(code, 3) <= w - 24 ? 3 : (_barcodeWidth(code, 2) <= w - 24 ? 2 : 1);
-          final bw = _barcodeWidth(code, narrow);
-          out.add('BARCODE ${((w - bw) / 2).round().clamp(4, w)},120,"128",110,1,0,$narrow,$narrow,"$code"');
-        }
-      }
-      if (batch.isNotEmpty) out.add(_text(12, 318, '3', _cut('Batch: $batch', 23)));
-      if (date.isNotEmpty) out.add(_text(12, 352, '2', _cut(date, 31)));
-    }
-    out.add('PRINT 1,${copies.clamp(1, 9999)}');
-    return '${out.join('\r\n')}\r\n';
-  }
-}
-
-// ── Dialogs ──────────────────────────────────────────────────────────────────
-
-/// One-stop "Print labels" window. [items] usually holds one label design
-/// (printed [copies] times); several items print one after another.
+/// One-stop "Print labels" window. [items] usually holds one label (printed
+/// [copies] times); several items print one after another. The layout comes
+/// from the organisation's label templates (Manufacturing → Label Printing).
 Future<void> showLabelPrintDialog(
   BuildContext context, {
   required List<LabelData> items,
@@ -266,29 +146,52 @@ Future<void> showLabelPrintDialog(
   await showDialog(
     context: context,
     builder: (_) => _LabelPrintDialog(
-      items: items, defaultCopies: defaultCopies, defaultSize: defaultSize,
-      defaultCode: defaultCode, allowQtyEdit: allowQtyEdit, title: title),
+      items: items, defaultCopies: defaultCopies,
+      defaultTemplateId: '${defaultSize == LabelSize.small ? 'small' : 'large'}_${defaultCode == LabelCode.qr ? 'qr' : 'barcode'}',
+      allowQtyEdit: allowQtyEdit, title: title),
   );
 }
 
-class _LabelPrintDialog extends StatefulWidget {
-  final List<LabelData> items;
-  final int defaultCopies;
-  final LabelSize defaultSize;
-  final LabelCode defaultCode;
-  final bool allowQtyEdit;
-  final String title;
-  const _LabelPrintDialog({required this.items, required this.defaultCopies, required this.defaultSize,
-      required this.defaultCode, required this.allowQtyEdit, required this.title});
-  @override
-  State<_LabelPrintDialog> createState() => _LabelPrintDialogState();
+/// Sends labels: silently when the browser lets this page reach the helper,
+/// otherwise through the helper's own small window. Call from a click handler
+/// (the window fallback must open inside the click). Returns a status line.
+Future<String> sendLabels({required bool helperReachable, required String tspl, required String job,
+    required int count, required LabelPrinterSettings settings}) async {
+  final what = '$count label${count == 1 ? '' : 's'}';
+  if (!helperReachable) {
+    PrintHelper.openJobWindow(settings.printer, tspl, job);
+    return 'Printing $what through the helper window…';
+  }
+  try {
+    await PrintHelper.send(settings.printer, tspl, job: job);
+    return 'Sent $what to ${settings.printer.isEmpty ? 'the label printer' : settings.printer}';
+  } catch (e) {
+    if ('$e'.startsWith('Could not reach')) {
+      PrintHelper.openJobWindow(settings.printer, tspl, job);
+      return 'Printing $what through the helper window…';
+    }
+    rethrow;
+  }
 }
 
-class _LabelPrintDialogState extends State<_LabelPrintDialog> {
-  late LabelSize _size = widget.defaultSize;
-  late LabelCode _code = widget.defaultCode;
+class _LabelPrintDialog extends ConsumerStatefulWidget {
+  final List<LabelData> items;
+  final int defaultCopies;
+  final String defaultTemplateId;
+  final bool allowQtyEdit;
+  final String title;
+  const _LabelPrintDialog({required this.items, required this.defaultCopies, required this.defaultTemplateId,
+      required this.allowQtyEdit, required this.title});
+  @override
+  ConsumerState<_LabelPrintDialog> createState() => _LabelPrintDialogState();
+}
+
+class _LabelPrintDialogState extends ConsumerState<_LabelPrintDialog> {
+  List<LabelTemplate> _templates = [for (final id in kBuiltInIds) builtInTemplate(id)];
+  late String _tid = widget.defaultTemplateId;
   late final _copiesCtrl = TextEditingController(text: '${widget.defaultCopies < 1 ? 1 : widget.defaultCopies}');
   late final _qtyCtrl = TextEditingController(text: widget.items.isNotEmpty ? (widget.items.first.qty ?? '') : '');
+  final Map<String, TextEditingController> _ask = {};
   LabelPrinterSettings _s = LabelPrinterSettings.load();
   bool? _helper; // null = checking
   bool _printing = false;
@@ -298,6 +201,18 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
   void initState() {
     super.initState();
     _check();
+    _loadTemplates();
+  }
+
+  Future<void> _loadTemplates() async {
+    final org = ref.read(currentUserProvider)?.orgId;
+    if (org == null) return;
+    final list = await LabelTemplateStore.load(org);
+    if (!mounted) return;
+    setState(() {
+      _templates = list;
+      if (!list.any((t) => t.id == _tid)) _tid = list.first.id;
+    });
   }
 
   Future<void> _check() async {
@@ -306,38 +221,33 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
     if (mounted) setState(() => _helper = ok);
   }
 
-  LabelData _withQty(LabelData d) => LabelData(
-      name: d.name, code: d.code, codeText: d.codeText, batch: d.batch, date: d.date,
-      qty: widget.allowQtyEdit ? _qtyCtrl.text.trim() : d.qty);
+  LabelTemplate get _t => _templates.firstWhere((t) => t.id == _tid, orElse: () => _templates.first);
 
-  void _done(String text) {
-    if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    Navigator.of(context, rootNavigator: true).pop();
-    messenger.showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating));
-  }
+  TextEditingController _askCtrl(LabelElement e) => _ask.putIfAbsent(e.id, () => TextEditingController(text: e.text));
+
+  LabelData _prepare(LabelData d) => d.copyWith(
+        qty: widget.allowQtyEdit ? _qtyCtrl.text.trim() : d.qty,
+        custom: {...d.custom, for (final e in _t.askFields) e.id: _askCtrl(e).text},
+      );
 
   Future<void> _print() async {
     final copies = int.tryParse(_copiesCtrl.text.trim()) ?? 0;
     if (copies < 1) { setState(() => _error = 'Enter how many labels to print.'); return; }
-    final total = copies * widget.items.length;
-    final data = widget.items.map((d) => Tspl.build(_withQty(d), _size, _code, copies, _s)).join();
-    // Browser won't let us call the helper directly → print through its window.
-    if (_helper != true) {
-      PrintHelper.openJobWindow(_s.printer, data, widget.title);
-      _done('Printing $total label${total == 1 ? '' : 's'} through the helper window…');
-      return;
-    }
-    setState(() { _printing = true; _error = null; });
+    final t = _t;
+    final tspl = widget.items
+        .map((d) => buildTspl(t, _prepare(d), copies,
+            density: _s.density, speed: _s.speed, offsetX: _s.offsetX, offsetY: _s.offsetY))
+        .join();
+    final count = copies * widget.items.length;
+    final reachable = _helper == true;
+    if (reachable) setState(() { _printing = true; _error = null; });
     try {
-      await PrintHelper.send(_s.printer, data, job: widget.title);
-      _done('Sent $total label${total == 1 ? '' : 's'} to ${_s.printer.isEmpty ? 'the label printer' : _s.printer}');
+      final msg = await sendLabels(helperReachable: reachable, tspl: tspl, job: widget.title, count: count, settings: _s);
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.of(context, rootNavigator: true).pop();
+      messenger.showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
     } catch (e) {
-      if ('$e'.startsWith('Could not reach')) {
-        PrintHelper.openJobWindow(_s.printer, data, widget.title);
-        _done('Printing $total label${total == 1 ? '' : 's'} through the helper window…');
-        return;
-      }
       if (mounted) setState(() { _printing = false; _error = '$e'; });
     }
   }
@@ -345,7 +255,9 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
   @override
   Widget build(BuildContext context) {
     final first = widget.items.isNotEmpty ? widget.items.first : const LabelData(name: '');
-    final hasCode = (first.code ?? '').isNotEmpty;
+    final t = _t;
+    final hasQty = t.elements.any((e) => e.kind == 'text' && e.source == 'qty');
+    final ppm = t.widthMm > 45 ? 4.4 : 6.0;
     return AlertDialog(
       title: Row(children: [
         Expanded(child: Text(widget.title)),
@@ -367,49 +279,42 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
         child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           _helperBanner(),
           const SizedBox(height: 12),
-          const Text('Label size', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          const SizedBox(height: 6),
-          SegmentedButton<LabelSize>(
-            segments: const [
-              ButtonSegment(value: LabelSize.small, label: Text('1.5" × 1"')),
-              ButtonSegment(value: LabelSize.large, label: Text('2" × 2"')),
-            ],
-            selected: {_size},
-            onSelectionChanged: (v) => setState(() => _size = v.first),
+          DropdownButtonFormField<String>(
+            value: _tid, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Label layout', isDense: true, border: OutlineInputBorder()),
+            items: [for (final x in _templates)
+              DropdownMenuItem(value: x.id, child: Text('${x.name}  ·  ${x.widthMm.toStringAsFixed(1)}×${x.heightMm.toStringAsFixed(1)} mm',
+                  overflow: TextOverflow.ellipsis))],
+            onChanged: (v) => setState(() => _tid = v ?? _tid),
           ),
-          if (hasCode) ...[
-            const SizedBox(height: 12),
-            const Text('Code', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            const SizedBox(height: 6),
-            SegmentedButton<LabelCode>(
-              segments: const [
-                ButtonSegment(value: LabelCode.barcode, label: Text('Barcode'), icon: Icon(Icons.view_week_outlined, size: 16)),
-                ButtonSegment(value: LabelCode.qr, label: Text('QR code'), icon: Icon(Icons.qr_code_2, size: 16)),
-              ],
-              selected: {_code},
-              onSelectionChanged: (v) => setState(() => _code = v.first),
-            ),
-          ],
-          const SizedBox(height: 14),
-          Row(children: [
+          const SizedBox(height: 12),
+          Wrap(spacing: 10, runSpacing: 10, children: [
             SizedBox(width: 140, child: TextField(
               controller: _copiesCtrl, keyboardType: TextInputType.number,
               decoration: InputDecoration(
                   labelText: widget.items.length > 1 ? 'Copies of each' : 'Number of labels',
                   isDense: true, border: const OutlineInputBorder()),
             )),
-            if (widget.allowQtyEdit && _size == LabelSize.large) ...[
-              const SizedBox(width: 10),
-              Expanded(child: TextField(
+            if (widget.allowQtyEdit && hasQty)
+              SizedBox(width: 200, child: TextField(
                 controller: _qtyCtrl,
                 onChanged: (_) => setState(() {}),
                 decoration: const InputDecoration(labelText: 'Qty on label (optional)', hintText: 'e.g. 12 pcs',
                     isDense: true, border: OutlineInputBorder()),
               )),
-            ],
+            for (final e in t.askFields)
+              SizedBox(width: 200, child: TextField(
+                controller: _askCtrl(e),
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(labelText: e.prefix.trim().isEmpty ? 'Text' : e.prefix.trim(),
+                    isDense: true, border: const OutlineInputBorder()),
+              )),
           ]),
           const SizedBox(height: 14),
-          _preview(_withQty(first)),
+          Center(child: LabelPreview(template: t, data: _prepare(first), pxPerMm: ppm)),
+          const SizedBox(height: 4),
+          const Center(child: Text('Preview — adjust layouts in Manufacturing → Label Printing',
+              style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary))),
           if (widget.items.length > 1)
             Padding(padding: const EdgeInsets.only(top: 6),
                 child: Text('${widget.items.length} different labels', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
@@ -431,25 +336,33 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
     );
   }
 
-  Widget _helperBanner() {
-    if (_helper == null) {
+  Widget _helperBanner() => LabelHelperBanner(reachable: _helper, printer: _s.printer, onRetry: _check);
+}
+
+/// Status strip: checking / connected / will print through the helper window.
+class LabelHelperBanner extends StatelessWidget {
+  final bool? reachable;
+  final String printer;
+  final VoidCallback onRetry;
+  const LabelHelperBanner({super.key, required this.reachable, required this.printer, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    if (reachable == null) {
       return const Row(children: [
         SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
         SizedBox(width: 8),
         Text('Looking for the label printer…', style: TextStyle(fontSize: 12.5)),
       ]);
     }
-    if (_helper == true) {
-      final has = _s.printer.isNotEmpty;
+    if (reachable == true) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-            color: (has ? Colors.green : Colors.orange).withOpacity(0.08), borderRadius: BorderRadius.circular(8)),
+        decoration: BoxDecoration(color: Colors.green.withOpacity(0.08), borderRadius: BorderRadius.circular(8)),
         child: Row(children: [
-          Icon(has ? Icons.check_circle_outline : Icons.info_outline, size: 18,
-              color: has ? Colors.green.shade700 : Colors.orange.shade800),
+          Icon(Icons.check_circle_outline, size: 18, color: Colors.green.shade700),
           const SizedBox(width: 8),
-          Expanded(child: Text(has ? 'Printer: ${_s.printer}' : 'Connected — prints to the printer chosen in the helper (gear icon to change).',
+          Expanded(child: Text(printer.isNotEmpty ? 'Printer: $printer' : 'Connected — prints to the printer chosen in the helper.',
               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600))),
         ]),
       );
@@ -462,9 +375,8 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
         const Text('Printing will open a small helper window',
             style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
-        const Text('The browser isn\'t letting this page reach the Opstation Print Helper directly, so Print opens a '
-            'small window that sends the labels and closes itself. Allow pop-ups for Opstation if the browser asks.\n'
-            'First time on this PC? Download and double-click OpstationPrint.exe, then use "Printer setup" to pick the TSC.',
+        const Text('It sends the labels and closes itself. Allow pop-ups for Opstation if the browser asks. '
+            'First time on this PC? Download and double-click OpstationPrint.exe, then use "Printer setup".',
             style: TextStyle(fontSize: 12)),
         const SizedBox(height: 8),
         Wrap(spacing: 8, children: [
@@ -475,62 +387,12 @@ class _LabelPrintDialogState extends State<_LabelPrintDialog> {
           ),
           OutlinedButton.icon(
             icon: const Icon(Icons.download_outlined, size: 16),
-            label: const Text('Download helper (Windows)'),
+            label: const Text('Download helper'),
             onPressed: () => html.window.open(PrintHelper.downloadPath, '_blank'),
           ),
-          TextButton.icon(icon: const Icon(Icons.refresh, size: 16), label: const Text('Retry'), onPressed: _check),
+          TextButton.icon(icon: const Icon(Icons.refresh, size: 16), label: const Text('Retry'), onPressed: onRetry),
         ]),
       ]),
-    );
-  }
-
-  // A rough on-screen picture of the label (not exact printer output).
-  Widget _preview(LabelData d) {
-    final small = _size == LabelSize.small;
-    final w = small ? 216.0 : 180.0;
-    final h = small ? 144.0 : 180.0;
-    final hasCode = (d.code ?? '').isNotEmpty;
-    final codeBox = !hasCode
-        ? const SizedBox.shrink()
-        : _code == LabelCode.qr
-            ? Icon(Icons.qr_code_2, size: small ? 64 : 84)
-            : Column(mainAxisSize: MainAxisSize.min, children: [
-                Container(height: small ? 30 : 44, width: small ? 150 : 140,
-                    decoration: const BoxDecoration(gradient: LinearGradient(colors: [
-                      Colors.black, Colors.white, Colors.black, Colors.black, Colors.white, Colors.black, Colors.white, Colors.black,
-                    ], stops: [0, .12, .2, .35, .45, .6, .8, 1]))),
-                Text(d.code!, style: const TextStyle(fontSize: 8)),
-              ]);
-    final lines = <Widget>[
-      Text(d.name, maxLines: 2, overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: small ? 10 : 11.5, fontWeight: FontWeight.w700)),
-      if (!small && (d.qty ?? '').isNotEmpty) Text('Qty: ${d.qty}', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600)),
-    ];
-    final meta = [if ((d.batch ?? '').isNotEmpty) 'B: ${d.batch}', if ((d.date ?? '').isNotEmpty) d.date!].join('  ');
-    return Center(
-      child: Container(
-        width: w, height: h, padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: AppTheme.border),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6)]),
-        child: small && _code == LabelCode.qr && hasCode
-            ? Row(children: [
-                codeBox,
-                const SizedBox(width: 4),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-                  ...lines,
-                  if ((d.codeText ?? '').isNotEmpty && d.codeText != d.code) Text(d.codeText!, style: const TextStyle(fontSize: 8.5)),
-                  if (meta.isNotEmpty) Text(meta, style: const TextStyle(fontSize: 8.5)),
-                ])),
-              ])
-            : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                ...lines,
-                const Spacer(),
-                Center(child: codeBox),
-                const Spacer(),
-                if (meta.isNotEmpty) Text(meta, style: const TextStyle(fontSize: 8.5)),
-              ]),
-      ),
     );
   }
 }
@@ -578,7 +440,7 @@ Future<LabelPrinterSettings?> showLabelPrinterSetup(BuildContext context) async 
           const SizedBox(height: 12),
           Row(children: [
             Expanded(child: TextField(controller: gap, keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Gap between labels (mm)', isDense: true))),
+                decoration: const InputDecoration(labelText: 'Gap for test label (mm)', isDense: true))),
             const SizedBox(width: 10),
             Expanded(child: DropdownButtonFormField<int>(
               value: speed, isDense: true,
@@ -606,9 +468,10 @@ Future<LabelPrinterSettings?> showLabelPrinterSetup(BuildContext context) async 
             onPressed: sel == null ? null : () async {
               setD(() => msg = 'Printing test label…');
               try {
-                await PrintHelper.send(sel!, Tspl.build(
-                    const LabelData(name: 'Opstation test label', code: 'TEST-12345', batch: 'B-001', date: 'Today'),
-                    LabelSize.small, LabelCode.barcode, 1, current()), job: 'Opstation test');
+                final c = current();
+                await PrintHelper.send(sel!, buildTspl(builtInTemplate('small_barcode')..gapMm = c.gapMm,
+                    const LabelData(name: 'Opstation test label', code: 'TEST-12345', batch: 'B-001', date: 'Today'), 1,
+                    density: c.density, speed: c.speed, offsetX: c.offsetX, offsetY: c.offsetY), job: 'Opstation test');
                 setD(() => msg = 'Test label sent. If it prints off-centre, adjust the shift values.');
               } catch (e) {
                 setD(() => msg = '$e');

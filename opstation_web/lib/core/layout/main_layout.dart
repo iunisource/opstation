@@ -1378,6 +1378,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/manufacturing/qc-station')) _menuItem(context, 'QC Station', Icons.checklist_outlined, '/manufacturing/qc-station', location),
       if (show('/manufacturing/job-kiosk')) _menuItem(context, 'Job Kiosk', Icons.qr_code_scanner_outlined, '/manufacturing/job-kiosk', location),
       if (show('/manufacturing/duty-roster')) _menuItem(context, 'Duty Roster', Icons.badge_outlined, '/manufacturing/duty-roster', location),
+      if (show('/manufacturing/label-printing')) _menuItem(context, 'Label Printing', Icons.label_outline, '/manufacturing/label-printing', location),
     ];
     final mfgVoucherItems = <Widget>[
       if (show('/manufacturing/product-assembly')) _menuItem(context, 'Product Assembly (BOM)', Icons.account_tree_outlined, '/manufacturing/product-assembly', location, badge: bomSupervisePending),
@@ -1502,7 +1503,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
-          ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station', '/manufacturing/job-kiosk', '/manufacturing/duty-roster',
+          ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station', '/manufacturing/job-kiosk', '/manufacturing/duty-roster', '/manufacturing/label-printing',
            '/manufacturing/production-inverse-voucher', '/manufacturing/damage-stock-voucher',
            '/manufacturing/claim-processing-voucher', '/manufacturing/production-report', '/manufacturing/production-waste-report', '/manufacturing/overheads-summary', '/erp/fg-without-bom'],
           _trimDividers(manufacturingItems), badge: jobAckPending + bomSupervisePending),
