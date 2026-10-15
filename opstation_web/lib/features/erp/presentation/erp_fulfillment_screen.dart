@@ -443,7 +443,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     }
   }
 
-  static const _couriers = ['PostEx', 'Leopards', 'TCS', 'M&P', 'Trax', 'BlueEx', 'Call Courier', 'Rider', 'Swyft', 'DHL', 'Pakistan Post'];
+  static const _couriers = ['DEX Logistics', 'PostEx', 'Leopards', 'TCS', 'M&P', 'Trax', 'BlueEx', 'Call Courier', 'Rider', 'Swyft', 'DHL', 'Pakistan Post'];
 
   /// The order in the Shopify admin (where the store's courier app books it).
   void _openInShopify(Map<String, dynamic> o) {
@@ -1381,6 +1381,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ].join(' ')),
           if ((o['fulfil_error'] as String?)?.isNotEmpty == true && st != 'fulfilled')
             _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
+          if (canWork && '${o['ext_fulfillment'] ?? ''}'.toUpperCase() == 'FULFILLED')
+            _bookedBanner(o),
           if (_hasUnmatched(o) && canWork)
             _banner(Colors.deepOrange, Icons.link_off, 'Some items are not matched to a product yet — match them before picking.'),
           const SizedBox(height: 16),
@@ -1464,6 +1466,55 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           ),
       ]),
     );
+  }
+
+  /// Booked (and fulfilled) in Shopify by the courier app, but not packed here yet.
+  Widget _bookedBanner(Map<String, dynamic> o) {
+    final si = Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+    final what = [si['company'], si['number']].where((x) => x != null && '$x'.isNotEmpty).join(' ');
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: Colors.indigo.withOpacity(0.06), borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.indigo.withOpacity(0.35))),
+      child: Row(children: [
+        const Icon(Icons.local_shipping_outlined, size: 18, color: Colors.indigo),
+        const SizedBox(width: 8),
+        Expanded(child: Text(
+            'Already booked in Shopify${what.isEmpty ? '' : ' ($what)'}. Pick and pack it as usual — '
+            'Fulfil just closes it here, nothing is sent to the store again.',
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.indigo))),
+        TextButton(
+          onPressed: _busy ? null : () => _markShippedOutside(o),
+          child: const Text('Already shipped'),
+        ),
+      ]),
+    );
+  }
+
+  /// Shipped without picking here (e.g. packed before Opstation) — close it.
+  Future<void> _markShippedOutside(Map<String, dynamic> o) async {
+    final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(
+      title: Text('Close ${o['order_no'] ?? ''} without picking?'),
+      content: const Text('Use this only if the parcel has already left. It is marked fulfilled here without scanning.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), child: const Text('Mark fulfilled')),
+      ],
+    ));
+    if (ok != true) return;
+    final si = Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+    final now = DateTime.now().toUtc().toIso8601String();
+    try {
+      await Supabase.instance.client.from('shop_orders').update({
+        'status': 'fulfilled', 'fulfilled_at': now, 'fulfilled_by_name': ref.read(currentUserProvider)?.name,
+        'tracking_company': o['tracking_company'] ?? si['company'], 'tracking_number': o['tracking_number'] ?? si['number'],
+        'tracking_url': o['tracking_url'] ?? si['url'], 'updated_at': now,
+      }).eq('id', o['id']);
+      await _load(quiet: true);
+    } catch (e) {
+      _snack('Could not save: $e');
+    }
   }
 
   Widget _kv(String k, String v) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

@@ -133,7 +133,7 @@ const COURIERS: Array<[RegExp, string]> = [
   [/post\s*ex/i, "PostEx"], [/leopard/i, "Leopards"], [/\btcs\b/i, "TCS"], [/trax/i, "Trax"],
   [/\bm\s*&\s*p\b|\bmnp\b|m\s*and\s*p/i, "M&P"], [/blue\s*ex/i, "BlueEx"], [/call\s*courier/i, "Call Courier"],
   [/\brider\b/i, "Rider"], [/swyft/i, "Swyft"], [/daewoo/i, "Daewoo"], [/pak(istan)?\s*post/i, "Pakistan Post"],
-  [/\bdhl\b/i, "DHL"], [/fed\s*ex/i, "FedEx"], [/\bups\b/i, "UPS"],
+  [/\bdex\b|daraz/i, "DEX Logistics"], [/\bdhl\b/i, "DHL"], [/fed\s*ex/i, "FedEx"], [/\bups\b/i, "UPS"],
 ];
 const courierIn = (s: string) => COURIERS.find(([re]) => re.test(s))?.[1] ?? null;
 const TRACK_KEY = /track|consign|\bcn\b|cn_?no|awb|booking|waybill|airway|parcel|shipment/i;
@@ -145,7 +145,12 @@ function findShipping(o: any): ShipInfo | null {
   // 1) A fulfilment with tracking (the courier app already fulfilled it)
   for (const f of o.fulfillments ?? []) {
     for (const t of f.trackingInfo ?? []) {
-      if (t?.number) return { company: t.company ?? courierIn(String(t.url ?? "")), number: String(t.number), url: t.url ?? null, source: "Shopify fulfilment" };
+      if (t?.number) {
+        // Use our courier name when we recognise it ("Daraz Express" → DEX Logistics).
+        const known = courierIn(`${t.company ?? ""} ${t.url ?? ""}`);
+        const company = known ?? (t.company && !/^other$/i.test(t.company) ? t.company : null);
+        return { company, number: String(t.number), url: t.url ?? null, source: "Shopify fulfilment" };
+      }
     }
   }
   const pick = (key: string, value: string, where: string): ShipInfo | null => {
@@ -475,7 +480,13 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
 
   let status = prev?.status ?? "new";
   if (o.cancelledAt) status = "cancelled";
-  else if (o.displayFulfillmentStatus === "FULFILLED" && status !== "fulfilled") status = "fulfilled";
+  else if (o.displayFulfillmentStatus === "FULFILLED" && status !== "fulfilled") {
+    // Fulfilled in Shopify — often a courier app (e.g. DEX) books AND fulfils
+    // at once. An order we already had waiting to be picked stays in the
+    // queue so it's still scanned and packed (shown as "booked in Shopify");
+    // anything else (old / packed) is simply done.
+    if (!(prev && (prev.status === "new" || prev.status === "picking"))) status = "fulfilled";
+  }
 
   const a = o.shippingAddress;
   const row = {
