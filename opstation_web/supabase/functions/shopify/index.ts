@@ -12,6 +12,8 @@
 //       {action:"fulfill", order_id, company?, number?, url?, notify?}
 //       {action:"refresh_order", order_id}
 //       {action:"disconnect", store_id}
+//       {action:"list_variants", store_id}   store items + suggested matches
+//       {action:"rematch", store_id}         re-apply matches to open orders
 //
 // Deploy (Shopify's notifications carry no Supabase login, so JWT checking is
 // done inside):
@@ -32,7 +34,7 @@ const cors = {
 const json = (o: unknown, status = 200) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
-type Store = { id: string; org_id: string; shop_domain: string; name: string | null; branch_id: string | null; is_active: boolean };
+type Store = { id: string; org_id: string; shop_domain: string; name: string | null; branch_id: string | null; is_active: boolean; match_groups?: string[] | null };
 type Secret = { store_id: string; client_id: string | null; client_secret: string | null; access_token: string | null; token_expires_at: string | null };
 
 function jwtPayload(token: string): Record<string, unknown> | null {
@@ -111,58 +113,174 @@ async function gqlOrders(admin: SupabaseClient, store: Store, sec: Secret, build
   }
 }
 
-// ── Saving orders ────────────────────────────────────────────────────────────
-type Catalog = { byCode: Map<string, string>; map: Map<string, string> };
-
-async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog> {
-  const byCode = new Map<string, string>();
-  for (let from = 0; ; from += 1000) {
-    const { data } = await admin.from("products").select("id, sku, barcode")
-      .eq("org_id", store.org_id).eq("is_active", true).range(from, from + 999);
-    for (const p of data ?? []) {
-      if (p.barcode) byCode.set(`b:${String(p.barcode).trim().toLowerCase()}`, p.id);
-      if (p.sku) byCode.set(`s:${String(p.sku).trim().toLowerCase()}`, p.id);
-    }
-    if (!data || data.length < 1000) break;
+// ── Matching store items to Opstation products ───────────────────────────────
+// Alfa-style item codes: "ALO 202", "ALA 301 (S)", "2x ALC 300". A store SKU
+// with several codes ("ALO 202 + ALA 301 (S) + ALC 300") is a bundle.
+// On the Opstation side the code is the one the product NAME starts with
+// ("ALA 301-ALFA Honda Civic … - FG"); codes mentioned later in a name
+// ("Base Plate (ALO 202)") are parts, not the product. "(S)" = special quality.
+// Only products in the store's chosen main groups are considered (default:
+// the finished-goods group), so boxes, raw and parts never get picked.
+const CODE_RE = /(?:(\d+)\s*[X×]\s*)?\b([A-Z]{2,4})\s*-?\s*(\d{2,5})(?!\d)(?:\s*\(\s*([A-Z0-9]{1,3})\s*\))?(?:\s*[X×]\s*(\d{1,3})\b)?/g;
+const LEAD_RE = /^\s*([A-Z]{2,4})\s*-?\s*(\d{2,5})(?!\d)(?:\s*\(\s*([A-Z0-9]{1,3})\s*\))?/;
+type Code = { code: string; base: string; suffix: string | null; qty: number };
+function parseCodes(s: string): Code[] {
+  const out: Code[] = [];
+  for (const m of String(s ?? "").toUpperCase().matchAll(CODE_RE)) {
+    const base = `${m[2]} ${m[3]}`;
+    const suffix = m[4] ?? null;
+    const code = suffix ? `${base} (${suffix})` : base;
+    const qty = m[1] ? Math.max(1, Number(m[1])) : (m[5] ? Math.max(1, Number(m[5])) : 1);
+    const ex = out.find((c) => c.code === code);
+    if (ex) ex.qty += qty; else out.push({ code, base, suffix, qty });
   }
-  const map = new Map<string, string>();
-  const { data: m } = await admin.from("shop_product_map").select("ext_key, product_id").eq("store_id", store.id);
-  for (const r of m ?? []) map.set(r.ext_key, r.product_id);
-  return { byCode, map };
+  return out;
+}
+// The code a product is (from its name's start, or its own SKU).
+function productCode(name: string, sku: string): { base: string; suffix: string | null } | null {
+  const up = String(name ?? "").toUpperCase();
+  const m = up.match(LEAD_RE);
+  const special = /\bSPECIAL\b/.test(up);
+  if (m) return { base: `${m[1]} ${m[2]}`, suffix: m[3] ?? (special ? "S" : null) };
+  const s = parseCodes(sku);
+  if (s.length === 1) return { base: s[0].base, suffix: s[0].suffix ?? (special ? "S" : null) };
+  return null;
 }
 
-function matchProduct(cat: Catalog, variantId: string | null, sku: string, barcode: string): string | null {
+type Part = { product_id: string; qty: number };
+type Mapped = { product_id: string | null; components: Part[] | null };
+type SuggestPart = { code: string | null; qty: number; product_id: string | null; choices: string[] };
+type Suggestion = { how: string; parts: SuggestPart[] };
+type Catalog = {
+  byCode: Map<string, string>;                                         // exact barcode / SKU
+  idx: Map<string, Array<{ id: string; suffix: string | null }>>;     // code → finished products
+  map: Map<string, Mapped>;                                            // saved matches
+  groups: string[];                                                    // main groups in use
+  allGroups: Record<string, number>;
+};
+
+function finishedDefault(all: string[]): string[] {
+  const f = all.filter((g) => /finish/i.test(g));
+  return f.length ? f : all.filter((g) => !/raw|pre-?\s?produc|packag|marketing|promotion/i.test(g));
+}
+
+async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog> {
+  // deno-lint-ignore no-explicit-any
+  const prods: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data } = await admin.from("products").select("id, name, sku, barcode, product_main_group")
+      .eq("org_id", store.org_id).eq("is_active", true).range(from, from + 999);
+    prods.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  const allGroups: Record<string, number> = {};
+  for (const p of prods) { const g = String(p.product_main_group ?? "").trim() || "(none)"; allGroups[g] = (allGroups[g] ?? 0) + 1; }
+  const chosen = Array.isArray(store.match_groups) && store.match_groups.length
+    ? store.match_groups : finishedDefault(Object.keys(allGroups));
+  const inGroup = new Set(chosen);
+
+  const byCode = new Map<string, string>();
+  const idx = new Map<string, Array<{ id: string; suffix: string | null }>>();
+  for (const p of prods) {
+    if (p.barcode) byCode.set(`b:${String(p.barcode).trim().toLowerCase()}`, p.id);
+    if (p.sku) byCode.set(`s:${String(p.sku).trim().toLowerCase()}`, p.id);
+    if (!inGroup.has(String(p.product_main_group ?? "").trim() || "(none)")) continue;
+    const c = productCode(p.name ?? "", p.sku ?? "");
+    if (!c) continue;
+    if (!idx.has(c.base)) idx.set(c.base, []);
+    idx.get(c.base)!.push({ id: p.id, suffix: c.suffix });
+  }
+  const map = new Map<string, Mapped>();
+  const { data: m } = await admin.from("shop_product_map").select("ext_key, product_id, components").eq("store_id", store.id);
+  for (const r of m ?? []) map.set(r.ext_key, { product_id: r.product_id ?? null, components: (r.components as Part[] | null) ?? null });
+  return { byCode, idx, map, groups: chosen, allGroups };
+}
+
+function resolveCode(cat: Catalog, c: Code): SuggestPart {
+  const cands = cat.idx.get(c.base) ?? [];
+  const same = cands.filter((p) => (p.suffix ?? null) === (c.suffix ?? null));
+  const pool = same.length ? same : cands;
+  return { code: c.code, qty: c.qty, product_id: same.length === 1 ? same[0].id : null, choices: pool.map((p) => p.id) };
+}
+
+// What a store item should be, without any saved choice.
+function autoSuggest(cat: Catalog, sku: string, barcode: string, title: string): Suggestion {
+  const one = (how: string, id?: string): Suggestion => ({ how, parts: [{ code: null, qty: 1, product_id: id ?? null, choices: [] }] });
+  const b = barcode.toLowerCase(), s = sku.toLowerCase();
+  if (b && cat.byCode.has(`b:${b}`)) return one("barcode", cat.byCode.get(`b:${b}`));
+  if (s && cat.byCode.has(`b:${s}`)) return one("barcode", cat.byCode.get(`b:${s}`));
+  if (s && cat.byCode.has(`s:${s}`)) return one("sku", cat.byCode.get(`s:${s}`));
+  let codes = parseCodes(sku);
+  if (codes.length === 0) codes = parseCodes(title).filter((c) => cat.idx.has(c.base)); // titles: known codes only
+  if (codes.length === 0) return { how: "none", parts: [] };
+  const parts = codes.map((c) => resolveCode(cat, c));
+  if (parts.some((p) => !p.product_id)) return { how: parts.some((p) => p.choices.length) ? "unsure" : "none", parts };
+  return { how: parts.length > 1 || parts[0].qty > 1 ? "bundle" : "code", parts };
+}
+
+function savedFor(cat: Catalog, variantId: string | null, sku: string): Mapped | null {
   if (variantId && cat.map.has(variantId)) return cat.map.get(variantId)!;
   if (sku && cat.map.has(`sku:${sku.toLowerCase()}`)) return cat.map.get(`sku:${sku.toLowerCase()}`)!;
-  if (barcode && cat.byCode.has(`b:${barcode.toLowerCase()}`)) return cat.byCode.get(`b:${barcode.toLowerCase()}`)!;
-  if (sku && cat.byCode.has(`b:${sku.toLowerCase()}`)) return cat.byCode.get(`b:${sku.toLowerCase()}`)!;
-  if (sku && cat.byCode.has(`s:${sku.toLowerCase()}`)) return cat.byCode.get(`s:${sku.toLowerCase()}`)!;
   return null;
+}
+
+function toMapped(s: Suggestion): Mapped | null {
+  if (!s.parts.length || s.parts.some((p) => !p.product_id)) return null;
+  if (s.parts.length === 1 && s.parts[0].qty === 1) return { product_id: s.parts[0].product_id, components: null };
+  return { product_id: null, components: s.parts.map((p) => ({ product_id: p.product_id!, qty: p.qty })) };
+}
+
+function matchLine(cat: Catalog, variantId: string | null, sku: string, barcode: string, title: string): Mapped | null {
+  const saved = savedFor(cat, variantId, sku);
+  if (saved && (saved.product_id || saved.components?.length)) return saved;
+  return toMapped(autoSuggest(cat, sku, barcode, title));
+}
+
+type LineComp = { product_id: string; per: number; qty: number; picked: number };
+// Builds a line's match, keeping picking progress already made on it.
+// deno-lint-ignore no-explicit-any
+function applyMatch(cat: Catalog, line: any, old: any | null) {
+  const qty = Number(line.qty ?? 0);
+  const progress = old && (Number(old.picked ?? 0) > 0 ||
+    ((old.components ?? []) as LineComp[]).some((c) => Number(c.picked ?? 0) > 0));
+  if (progress) {
+    // Already being picked: don't change what is being picked.
+    const comps = old.components
+      ? (old.components as LineComp[]).map((c) => ({ product_id: c.product_id, per: Number(c.per ?? 1), qty: Number(c.per ?? 1) * qty,
+          picked: Math.min(Number(c.picked ?? 0), Number(c.per ?? 1) * qty) }))
+      : null;
+    return { ...line, product_id: comps ? null : (old.product_id ?? null), components: comps, picked: Math.min(Number(old.picked ?? 0), qty) };
+  }
+  const m = matchLine(cat, line.variant_id ?? null, String(line.sku ?? ""), String(line.barcode ?? ""), String(line.title ?? ""));
+  const comps = m?.components?.length
+    ? m.components.map((c) => ({ product_id: c.product_id, per: c.qty, qty: c.qty * qty, picked: 0 }))
+    : null;
+  return { ...line, product_id: comps ? null : (m?.product_id ?? null), components: comps, picked: 0 };
 }
 
 // deno-lint-ignore no-explicit-any
 async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: any) {
   const { data: prev } = await admin.from("shop_orders").select("id, status, lines")
     .eq("store_id", store.id).eq("external_id", o.id).maybeSingle();
-  const prevPicked = new Map<string, number>();
-  const prevProduct = new Map<string, string>();
-  for (const l of (prev?.lines ?? []) as Array<Record<string, unknown>>) {
-    prevPicked.set(String(l.line_id), Number(l.picked ?? 0));
-    if (l.product_id) prevProduct.set(String(l.line_id), String(l.product_id));
-  }
   // deno-lint-ignore no-explicit-any
-  const lines = (o.lineItems?.nodes ?? []).map((li: any) => {
-    const sku = String(li.sku ?? li.variant?.sku ?? "").trim();
-    const barcode = String(li.variant?.barcode ?? "").trim();
-    const variantId = li.variant?.id ?? null;
-    const qty = Number(li.currentQuantity ?? li.quantity ?? 0);
-    return {
-      line_id: li.id, title: li.title, variant_title: li.variantTitle ?? null, sku, barcode, variant_id: variantId,
-      qty, price: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
-      product_id: prevProduct.get(li.id) ?? matchProduct(cat, variantId, sku, barcode),
-      picked: Math.min(prevPicked.get(li.id) ?? 0, qty),
-    };
-  }).filter((l: { qty: number }) => l.qty > 0);
+  const prevLine = new Map<string, any>();
+  for (const l of (prev?.lines ?? []) as Array<Record<string, unknown>>) prevLine.set(String(l.line_id), l);
+  // deno-lint-ignore no-explicit-any
+  const lines = (o.lineItems?.nodes ?? []).map((li: any) => applyMatch(cat, {
+    line_id: li.id, title: li.title, variant_title: li.variantTitle ?? null,
+    sku: String(li.sku ?? li.variant?.sku ?? "").trim(), barcode: String(li.variant?.barcode ?? "").trim(),
+    variant_id: li.variant?.id ?? null,
+    qty: Number(li.currentQuantity ?? li.quantity ?? 0),
+    price: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
+  }, prevLine.get(li.id) ?? null)).filter((l: { qty: number }) => l.qty > 0);
+
+  // Matches can't change once an order is shipped / cancelled.
+  if (prev && (prev.status === "fulfilled" || prev.status === "cancelled")) {
+    for (const l of lines) {
+      const old = prevLine.get(String(l.line_id));
+      if (old) { l.product_id = old.product_id ?? null; l.components = old.components ?? null; l.picked = old.picked ?? 0; }
+    }
+  }
 
   let status = prev?.status ?? "new";
   if (o.cancelledAt) status = "cancelled";
@@ -515,8 +633,11 @@ Deno.serve(async (req) => {
     if (action === "fulfill") {
       if (order.status === "cancelled") return json({ error: "This order was cancelled." }, 400);
       // Only ship what was actually picked: every item scanned in full first.
-      const short = ((order.lines ?? []) as Array<Record<string, unknown>>)
-        .filter((l) => Number(l.picked ?? 0) < Number(l.qty ?? 0));
+      const short = ((order.lines ?? []) as Array<Record<string, unknown>>).filter((l) => {
+        const comps = l.components as Array<Record<string, unknown>> | null;
+        if (comps && comps.length) return comps.some((c) => Number(c.picked ?? 0) < Number(c.qty ?? 0));
+        return Number(l.picked ?? 0) < Number(l.qty ?? 0);
+      });
       if (short.length > 0) {
         return json({ error: `Pick every item first — ${short.length} item(s) not fully picked.` }, 400);
       }
@@ -550,7 +671,35 @@ Deno.serve(async (req) => {
         if (!d.productVariants.pageInfo.hasNextPage) break;
         after = d.productVariants.pageInfo.endCursor;
       }
-      return json({ ok: true, variants: out });
+      // Suggestions from the item codes (finished products only) + any saved choice.
+      const cat = await loadCatalog(admin, store);
+      for (const v of out) {
+        const sku = String(v.sku ?? "").trim();
+        const auto = autoSuggest(cat, sku, String(v.barcode ?? "").trim(), String(v.product ?? ""));
+        const saved = savedFor(cat, String(v.id), sku);
+        v.auto = auto;
+        v.saved = saved && (saved.product_id || saved.components?.length)
+          ? (saved.components?.length ? saved.components : [{ product_id: saved.product_id, qty: 1 }])
+          : null;
+      }
+      return json({ ok: true, variants: out, groups: cat.groups, all_groups: cat.allGroups });
+    }
+    if (action === "rematch") {
+      // Re-apply saved / code matches to open orders not yet being picked.
+      const cat = await loadCatalog(admin, store);
+      const { data: open } = await admin.from("shop_orders").select("id, lines")
+        .eq("store_id", store.id).in("status", ["new", "picking", "packed"]);
+      let changed = 0;
+      for (const o of open ?? []) {
+        const before = JSON.stringify(o.lines ?? []);
+        // deno-lint-ignore no-explicit-any
+        const lines = ((o.lines ?? []) as any[]).map((l) => applyMatch(cat, l, l));
+        if (JSON.stringify(lines) !== before) {
+          await admin.from("shop_orders").update({ lines, updated_at: new Date().toISOString() }).eq("id", o.id);
+          changed++;
+        }
+      }
+      return json({ ok: true, orders: changed });
     }
     if (action === "authorize_url") {
       if (!isAdminRole(mine.role)) return json({ error: "Only an admin can do this." }, 403);

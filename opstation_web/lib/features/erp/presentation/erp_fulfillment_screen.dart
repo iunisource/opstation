@@ -103,7 +103,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (_products.isEmpty) {
         try {
           _products = List<Map<String, dynamic>>.from(await client.from('products')
-              .select('id, name, sku, barcode, base_uom_id').eq('org_id', org).eq('is_active', true).order('name').limit(10000));
+              .select('id, name, sku, barcode, base_uom_id, product_main_group').eq('org_id', org).eq('is_active', true).order('name').limit(10000));
           _prodById = {for (final p in _products) p['id'] as String: p};
         } catch (_) {}
       }
@@ -207,47 +207,98 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     await Supabase.instance.client.from('shop_orders').update(upd).eq('id', o['id']);
   }
 
-  bool _lineMatches(Map<String, dynamic> l, String code) {
-    final c = code.trim().toLowerCase();
-    final p = _prodById[l['product_id']];
-    for (final v in [l['barcode'], l['sku'], p?['barcode'], p?['sku']]) {
-      if ('${v ?? ''}'.trim().toLowerCase() == c && c.isNotEmpty) return true;
+  bool _prodMatches(String? pid, String c) {
+    final p = _prodById[pid];
+    if (p == null || c.isEmpty) return false;
+    for (final v in [p['barcode'], p['sku']]) {
+      if ('${v ?? ''}'.trim().toLowerCase() == c) return true;
     }
     return false;
   }
+
+  bool _lineMatches(Map<String, dynamic> l, String code) {
+    final c = code.trim().toLowerCase();
+    if (c.isEmpty) return false;
+    if (_prodMatches(l['product_id'] as String?, c)) return true;
+    return [l['barcode'], l['sku']].any((v) => '${v ?? ''}'.trim().toLowerCase() == c);
+  }
+
+  /// Bundle lines: one store item made of several products, each picked on its own.
+  List<Map<String, dynamic>> _comps(Map<String, dynamic> l) =>
+      [for (final c in (l['components'] as List? ?? const [])) Map<String, dynamic>.from(c as Map)];
+  bool _isBundle(Map<String, dynamic> l) => (l['components'] as List?)?.isNotEmpty == true;
+  bool _lineDone(Map<String, dynamic> l) => _isBundle(l)
+      ? _comps(l).every((c) => _num(c['picked']) >= _num(c['qty']))
+      : _num(l['picked']) >= _num(l['qty']);
+  bool _lineMapped(Map<String, dynamic> l) => l['product_id'] != null || _isBundle(l);
 
   Future<ScanOutcome> _onScan(String code, double qty) async {
     final o = _sel;
     if (o == null) return const ScanOutcome(false, 'Open an order first');
     final st = o['status'] as String? ?? 'new';
     if (st == 'fulfilled' || st == 'cancelled') return ScanOutcome(false, 'This order is ${_statusLabels[st]?.toLowerCase()}');
+    final c = code.trim().toLowerCase();
     final lines = _lines(o);
-    // Prefer a line that still needs items.
-    int idx = lines.indexWhere((l) => _lineMatches(l, code) && _num(l['picked']) < _num(l['qty']));
-    if (idx < 0) idx = lines.indexWhere((l) => _lineMatches(l, code));
-    if (idx < 0) return ScanOutcome(false, 'Not on this order: $code');
-    final l = lines[idx];
-    final need = _num(l['qty']);
-    final now = _num(l['picked']) + qty;
-    if (now > need) return ScanOutcome(false, '${_lineName(l)}: only ${_q(need)} ordered (already ${_q(_num(l['picked']))})');
-    l['picked'] = now;
-    final allDone = lines.every((x) => _num(x['picked']) >= _num(x['qty']));
+    // Every pickable thing: plain lines and the parts of bundle lines.
+    final targets = <(int, int?)>[];
+    for (var i = 0; i < lines.length; i++) {
+      if (_isBundle(lines[i])) {
+        final cs = _comps(lines[i]);
+        for (var j = 0; j < cs.length; j++) {
+          if (_prodMatches(cs[j]['product_id'] as String?, c)) targets.add((i, j));
+        }
+      } else if (_lineMatches(lines[i], code)) {
+        targets.add((i, null));
+      }
+    }
+    if (targets.isEmpty) return ScanOutcome(false, 'Not on this order: $code');
+    // Prefer one that still needs items.
+    (int, int?) t = targets.first;
+    for (final x in targets) {
+      final l = lines[x.$1];
+      final rec = x.$2 == null ? l : _comps(l)[x.$2!];
+      if (_num(rec['picked']) < _num(rec['qty'])) { t = x; break; }
+    }
+    final l = lines[t.$1];
+    final cs = t.$2 == null ? null : _comps(l);
+    final rec = cs == null ? l : cs[t.$2!];
+    final name = cs == null ? _lineName(l) : '${_prodById[rec['product_id']]?['name'] ?? 'Item'} (in ${l['title']})';
+    final need = _num(rec['qty']);
+    final now = _num(rec['picked']) + qty;
+    if (now > need) return ScanOutcome(false, '$name: only ${_q(need)} needed (already ${_q(_num(rec['picked']))})');
+    rec['picked'] = now;
+    if (cs != null) l['components'] = cs;
+    final allDone = lines.every(_lineDone);
     try {
       await _saveLines(o, lines, status: st == 'new' ? 'picking' : null);
     } catch (e) {
       return ScanOutcome(false, 'Could not save: $e');
     }
-    return ScanOutcome(true, '${_lineName(l)}  ${_q(now)} / ${_q(need)}${allDone ? '   ✓ all items picked — press Packed' : ''}');
+    return ScanOutcome(true, '$name  ${_q(now)} / ${_q(need)}${allDone ? '   ✓ all items picked — press Packed' : ''}');
   }
 
-  Future<void> _setPicked(Map<String, dynamic> o, int i, double v) async {
+  Future<void> _setPicked(Map<String, dynamic> o, int i, double v, {int? comp}) async {
     final lines = _lines(o);
-    lines[i]['picked'] = v.clamp(0, _num(lines[i]['qty']));
+    if (comp != null) {
+      final cs = _comps(lines[i]);
+      cs[comp]['picked'] = v.clamp(0, _num(cs[comp]['qty']));
+      lines[i]['components'] = cs;
+    } else {
+      lines[i]['picked'] = v.clamp(0, _num(lines[i]['qty']));
+    }
     await _saveLines(o, lines, status: (o['status'] == 'new' && v > 0) ? 'picking' : null);
   }
 
   Future<void> _mapProduct(Map<String, dynamic> o, int i) async {
-    final p = await pickProduct(context, _products, title: 'Which product is this?');
+    // Only the store's finished products (same groups as Match products).
+    final store = _stores.firstWhere((x) => x['id'] == o['store_id'], orElse: () => const {});
+    final chosen = [for (final g in (store['match_groups'] as List? ?? const [])) '$g'];
+    bool inGroup(Map<String, dynamic> p) {
+      final g = '${p['product_main_group'] ?? ''}'.trim();
+      return chosen.isNotEmpty ? chosen.contains(g.isEmpty ? '(none)' : g) : g.toLowerCase().contains('finish');
+    }
+    final fin = _products.where(inGroup).toList();
+    final p = await pickProduct(context, fin.isEmpty ? _products : fin, title: 'Which product is this?');
     if (p == null || p.isEmpty) return;
     final lines = _lines(o);
     final l = lines[i];
@@ -266,11 +317,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
 
   Future<void> _markPacked(Map<String, dynamic> o) async {
     final lines = _lines(o);
-    final short = lines.where((l) => _num(l['picked']) < _num(l['qty'])).toList();
+    final short = lines.where((l) => !_lineDone(l)).toList();
     if (short.isNotEmpty) {
       // Only what was actually scanned can be packed and shipped.
       _snack('Scan every item first — ${short.length} item${short.length == 1 ? '' : 's'} still to pick: '
-          '${short.take(3).map((l) => '${_lineName(l)} (${_q(_num(l['picked']))}/${_q(_num(l['qty']))})').join(', ')}');
+          '${short.take(3).map((l) => _isBundle(l) ? '${_lineName(l)} (bundle)' : '${_lineName(l)} (${_q(_num(l['picked']))}/${_q(_num(l['qty']))})').join(', ')}');
       return;
     }
     final me = ref.read(currentUserProvider);
@@ -666,7 +717,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                     final o = rows[i];
                     final st = o['status'] as String? ?? 'new';
                     final lines = _lines(o);
-                    final unmapped = lines.where((l) => l['product_id'] == null).length;
+                    final unmapped = lines.where((l) => !_lineMapped(l)).length;
                     final placed = DateTime.tryParse('${o['placed_at'] ?? ''}')?.toLocal();
                     return ListTile(
                       selected: o['id'] == _selId,
@@ -704,7 +755,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final address = [ship['address1'], ship['address2'], ship['city'], ship['province'], ship['zip'], ship['country']]
         .where((x) => x != null && '$x'.trim().isNotEmpty).join(', ');
     final placed = DateTime.tryParse('${o['placed_at'] ?? ''}')?.toLocal();
-    final pickedAll = lines.isNotEmpty && lines.every((l) => _num(l['picked']) >= _num(l['qty']));
+    final pickedAll = lines.isNotEmpty && lines.every(_lineDone);
     final canWork = st != 'fulfilled' && st != 'cancelled';
     final paid = '${o['financial_status'] ?? ''}'.toUpperCase();
     return Container(
@@ -784,7 +835,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               TextButton(
                 onPressed: _busy ? null : () async {
                   final ls = _lines(o);
-                  for (final l in ls) { l['picked'] = 0; }
+                  for (final l in ls) {
+                    l['picked'] = 0;
+                    if (_isBundle(l)) l['components'] = [for (final c in _comps(l)) {...c, 'picked': 0}];
+                  }
                   await _saveLines(o, ls, status: 'new');
                 },
                 child: const Text('Restart picking'),
@@ -820,9 +874,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final l = lines[i];
     final qty = _num(l['qty']);
     final picked = _num(l['picked']);
-    final done = picked >= qty;
-    final mapped = l['product_id'] != null;
+    final bundle = _isBundle(l);
+    final done = _lineDone(l);
+    final mapped = _lineMapped(l);
     final codes = [l['sku'], l['barcode']].where((x) => x != null && '$x'.trim().isNotEmpty).join(' · ');
+    final comps = bundle ? _comps(l) : const <Map<String, dynamic>>[];
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -831,35 +887,77 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: done ? Colors.green.withOpacity(0.4) : AppTheme.border),
       ),
-      child: Row(children: [
-        Icon(done ? Icons.check_circle : Icons.radio_button_unchecked, size: 18, color: done ? Colors.green : AppTheme.textSecondary),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_lineName(l), style: const TextStyle(fontWeight: FontWeight.w600)),
-          Text([
-            if (mapped && '${l['title']}' != _lineName(l)) 'Store: ${l['title']}${(l['variant_title'] ?? '') != '' && l['variant_title'] != 'Default Title' ? ' — ${l['variant_title']}' : ''}',
-            if (codes.isNotEmpty) codes,
-            '@ ${NumberFormat('#,##0.##').format(_num(l['price']))}',
-          ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
-          if (!mapped)
-            TextButton.icon(
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, foregroundColor: Colors.orange.shade800),
-              onPressed: () => _mapProduct(o, i),
-              icon: const Icon(Icons.link, size: 16),
-              label: const Text('Match to a product'),
-            ),
-        ])),
-        if (canWork) ...[
-          IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 18),
-              onPressed: picked <= 0 ? null : () => _setPicked(o, i, picked - 1)),
-          Text('${_q(picked)} / ${_q(qty)}', style: TextStyle(fontWeight: FontWeight.w800, color: done ? Colors.green.shade700 : null)),
-          // Picking is by scanning; adding by hand is an admin override.
-          if (_isAdmin)
-            IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 18),
-                tooltip: 'Admin: count one without scanning',
-                onPressed: done ? null : () => _setPicked(o, i, picked + 1)),
-        ] else
-          Text('× ${_q(qty)}', style: const TextStyle(fontWeight: FontWeight.w800)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(done ? Icons.check_circle : Icons.radio_button_unchecked, size: 18, color: done ? Colors.green : AppTheme.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Flexible(child: Text(_lineName(l), style: const TextStyle(fontWeight: FontWeight.w600))),
+              if (bundle) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(color: Colors.indigo.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  child: Text('Bundle × ${_q(qty)}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.indigo)),
+                ),
+              ],
+            ]),
+            Text([
+              if (mapped && !bundle && '${l['title']}' != _lineName(l)) 'Store: ${l['title']}${(l['variant_title'] ?? '') != '' && l['variant_title'] != 'Default Title' ? ' — ${l['variant_title']}' : ''}',
+              if (codes.isNotEmpty) codes,
+              '@ ${NumberFormat('#,##0.##').format(_num(l['price']))}',
+            ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            if (!mapped)
+              TextButton.icon(
+                style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact, foregroundColor: Colors.orange.shade800),
+                onPressed: () => _mapProduct(o, i),
+                icon: const Icon(Icons.link, size: 16),
+                label: const Text('Match to a product'),
+              ),
+          ])),
+          if (!bundle) ...[
+            if (canWork) ...[
+              IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 18),
+                  onPressed: picked <= 0 ? null : () => _setPicked(o, i, picked - 1)),
+              Text('${_q(picked)} / ${_q(qty)}', style: TextStyle(fontWeight: FontWeight.w800, color: done ? Colors.green.shade700 : null)),
+              // Picking is by scanning; adding by hand is an admin override.
+              if (_isAdmin)
+                IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 18),
+                    tooltip: 'Admin: count one without scanning',
+                    onPressed: done ? null : () => _setPicked(o, i, picked + 1)),
+            ] else
+              Text('× ${_q(qty)}', style: const TextStyle(fontWeight: FontWeight.w800)),
+          ],
+        ]),
+        // Bundle: each product inside is scanned on its own.
+        for (var j = 0; j < comps.length; j++)
+          Builder(builder: (_) {
+            final c = comps[j];
+            final cq = _num(c['qty']);
+            final cp = _num(c['picked']);
+            final cd = cp >= cq;
+            final p = _prodById[c['product_id']];
+            return Padding(
+              padding: const EdgeInsets.only(left: 28, top: 4),
+              child: Row(children: [
+                Icon(cd ? Icons.check : Icons.subdirectory_arrow_right, size: 15, color: cd ? Colors.green : AppTheme.textSecondary),
+                const SizedBox(width: 6),
+                Expanded(child: Text('${p?['name'] ?? 'Product'}',
+                    style: TextStyle(fontSize: 12.5, color: cd ? Colors.green.shade800 : null))),
+                if (canWork) ...[
+                  IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 16),
+                      onPressed: cp <= 0 ? null : () => _setPicked(o, i, cp - 1, comp: j)),
+                  Text('${_q(cp)} / ${_q(cq)}', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: cd ? Colors.green.shade700 : null)),
+                  if (_isAdmin)
+                    IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 16),
+                        tooltip: 'Admin: count one without scanning',
+                        onPressed: cd ? null : () => _setPicked(o, i, cp + 1, comp: j)),
+                ] else
+                  Text('× ${_q(cq)}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5)),
+              ]),
+            );
+          }),
       ]),
     );
   }
