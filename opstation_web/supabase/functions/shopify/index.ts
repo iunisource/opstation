@@ -514,6 +514,12 @@ Deno.serve(async (req) => {
     }
     if (action === "fulfill") {
       if (order.status === "cancelled") return json({ error: "This order was cancelled." }, 400);
+      // Only ship what was actually picked: every item scanned in full first.
+      const short = ((order.lines ?? []) as Array<Record<string, unknown>>)
+        .filter((l) => Number(l.picked ?? 0) < Number(l.qty ?? 0));
+      if (short.length > 0) {
+        return json({ error: `Pick every item first — ${short.length} item(s) not fully picked.` }, 400);
+      }
       const r = await fulfil(admin, store, sec, order.external_id,
         { company: body.company, number: body.number, url: body.url }, body.notify !== false);
       await admin.from("shop_orders").update({
@@ -522,6 +528,24 @@ Deno.serve(async (req) => {
         fulfil_error: null, updated_at: new Date().toISOString(),
       }).eq("id", order.id);
       return json({ ok: true, already: r.already });
+    }
+    if (action === "list_variants") {
+      // Every product variant in the store, for bulk matching to Opstation products.
+      const out: Array<Record<string, unknown>> = [];
+      let after: string | null = null;
+      for (let page = 0; page < 30; page++) {
+        const d = await gql(admin, store, sec,
+          `query($after: String) { productVariants(first: 250, after: $after) {
+             pageInfo { hasNextPage endCursor }
+             nodes { id title sku barcode product { title status } } } }`, { after });
+        for (const v of d.productVariants.nodes) {
+          out.push({ id: v.id, product: v.product?.title ?? "", variant: v.title ?? "", sku: v.sku ?? "",
+            barcode: v.barcode ?? "", status: v.product?.status ?? "" });
+        }
+        if (!d.productVariants.pageInfo.hasNextPage) break;
+        after = d.productVariants.pageInfo.endCursor;
+      }
+      return json({ ok: true, variants: out });
     }
     if (action === "authorize_url") {
       if (!isAdminRole(mine.role)) return json({ error: "Only an admin can do this." }, 403);

@@ -13,6 +13,7 @@ import '../../../core/layout/main_layout.dart' show userBranchesProvider, shopNe
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/widgets/scan_bar.dart';
 import '../../auth/auth_controller.dart';
+import 'shop_product_matching.dart';
 
 /// Sales → Fulfillment: orders from connected online stores (Shopify).
 /// New → Picking (scan each item) → Packed → Fulfilled (sent back to the
@@ -265,20 +266,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final lines = _lines(o);
     final short = lines.where((l) => _num(l['picked']) < _num(l['qty'])).toList();
     if (short.isNotEmpty) {
-      final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(
-        title: const Text('Not everything is picked'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          for (final l in short.take(10))
-            Text('• ${_lineName(l)}: ${_q(_num(l['picked']))} of ${_q(_num(l['qty']))}'),
-          const SizedBox(height: 8),
-          const Text('Mark as packed anyway?'),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Keep picking')),
-          FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), child: const Text('Packed anyway')),
-        ],
-      ));
-      if (ok != true) return;
+      // Only what was actually scanned can be packed and shipped.
+      _snack('Scan every item first — ${short.length} item${short.length == 1 ? '' : 's'} still to pick: '
+          '${short.take(3).map((l) => '${_lineName(l)} (${_q(_num(l['picked']))}/${_q(_num(l['qty']))})').join(', ')}');
+      return;
     }
     final me = ref.read(currentUserProvider);
     try {
@@ -431,6 +422,24 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     )));
   }
 
+  Future<void> _openMatching() async {
+    final active = _stores.where((s) => s['is_active'] == true).toList();
+    if (active.isEmpty) return;
+    Map<String, dynamic>? store = active.length == 1
+        ? active.first
+        : active.firstWhere((s) => s['id'] == _storeFilter, orElse: () => const {});
+    if (store == null || store.isEmpty) {
+      store = await showDialog<Map<String, dynamic>>(context: context, builder: (d) => SimpleDialog(
+        title: const Text('Which store?'),
+        children: [for (final s in active)
+          SimpleDialogOption(onPressed: () => Navigator.of(d, rootNavigator: true).pop(s), child: Text('${s['name'] ?? s['shop_domain']}'))],
+      ));
+    }
+    if (store == null || !mounted) return;
+    await showShopProductMatching(context, store: store, products: _products, call: _call);
+    await _load(quiet: true);
+  }
+
   /// Keys are saved, but Shopify still has to approve access for this store.
   Future<void> _authorizeDialog(String url) async {
     await showDialog(context: context, builder: (d) => AlertDialog(
@@ -559,6 +568,14 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.sync),
           ),
+          if (_stores.any((s) => s['is_active'] == true)) ...[
+            OutlinedButton.icon(
+              icon: const Icon(Icons.link, size: 18),
+              label: const Text('Match products'),
+              onPressed: _openMatching,
+            ),
+            const SizedBox(width: 8),
+          ],
           OutlinedButton.icon(
             icon: const Icon(Icons.storefront_outlined, size: 18),
             label: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'),
@@ -747,14 +764,20 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             if (st != 'packed')
               OutlinedButton.icon(
                 icon: const Icon(Icons.inventory_2_outlined, size: 18),
-                label: Text(pickedAll ? 'Mark packed' : 'Mark packed…'),
-                onPressed: _busy ? null : () => _markPacked(o),
+                label: const Text('Mark packed'),
+                onPressed: _busy || !pickedAll ? null : () => _markPacked(o),
               ),
             FilledButton.icon(
               icon: const Icon(Icons.local_shipping_outlined, size: 18),
               label: const Text('Fulfil in store'),
-              onPressed: _busy ? null : () => _fulfil(o),
+              onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
             ),
+            if (!pickedAll)
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: Text('Scan every item to enable Packed and Fulfil.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ),
             if (st == 'picking' || st == 'packed')
               TextButton(
                 onPressed: _busy ? null : () async {
@@ -828,8 +851,11 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.remove_circle_outline, size: 18),
               onPressed: picked <= 0 ? null : () => _setPicked(o, i, picked - 1)),
           Text('${_q(picked)} / ${_q(qty)}', style: TextStyle(fontWeight: FontWeight.w800, color: done ? Colors.green.shade700 : null)),
-          IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 18),
-              onPressed: done ? null : () => _setPicked(o, i, picked + 1)),
+          // Picking is by scanning; adding by hand is an admin override.
+          if (_isAdmin)
+            IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.add_circle_outline, size: 18),
+                tooltip: 'Admin: count one without scanning',
+                onPressed: done ? null : () => _setPicked(o, i, picked + 1)),
         ] else
           Text('× ${_q(qty)}', style: const TextStyle(fontWeight: FontWeight.w800)),
       ]),
