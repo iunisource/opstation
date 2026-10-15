@@ -1684,6 +1684,13 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final (p, n) = _units(o);
     final auto = _autoOn(o['store_id'] as String?);
     final slipNeeded = _slipRequired(o['store_id'] as String?) && o['slip_verified_at'] == null;
+    // Notes kept behind the ⓘ (count shown on it).
+    final infoCount = [
+      (o['note'] as String?)?.isNotEmpty == true,
+      canWork && o['slip_verified_at'] != null,
+      canWork && o['reopened_at'] != null,
+      canWork && '${o['ext_fulfillment'] ?? ''}'.toUpperCase() == 'FULFILLED',
+    ].where((x) => x).length;
     final phone = '${o['phone'] ?? ''}'.trim();
     // Phone / tablet: picking mode — the scan bar and a big camera button stay
     // at the top while the item list scrolls, no keyboard popping up.
@@ -1722,82 +1729,101 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ]),
           ),
         Expanded(child: ListView(padding: EdgeInsets.all(mobile ? 12 : 18), children: [
-          // title
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Wrap(spacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                Text('${o['order_no'] ?? ''}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-                _chip(st),
-                _payPill(collect),
-              ]),
-              Text([
-                _storeName(o['store_id'] as String?),
-                if (placed != null) '${DateFormat('d MMM yyyy, HH:mm').format(placed)} (${_ago(placed)})',
-              ].join(' · '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            ])),
-            IconButton(tooltip: 'Print packing slip', icon: const Icon(Icons.print_outlined), onPressed: () => _printSlips([o])),
-            IconButton(tooltip: 'Open in Shopify', icon: const Icon(Icons.open_in_new), onPressed: () => _openInShopify(o)),
-            IconButton(tooltip: 'Refresh from the store', icon: const Icon(Icons.refresh),
+          // One compact header line; everything else opens on tap (ⓘ).
+          Row(children: [
+            Text('${o['order_no'] ?? ''}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 8),
+            _chip(st),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: (collect > 0 ? Colors.orange.shade800 : Colors.green.shade700).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8)),
+              child: Text(collect > 0 ? 'COD ${NumberFormat('#,##0.##').format(collect)}' : 'Paid',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800,
+                      color: collect > 0 ? Colors.orange.shade800 : Colors.green.shade700)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => setState(() => _infoOpen = !_infoOpen),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                child: Row(children: [
+                  Flexible(child: Text(
+                    [ '${o['customer_name'] ?? '—'}', if (_city(o).isNotEmpty) _city(o) ].join(' · '),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+                  if ((o['note'] as String?)?.isNotEmpty == true) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(message: 'Customer note: ${o['note']}',
+                        child: Icon(Icons.sticky_note_2, size: 16, color: Colors.amber.shade800)),
+                  ],
+                  if (infoCount > 0) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(color: Colors.indigo.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                      child: Text('$infoCount', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: Colors.indigo)),
+                    ),
+                  ],
+                  Icon(_infoOpen ? Icons.expand_less : Icons.info_outline, size: 17, color: AppTheme.textSecondary),
+                ]),
+              ),
+            )),
+            IconButton(visualDensity: VisualDensity.compact, tooltip: 'Print packing slip',
+                icon: const Icon(Icons.print_outlined, size: 20), onPressed: () => _printSlips([o])),
+            IconButton(visualDensity: VisualDensity.compact, tooltip: 'Open in Shopify',
+                icon: const Icon(Icons.open_in_new, size: 20), onPressed: () => _openInShopify(o)),
+            IconButton(visualDensity: VisualDensity.compact, tooltip: 'Refresh from the store',
+                icon: const Icon(Icons.refresh, size: 20),
                 onPressed: _busy ? null : () async {
                   try { await _call({'action': 'refresh_order', 'order_id': o['id']}); await _load(quiet: true); }
                   catch (e) { _snack('$e'); }
                 }),
           ]),
-          const SizedBox(height: 10),
-          // Customer / address / payment in one compact strip; tap to see all.
-          InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: () => setState(() => _infoOpen = !_infoOpen),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          // Details on tap: customer, address, payment, and the order's notes.
+          if (_infoOpen)
+            Container(
+              margin: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: AppTheme.border)),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  const Icon(Icons.person_outline, size: 16, color: AppTheme.textSecondary),
-                  const SizedBox(width: 6),
-                  Flexible(flex: 2, child: Text('${o['customer_name'] ?? '—'}',
-                      overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
-                  if (phone.isNotEmpty) ...[
-                    const SizedBox(width: 10),
+                Wrap(spacing: 14, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  Text('${o['customer_name'] ?? '—'}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  if (phone.isNotEmpty)
                     InkWell(
                       onTap: () => html.window.open('tel:${phone.replaceAll(' ', '')}', '_self'),
                       child: Text(phone, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.primary)),
                     ),
-                  ],
-                  const SizedBox(width: 10),
-                  const Icon(Icons.place_outlined, size: 15, color: AppTheme.textSecondary),
-                  const SizedBox(width: 3),
-                  Expanded(flex: 3, child: Text(
-                    _infoOpen ? '' : (_city(o).isNotEmpty ? _city(o) : (address.isEmpty ? '—' : address)),
-                    overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5))),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: (collect > 0 ? Colors.orange.shade800 : Colors.green.shade700).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8)),
-                    child: Text(
-                      collect > 0
-                          ? 'Collect ${'${o['currency'] ?? ''} ${NumberFormat('#,##0.##').format(collect)}'.trim()}'
-                          : 'Paid ${_money(o)}',
-                      style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800,
-                          color: collect > 0 ? Colors.orange.shade800 : Colors.green.shade700)),
-                  ),
-                  Icon(_infoOpen ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
-                ]),
-                if (_infoOpen) ...[
-                  const SizedBox(height: 6),
-                  Text(address.isEmpty ? 'No address' : address, style: const TextStyle(fontSize: 12.5)),
                   if ((o['email'] as String?)?.isNotEmpty == true)
                     Text('${o['email']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                  if ((o['payment_methods'] as String?)?.isNotEmpty == true)
-                    Text('${o['payment_methods']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                ],
+                ]),
+                const SizedBox(height: 3),
+                Text(address.isEmpty ? 'No address' : address, style: const TextStyle(fontSize: 12.5)),
+                const SizedBox(height: 3),
+                Text([
+                  _storeName(o['store_id'] as String?),
+                  if (placed != null) 'placed ${DateFormat('d MMM yyyy, HH:mm').format(placed)} (${_ago(placed)})',
+                  if ((o['payment_methods'] as String?)?.isNotEmpty == true) '${o['payment_methods']}',
+                  'total ${_money(o)}',
+                ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                if ((o['note'] as String?)?.isNotEmpty == true)
+                  _banner(Colors.amber.shade800, Icons.sticky_note_2_outlined, 'Customer note: ${o['note']}'),
+                if (canWork && o['slip_verified_at'] != null)
+                  _banner(Colors.green, Icons.verified_outlined, 'Box checked — slip scanned by ${o['slip_verified_by'] ?? ''}'
+                      '${o['label_verified_at'] != null ? ' · courier label matches' : ''}'),
+                if (canWork && o['reopened_at'] != null)
+                  _banner(Colors.deepPurple, Icons.undo, 'Un-fulfilled in Shopify '
+                      '${DateFormat('d MMM, HH:mm').format(DateTime.parse('${o['reopened_at']}').toLocal())} — back in the queue. '
+                      'Picked items were kept; use Restart to count again.'),
+                if (canWork && '${o['ext_fulfillment'] ?? ''}'.toUpperCase() == 'FULFILLED')
+                  _bookedBanner(o),
               ]),
             ),
-          ),
-          if ((o['note'] as String?)?.isNotEmpty == true)
-            _banner(Colors.amber.shade800, Icons.sticky_note_2_outlined, 'Customer note: ${o['note']}'),
+          // Always visible: only what stops or changes the work.
           if (st == 'cancelled')
             _banner(Colors.red, Icons.cancel_outlined, 'This order was cancelled in the store. Do not ship it.'),
           if (st == 'fulfilled')
@@ -1811,30 +1837,21 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
           if (canWork && _lockedByOther(o))
             Container(
-              margin: const EdgeInsets.only(top: 12),
-              padding: const EdgeInsets.all(10),
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(color: Colors.red.withOpacity(0.06), borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.red.withOpacity(0.4))),
               child: Row(children: [
-                const Icon(Icons.lock_outline, size: 18, color: Colors.red),
+                const Icon(Icons.lock_outline, size: 16, color: Colors.red),
                 const SizedBox(width: 8),
-                Expanded(child: Text('Being picked by ${o['picking_by_name'] ?? 'someone else'} — scanning is blocked so two people don\'t pick the same order.',
+                Expanded(child: Text('Being picked by ${o['picking_by_name'] ?? 'someone else'} — scanning blocked.',
                     style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.red))),
                 if (_isAdmin) TextButton(onPressed: () => _takeOver(o), child: const Text('Take over')),
               ]),
             ),
-          if (canWork && o['slip_verified_at'] != null)
-            _banner(Colors.green, Icons.verified_outlined, 'Box checked — slip scanned by ${o['slip_verified_by'] ?? ''}'
-                '${o['label_verified_at'] != null ? ' · courier label matches' : ''}'),
-          if (canWork && o['reopened_at'] != null)
-            _banner(Colors.deepPurple, Icons.undo, 'Un-fulfilled in Shopify '
-                '${DateFormat('d MMM, HH:mm').format(DateTime.parse('${o['reopened_at']}').toLocal())} — back in the queue. '
-                'Picked items were kept; use Restart to count again.'),
-          if (canWork && '${o['ext_fulfillment'] ?? ''}'.toUpperCase() == 'FULFILLED')
-            _bookedBanner(o),
           if (_hasUnmatched(o) && canWork)
             _banner(Colors.deepOrange, Icons.link_off, 'Some items are not matched to a product yet — match them before picking.'),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           // picking
           Row(children: [
             const Text('Items', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
@@ -1976,8 +1993,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       ]);
 
   Widget _banner(Color c, IconData icon, String text) => Container(
-        margin: const EdgeInsets.only(top: 12),
-        padding: const EdgeInsets.all(10),
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(color: c.withOpacity(0.07), borderRadius: BorderRadius.circular(8), border: Border.all(color: c.withOpacity(0.35))),
         child: Row(children: [
           Icon(icon, size: 18, color: c),
