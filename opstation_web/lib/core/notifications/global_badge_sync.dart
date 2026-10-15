@@ -219,6 +219,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(bomSupervisePendingProvider);
     ref.invalidate(assetSupervisePendingProvider);
     ref.invalidate(assetSuggestionCountProvider); // refreshed by journal_entries / assets events
+    ref.invalidate(shopNewOrdersCountProvider); // 90-second safety refresh
     _checkPoPing(); // ping admins if a new PO just landed
   }
 

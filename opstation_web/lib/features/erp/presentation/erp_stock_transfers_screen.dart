@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/notifications/global_transfer_alert.dart';
 import '../../../core/widgets/product_picker.dart';
+import '../../../core/widgets/scan_bar.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -508,6 +509,76 @@ class _StockTransferVoucherScreenState
   final _addQtyCtrl = TextEditingController(text: '1');
   final _addQtyFocus = FocusNode();
 
+  // Receiving: what the receiving branch has scanned (product id -> qty).
+  final Map<String, double> _rcvScanned = {};
+
+  double _onTransfer(String pid) => _items
+      .where((it) => it['product_id'] == pid)
+      .fold(0.0, (a, it) => a + ((it['quantity'] as num?)?.toDouble() ?? 0));
+
+  // Sending: each scan adds the product (merging into its line).
+  Future<ScanOutcome> _onSendScan(String code, double qty) async {
+    final p = findProductByCode(_products, code);
+    if (p == null) return ScanOutcome(false, 'Not found: $code');
+    await _ensureSaved();
+    if (_transfer == null) return const ScanOutcome(false, 'Pick From and To first, then scan');
+    if (!mounted) return const ScanOutcome(false, 'Closed');
+    setState(() {
+      _addProductId = p['id'] as String?;
+      _addUomId = p['base_uom_id'] as String?;
+      _addQtyCtrl.text = _fmtQty(qty);
+    });
+    final ok = await _addItem();
+    if (!ok) return ScanOutcome(false, 'Not added: ${p['name'] ?? code}');
+    return ScanOutcome(true, '${p['name'] ?? code}  +${_fmtQty(qty)}  (now ${_fmtQty(_onTransfer(p['id'] as String))})');
+  }
+
+  // Receiving: count what arrived against what was sent (check only — the
+  // transfer itself isn't changed).
+  Future<ScanOutcome> _onReceiveScan(String code, double qty) async {
+    final p = findProductByCode(_products, code);
+    if (p == null) return ScanOutcome(false, 'Not found: $code');
+    final pid = p['id'] as String;
+    final sent = _onTransfer(pid);
+    if (sent <= 0) return ScanOutcome(false, '${p['name']} is not on this transfer');
+    setState(() => _rcvScanned[pid] = (_rcvScanned[pid] ?? 0) + qty);
+    final got = _rcvScanned[pid]!;
+    return got > sent
+        ? ScanOutcome(false, '${p['name']}: ${_fmtQty(got)} scanned — more than sent (${_fmtQty(sent)})')
+        : ScanOutcome(true, '${p['name']}: ${_fmtQty(got)} of ${_fmtQty(sent)}${got == sent ? '  ✓ complete' : ''}');
+  }
+
+  Widget _scanCell(Map<String, dynamic> item) {
+    final pid = item['product_id'] as String? ?? '';
+    final got = _rcvScanned[pid] ?? 0;
+    final sent = _onTransfer(pid);
+    final c = got == sent ? AppTheme.success : AppTheme.danger;
+    return Expanded(
+        flex: 2,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(got == sent ? Icons.check_circle : Icons.error_outline, size: 15, color: c),
+          const SizedBox(width: 4),
+          Text('${_fmtQty(got)} / ${_fmtQty(sent)}', style: TextStyle(fontWeight: FontWeight.w700, color: c)),
+        ]));
+  }
+
+  /// Lines where the scanned count differs from what was sent.
+  List<String> get _rcvMismatches {
+    if (_rcvScanned.isEmpty) return const [];
+    final out = <String>[];
+    final seen = <String>{};
+    for (final it in _items) {
+      final pid = it['product_id'] as String? ?? '';
+      if (!seen.add(pid)) continue;
+      final sent = _onTransfer(pid);
+      final got = _rcvScanned[pid] ?? 0;
+      if (got != sent) {
+        out.add('${it['products']?['name'] ?? 'Item'}: sent ${_fmtQty(sent)}, scanned ${_fmtQty(got)}');
+      }
+    }
+    return out;
+  }
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _userId => ref.read(currentUserProvider)?.id;
 
@@ -603,7 +674,7 @@ class _StockTransferVoucherScreenState
     if (okc) return;
     final res = await Future.wait([
       client.from('products')
-          .select('id, name, sku, base_uom_id')
+          .select('id, name, sku, barcode, base_uom_id')
           .eq('org_id', orgId).eq('is_active', true).order('name').limit(10000),
       client.from('uoms').select().eq('org_id', orgId).order('name'),
     ]);
@@ -1333,8 +1404,20 @@ class _StockTransferVoucherScreenState
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Approve Transfer'),
-        content: Text(
-            'Confirm receipt at ${_branchName(toBranchId)}. The in-transit stock will be added to this branch.'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Confirm receipt at ${_branchName(toBranchId)}. The in-transit stock will be added to this branch.'),
+          if (_rcvMismatches.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text('The scan does not match what was sent:',
+                style: TextStyle(fontWeight: FontWeight.w700, color: AppTheme.danger)),
+            for (final m in _rcvMismatches.take(12))
+              Text('• $m', style: const TextStyle(fontSize: 12.5, color: AppTheme.danger)),
+            if (_rcvMismatches.length > 12)
+              Text('…and ${_rcvMismatches.length - 12} more', style: const TextStyle(fontSize: 12.5)),
+            const SizedBox(height: 6),
+            const Text('Receive anyway? (The full sent quantity will be received.)', style: TextStyle(fontSize: 12.5)),
+          ],
+        ]),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
@@ -1735,7 +1818,16 @@ class _StockTransferVoucherScreenState
                             label: const Text('Add product')),
                     ]),
                     const SizedBox(height: 12),
-                    if (editable) _addRow(),
+                    if (editable) ...[
+                      ScanBar(onScan: _onSendScan, hint: 'Scan barcode to add (or type code + Enter)'),
+                      const SizedBox(height: 8),
+                      _addRow(),
+                    ],
+                    if (_isInTransit && canApprove) ...[
+                      ScanBar(onScan: _onReceiveScan, autofocus: false,
+                          hint: 'Scan items as they arrive to check against what was sent'),
+                      const SizedBox(height: 12),
+                    ],
                     Expanded(child: _itemsCard(editable)),
                     if (!_isNew) ...[
                       const SizedBox(height: 16),
@@ -2027,6 +2119,14 @@ class _StockTransferVoucherScreenState
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                         color: AppTheme.textSecondary))),
+            if (_isInTransit && _rcvScanned.isNotEmpty)
+              const Expanded(
+                  flex: 2,
+                  child: Text('Scanned',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: AppTheme.textSecondary))),
             if (_isDraft)
               const Expanded(
                   flex: 2,
@@ -2083,6 +2183,8 @@ class _StockTransferVoucherScreenState
                             child: Text(_fmtQty(qty),
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600))),
+                        if (_isInTransit && _rcvScanned.isNotEmpty)
+                          _scanCell(item),
                         if (_isDraft)
                           Expanded(
                               flex: 2,

@@ -60,7 +60,10 @@ class _ProductPickerDialogState extends State<_ProductPickerDialog> {
     return widget.products.where((p) {
       final name = (p['name'] as String? ?? '').toLowerCase();
       final sku = (p['sku'] as String? ?? '').toLowerCase();
-      return name.contains(q) || sku.contains(q);
+      // A barcode scanner types the barcode: match it too (when the caller
+      // loaded the 'barcode' column).
+      final bc = (p['barcode'] as String? ?? '').toLowerCase();
+      return name.contains(q) || sku.contains(q) || (bc.isNotEmpty && bc == q);
     }).toList();
   }
 

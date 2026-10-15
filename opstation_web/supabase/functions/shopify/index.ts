@@ -1,0 +1,430 @@
+// Supabase Edge Function: shopify
+// Connects Shopify stores to Opstation and keeps their orders in shop_orders
+// (SQL 370) for Sales → Fulfillment.
+//
+// Callers
+//   • Shopify notifications (orders created / updated / cancelled)
+//       POST ?store=<store id>, signed with the app's client secret (HMAC).
+//   • pg_cron every 10 min with the service key: {"action":"sync_all"}
+//   • The app (signed-in user):
+//       {action:"connect", shop_domain, client_id, client_secret, access_token?, name?, branch_id?, days?}
+//       {action:"sync", store_id}
+//       {action:"fulfill", order_id, company?, number?, url?, notify?}
+//       {action:"refresh_order", order_id}
+//       {action:"disconnect", store_id}
+//
+// Deploy (Shopify's notifications carry no Supabase login, so JWT checking is
+// done inside):
+//   supabase functions deploy shopify --project-ref xgptodkasmytddmdnbtb --no-verify-jwt
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const API_VERSION = "2026-07";
+const FN_URL = "https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/shopify";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+const json = (o: unknown, status = 200) =>
+  new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
+
+type Store = { id: string; org_id: string; shop_domain: string; name: string | null; branch_id: string | null; is_active: boolean };
+type Secret = { store_id: string; client_id: string | null; client_secret: string | null; access_token: string | null; token_expires_at: string | null };
+
+function jwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const p = token.split(".")[1];
+    if (!p) return null;
+    return JSON.parse(atob(p.replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    return null;
+  }
+}
+
+function normDomain(d: string): string {
+  let s = (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  if (s && !s.includes(".")) s = `${s}.myshopify.com`;
+  return s;
+}
+
+// ── Shopify access ────────────────────────────────────────────────────────────
+async function getToken(admin: SupabaseClient, store: Store, sec: Secret): Promise<string> {
+  const exp = sec.token_expires_at ? Date.parse(sec.token_expires_at) : null;
+  if (sec.access_token && (exp === null || exp - Date.now() > 5 * 60 * 1000)) return sec.access_token;
+  if (!sec.client_id || !sec.client_secret) throw new Error("No access key for this store — connect it again.");
+  const r = await fetch(`https://${store.shop_domain}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: sec.client_id, client_secret: sec.client_secret }),
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`Shopify refused the app key (${r.status}): ${t.slice(0, 200)}`);
+  const j = JSON.parse(t);
+  const expiresAt = new Date(Date.now() + (Number(j.expires_in) || 86399) * 1000).toISOString();
+  await admin.from("shop_store_secrets").update({ access_token: j.access_token, token_expires_at: expiresAt }).eq("store_id", store.id);
+  sec.access_token = j.access_token;
+  sec.token_expires_at = expiresAt;
+  return j.access_token;
+}
+
+async function gql(admin: SupabaseClient, store: Store, sec: Secret, query: string, variables: Record<string, unknown> = {}) {
+  const token = await getToken(admin, store, sec);
+  const r = await fetch(`https://${store.shop_domain}/admin/api/${API_VERSION}/graphql.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    body: JSON.stringify({ query, variables }),
+  });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`Shopify ${r.status}: ${t.slice(0, 300)}`);
+  const j = JSON.parse(t);
+  if (j.errors) throw new Error(`Shopify: ${JSON.stringify(j.errors).slice(0, 300)}`);
+  return j.data;
+}
+
+const ORDER_FIELDS = `
+  id name createdAt updatedAt cancelledAt displayFinancialStatus displayFulfillmentStatus
+  email phone note paymentGatewayNames
+  totalPriceSet { shopMoney { amount currencyCode } }
+  customer { displayName email phone }
+  shippingAddress { name address1 address2 city province zip country phone }
+  lineItems(first: 100) { nodes { id title variantTitle sku quantity currentQuantity
+    originalUnitPriceSet { shopMoney { amount } } variant { id barcode sku } } }`;
+
+// ── Saving orders ────────────────────────────────────────────────────────────
+type Catalog = { byCode: Map<string, string>; map: Map<string, string> };
+
+async function loadCatalog(admin: SupabaseClient, store: Store): Promise<Catalog> {
+  const byCode = new Map<string, string>();
+  for (let from = 0; ; from += 1000) {
+    const { data } = await admin.from("products").select("id, sku, barcode")
+      .eq("org_id", store.org_id).eq("is_active", true).range(from, from + 999);
+    for (const p of data ?? []) {
+      if (p.barcode) byCode.set(`b:${String(p.barcode).trim().toLowerCase()}`, p.id);
+      if (p.sku) byCode.set(`s:${String(p.sku).trim().toLowerCase()}`, p.id);
+    }
+    if (!data || data.length < 1000) break;
+  }
+  const map = new Map<string, string>();
+  const { data: m } = await admin.from("shop_product_map").select("ext_key, product_id").eq("store_id", store.id);
+  for (const r of m ?? []) map.set(r.ext_key, r.product_id);
+  return { byCode, map };
+}
+
+function matchProduct(cat: Catalog, variantId: string | null, sku: string, barcode: string): string | null {
+  if (variantId && cat.map.has(variantId)) return cat.map.get(variantId)!;
+  if (sku && cat.map.has(`sku:${sku.toLowerCase()}`)) return cat.map.get(`sku:${sku.toLowerCase()}`)!;
+  if (barcode && cat.byCode.has(`b:${barcode.toLowerCase()}`)) return cat.byCode.get(`b:${barcode.toLowerCase()}`)!;
+  if (sku && cat.byCode.has(`b:${sku.toLowerCase()}`)) return cat.byCode.get(`b:${sku.toLowerCase()}`)!;
+  if (sku && cat.byCode.has(`s:${sku.toLowerCase()}`)) return cat.byCode.get(`s:${sku.toLowerCase()}`)!;
+  return null;
+}
+
+// deno-lint-ignore no-explicit-any
+async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: any) {
+  const { data: prev } = await admin.from("shop_orders").select("id, status, lines")
+    .eq("store_id", store.id).eq("external_id", o.id).maybeSingle();
+  const prevPicked = new Map<string, number>();
+  const prevProduct = new Map<string, string>();
+  for (const l of (prev?.lines ?? []) as Array<Record<string, unknown>>) {
+    prevPicked.set(String(l.line_id), Number(l.picked ?? 0));
+    if (l.product_id) prevProduct.set(String(l.line_id), String(l.product_id));
+  }
+  // deno-lint-ignore no-explicit-any
+  const lines = (o.lineItems?.nodes ?? []).map((li: any) => {
+    const sku = String(li.sku ?? li.variant?.sku ?? "").trim();
+    const barcode = String(li.variant?.barcode ?? "").trim();
+    const variantId = li.variant?.id ?? null;
+    const qty = Number(li.currentQuantity ?? li.quantity ?? 0);
+    return {
+      line_id: li.id, title: li.title, variant_title: li.variantTitle ?? null, sku, barcode, variant_id: variantId,
+      qty, price: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
+      product_id: prevProduct.get(li.id) ?? matchProduct(cat, variantId, sku, barcode),
+      picked: Math.min(prevPicked.get(li.id) ?? 0, qty),
+    };
+  }).filter((l: { qty: number }) => l.qty > 0);
+
+  let status = prev?.status ?? "new";
+  if (o.cancelledAt) status = "cancelled";
+  else if (o.displayFulfillmentStatus === "FULFILLED" && status !== "fulfilled") status = "fulfilled";
+
+  const a = o.shippingAddress;
+  const row = {
+    org_id: store.org_id, store_id: store.id, external_id: o.id, order_no: o.name,
+    placed_at: o.createdAt, ext_updated_at: o.updatedAt,
+    financial_status: o.displayFinancialStatus, ext_fulfillment: o.displayFulfillmentStatus,
+    payment_methods: (o.paymentGatewayNames ?? []).join(", "),
+    cancelled_at: o.cancelledAt,
+    customer_name: a?.name ?? o.customer?.displayName ?? null,
+    email: o.email ?? o.customer?.email ?? null,
+    phone: a?.phone ?? o.phone ?? o.customer?.phone ?? null,
+    ship_to: a ?? null, note: o.note ?? null,
+    total: Number(o.totalPriceSet?.shopMoney?.amount ?? 0),
+    currency: o.totalPriceSet?.shopMoney?.currencyCode ?? null,
+    lines, status, updated_at: new Date().toISOString(),
+  };
+  const { error } = await admin.from("shop_orders").upsert(row, { onConflict: "store_id,external_id" });
+  if (error) throw new Error(error.message);
+}
+
+async function syncStore(admin: SupabaseClient, store: Store, sec: Secret, sinceIso: string | null) {
+  const { data: st } = await admin.from("shop_stores").select("last_sync_at").eq("id", store.id).single();
+  const since = sinceIso ?? (st?.last_sync_at
+    ? new Date(Date.parse(st.last_sync_at) - 15 * 60 * 1000).toISOString()
+    : new Date(Date.now() - 7 * 86400000).toISOString());
+  const started = new Date().toISOString();
+  const cat = await loadCatalog(admin, store);
+  let after: string | null = null;
+  let n = 0;
+  for (let page = 0; page < 40; page++) {
+    const data = await gql(admin, store, sec,
+      `query($q: String, $after: String) { orders(first: 50, after: $after, sortKey: UPDATED_AT, query: $q) {
+         pageInfo { hasNextPage endCursor } nodes { ${ORDER_FIELDS} } } }`,
+      { q: `updated_at:>='${since}'`, after });
+    for (const o of data.orders.nodes) { await saveOrder(admin, store, cat, o); n++; }
+    if (!data.orders.pageInfo.hasNextPage) break;
+    after = data.orders.pageInfo.endCursor;
+  }
+  await admin.from("shop_stores").update({ last_sync_at: started, last_error: null }).eq("id", store.id);
+  return n;
+}
+
+async function refreshOne(admin: SupabaseClient, store: Store, sec: Secret, gid: string) {
+  const data = await gql(admin, store, sec, `query($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`, { id: gid });
+  if (!data.order) return;
+  await saveOrder(admin, store, await loadCatalog(admin, store), data.order);
+}
+
+async function registerWebhooks(admin: SupabaseClient, store: Store, sec: Secret): Promise<string | null> {
+  const url = `${FN_URL}?store=${store.id}`;
+  const problems: string[] = [];
+  for (const topic of ["ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED"]) {
+    let ok = false;
+    for (const field of ["uri", "callbackUrl"]) {
+      try {
+        const d = await gql(admin, store, sec,
+          `mutation($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+             webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
+               webhookSubscription { id } userErrors { message } } }`,
+          { topic, sub: { [field]: url, format: "JSON" } });
+        const errs = d.webhookSubscriptionCreate.userErrors ?? [];
+        if (errs.length === 0 || errs.some((e: { message: string }) => /taken|already/i.test(e.message))) { ok = true; break; }
+        problems.push(`${topic}: ${errs.map((e: { message: string }) => e.message).join("; ")}`);
+      } catch (e) {
+        if (field === "callbackUrl") problems.push(`${topic}: ${(e as Error).message}`);
+      }
+    }
+    if (!ok && problems.length === 0) problems.push(`${topic}: not registered`);
+  }
+  const allOk = problems.length === 0;
+  await admin.from("shop_stores").update({ webhooks_ok: allOk }).eq("id", store.id);
+  return allOk ? null : problems.join(" | ");
+}
+
+async function fulfil(admin: SupabaseClient, store: Store, sec: Secret, gid: string,
+    tracking: { company?: string; number?: string; url?: string }, notify: boolean) {
+  const d = await gql(admin, store, sec,
+    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 20) { nodes { id status } } } }`, { id: gid });
+  const open = (d.order?.fulfillmentOrders?.nodes ?? [])
+    .filter((f: { status: string }) => ["OPEN", "IN_PROGRESS", "SCHEDULED"].includes(f.status));
+  if (open.length === 0) return { already: true };
+  const trackingInfo: Record<string, string> = {};
+  if (tracking.company) trackingInfo.company = tracking.company;
+  if (tracking.number) trackingInfo.number = tracking.number;
+  if (tracking.url) trackingInfo.url = tracking.url;
+  const input = {
+    lineItemsByFulfillmentOrder: open.map((f: { id: string }) => ({ fulfillmentOrderId: f.id })),
+    notifyCustomer: notify,
+    ...(Object.keys(trackingInfo).length ? { trackingInfo } : {}),
+  };
+  for (const m of ["fulfillmentCreate", "fulfillmentCreateV2"]) {
+    try {
+      const r = await gql(admin, store, sec,
+        `mutation($f: FulfillmentInput!) { ${m}(fulfillment: $f) { fulfillment { id status } userErrors { field message } } }`,
+        { f: input });
+      const errs = r[m].userErrors ?? [];
+      if (errs.length) throw new Error(errs.map((e: { message: string }) => e.message).join("; "));
+      return { already: false };
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (m === "fulfillmentCreate" && /doesn't exist|undefinedField|Field 'fulfillmentCreate'/i.test(msg)) continue;
+      throw e;
+    }
+  }
+  throw new Error("Shopify did not accept the fulfilment.");
+}
+
+// ── Notifications from Shopify ───────────────────────────────────────────────
+async function verifyHmac(secret: string, raw: Uint8Array, header: string): Promise<boolean> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, raw));
+  let bin = "";
+  for (const b of sig) bin += String.fromCharCode(b);
+  const mine = btoa(bin);
+  if (mine.length !== header.length) return false;
+  let diff = 0;
+  for (let i = 0; i < mine.length; i++) diff |= mine.charCodeAt(i) ^ header.charCodeAt(i);
+  return diff === 0;
+}
+
+async function loadStore(admin: SupabaseClient, id: string): Promise<[Store, Secret] | null> {
+  const { data: s } = await admin.from("shop_stores").select("*").eq("id", id).maybeSingle();
+  if (!s) return null;
+  const { data: k } = await admin.from("shop_store_secrets").select("*").eq("store_id", id).maybeSingle();
+  if (!k) return null;
+  return [s as Store, k as Secret];
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const url = new URL(req.url);
+  const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+  // 1) Shopify notification
+  const hmac = req.headers.get("X-Shopify-Hmac-Sha256");
+  if (hmac) {
+    const raw = new Uint8Array(await req.arrayBuffer());
+    const sid = url.searchParams.get("store") ?? "";
+    const loaded = await loadStore(admin, sid);
+    if (!loaded || !loaded[1].client_secret) return new Response("unknown store", { status: 401 });
+    const [store, sec] = loaded;
+    if (!(await verifyHmac(sec.client_secret!, raw, hmac))) return new Response("bad signature", { status: 401 });
+    try {
+      const body = JSON.parse(new TextDecoder().decode(raw));
+      const gid = body.admin_graphql_api_id ?? (body.id ? `gid://shopify/Order/${body.id}` : null);
+      if (gid && store.is_active) await refreshOne(admin, store, sec, gid);
+    } catch (e) {
+      await admin.from("shop_stores").update({ last_error: `Notification: ${(e as Error).message}`.slice(0, 500) }).eq("id", store.id);
+    }
+    return new Response("ok"); // always 200 so Shopify doesn't retry forever
+  }
+
+  // deno-lint-ignore no-explicit-any
+  let body: any = {};
+  try { body = await req.json(); } catch { /* none */ }
+  const action = String(body.action ?? "");
+  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const claims = jwtPayload(token);
+
+  // 2) Scheduled sync (service key)
+  if (action === "sync_all") {
+    if (claims?.role !== "service_role") return json({ error: "not allowed" }, 403);
+    const { data: stores } = await admin.from("shop_stores").select("id").eq("is_active", true);
+    const out: Record<string, unknown> = {};
+    for (const s of stores ?? []) {
+      const loaded = await loadStore(admin, s.id);
+      if (!loaded) continue;
+      try { out[s.id] = await syncStore(admin, loaded[0], loaded[1], null); }
+      catch (e) {
+        out[s.id] = (e as Error).message;
+        await admin.from("shop_stores").update({ last_error: (e as Error).message.slice(0, 500) }).eq("id", s.id);
+      }
+    }
+    return json({ ok: true, synced: out });
+  }
+
+  // 3) Signed-in user
+  const { data: u } = await admin.auth.getUser(token);
+  const email = u?.user?.email;
+  if (!email) return json({ error: "Please sign in again." }, 401);
+  const { data: me } = await admin.from("users").select("id, name, org_id, role, is_active").ilike("email", email).limit(5);
+  const meRows = (me ?? []).filter((r: { is_active: boolean | null }) => r.is_active !== false);
+  const isAdminRole = (r: string) => ["admin", "masterAdmin", "superAdmin"].includes(r);
+  const userFor = (org: string) => meRows.find((r: { org_id: string; role: string }) => r.org_id === org || r.role === "superAdmin");
+
+  try {
+    if (action === "connect") {
+      const org = String(body.org_id ?? "");
+      const mine = userFor(org);
+      if (!mine || !isAdminRole(mine.role)) return json({ error: "Only an admin can connect a store." }, 403);
+      const shop = normDomain(String(body.shop_domain ?? ""));
+      if (!shop.endsWith(".myshopify.com")) return json({ error: "Enter the store's .myshopify.com address." }, 400);
+      if (!body.client_secret) return json({ error: "The app's client secret is required." }, 400);
+      if (!body.access_token && !body.client_id) return json({ error: "Enter the client ID (or an Admin API access token)." }, 400);
+
+      const { data: existing } = await admin.from("shop_stores").select("*").eq("org_id", org).eq("shop_domain", shop).maybeSingle();
+      let store: Store;
+      if (existing) {
+        await admin.from("shop_stores").update({
+          name: body.name ?? existing.name, branch_id: body.branch_id ?? existing.branch_id, is_active: true,
+        }).eq("id", existing.id);
+        store = { ...existing, name: body.name ?? existing.name, branch_id: body.branch_id ?? existing.branch_id, is_active: true };
+      } else {
+        const { data: ins, error } = await admin.from("shop_stores").insert({
+          org_id: org, shop_domain: shop, name: body.name || shop.replace(".myshopify.com", ""), branch_id: body.branch_id ?? null,
+        }).select("*").single();
+        if (error) throw new Error(error.message);
+        store = ins as Store;
+      }
+      const sec: Secret = {
+        store_id: store.id, client_id: body.client_id || null, client_secret: body.client_secret,
+        access_token: body.access_token || null, token_expires_at: null,
+      };
+      await admin.from("shop_store_secrets").upsert(sec, { onConflict: "store_id" });
+      // Test the key, then subscribe to order notifications and pull recent orders.
+      const shopInfo = await gql(admin, store, sec, `{ shop { name } }`);
+      if (!existing && !body.name && shopInfo?.shop?.name) {
+        await admin.from("shop_stores").update({ name: shopInfo.shop.name }).eq("id", store.id);
+      }
+      const hookProblem = await registerWebhooks(admin, store, sec);
+      const days = Math.max(1, Math.min(90, Number(body.days ?? 7)));
+      const n = await syncStore(admin, store, sec, new Date(Date.now() - days * 86400000).toISOString());
+      return json({ ok: true, store_id: store.id, shop: shopInfo?.shop?.name, imported: n, webhook_warning: hookProblem });
+    }
+
+    // Everything else acts on a store / order the user's org owns.
+    let store: Store, sec: Secret;
+    // deno-lint-ignore no-explicit-any
+    let order: any = null;
+    if (body.order_id) {
+      const { data: o } = await admin.from("shop_orders").select("*").eq("id", body.order_id).maybeSingle();
+      if (!o) return json({ error: "Order not found." }, 404);
+      order = o;
+      const l = await loadStore(admin, o.store_id);
+      if (!l) return json({ error: "Store not connected." }, 404);
+      [store, sec] = l;
+    } else {
+      const l = await loadStore(admin, String(body.store_id ?? ""));
+      if (!l) return json({ error: "Store not found." }, 404);
+      [store, sec] = l;
+    }
+    const mine = userFor(store.org_id);
+    if (!mine) return json({ error: "Not allowed." }, 403);
+
+    if (action === "sync") {
+      const n = await syncStore(admin, store, sec, body.days ? new Date(Date.now() - Number(body.days) * 86400000).toISOString() : null);
+      const hookProblem = (await admin.from("shop_stores").select("webhooks_ok").eq("id", store.id).single()).data?.webhooks_ok
+        ? null : await registerWebhooks(admin, store, sec);
+      return json({ ok: true, synced: n, webhook_warning: hookProblem });
+    }
+    if (action === "refresh_order") {
+      await refreshOne(admin, store, sec, order.external_id);
+      return json({ ok: true });
+    }
+    if (action === "fulfill") {
+      if (order.status === "cancelled") return json({ error: "This order was cancelled." }, 400);
+      const r = await fulfil(admin, store, sec, order.external_id,
+        { company: body.company, number: body.number, url: body.url }, body.notify !== false);
+      await admin.from("shop_orders").update({
+        status: "fulfilled", fulfilled_at: new Date().toISOString(), fulfilled_by_name: mine.name ?? null,
+        tracking_company: body.company ?? null, tracking_number: body.number ?? null, tracking_url: body.url ?? null,
+        fulfil_error: null, updated_at: new Date().toISOString(),
+      }).eq("id", order.id);
+      return json({ ok: true, already: r.already });
+    }
+    if (action === "disconnect") {
+      if (!isAdminRole(mine.role)) return json({ error: "Only an admin can disconnect a store." }, 403);
+      await admin.from("shop_stores").update({ is_active: false, webhooks_ok: false }).eq("id", store.id);
+      await admin.from("shop_store_secrets").update({ access_token: null, token_expires_at: null }).eq("store_id", store.id);
+      return json({ ok: true });
+    }
+    return json({ error: "Unknown action." }, 400);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (body.order_id && action === "fulfill") {
+      await admin.from("shop_orders").update({ fulfil_error: msg.slice(0, 500) }).eq("id", body.order_id);
+    }
+    return json({ error: msg }, 400);
+  }
+});
