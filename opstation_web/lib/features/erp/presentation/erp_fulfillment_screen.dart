@@ -14,6 +14,8 @@ import '../../../core/widgets/product_picker.dart';
 import '../../../core/widgets/scan_bar.dart';
 import '../../../core/widgets/scan_feedback.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/pdf/pdf_output.dart';
+import '../services/packing_slip_pdf.dart';
 import 'shop_product_matching.dart';
 
 /// Sales → Fulfillment: orders from connected online stores (Shopify).
@@ -203,9 +205,16 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   Future<void> _saveLines(Map<String, dynamic> o, List<Map<String, dynamic>> lines, {String? status}) async {
     final upd = <String, dynamic>{'lines': lines, 'updated_at': DateTime.now().toUtc().toIso8601String()};
     if (status != null) upd['status'] = status;
+    // Who started picking (printed on the packing slip).
+    final picking = lines.any((l) => _num(l['picked']) > 0 || _comps(l).any((c) => _num(c['picked']) > 0));
+    if (picking && o['picked_by_name'] == null) {
+      upd['picked_by_name'] = ref.read(currentUserProvider)?.name;
+      upd['picked_at'] = DateTime.now().toUtc().toIso8601String();
+    }
     setState(() {
       o['lines'] = lines;
       if (status != null) o['status'] = status;
+      if (upd.containsKey('picked_by_name')) { o['picked_by_name'] = upd['picked_by_name']; o['picked_at'] = upd['picked_at']; }
     });
     await Supabase.instance.client.from('shop_orders').update(upd).eq('id', o['id']);
   }
@@ -347,7 +356,14 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       await Supabase.instance.client.from('shop_orders').update({
         'status': 'packed', 'packed_at': now, 'packed_by_name': me?.name, 'updated_at': now,
       }).eq('id', id);
-      final r = await _call({'action': 'fulfill', 'order_id': id, 'notify': true});
+      // Use the courier booking found on the store order, if any.
+      final si = Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+      final r = await _call({
+        'action': 'fulfill', 'order_id': id, 'notify': true,
+        'company': o['tracking_company'] ?? si['company'],
+        'number': o['tracking_number'] ?? si['number'],
+        'url': o['tracking_url'] ?? si['url'],
+      });
       ScanFeedback.done();
       _snack('✓ ${o['order_no'] ?? 'Order'} fulfilled automatically${r['already'] == true ? ' (it was already fulfilled in the store)' : ''}');
     } catch (e) {
@@ -406,42 +422,119 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     }
   }
 
+  static const _couriers = ['PostEx', 'Leopards', 'TCS', 'M&P', 'Trax', 'BlueEx', 'Call Courier', 'Rider', 'Swyft', 'DHL', 'Pakistan Post'];
+
+  /// The order in the Shopify admin (where the store's courier app books it).
+  void _openInShopify(Map<String, dynamic> o) {
+    final store = _stores.firstWhere((s) => s['id'] == o['store_id'], orElse: () => const {});
+    final domain = '${store['shop_domain'] ?? ''}';
+    final id = '${o['external_id'] ?? ''}'.split('/').last;
+    if (domain.isEmpty || id.isEmpty) return;
+    html.window.open('https://$domain/admin/orders/$id', '_blank');
+  }
+
   Future<void> _fulfil(Map<String, dynamic> o) async {
-    final company = TextEditingController(text: o['tracking_company'] as String? ?? '');
-    final number = TextEditingController(text: o['tracking_number'] as String? ?? '');
-    final url = TextEditingController(text: o['tracking_url'] as String? ?? '');
+    // Prefill: what was typed before, else a booking found on the store order.
+    Map<String, dynamic> si() => Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+    final company = TextEditingController(text: '${o['tracking_company'] ?? si()['company'] ?? ''}');
+    final number = TextEditingController(text: '${o['tracking_number'] ?? si()['number'] ?? ''}');
+    final url = TextEditingController(text: '${o['tracking_url'] ?? si()['url'] ?? ''}');
     var notify = true;
-    final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
-      title: Text('Fulfil ${o['order_no'] ?? ''}'),
-      content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('The order is marked fulfilled in the store. With tracking filled in, the customer gets it by email.',
-            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
-        const SizedBox(height: 12),
-        Autocomplete<String>(
-          initialValue: TextEditingValue(text: company.text),
-          optionsBuilder: (v) => const ['TCS', 'Leopards', 'PostEx', 'M&P', 'Trax', 'BlueEx', 'Call Courier', 'Rider', 'DHL', 'Pakistan Post']
-              .where((c) => c.toLowerCase().contains(v.text.toLowerCase())),
-          onSelected: (v) => company.text = v,
-          fieldViewBuilder: (ctx, c, f, _) => TextField(controller: c, focusNode: f,
-              onChanged: (v) => company.text = v,
-              decoration: const InputDecoration(labelText: 'Courier', isDense: true, border: OutlineInputBorder())),
-        ),
-        const SizedBox(height: 10),
-        TextField(controller: number, decoration: const InputDecoration(labelText: 'Tracking number', isDense: true, border: OutlineInputBorder())),
-        const SizedBox(height: 10),
-        TextField(controller: url, decoration: const InputDecoration(labelText: 'Tracking link (optional)', isDense: true, border: OutlineInputBorder())),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero, dense: true,
-          title: const Text('Email the customer', style: TextStyle(fontSize: 13)),
-          value: notify, onChanged: (v) => setD(() => notify = v),
-        ),
-      ])),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
-        FilledButton.icon(icon: const Icon(Icons.local_shipping_outlined, size: 18),
-            onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), label: const Text('Fulfil')),
-      ],
-    )));
+    var checking = false;
+    String? checkMsg;
+    final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) {
+      final found = si();
+      final hasBooking = '${found['number'] ?? ''}'.isNotEmpty;
+      return AlertDialog(
+        title: Text('Fulfil ${o['order_no'] ?? ''}'),
+        content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (hasBooking)
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.green.withOpacity(0.07), borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.withOpacity(0.4))),
+              child: Row(children: [
+                const Icon(Icons.check_circle_outline, color: Colors.green, size: 18),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Booking found in the store (${found['source'] ?? 'courier app'}): '
+                    '${found['company'] ?? 'courier'} ${found['number']}. Filled in below.',
+                    style: const TextStyle(fontSize: 12.5))),
+              ]),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.07), borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withOpacity(0.4))),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('No courier booking found on this order yet.', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                const Text('Book it with your courier app in Shopify (or the courier portal), then press "Check again" — '
+                    'the tracking number is picked up and filled in.', style: TextStyle(fontSize: 12)),
+                const SizedBox(height: 6),
+                Wrap(spacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.open_in_new, size: 16),
+                    label: const Text('Book in Shopify'),
+                    onPressed: () => _openInShopify(o),
+                  ),
+                  OutlinedButton.icon(
+                    icon: checking
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.refresh, size: 16),
+                    label: const Text('Check again'),
+                    onPressed: checking ? null : () async {
+                      setD(() { checking = true; checkMsg = null; });
+                      try {
+                        await _call({'action': 'refresh_order', 'order_id': o['id']});
+                        final fresh = await Supabase.instance.client.from('shop_orders')
+                            .select('ship_info, tracking_company, tracking_number, tracking_url').eq('id', o['id']).single();
+                        o['ship_info'] = fresh['ship_info'];
+                        final f = si();
+                        if ('${f['number'] ?? ''}'.isNotEmpty) {
+                          if (company.text.trim().isEmpty) company.text = '${f['company'] ?? ''}';
+                          if (number.text.trim().isEmpty) number.text = '${f['number']}';
+                          if (url.text.trim().isEmpty) url.text = '${f['url'] ?? ''}';
+                        } else {
+                          checkMsg = 'Still no booking on the store order. If your courier app keeps it only in its own '
+                              'screen, type the tracking number below.';
+                        }
+                      } catch (e) {
+                        checkMsg = '$e';
+                      }
+                      setD(() => checking = false);
+                    },
+                  ),
+                ]),
+                if (checkMsg != null) Padding(padding: const EdgeInsets.only(top: 6),
+                    child: Text(checkMsg!, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
+              ]),
+            ),
+          const SizedBox(height: 12),
+          TextField(controller: company, decoration: InputDecoration(
+            labelText: 'Courier', isDense: true, border: const OutlineInputBorder(),
+            suffixIcon: PopupMenuButton<String>(
+              icon: const Icon(Icons.arrow_drop_down),
+              onSelected: (v) => setD(() => company.text = v),
+              itemBuilder: (_) => [for (final c in _couriers) PopupMenuItem(value: c, child: Text(c))],
+            ),
+          )),
+          const SizedBox(height: 10),
+          TextField(controller: number, decoration: const InputDecoration(labelText: 'Tracking number', isDense: true, border: OutlineInputBorder())),
+          const SizedBox(height: 10),
+          TextField(controller: url, decoration: const InputDecoration(labelText: 'Tracking link (optional)', isDense: true, border: OutlineInputBorder())),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero, dense: true,
+            title: const Text('Email the customer', style: TextStyle(fontSize: 13)),
+            value: notify, onChanged: (v) => setD(() => notify = v),
+          ),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          FilledButton.icon(icon: const Icon(Icons.local_shipping_outlined, size: 18),
+              onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), label: const Text('Fulfil')),
+        ],
+      );
+    }));
     if (ok != true) return;
     setState(() => _busy = true);
     try {
@@ -459,6 +552,101 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (mounted) setState(() => _busy = false);
       await _load(quiet: true);
     }
+  }
+
+  // ── packing slips ────────────────────────────────────────────────────────
+  Future<void> _printSlips(List<Map<String, dynamic>> orders) async {
+    if (orders.isEmpty) return;
+    final storeIds = orders.map((o) => o['store_id']).toSet();
+    final store = _stores.firstWhere((s) => storeIds.contains(s['id']), orElse: () => const {});
+    final note = TextEditingController(text: '${store['slip_note'] ?? ''}');
+    var a5 = store['slip_size'] == 'a5';
+    final go = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
+      title: Text(orders.length == 1 ? 'Packing slip · ${orders.first['order_no'] ?? ''}' : 'Packing slips · ${orders.length} orders'),
+      content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Paper size', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        SegmentedButton<bool>(
+          segments: const [ButtonSegment(value: false, label: Text('A4')), ButtonSegment(value: true, label: Text('A5'))],
+          selected: {a5},
+          onSelectionChanged: (v) => setD(() => a5 = v.first),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: note, minLines: 2, maxLines: 5,
+          decoration: const InputDecoration(
+            labelText: 'Your text on every slip (optional)',
+            hintText: 'e.g. Thank you for shopping with us! For returns / warranty call 03xx-xxxxxxx',
+            border: OutlineInputBorder()),
+        ),
+        const SizedBox(height: 6),
+        const Text('Size and text are remembered for this store.', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        FilledButton.icon(icon: const Icon(Icons.print_outlined, size: 18), label: const Text('Print'),
+            onPressed: () => Navigator.of(d, rootNavigator: true).pop(true)),
+      ],
+    )));
+    if (go != true) return;
+    // Remember size + text for the store(s) printed.
+    for (final s in _stores.where((s) => storeIds.contains(s['id']))) {
+      if (s['slip_note'] != note.text.trim() || (s['slip_size'] == 'a5') != a5) {
+        s['slip_note'] = note.text.trim();
+        s['slip_size'] = a5 ? 'a5' : 'a4';
+        try {
+          await Supabase.instance.client.from('shop_stores')
+              .update({'slip_note': s['slip_note'], 'slip_size': s['slip_size']}).eq('id', s['id']);
+        } catch (_) {}
+      }
+    }
+    try {
+      final bytes = await PackingSlipPdf.build(
+        orders: orders,
+        products: _prodById,
+        storeName: _storeName,
+        storeNote: (id) => _stores.firstWhere((s) => s['id'] == id, orElse: () => const {})['slip_note'] as String?,
+        printedBy: ref.read(currentUserProvider)?.name ?? '',
+        a5: a5,
+      );
+      await showPdf(bytes, orders.length == 1 ? 'Packing slip ${orders.first['order_no'] ?? ''}' : 'Packing slips');
+    } catch (e) {
+      _snack('Could not make the slip: $e');
+    }
+  }
+
+  /// Pick several orders and print all their slips in one go.
+  Future<void> _printSlipsPicker() async {
+    final candidates = _visible.where((o) => o['status'] != 'cancelled').toList();
+    if (candidates.isEmpty) { _snack('No orders in this list.'); return; }
+    final sel = <String>{for (final o in candidates) if (o['status'] != 'fulfilled') o['id'] as String};
+    final go = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) => AlertDialog(
+      title: const Text('Print packing slips'),
+      content: SizedBox(width: 460, height: 420, child: Column(children: [
+        Row(children: [
+          Text('${sel.length} selected', style: const TextStyle(fontWeight: FontWeight.w600)),
+          const Spacer(),
+          TextButton(onPressed: () => setD(() => sel..clear()..addAll(candidates.map((o) => o['id'] as String))), child: const Text('All')),
+          TextButton(onPressed: () => setD(sel.clear), child: const Text('None')),
+        ]),
+        Expanded(child: ListView(children: [
+          for (final o in candidates)
+            CheckboxListTile(
+              dense: true, controlAffinity: ListTileControlAffinity.leading,
+              value: sel.contains(o['id']),
+              onChanged: (v) => setD(() => v == true ? sel.add(o['id'] as String) : sel.remove(o['id'])),
+              title: Text('${o['order_no'] ?? ''} · ${o['customer_name'] ?? ''}'),
+              subtitle: Text('${_statusLabels[o['status']] ?? o['status']} · ${_money(o)}', style: const TextStyle(fontSize: 11.5)),
+            ),
+        ])),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), child: const Text('Next')),
+      ],
+    )));
+    if (go != true || sel.isEmpty) return;
+    await _printSlips(candidates.where((o) => sel.contains(o['id'])).toList());
   }
 
   // ── store connection ─────────────────────────────────────────────────────
@@ -717,6 +905,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             ),
             const SizedBox(width: 8),
           ],
+          if (_orders.isNotEmpty) ...[
+            IconButton(tooltip: 'Print packing slips', icon: const Icon(Icons.print_outlined), onPressed: _printSlipsPicker),
+          ],
           if (_stores.any((s) => s['is_active'] == true)) ...[
             OutlinedButton.icon(
               icon: const Icon(Icons.link, size: 18),
@@ -869,6 +1060,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (placed != null) DateFormat('d MMM yyyy, HH:mm').format(placed),
             ].join(' · '), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ])),
+          IconButton(tooltip: 'Print packing slip', icon: const Icon(Icons.print_outlined),
+              onPressed: () => _printSlips([o])),
           IconButton(tooltip: 'Refresh from the store', icon: const Icon(Icons.refresh),
               onPressed: _busy ? null : () async {
                 try { await _call({'action': 'refresh_order', 'order_id': o['id']}); await _load(quiet: true); }

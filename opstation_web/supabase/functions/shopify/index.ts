@@ -96,21 +96,96 @@ const ORDER_FIELDS = `
   lineItems(first: 100) { nodes { id title variantTitle sku quantity currentQuantity
     originalUnitPriceSet { shopMoney { amount } } variant { id barcode sku } } }`;
 
-// Same, without product details — used when the app doesn't have the
-// read_products permission yet (matching then works by SKU only).
-const ORDER_FIELDS_LITE = ORDER_FIELDS.replace("variant { id barcode sku }", "");
+// Extra details: money breakdown for the packing slip, and wherever a courier
+// app may have put its booking (fulfilment tracking, order tags, note
+// attributes, metafields) to prefill the courier + tracking number.
+const ORDER_EXTRA = `
+  tags customAttributes { key value }
+  subtotalPriceSet { shopMoney { amount } } totalShippingPriceSet { shopMoney { amount } }
+  totalDiscountsSet { shopMoney { amount } } totalOutstandingSet { shopMoney { amount } }
+  fulfillments(first: 10) { trackingInfo(first: 5) { company number url } }
+  metafields(first: 30) { nodes { namespace key value } }`;
 
-/// Runs an orders query; if Shopify denies product details, retries without them.
+/// Runs an orders query with as much detail as this connection is allowed:
+/// full → without the extras → without product details.
 async function gqlOrders(admin: SupabaseClient, store: Store, sec: Secret, build: (fields: string) => string,
     variables: Record<string, unknown>) {
-  try {
-    return await gql(admin, store, sec, build(ORDER_FIELDS), variables);
-  } catch (e) {
-    if (/read_products|ACCESS_DENIED/i.test((e as Error).message)) {
-      return await gql(admin, store, sec, build(ORDER_FIELDS_LITE), variables);
+  const tries = [
+    ORDER_FIELDS + ORDER_EXTRA,
+    ORDER_FIELDS,
+    ORDER_FIELDS.replace("variant { id barcode sku }", ""),
+  ];
+  let last: unknown = null;
+  for (const f of tries) {
+    try {
+      return await gql(admin, store, sec, build(f), variables);
+    } catch (e) {
+      last = e;
+      // Only fall back on "not allowed / unknown field" kinds of errors.
+      if (!/access|denied|field|doesn't exist|undefined|permission|scope|metafield/i.test((e as Error).message)) throw e;
     }
-    throw e;
   }
+  throw last;
+}
+
+// ── Courier booking already on the Shopify order? ────────────────────────────
+const COURIERS: Array<[RegExp, string]> = [
+  [/post\s*ex/i, "PostEx"], [/leopard/i, "Leopards"], [/\btcs\b/i, "TCS"], [/trax/i, "Trax"],
+  [/\bm\s*&\s*p\b|\bmnp\b|m\s*and\s*p/i, "M&P"], [/blue\s*ex/i, "BlueEx"], [/call\s*courier/i, "Call Courier"],
+  [/\brider\b/i, "Rider"], [/swyft/i, "Swyft"], [/daewoo/i, "Daewoo"], [/pak(istan)?\s*post/i, "Pakistan Post"],
+  [/\bdhl\b/i, "DHL"], [/fed\s*ex/i, "FedEx"], [/\bups\b/i, "UPS"],
+];
+const courierIn = (s: string) => COURIERS.find(([re]) => re.test(s))?.[1] ?? null;
+const TRACK_KEY = /track|consign|\bcn\b|cn_?no|awb|booking|waybill|airway|parcel|shipment/i;
+const TRACK_NO = /^[A-Z0-9][A-Z0-9-]{5,29}$/i;
+type ShipInfo = { company: string | null; number: string; url: string | null; source: string };
+
+// deno-lint-ignore no-explicit-any
+function findShipping(o: any): ShipInfo | null {
+  // 1) A fulfilment with tracking (the courier app already fulfilled it)
+  for (const f of o.fulfillments ?? []) {
+    for (const t of f.trackingInfo ?? []) {
+      if (t?.number) return { company: t.company ?? courierIn(String(t.url ?? "")), number: String(t.number), url: t.url ?? null, source: "Shopify fulfilment" };
+    }
+  }
+  const pick = (key: string, value: string, where: string): ShipInfo | null => {
+    const v = String(value ?? "").trim();
+    if (!v) return null;
+    // JSON blobs some apps store: look for a number + courier inside
+    if (v.startsWith("{")) {
+      try {
+        const j = JSON.parse(v);
+        for (const [k, x] of Object.entries(j)) {
+          if (TRACK_KEY.test(k) && TRACK_NO.test(String(x))) {
+            return { company: courierIn(`${key} ${v}`), number: String(x), url: null, source: where };
+          }
+        }
+      } catch { /* not JSON */ }
+      return null;
+    }
+    if (TRACK_KEY.test(key) && TRACK_NO.test(v) && /\d/.test(v)) {
+      return { company: courierIn(`${key} ${v}`), number: v, url: /^https?:/.test(v) ? v : null, source: where };
+    }
+    return null;
+  };
+  // 2) Metafields written by courier apps
+  for (const m of o.metafields?.nodes ?? []) {
+    const r = pick(`${m.namespace} ${m.key}`, m.value, "courier app (order data)");
+    if (r) return { ...r, company: r.company ?? courierIn(m.namespace ?? "") };
+  }
+  // 3) Note attributes ("Tracking Number: …")
+  for (const a of o.customAttributes ?? []) {
+    const r = pick(String(a.key ?? ""), String(a.value ?? ""), "order note attributes");
+    if (r) return r;
+  }
+  // 4) Tags like "PostEx: 12345678" / "CN-12345678" / "TCS 1234567890"
+  for (const t of (o.tags ?? []) as string[]) {
+    const m = String(t).match(/^(.*?)[\s:#-]+([A-Z0-9]{6,30})$/i);
+    if (!m || !/\d{5,}/.test(m[2])) continue;
+    const c = courierIn(m[1]);
+    if (c || TRACK_KEY.test(m[1])) return { company: c, number: m[2], url: null, source: "order tags" };
+  }
+  return null;
 }
 
 // ── Matching store items to Opstation products ───────────────────────────────
@@ -417,6 +492,26 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     currency: o.totalPriceSet?.shopMoney?.currencyCode ?? null,
     lines, status, updated_at: new Date().toISOString(),
   };
+  // Money breakdown + courier booking — only when Shopify sent the extras.
+  if (o.subtotalPriceSet || o.fulfillments || o.tags) {
+    const money = (x: { shopMoney?: { amount?: string } } | null | undefined) =>
+      x?.shopMoney?.amount != null ? Number(x.shopMoney.amount) : null;
+    const ship = findShipping(o);
+    Object.assign(row, {
+      subtotal: money(o.subtotalPriceSet), shipping_total: money(o.totalShippingPriceSet),
+      discounts: money(o.totalDiscountsSet), outstanding: money(o.totalOutstandingSet),
+      tags: Array.isArray(o.tags) ? o.tags.join(", ") : null,
+      ship_info: ship,
+    });
+    // Booked / fulfilled outside Opstation: keep its tracking on our side too.
+    if (ship && status === "fulfilled") {
+      const { data: cur } = await admin.from("shop_orders").select("tracking_number")
+        .eq("store_id", store.id).eq("external_id", o.id).maybeSingle();
+      if (!cur?.tracking_number) {
+        Object.assign(row, { tracking_company: ship.company, tracking_number: ship.number, tracking_url: ship.url });
+      }
+    }
+  }
   const { error } = await admin.from("shop_orders").upsert(row, { onConflict: "store_id,external_id" });
   if (error) throw new Error(error.message);
 }
