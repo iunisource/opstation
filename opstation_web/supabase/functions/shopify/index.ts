@@ -1037,9 +1037,12 @@ Deno.serve(async (req) => {
         return json({ error: `Pick every item first — ${short.length} item(s) not fully picked.` }, 400);
       }
       // Store rule: the packing slip must have been scanned (box checked) first.
-      const { data: rule } = await admin.from("shop_stores").select("require_slip_scan").eq("id", store.id).single();
+      const { data: rule } = await admin.from("shop_stores").select("*").eq("id", store.id).single();
       if (rule?.require_slip_scan && !order.slip_verified_at) {
         return json({ error: "Scan the packing slip on the box first (pack check)." }, 400);
+      }
+      if (rule?.require_label_scan && !order.label_verified_at) {
+        return json({ error: "Scan the courier label on the box first (label check)." }, 400);
       }
       const cancelled: Record<string, number> = {};
       for (const l of (order.lines ?? []) as Array<Record<string, unknown>>) {
