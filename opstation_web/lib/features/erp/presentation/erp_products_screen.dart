@@ -1269,16 +1269,19 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                                   : null))),
                   const SizedBox(width: 12),
                   Expanded(
-                      // Barcodes are system-generated (EAN-13) and immutable —
-                      // enforced by a DB trigger; this field is display-only.
+                      // Generated automatically (EAN-13) when left empty; can be
+                      // changed — e.g. to the maker's barcode printed on the box.
+                      // Must be unique in the organisation (checked on save).
                       child: TextField(
                           controller: barcodeCtrl,
-                          enabled: false,
                           decoration: InputDecoration(
                               labelText: 'Barcode',
                               hintText: 'Auto-generated on save',
-                              suffixIcon: Icon(Icons.lock_outline,
-                                  size: 15,
+                              helperText: product == null
+                                  ? 'Leave empty to generate one'
+                                  : 'You can change it — old printed labels stop working',
+                              suffixIcon: Icon(Icons.qr_code_2,
+                                  size: 16,
                                   color: AppTheme.textSecondary.withOpacity(0.6))))),
                 ]),
                 const SizedBox(height: 12),
@@ -1422,11 +1425,31 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   return;
                 }
                 final orgId = ref.read(currentUserProvider)?.orgId;
+                // A barcode must point to one product only.
+                final newCode = barcodeCtrl.text.trim();
+                if (newCode.isNotEmpty && newCode != '${product?['barcode'] ?? ''}'.trim()) {
+                  try {
+                    var dq = Supabase.instance.client.from('products').select('id, name')
+                        .eq('org_id', orgId ?? '').eq('barcode', newCode);
+                    if (product != null) dq = dq.neq('id', product['id'] as String);
+                    final dup = await dq.limit(1);
+                    if ((dup as List).isNotEmpty) {
+                      if (ctx.mounted) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                            content: Text('Barcode $newCode is already used by "${dup.first['name']}"')));
+                      }
+                      return;
+                    }
+                  } catch (_) {}
+                }
                 final data = {
                   'org_id': orgId,
                   'name': nameCtrl.text.trim(),
                   'sku': skuCtrl.text.trim().isEmpty ? null : skuCtrl.text.trim(),
-                  'barcode': barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
+                  // Empty on a new product → generated on save; empty on an
+                  // existing one → keep its current barcode.
+                  if (barcodeCtrl.text.trim().isNotEmpty || product == null)
+                    'barcode': barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
                   'base_uom_id': uomId,
                   'product_type': productType,
                   'product_main_group': mainGroup,
