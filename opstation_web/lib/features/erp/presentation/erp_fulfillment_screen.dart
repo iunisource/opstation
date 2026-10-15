@@ -59,6 +59,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   String _view = 'queue';           // queue | summary
   bool _fullscreen = false;         // browser full screen (focus mode)
   bool _infoOpen = false;           // customer strip expanded
+  final _scanKey = GlobalKey<ScanBarState>();
 
   /// "Email the customer" in the Fulfil dialog — remembered on this computer.
   bool get _notifyPref {
@@ -1534,10 +1535,43 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final (p, n) = _units(o);
     final auto = _autoOn(o['store_id'] as String?);
     final phone = '${o['phone'] ?? ''}'.trim();
+    // Phone / tablet: picking mode — the scan bar and a big camera button stay
+    // at the top while the item list scrolls, no keyboard popping up.
+    final mobile = MediaQuery.of(context).size.width < 700;
+    final scanBar = ScanBar(
+      key: _scanKey, onScan: _onScan, hint: mobile ? 'Scan or type code' : 'Scan each item to pick it',
+      strongFeedback: true, camera: true, autofocus: !mobile,
+    );
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.border)),
       child: Column(children: [
-        Expanded(child: ListView(padding: const EdgeInsets.all(18), children: [
+        if (mobile && canWork)
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+            child: Column(children: [
+              Row(children: [
+                Text('${o['order_no'] ?? ''}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                const SizedBox(width: 8),
+                _chip(st),
+                const Spacer(),
+                Text('${_q(p)} / ${_q(n)}', style: TextStyle(fontWeight: FontWeight.w800,
+                    color: pickedAll ? Colors.green.shade700 : null)),
+              ]),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity, height: 52,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.photo_camera_outlined),
+                  label: const Text('Scan with camera', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  onPressed: () => _scanKey.currentState?.openCamera(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              scanBar,
+            ]),
+          ),
+        Expanded(child: ListView(padding: EdgeInsets.all(mobile ? 12 : 18), children: [
           // title
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1652,7 +1686,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           ]),
           const SizedBox(height: 10),
           if (canWork) ...[
-            ScanBar(onScan: _onScan, hint: 'Scan each item to pick it', strongFeedback: true),
+            if (!mobile) scanBar,
             if (_autoBusy.contains(o['id']))
               _banner(Colors.blue, Icons.local_shipping_outlined, 'All items scanned — fulfilling in the store…'),
             const SizedBox(height: 10),

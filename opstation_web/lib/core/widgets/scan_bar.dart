@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../theme/app_theme.dart';
 import 'scan_feedback.dart';
+import 'camera_scanner.dart';
 
 /// Finds a product by what a scanner reads: barcode first, then SKU (exact,
 /// case-insensitive). Products need 'barcode' / 'sku' keys.
@@ -38,13 +39,15 @@ class ScanBar extends StatefulWidget {
   final bool showQty;
   /// Beep on a right scan; loud buzz + whole screen blinks red on a wrong one.
   final bool strongFeedback;
+  /// Show a camera button: scan with the phone / tablet camera.
+  final bool camera;
   const ScanBar({super.key, required this.onScan, this.hint = 'Scan barcode (or type code + Enter)',
-      this.autofocus = true, this.showQty = true, this.strongFeedback = false});
+      this.autofocus = true, this.showQty = true, this.strongFeedback = false, this.camera = false});
   @override
-  State<ScanBar> createState() => _ScanBarState();
+  State<ScanBar> createState() => ScanBarState();
 }
 
-class _ScanBarState extends State<ScanBar> {
+class ScanBarState extends State<ScanBar> {
   final _ctrl = TextEditingController();
   final _focus = FocusNode();
   final _qty = TextEditingController(text: '1');
@@ -86,22 +89,38 @@ class _ScanBarState extends State<ScanBar> {
     _working = true;
     while (_queue.isNotEmpty) {
       final (code, q) = _queue.removeAt(0);
-      ScanOutcome r;
-      try {
-        r = await widget.onScan(code, q);
-      } catch (e) {
-        r = ScanOutcome(false, '$e');
-      }
+      await _handle(code, q);
       if (!mounted) return;
-      setState(() { _last = r; if (r.ok) _count++; });
-      if (widget.strongFeedback) {
-        if (r.ok) { ScanFeedback.ok(); } else { ScanFeedback.wrong(context); }
-      } else if (!r.ok) {
-        SystemSound.play(SystemSoundType.alert);
-      }
     }
     _working = false;
     if (mounted) setState(() {});
+  }
+
+  /// One scan (scanner, typed, or camera): run it, show + sound the result.
+  Future<ScanOutcome> _handle(String code, double q) async {
+    ScanOutcome r;
+    try {
+      r = await widget.onScan(code, q);
+    } catch (e) {
+      r = ScanOutcome(false, '$e');
+    }
+    if (!mounted) return r;
+    setState(() { _last = r; if (r.ok) _count++; });
+    if (widget.strongFeedback) {
+      if (r.ok) { ScanFeedback.ok(); } else { ScanFeedback.wrong(context); }
+    } else if (!r.ok) {
+      SystemSound.play(SystemSoundType.alert);
+    }
+    return r;
+  }
+
+  Future<void> openCamera() async {
+    await showCameraScanner(context, onCode: (code) async {
+      final q = double.tryParse(_qty.text.trim()) ?? 1;
+      final r = await _handle(code, q <= 0 ? 1 : q);
+      if (widget.showQty && mounted) _qty.text = '1';
+      return r;
+    });
   }
 
   @override
@@ -139,7 +158,9 @@ class _ScanBarState extends State<ScanBar> {
               suffixIcon: _working
                   ? const Padding(padding: EdgeInsets.all(12),
                       child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))
-                  : null,
+                  : widget.camera
+                      ? IconButton(tooltip: 'Scan with camera', icon: const Icon(Icons.photo_camera_outlined), onPressed: openCamera)
+                      : null,
             ),
             onSubmitted: _submit,
           )),

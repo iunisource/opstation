@@ -166,7 +166,8 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
     for (final o in orders) {
       for (final l in _lines(o)) {
         final qty = _n(l['qty']);
-        final amount = _n(l['price']) * qty;
+        // The price it actually sold for: after its share of any discount code.
+        final amount = (_n(l['price']) - _n(l['disc_each'])) * qty;
         final comps = [for (final c in (l['components'] as List? ?? const [])) Map<String, dynamic>.from(c as Map)];
         if (comps.isNotEmpty) {
           final weights = [
@@ -274,9 +275,9 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
         ]),
         pw.SizedBox(height: 12),
         pw.Text('Items', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
-        pw.Text(single ? 'Prices as charged on the order.'
-            : 'Price = average across the selected orders (the actual price where an item is in one order only). '
-              'Bundle prices are shared across the products inside them.',
+        pw.Text(single ? 'Prices as sold (after any discount code).'
+            : 'Price = what it sold for (after any discount code), averaged across the selected orders — '
+              'the actual price where an item is in one order only. Bundle prices are shared across the products inside them.',
             style: const pw.TextStyle(fontSize: 7.5, color: grey)),
         pw.SizedBox(height: 4),
         pw.Table(
@@ -378,7 +379,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
         title: Text('Copy ${orders.length} order${orders.length == 1 ? '' : 's'} to a Sales Order'),
         content: SizedBox(width: 520, height: 470, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('${usable.length} item line${usable.length == 1 ? '' : 's'}, ${_qf(usable.fold<double>(0, (a, i) => a + i.qty))} units. '
-              '${orders.length > 1 ? 'Same products are combined at their average price.' : 'Prices as charged.'}',
+              '${orders.length > 1 ? 'Same products are combined at their average price.' : 'Prices as sold.'}',
               style: const TextStyle(fontSize: 12.5)),
           if (already.isNotEmpty)
             Padding(padding: const EdgeInsets.only(top: 6), child: Text(
