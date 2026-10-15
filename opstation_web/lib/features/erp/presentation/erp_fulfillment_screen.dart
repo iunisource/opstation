@@ -12,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart' show userBranchesProvider, shopNewOrdersCountProvider;
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/widgets/scan_bar.dart';
+import '../../../core/widgets/scan_feedback.dart';
 import '../../auth/auth_controller.dart';
 import 'shop_product_matching.dart';
 
@@ -45,6 +46,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   bool _loading = true;
   bool _busy = false;
   RealtimeChannel? _channel;
+  final Set<String> _autoBusy = {}; // orders being auto-fulfilled right now
   Timer? _debounce;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -57,6 +59,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   void initState() {
     super.initState();
     _selId = widget.focusId;
+    ScanFeedback.install();
     _load();
     _subscribe();
     // Back from authorising in Shopify: show what happened.
@@ -274,7 +277,18 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     } catch (e) {
       return ScanOutcome(false, 'Could not save: $e');
     }
-    return ScanOutcome(true, '$name  ${_q(now)} / ${_q(need)}${allDone ? '   ✓ all items picked — press Packed' : ''}');
+    if (allDone) {
+      final auto = _autoOn(o['store_id'] as String?);
+      if (auto) {
+        // Let the beep play, then fulfil without anyone touching the screen.
+        Future.delayed(const Duration(milliseconds: 250), () => _autoFulfil(o));
+      } else {
+        Future.delayed(const Duration(milliseconds: 150), ScanFeedback.done);
+      }
+      return ScanOutcome(true, '$name  ${_q(now)} / ${_q(need)}   ✓ all items picked'
+          '${auto ? ' — fulfilling automatically…' : ' — press Packed / Fulfil'}');
+    }
+    return ScanOutcome(true, '$name  ${_q(now)} / ${_q(need)}');
   }
 
   Future<void> _setPicked(Map<String, dynamic> o, int i, double v, {int? comp}) async {
@@ -287,6 +301,53 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       lines[i]['picked'] = v.clamp(0, _num(lines[i]['qty']));
     }
     await _saveLines(o, lines, status: (o['status'] == 'new' && v > 0) ? 'picking' : null);
+  }
+
+  bool _autoOn(String? storeId) =>
+      _stores.any((s) => s['id'] == storeId && s['auto_fulfil'] == true);
+
+  /// Stores the header switch applies to (the store filter, or all connected).
+  List<Map<String, dynamic>> get _scopeStores => _stores
+      .where((s) => s['is_active'] == true && (_storeFilter == 'all' || s['id'] == _storeFilter))
+      .toList();
+
+  Future<void> _setAuto(bool on) async {
+    final scope = _scopeStores;
+    if (scope.isEmpty) return;
+    setState(() { for (final s in scope) { s['auto_fulfil'] = on; } });
+    try {
+      await Supabase.instance.client.from('shop_stores').update({'auto_fulfil': on})
+          .inFilter('id', [for (final s in scope) s['id']]);
+      _snack(on
+          ? 'Auto-fulfil ON — an order is packed and fulfilled in the store as soon as its last item is scanned'
+          : 'Auto-fulfil OFF — press Packed / Fulfil yourself');
+    } catch (e) {
+      setState(() { for (final s in scope) { s['auto_fulfil'] = !on; } });
+      _snack('Could not change it: $e');
+    }
+  }
+
+  /// Every item scanned right + auto-fulfil on → pack and fulfil in the store.
+  Future<void> _autoFulfil(Map<String, dynamic> o) async {
+    final id = o['id'] as String;
+    if (_autoBusy.contains(id) || !mounted) return;
+    setState(() => _autoBusy.add(id));
+    final me = ref.read(currentUserProvider);
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      await Supabase.instance.client.from('shop_orders').update({
+        'status': 'packed', 'packed_at': now, 'packed_by_name': me?.name, 'updated_at': now,
+      }).eq('id', id);
+      final r = await _call({'action': 'fulfill', 'order_id': id, 'notify': true});
+      ScanFeedback.done();
+      _snack('✓ ${o['order_no'] ?? 'Order'} fulfilled automatically${r['already'] == true ? ' (it was already fulfilled in the store)' : ''}');
+    } catch (e) {
+      if (mounted) ScanFeedback.wrong(context);
+      _snack('${o['order_no'] ?? 'Order'} was NOT fulfilled: $e');
+    } finally {
+      if (mounted) setState(() => _autoBusy.remove(id));
+      await _load(quiet: true);
+    }
   }
 
   Future<void> _mapProduct(Map<String, dynamic> o, int i) async {
@@ -621,6 +682,32 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.sync),
           ),
+          if (_scopeStores.isNotEmpty) ...[
+            Tooltip(
+              message: 'When on, an order is packed and fulfilled in the store automatically '
+                  'as soon as every item has been scanned right.',
+              child: Container(
+                padding: const EdgeInsets.only(left: 10, right: 2),
+                decoration: BoxDecoration(
+                  color: _scopeStores.every((s) => s['auto_fulfil'] == true) ? Colors.green.withOpacity(0.08) : Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _scopeStores.every((s) => s['auto_fulfil'] == true) ? Colors.green : AppTheme.border),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.bolt, size: 16),
+                  if (!narrow) ...[
+                    const SizedBox(width: 4),
+                    const Text('Auto-fulfil', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  ],
+                  Switch(
+                    value: _scopeStores.every((s) => s['auto_fulfil'] == true),
+                    onChanged: _setAuto,
+                  ),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           if (_stores.any((s) => s['is_active'] == true)) ...[
             OutlinedButton.icon(
               icon: const Icon(Icons.link, size: 18),
@@ -805,7 +892,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           _banner(Colors.red, Icons.error_outline, 'Last fulfil attempt failed: ${o['fulfil_error']}'),
         const SizedBox(height: 16),
         if (canWork) ...[
-          ScanBar(onScan: _onScan, hint: 'Scan each item to pick it'),
+          ScanBar(onScan: _onScan, hint: 'Scan each item to pick it', strongFeedback: true),
+          if (_autoBusy.contains(o['id']))
+            _banner(Colors.blue, Icons.local_shipping_outlined, 'All items scanned — fulfilling in the store…'),
           const SizedBox(height: 12),
         ],
         const Text('Items', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -826,10 +915,12 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
             ),
             if (!pickedAll)
-              const Padding(
-                padding: EdgeInsets.only(top: 10),
-                child: Text('Scan every item to enable Packed and Fulfil.',
-                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(_autoOn(o['store_id'] as String?)
+                    ? 'Auto-fulfil is on: the order is fulfilled as soon as the last item is scanned.'
+                    : 'Scan every item to enable Packed and Fulfil.',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               ),
             if (st == 'picking' || st == 'packed')
               TextButton(

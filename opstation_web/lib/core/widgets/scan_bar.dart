@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/app_theme.dart';
+import 'scan_feedback.dart';
 
 /// Finds a product by what a scanner reads: barcode first, then SKU (exact,
 /// case-insensitive). Products need 'barcode' / 'sku' keys.
@@ -35,8 +36,10 @@ class ScanBar extends StatefulWidget {
   final String hint;
   final bool autofocus;
   final bool showQty;
+  /// Beep on a right scan; loud buzz + whole screen blinks red on a wrong one.
+  final bool strongFeedback;
   const ScanBar({super.key, required this.onScan, this.hint = 'Scan barcode (or type code + Enter)',
-      this.autofocus = true, this.showQty = true});
+      this.autofocus = true, this.showQty = true, this.strongFeedback = false});
   @override
   State<ScanBar> createState() => _ScanBarState();
 }
@@ -53,6 +56,7 @@ class _ScanBarState extends State<ScanBar> {
   @override
   void initState() {
     super.initState();
+    if (widget.strongFeedback) ScanFeedback.install();
     if (widget.autofocus) {
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _focus.requestFocus(); });
     }
@@ -90,7 +94,11 @@ class _ScanBarState extends State<ScanBar> {
       }
       if (!mounted) return;
       setState(() { _last = r; if (r.ok) _count++; });
-      if (!r.ok) SystemSound.play(SystemSoundType.alert);
+      if (widget.strongFeedback) {
+        if (r.ok) { ScanFeedback.ok(); } else { ScanFeedback.wrong(context); }
+      } else if (!r.ok) {
+        SystemSound.play(SystemSoundType.alert);
+      }
     }
     _working = false;
     if (mounted) setState(() {});
