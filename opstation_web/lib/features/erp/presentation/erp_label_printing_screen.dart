@@ -404,6 +404,15 @@ class _ErpLabelPrintingScreenState extends ConsumerState<ErpLabelPrintingScreen>
           ),
         ),
       )),
+      for (final w in labelWarnings(t, _data))
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.warning_amber_rounded, size: 16, color: Colors.red),
+            const SizedBox(width: 6),
+            Expanded(child: Text(w, style: const TextStyle(fontSize: 12, color: Colors.red))),
+          ]),
+        ),
       if (canEdit) ...[
         const SizedBox(height: 6),
         const Center(child: Text('Click an item to edit it · drag to move · positions snap to 0.25 mm',
@@ -568,9 +577,26 @@ class _ErpLabelPrintingScreenState extends ConsumerState<ErpLabelPrintingScreen>
             value: e.human, onChanged: (v) => _changed(() => e.human = v ?? true),
           )),
         ],
-        if (e.kind == 'qr')
+        if (e.kind == 'qr') ...[
           _intDrop('QR size', e.cell, const [0, 2, 3, 4, 5, 6, 7, 8, 10], (v) => _changed(() => e.cell = v),
               text: (o) => o == 0 ? 'Auto' : '$o', width: 110),
+          SizedBox(
+            width: 170,
+            child: DropdownButtonFormField<String>(
+              value: const ['', 'L', 'M', 'Q', 'H'].contains(e.ecc) ? e.ecc : '',
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Error correction', isDense: true),
+              items: const [
+                DropdownMenuItem(value: '', child: Text('Auto')),
+                DropdownMenuItem(value: 'L', child: Text('L · smallest QR')),
+                DropdownMenuItem(value: 'M', child: Text('M · standard')),
+                DropdownMenuItem(value: 'Q', child: Text('Q · sturdier')),
+                DropdownMenuItem(value: 'H', child: Text('H · sturdiest')),
+              ],
+              onChanged: (v) => _changed(() => e.ecc = v ?? ''),
+            ),
+          ),
+        ],
         if (e.kind == 'line') ...[
           _numField('$k.w', 'Length (mm)', e.width, (v) => _changed(() => e.width = v), step: 1, min: 1),
           _numField('$k.h', 'Thickness (mm)', e.height, (v) => _changed(() => e.height = v), step: 0.125, min: 0.125),

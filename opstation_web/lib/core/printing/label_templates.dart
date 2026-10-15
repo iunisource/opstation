@@ -82,6 +82,7 @@ class LabelElement {
   int narrow; // barcode module width in dots, 0 = auto
   bool human; // barcode: print the digits under it
   int cell; // QR module size in dots, 0 = auto
+  String ecc; // QR error correction: '' = auto, L, M, Q, H
 
   LabelElement({
     required this.id,
@@ -103,6 +104,7 @@ class LabelElement {
     this.narrow = 0,
     this.human = true,
     this.cell = 0,
+    this.ecc = '',
   });
 
   factory LabelElement.fromJson(Map<String, dynamic> m) => LabelElement(
@@ -125,13 +127,14 @@ class LabelElement {
         narrow: (m['narrow'] as num?)?.toInt() ?? 0,
         human: m['human'] != false,
         cell: (m['cell'] as num?)?.toInt() ?? 0,
+        ecc: '${m['ecc'] ?? ''}',
       );
 
   Map<String, dynamic> toJson() => {
         'id': id, 'kind': kind, 'source': source, 'prefix': prefix, 'text': text, 'ask': askAtPrint,
         'x': x, 'y': y, 'center': center, 'font': font, 'scale': scale, 'maxChars': maxChars,
         'maxLines': maxLines, 'lineGap': lineGap, 'height': height, 'width': width, 'narrow': narrow,
-        'human': human, 'cell': cell,
+        'human': human, 'cell': cell, 'ecc': ecc,
       };
 
   LabelElement copy() => LabelElement.fromJson(toJson());
@@ -194,11 +197,11 @@ LabelTemplate builtInTemplate(String id) {
   switch (id) {
     case 'small_qr':
       return LabelTemplate(id: id, name: '1.5" × 1" · QR', widthMm: 38.1, heightMm: 25.4, builtIn: true, elements: [
-        LabelElement(id: 'qr', kind: 'qr', source: 'code', x: 1, y: 4.5, cell: 0),
-        LabelElement(id: 'name', kind: 'text', source: 'name', x: 16, y: 1, font: 2, maxChars: 14, maxLines: 3, lineGap: 0.3),
-        LabelElement(id: 'ctext', kind: 'text', source: 'codeText', x: 16, y: 11.5, font: 1, maxChars: 20),
-        LabelElement(id: 'batch', kind: 'text', source: 'batch', prefix: 'B: ', x: 16, y: 14.5, font: 1, maxChars: 20),
-        LabelElement(id: 'date', kind: 'text', source: 'date', x: 16, y: 17.5, font: 1, maxChars: 20),
+        LabelElement(id: 'qr', kind: 'qr', source: 'code', x: 1, y: 1.5, cell: 0),
+        LabelElement(id: 'name', kind: 'text', source: 'name', x: 19, y: 1, font: 2, maxChars: 13, maxLines: 3, lineGap: 0.3),
+        LabelElement(id: 'ctext', kind: 'text', source: 'codeText', x: 19, y: 11.5, font: 1, maxChars: 18),
+        LabelElement(id: 'batch', kind: 'text', source: 'batch', prefix: 'B: ', x: 19, y: 14.5, font: 1, maxChars: 18),
+        LabelElement(id: 'date', kind: 'text', source: 'date', x: 19, y: 17.5, font: 1, maxChars: 18),
       ]);
     case 'large_barcode':
       return LabelTemplate(id: id, name: '2" × 2" · Barcode', widthMm: 50.8, heightMm: 50.8, builtIn: true, elements: [
@@ -304,15 +307,26 @@ List<String> labelWrap(String text, int maxChars, int maxLines) {
 
 int _barcodeDots(String code, int narrow) => (11 * code.length + 35) * narrow;
 
-int qrModules(String data) {
+/// Byte-mode capacity per QR version 1–14 for each error-correction level.
+const Map<String, List<int>> _qrCap = {
+  'L': [17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321, 367, 425, 458],
+  'M': [14, 26, 42, 62, 84, 106, 122, 152, 180, 213, 251, 287, 331, 362],
+  'Q': [11, 20, 32, 46, 60, 74, 86, 108, 130, 151, 177, 203, 241, 258],
+  'H': [7, 14, 24, 34, 44, 58, 64, 84, 98, 119, 137, 155, 177, 194],
+};
+
+/// Modules per side of the QR the printer will draw for [data].
+int qrModules(String data, [String ecc = 'M']) {
+  final caps = _qrCap[ecc] ?? _qrCap['M']!;
   final n = data.length;
-  if (n <= 14) return 21;
-  if (n <= 26) return 25;
-  if (n <= 42) return 29;
-  if (n <= 62) return 33;
-  if (n <= 84) return 37;
-  return 41;
+  for (var v = 0; v < caps.length; v++) {
+    if (n <= caps[v]) return 17 + 4 * (v + 1);
+  }
+  return 17 + 4 * 15;
 }
+
+/// A QR module smaller than 3 printer dots (0.375 mm) often won't scan.
+const int kMinQrCell = 3;
 
 /// Resolved, in dots — one entry per thing actually drawn.
 class PlacedItem {
@@ -322,8 +336,10 @@ class PlacedItem {
   final String value;
   final int font, scale; // text
   final int narrow, cell; // barcode / qr
+  final String ecc; // qr
   PlacedItem(this.el, this.kind, this.x, this.y, this.w, this.h, this.value,
-      {this.font = 2, this.scale = 1, this.narrow = 1, this.cell = 4});
+      {this.font = 2, this.scale = 1, this.narrow = 1, this.cell = 4, this.ecc = 'M'});
+  bool get qrTooSmall => kind == 'qr' && cell < kMinQrCell;
 }
 
 List<PlacedItem> layoutLabel(LabelTemplate t, LabelData d) {
@@ -356,15 +372,28 @@ List<PlacedItem> layoutLabel(LabelTemplate t, LabelData d) {
       case 'qr':
         final data = labelClean(d.value(e));
         if (data.isEmpty) break;
-        final mods = qrModules(data);
+        // Room for the square: from its top to the bottom edge, and the width
+        // it may use (half the label beside text, or the full label centred).
+        final hDots = (t.heightMm * kDotsPerMm).round();
+        final roomH = hDots - y0 - 4;
+        final roomW = e.center ? wDots - 8 : (t.widthMm > 45 ? wDots - x0 - 8 : ((wDots * 0.5) - x0).round());
+        final room = math.max(20, math.min(roomH, roomW));
+        var ecc = 'MLQH'.contains(e.ecc) && e.ecc.isNotEmpty ? e.ecc : '';
         var cell = e.cell;
-        if (cell <= 0) {
-          final room = math.min(wDots, (t.heightMm * kDotsPerMm).round()) * (t.widthMm > 45 ? 0.45 : 0.5);
-          cell = (room / mods).floor().clamp(2, 10);
+        if (ecc.isEmpty) {
+          // Auto: prefer M; fall back to L (smaller symbol, bigger dots) when M
+          // would make the dots too small to scan.
+          ecc = 'M';
+          final mCell = (room / qrModules(data, 'M')).floor();
+          final lCell = (room / qrModules(data, 'L')).floor();
+          final mFits = cell > 0 ? qrModules(data, 'M') * cell <= room : mCell >= kMinQrCell + 1;
+          if (!mFits && (cell > 0 || lCell > mCell)) ecc = 'L';
         }
+        final mods = qrModules(data, ecc);
+        if (cell <= 0) cell = (room / mods).floor().clamp(2, 10);
         final qw = mods * cell;
         out.add(PlacedItem(e, 'qr', e.center ? math.max(0, ((wDots - qw) / 2).round()) : x0, y0, qw, qw, data,
-            cell: cell));
+            cell: cell, ecc: ecc));
         break;
       default:
         final raw = d.value(e);
@@ -387,6 +416,15 @@ List<PlacedItem> layoutLabel(LabelTemplate t, LabelData d) {
   }
   return out;
 }
+
+/// Problems that would make a printed label hard to scan.
+List<String> labelWarnings(LabelTemplate t, LabelData d) => [
+      for (final p in layoutLabel(t, d))
+        if (p.qrTooSmall)
+          'The QR code is too dense for its space (dots of ${p.cell}) and may not scan. '
+              'Give it more room (move it up/left or use a bigger label), set "QR size" to 3 or more, '
+              'or set error correction to L.',
+    ];
 
 /// TSPL commands for [copies] of one label.
 String buildTspl(LabelTemplate t, LabelData d, int copies,
@@ -411,7 +449,7 @@ String buildTspl(LabelTemplate t, LabelData d, int copies,
         out.add('BARCODE ${p.x},${p.y},"128",${p.h - (p.el.human ? 22 : 0)},${p.el.human ? 1 : 0},0,${p.narrow},${p.narrow},"${p.value}"');
         break;
       case 'qr':
-        out.add('QRCODE ${p.x},${p.y},M,${p.cell},A,0,"${p.value}"');
+        out.add('QRCODE ${p.x},${p.y},${p.ecc},${p.cell},A,0,"${p.value}"');
         break;
       default:
         out.add('TEXT ${p.x},${p.y},"${p.font}",0,${p.scale},${p.scale},"${p.value}"');
@@ -459,7 +497,13 @@ class LabelPreview extends StatelessWidget {
           ]);
           break;
         case 'qr':
-          child = CustomPaint(painter: _QrPainter(p.value), size: Size.infinite);
+          child = CustomPaint(painter: _QrPainter(p.value, p.ecc), size: Size.infinite);
+          if (p.qrTooSmall) {
+            child = Container(
+              foregroundDecoration: BoxDecoration(border: Border.all(color: Colors.red, width: 2)),
+              child: child,
+            );
+          }
           break;
         default:
           child = FittedBox(
@@ -542,10 +586,11 @@ class _BarsPainter extends CustomPainter {
 
 class _QrPainter extends CustomPainter {
   final String v;
-  _QrPainter(this.v);
+  final String ecc;
+  _QrPainter(this.v, this.ecc);
   @override
   void paint(Canvas c, Size s) {
-    final mods = qrModules(v);
+    final mods = qrModules(v, ecc);
     final u = s.width / mods;
     final p = Paint()..color = Colors.black;
     var seed = v.codeUnits.fold<int>(11, (a, b) => (a * 33 + b) & 0x7fffffff);
@@ -568,5 +613,5 @@ class _QrPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_QrPainter o) => o.v != v;
+  bool shouldRepaint(_QrPainter o) => o.v != v || o.ecc != ecc;
 }

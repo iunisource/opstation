@@ -312,6 +312,11 @@ class _LabelPrintDialogState extends ConsumerState<_LabelPrintDialog> {
           ]),
           const SizedBox(height: 14),
           Center(child: LabelPreview(template: t, data: _prepare(first), pxPerMm: ppm)),
+          for (final w in labelWarnings(t, _prepare(first)))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(w, style: const TextStyle(fontSize: 11.5, color: Colors.red)),
+            ),
           const SizedBox(height: 4),
           const Center(child: Text('Preview — adjust layouts in Manufacturing → Label Printing',
               style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary))),
