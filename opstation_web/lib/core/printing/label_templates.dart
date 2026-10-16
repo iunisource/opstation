@@ -306,7 +306,59 @@ List<String> labelWrap(String text, int maxChars, int maxLines) {
   return lines;
 }
 
-int _barcodeDots(String code, int narrow) => (11 * code.length + 35) * narrow;
+/// A real 1-D barcode as module runs: EAN-13 for 12/13-digit product codes
+/// (what Opstation generates — reads best on phones and scanners), Code 128
+/// for anything else. [runs] = (first module, width in modules) of each black
+/// bar; [modules] = total width. Drawn the same way on screen and on the
+/// printer, so the preview scans exactly like the label.
+class BarRuns {
+  final String symbology; // EAN13 | CODE128
+  final int modules;
+  final List<(int, int)> runs;
+  const BarRuns(this.symbology, this.modules, this.runs);
+}
+
+final Map<String, BarRuns> _barCache = {};
+
+BarRuns barRuns(String code) {
+  final hit = _barCache[code];
+  if (hit != null) return hit;
+  if (_barCache.length > 300) _barCache.clear();
+  BarRuns out = const BarRuns('CODE128', 0, []);
+  final tries = <(String, bc.Barcode)>[
+    if (RegExp(r'^\d{12,13}$').hasMatch(code)) ('EAN13', bc.Barcode.ean13()),
+    ('CODE128', bc.Barcode.code128()),
+  ];
+  for (final (name, b) in tries) {
+    try {
+      const size = 2000.0;
+      final bars = b.make(code, width: size, height: 10, drawText: false).whereType<bc.BarcodeBar>().toList();
+      if (bars.isEmpty) continue;
+      var unit = size;
+      for (final x in bars) {
+        if (x.width > 0.0001 && x.width < unit) unit = x.width;
+      }
+      final modules = (size / unit).round();
+      final runs = <(int, int)>[];
+      for (final x in bars) {
+        if (!x.black) continue;
+        runs.add(((x.left / unit).round(), math.max(1, (x.width / unit).round())));
+      }
+      out = BarRuns(name, modules, runs);
+      break;
+    } catch (_) {
+      // e.g. a 13-digit code whose check digit isn't EAN — try Code 128.
+    }
+  }
+  _barCache[code] = out;
+  return out;
+}
+
+/// Barcode width in dots at [narrow] dots per module.
+int _barcodeDots(String code, int narrow) => barRuns(code).modules * narrow;
+
+/// Smallest bar width that prints and scans reliably at 203 dpi.
+const int kMinBarModule = 2;
 
 /// Byte-mode capacity per QR version 1–14 for each error-correction level.
 const Map<String, List<int>> _qrCap = {
@@ -415,9 +467,11 @@ List<PlacedItem> layoutLabel(LabelTemplate t, LabelData d) {
         if (code.isEmpty) break;
         var narrow = e.narrow;
         if (narrow <= 0) {
+          // Widest bars that fit with a quiet zone of 10 modules each side.
           narrow = 1;
+          final mods = barRuns(code).modules;
           for (final n in [3, 2]) {
-            if (_barcodeDots(code, n) <= wDots - 16) { narrow = n; break; }
+            if ((mods + 20) * n <= wDots) { narrow = n; break; }
           }
         }
         final bw = _barcodeDots(code, narrow);
@@ -476,6 +530,10 @@ List<PlacedItem> layoutLabel(LabelTemplate t, LabelData d) {
 /// Problems that would make a printed label hard to scan.
 List<String> labelWarnings(LabelTemplate t, LabelData d) => [
       for (final p in layoutLabel(t, d))
+        if (p.kind == 'barcode' && p.narrow < kMinBarModule)
+          'The barcode is too long for this label width and its bars are very thin — it may not scan. '
+              'Use a wider label or a QR template.',
+      for (final p in layoutLabel(t, d))
         if (p.qrTooSmall)
           'The QR code is too dense for its space (dots of ${p.cell}) and may not scan. '
               'Give it more room (move it up/left or use a bigger label), set "QR size" to 3 or more, '
@@ -502,7 +560,21 @@ String buildTspl(LabelTemplate t, LabelData d, int copies,
         out.add('BAR ${p.x},${p.y},${p.w},${p.h}');
         break;
       case 'barcode':
-        out.add('BARCODE ${p.x},${p.y},"128",${p.h - (p.el.human ? 22 : 0)},${p.el.human ? 1 : 0},0,${p.narrow},${p.narrow},"${p.value}"');
+        // Draw the bars ourselves (EAN-13 / Code 128), exactly as previewed.
+        final br = barRuns(p.value);
+        final bh = p.h - (p.el.human ? 22 : 0);
+        if (br.runs.isEmpty) {
+          out.add('BARCODE ${p.x},${p.y},"128",$bh,${p.el.human ? 1 : 0},0,${p.narrow},${p.narrow},"${p.value}"');
+          break;
+        }
+        for (final (start, w) in br.runs) {
+          out.add('BAR ${p.x + start * p.narrow},${p.y},${w * p.narrow},$bh');
+        }
+        if (p.el.human) {
+          // Font 2 is 12 dots per character — centred under the bars.
+          final tx = p.x + ((p.w - 12 * p.value.length) / 2).round();
+          out.add('TEXT ${math.max(0, tx)},${p.y + bh + 2},"2",0,1,1,"${p.value}"');
+        }
         break;
       case 'qr':
         final m = qrMatrix(p.value, p.ecc);
@@ -716,17 +788,13 @@ class _BarsPainter extends CustomPainter {
   _BarsPainter(this.v);
   @override
   void paint(Canvas c, Size s) {
+    // The real barcode (same bars the printer gets) — scannable on screen too.
     final p = Paint()..color = Colors.black;
-    final n = (11 * v.length + 35);
-    final unit = s.width / n;
-    var x = 0.0;
-    var i = 0;
-    final seed = v.codeUnits.fold<int>(7, (a, b) => (a * 31 + b) & 0x7fffffff);
-    while (x < s.width) {
-      final w = unit * (1 + ((seed >> (i % 24)) & 3));
-      if (i.isEven) c.drawRect(Rect.fromLTWH(x, 0, w, s.height), p);
-      x += w;
-      i++;
+    final br = barRuns(v);
+    if (br.modules == 0) return;
+    final unit = s.width / br.modules;
+    for (final (start, w) in br.runs) {
+      c.drawRect(Rect.fromLTWH(start * unit, 0, w * unit, s.height), p);
     }
   }
 
