@@ -25,14 +25,17 @@ class CombinedTripSummaryScreen extends ConsumerStatefulWidget {
 
 class _DayRow {
   final DateTime date;
+  final String userId;
   final String salesperson;
   final Set<String> routes = {};
   double km = 0;
+  /// Same salesperson, same weekday one week earlier. Null = no trip that day.
+  double? lastWeekKm;
   /// Part of [km] that came from ABANDONED trips (ended with no visits, not
   /// restarted). Counted, but flagged so a manager can approve or strike it.
   double abandonedKm = 0;
   int trips = 0;
-  _DayRow({required this.date, required this.salesperson});
+  _DayRow({required this.date, required this.userId, required this.salesperson});
 }
 
 class _CombinedTripSummaryScreenState
@@ -45,6 +48,7 @@ class _CombinedTripSummaryScreenState
   List<Map<String, dynamic>> _users = [];
   List<_DayRow> _rows = [];
   double _grandKm = 0;
+  double _grandLastWeekKm = 0;
   double _grandAbandonedKm = 0;
 
   @override
@@ -76,7 +80,10 @@ class _CombinedTripSummaryScreenState
           .eq('org_id', orgId)
           .eq('role', 'salesperson');
 
-      final start = _range!.start;
+      // Load one extra week before the range so each day can show the
+      // distance of the same weekday last week.
+      final rangeStart = DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
+      final start = rangeStart.subtract(const Duration(days: 7));
       final end = _range!.end.add(const Duration(days: 1));
       final List<Map<String, dynamic>> trips;
       if (_selectedUserId != null) {
@@ -152,7 +159,7 @@ class _CombinedTripSummaryScreenState
         final key = '$uid|${d.toIso8601String()}';
         final row = acc.putIfAbsent(
           key,
-          () => _DayRow(date: d, salesperson: t['user_name'] as String? ?? '-'),
+          () => _DayRow(date: d, userId: uid, salesperson: t['user_name'] as String? ?? '-'),
         );
         final ctx = TripReportContext.build(
           trip: t,
@@ -169,18 +176,24 @@ class _CombinedTripSummaryScreenState
         if (rn.isNotEmpty) row.routes.add(rn);
       }
 
-      final rows = acc.values.toList()
+      for (final row in acc.values) {
+        final prev = DateTime(row.date.year, row.date.month, row.date.day - 7);
+        row.lastWeekKm = acc['${row.userId}|${prev.toIso8601String()}']?.km;
+      }
+      final rows = acc.values.where((r) => !r.date.isBefore(rangeStart)).toList()
         ..sort((a, b) {
           final s = a.salesperson.compareTo(b.salesperson);
           return s != 0 ? s : a.date.compareTo(b.date);
         });
       final grand = rows.fold<double>(0, (s, r) => s + r.km);
       final grandAb = rows.fold<double>(0, (s, r) => s + r.abandonedKm);
+      final grandLw = rows.fold<double>(0, (s, r) => s + (r.lastWeekKm ?? 0));
 
       setState(() {
         _users = List<Map<String, dynamic>>.from(users);
         _rows = rows;
         _grandKm = grand;
+        _grandLastWeekKm = grandLw;
         _grandAbandonedKm = grandAb;
         _loading = false;
       });
@@ -233,6 +246,7 @@ class _CombinedTripSummaryScreenState
                         ? '  [REVIEW: incl. ${r.abandonedKm.toStringAsFixed(2)} km from an abandoned trip — no visits]'
                         : ''),
                 km: r.km,
+                lastWeekKm: r.lastWeekKm,
               ))
           .toList();
 
@@ -243,6 +257,7 @@ class _CombinedTripSummaryScreenState
         showSalesperson: showSalesperson,
         rows: pdfRows,
         grandTotalKm: _grandKm,
+        lastWeekTotalKm: _grandLastWeekKm,
         duplicate: duplicate,
       );
       await outputPdf(bytes, 'Combined Trip Summary');
@@ -358,7 +373,7 @@ class _CombinedTripSummaryScreenState
         else
           Expanded(
             child: HScrollOnNarrow(
-              minWidth: 820,
+              minWidth: 960,
               child: Container(
                 decoration: BoxDecoration(
                     color: Colors.white,
@@ -391,6 +406,14 @@ class _CombinedTripSummaryScreenState
                       const Expanded(
                           flex: 3,
                           child: Text('Route(s)',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                  color: AppTheme.textSecondary))),
+                      const Expanded(
+                          flex: 2,
+                          child: Text('Last week (km)',
+                              textAlign: TextAlign.right,
                               style: TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 13,
@@ -441,6 +464,14 @@ class _CombinedTripSummaryScreenState
                                           style: const TextStyle(fontSize: 13))),
                                   Expanded(
                                       flex: 2,
+                                      child: Text(
+                                          r.lastWeekKm == null ? '–' : r.lastWeekKm!.toStringAsFixed(2),
+                                          textAlign: TextAlign.right,
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              color: AppTheme.textSecondary))),
+                                  Expanded(
+                                      flex: 2,
                                       child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.end,
                                           children: [
@@ -486,6 +517,13 @@ class _CombinedTripSummaryScreenState
                                   fontWeight: FontWeight.w800, fontSize: 13))),
                       if (showSalesperson) const Expanded(flex: 2, child: Text('')),
                       const Expanded(flex: 3, child: Text('')),
+                      Expanded(
+                          flex: 2,
+                          child: Text('${_grandLastWeekKm.toStringAsFixed(2)} km',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textSecondary))),
                       Expanded(
                           flex: 2,
                           child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [

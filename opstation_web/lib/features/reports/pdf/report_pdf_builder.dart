@@ -127,11 +127,14 @@ class CombinedSummaryRow {
   final String salesperson;
   final String routes;
   final double km;
+  /// Same salesperson, same weekday one week earlier. Null = no trip that day.
+  final double? lastWeekKm;
   const CombinedSummaryRow({
     required this.date,
     required this.salesperson,
     required this.routes,
     required this.km,
+    this.lastWeekKm,
   });
 }
 
@@ -224,14 +227,18 @@ class ReportPdfBuilder {
     required bool showSalesperson,
     required List<CombinedSummaryRow> rows,
     required double grandTotalKm,
+    double? lastWeekTotalKm,
     bool duplicate = false,
   }) async {
     final doc = pw.Document();
+    final lastWeekTotal = lastWeekTotalKm ??
+        rows.fold<double>(0, (s, r) => s + (r.lastWeekKm ?? 0));
 
     final headers = <String>[
       'DATE',
       if (showSalesperson) 'SALESPERSON',
       'ROUTE(S)',
+      'LAST WEEK (KM)',
       'DISTANCE (KM)',
     ];
     final data = <List<String>>[
@@ -240,16 +247,18 @@ class ReportPdfBuilder {
           DateFormat('EEE, MMM d, y').format(r.date),
           if (showSalesperson) r.salesperson,
           r.routes,
+          r.lastWeekKm == null ? '-' : r.lastWeekKm!.toStringAsFixed(2),
           r.km.toStringAsFixed(2),
         ],
       [
         'TOTAL',
         if (showSalesperson) '',
         '',
+        '${lastWeekTotal.toStringAsFixed(2)} km',
         '${grandTotalKm.toStringAsFixed(2)} km',
       ],
     ];
-    final distIdx = showSalesperson ? 3 : 2;
+    final distIdx = showSalesperson ? 4 : 3;
 
     doc.addPage(pw.MultiPage(
       pageTheme: _pageTheme(duplicate),
@@ -274,7 +283,10 @@ class ReportPdfBuilder {
             headers: headers,
             data: data,
             cellAlignment: pw.Alignment.centerLeft,
-            cellAlignments: {distIdx: pw.Alignment.centerRight},
+            cellAlignments: {
+              distIdx - 1: pw.Alignment.centerRight,
+              distIdx: pw.Alignment.centerRight,
+            },
             headerStyle: pw.TextStyle(
                 fontSize: 7.5,
                 fontWeight: pw.FontWeight.bold,
