@@ -156,7 +156,7 @@ class _ErpStockAdjustmentScreenState
       _products = List<Map<String, dynamic>>.from(rows);
       _prodById = {for (final p in _products) p['id'] as String: p};
     } catch (e) {
-      if (mounted) _toast('Could not load products: $e');
+      if (mounted) _toast('Could not load products. ${_friendly(e)}');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -378,7 +378,7 @@ class _ErpStockAdjustmentScreenState
         });
       }
     } catch (e) {
-      _toast('Load failed: $e');
+      _toast('Could not open the voucher. ${_friendly(e)}');
     } finally {
       if (mounted) setState(() => _openingVoucher = false);
     }
@@ -530,7 +530,7 @@ class _ErpStockAdjustmentScreenState
       }
       await _loadVouchers();
     } catch (e) {
-      _toast('Save failed: $e');
+      _toast('Not saved. ${_friendly(e)}');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -573,7 +573,7 @@ class _ErpStockAdjustmentScreenState
       _newVoucher();
       await _loadVouchers();
     } catch (e) {
-      _toast('Delete failed: $e');
+      _toast('Not deleted. ${_friendly(e)}');
     }
   }
 
@@ -611,7 +611,7 @@ class _ErpStockAdjustmentScreenState
       await _loadVoucher(updated);
       await _loadVouchers();
     } catch (e) {
-      _toast('Void failed: $e');
+      _toast('Not voided. ${_friendly(e)}');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1247,4 +1247,15 @@ class _Td extends StatelessWidget {
                 fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
                 color: color)),
       );
+}
+
+/// A plain-language error for people: the database's own message without the
+/// technical wrapping (exception name, code, details, hint).
+String _friendly(Object e) {
+  var m = e is PostgrestException ? e.message : '$e';
+  m = m.replaceAll('""', '"').replaceAll(RegExp(r'^Exception:\s*'), '').trim();
+  if (m.isEmpty || m.contains('SocketException') || m.contains('Failed to fetch') || m.contains('ClientException')) {
+    return 'Please check the internet connection and try again.';
+  }
+  return m;
 }
