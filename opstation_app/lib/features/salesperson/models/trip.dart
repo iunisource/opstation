@@ -159,7 +159,8 @@ class Trip {
   int get totalStops => stopSnapshot.length;
 
   /// For each customer on the route, the *final* status for this trip
-  /// (the last non-skipped visit wins; if only skip(s) exist → skipped;
+  /// (a verified visit always stands; otherwise the last non-skipped visit
+  /// wins; if only skip(s) exist → skipped;
   /// if no visits → pending). Revisits collapse to one entry per customer.
   Map<String, VisitStatus> get statusByCustomer {
     final result = <String, VisitStatus>{};
@@ -171,6 +172,10 @@ class Trip {
       // A real visit always overwrites a prior skip/pending. A later skip
       // never demotes a real visit.
       final current = result[v.customerId]!;
+      // Once verified, a shop stays verified for this trip — a later mark
+      // (e.g. a collection recorded away from the shop) doesn't undo the
+      // verified visit; those are listed separately in the visit report.
+      if (current == VisitStatus.verified) continue;
       if (v.status == VisitStatus.skipped &&
           current != VisitStatus.pending &&
           current != VisitStatus.skipped) {

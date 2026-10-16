@@ -241,6 +241,9 @@ class ReportService {
   /// as the single-trip Trip Summary) and aggregated by (salesperson, date).
   Future<Uint8List> buildCombinedSummaryBytes({
     required List<Trip> trips,
+    /// Trips from the week before (same salespersons / route filter) — for
+    /// the "Last week" column: same salesperson, same weekday, 7 days earlier.
+    List<Trip> lastWeekTrips = const [],
     required Map<String, String> userNames,
     required bool showSalesperson,
     required String periodLabel,
@@ -270,13 +273,31 @@ class ReportService {
       if (t.routeName.trim().isNotEmpty) a.routes.add(t.routeName.trim());
     }
 
-    final rows = acc.values
-        .map((a) => CombinedSummaryRow(
+    // Last week's distance per (salesperson, day).
+    final prevKm = <String, double>{};
+    if (lastWeekTrips.isNotEmpty) {
+      final pctx = await Future.wait(lastWeekTrips.map((t) => builder.build(t)));
+      for (var i = 0; i < lastWeekTrips.length; i++) {
+        final t = lastWeekTrips[i];
+        final d = DateTime(t.startedAt.year, t.startedAt.month, t.startedAt.day);
+        final key = '${t.userId}|${d.toIso8601String()}';
+        prevKm[key] = (prevKm[key] ?? 0) + pctx[i].totalDistanceKm;
+      }
+    }
+
+    final rows = acc.entries
+        .map((e) {
+          final a = e.value;
+          final uid = e.key.split('|').first;
+          final lw = DateTime(a.date.year, a.date.month, a.date.day - 7);
+          return CombinedSummaryRow(
               date: a.date,
               salesperson: a.salesperson,
               routes: a.routes.join(', '),
               km: a.km,
-            ))
+              lastWeekKm: prevKm['$uid|${lw.toIso8601String()}'],
+            );
+        })
         .toList()
       ..sort((x, y) {
         final s = x.salesperson.compareTo(y.salesperson);

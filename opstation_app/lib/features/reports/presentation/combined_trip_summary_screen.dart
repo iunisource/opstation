@@ -127,8 +127,12 @@ class _CombinedTripSummaryScreenState
         by: actor?.id,
         claim: action == _Action.share,
       );
+      // Same days one week earlier, for the "Last week" column.
+      final lastWeek = await _loadTrips(
+          start.subtract(const Duration(days: 7)), end.subtract(const Duration(days: 7)));
       final bytes = await svc.buildCombinedSummaryBytes(
         trips: loaded.trips,
+        lastWeekTrips: lastWeek.trips,
         userNames: loaded.userNames,
         showSalesperson: showSalesperson,
         periodLabel: _periodLabel(range),

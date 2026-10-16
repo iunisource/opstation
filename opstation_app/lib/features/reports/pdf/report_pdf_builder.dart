@@ -14,11 +14,15 @@ class CombinedSummaryRow {
   final String salesperson;
   final String routes;
   final double km;
+  /// Same salesperson, same weekday one week earlier (same route filter).
+  /// Null when there was no trip that day.
+  final double? lastWeekKm;
   const CombinedSummaryRow({
     required this.date,
     required this.salesperson,
     required this.routes,
     required this.km,
+    this.lastWeekKm,
   });
 }
 
@@ -58,6 +62,7 @@ class ReportPdfBuilder {
           _sectionTitle('Visit Details'),
           pw.SizedBox(height: 6),
           _visitDetailsTable(trip, ctx),
+          ..._collectionsAfterVerified(trip, ctx),
           pw.SizedBox(height: 10),
           _receiptsFooter(trip),
           pw.SizedBox(height: 36),
@@ -130,24 +135,28 @@ class ReportPdfBuilder {
       'DATE',
       if (showSalesperson) 'SALESPERSON',
       'ROUTE(S)',
+      'LAST WEEK (KM)',
       'DISTANCE (KM)',
     ];
+    final lastWeekTotal = rows.fold<double>(0, (s, r) => s + (r.lastWeekKm ?? 0));
     final data = <List<String>>[
       for (final r in rows)
         [
           DateFormat('EEE, MMM d, y').format(r.date),
           if (showSalesperson) r.salesperson,
           r.routes,
+          r.lastWeekKm == null ? '-' : r.lastWeekKm!.toStringAsFixed(2),
           r.km.toStringAsFixed(2),
         ],
       [
         'TOTAL',
         if (showSalesperson) '',
         '',
+        '${lastWeekTotal.toStringAsFixed(2)} km',
         '${grandTotalKm.toStringAsFixed(2)} km',
       ],
     ];
-    final distIdx = showSalesperson ? 3 : 2;
+    final distIdx = showSalesperson ? 4 : 3;
 
     doc.addPage(
       pw.MultiPage(
@@ -181,7 +190,7 @@ class ReportPdfBuilder {
               headers: headers,
               data: data,
               cellAlignment: pw.Alignment.centerLeft,
-              cellAlignments: {distIdx: pw.Alignment.centerRight},
+              cellAlignments: {distIdx - 1: pw.Alignment.centerRight, distIdx: pw.Alignment.centerRight},
               headerStyle: pw.TextStyle(
                 fontSize: 7.5,
                 fontWeight: pw.FontWeight.bold,
@@ -636,9 +645,11 @@ class ReportPdfBuilder {
         latestByCust[v.customerId] = v;
       }
     }
-    final verifiedCount = latestByCust.values
-        .where((v) => v.status == VisitStatus.verified)
-        .length;
+    // Once verified stays verified: a shop counts if ANY of its visits was.
+    final verifiedCount = {
+      for (final v in trip.visits)
+        if (v.status == VisitStatus.verified) v.customerId,
+    }.length;
     final totalCollected =
         _receiptAmounts(trip.visits).values.fold<int>(0, (s, a) => s + a);
     final completion = trip.totalStops == 0
@@ -850,6 +861,87 @@ class ReportPdfBuilder {
       },
       border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
     );
+  }
+
+  /// Shops that were verified first and had money recorded on a LATER mark
+  /// (often away from the shop). The shop stays verified; these collections
+  /// are listed here for the manager to review.
+  static List<pw.Widget> _collectionsAfterVerified(Trip trip, TripReportContext ctx) {
+    final byCust = <String, List<Visit>>{};
+    for (final v in trip.visits) {
+      byCust.putIfAbsent(v.customerId, () => <Visit>[]).add(v);
+    }
+    final rows = <List<String>>[];
+    var total = 0;
+    byCust.forEach((cid, vs) {
+      vs.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      Visit? firstVerified;
+      for (final v in vs) {
+        if (v.status == VisitStatus.verified) { firstVerified = v; break; }
+      }
+      if (firstVerified == null) return;
+      final fv = firstVerified;
+      final later = _dedupCollections([
+        for (final v in vs)
+          if (v.id != fv.id && v.timestamp.isAfter(fv.timestamp)) v,
+      ]);
+      if (later.isEmpty) return;
+      String code = '-', name = '(customer)';
+      for (final c in trip.stopSnapshot) {
+        if (c.id == cid) { code = c.code; name = c.shopName; break; }
+      }
+      if (name == '(customer)') {
+        final ref = ctx.extraCustomers[cid];
+        if (ref != null) { code = ref.code; name = ref.name; }
+      }
+      for (final v in later) {
+        total += v.amount;
+        rows.add([
+          code,
+          name,
+          DateFormat('hh:mm a').format(fv.timestamp),
+          DateFormat('hh:mm a').format(v.timestamp),
+          _fmtNum(v.amount),
+          (v.receiptNumber ?? '').isEmpty ? '-' : v.receiptNumber!,
+          _statusTagWithDistance(v.status, v),
+        ]);
+      }
+    });
+    if (rows.isEmpty) return const [];
+    return [
+      pw.SizedBox(height: 18),
+      _sectionTitle('Collections after a verified visit'),
+      pw.SizedBox(height: 2),
+      pw.Text(
+        'These shops were verified earlier on this trip, then money was recorded on a later mark. '
+        'The shop stays verified — check where each collection was recorded.',
+        style: pw.TextStyle(fontSize: 8, color: _muted),
+      ),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headers: const ['CODE', 'CUSTOMER', 'VERIFIED AT', 'COLLECTED AT', 'AMOUNT', 'CR#', 'RECORDED'],
+        data: [
+          ...rows,
+          ['', 'TOTAL', '', '', _fmtNum(total), '', ''],
+        ],
+        cellAlignment: pw.Alignment.centerLeft,
+        cellAlignments: const {4: pw.Alignment.centerRight},
+        headerStyle: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: _muted, letterSpacing: 0.3),
+        headerDecoration: const pw.BoxDecoration(color: _bg),
+        cellStyle: const pw.TextStyle(fontSize: 8, color: _ink),
+        cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        columnWidths: const {
+          0: pw.FixedColumnWidth(46),
+          1: pw.FlexColumnWidth(5),
+          2: pw.FixedColumnWidth(50),
+          3: pw.FixedColumnWidth(54),
+          4: pw.FixedColumnWidth(46),
+          5: pw.FixedColumnWidth(36),
+          6: pw.FixedColumnWidth(70),
+        },
+        border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
+      ),
+    ];
   }
 
   static pw.Widget _receiptsFooter(Trip trip) {
