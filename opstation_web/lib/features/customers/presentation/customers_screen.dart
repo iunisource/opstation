@@ -1043,7 +1043,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
 
   void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
-    final allBranches = orgId != null ? await Supabase.instance.client
+    final branchRows = orgId != null ? await Supabase.instance.client
         .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name') : [];
     Set<String> selectedBranches = {};
     if (customer != null && orgId != null) {
@@ -1051,6 +1051,12 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           .from('customer_branches').select('branch_id').eq('customer_id', customer['id']);
       selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
     }
+    // Processor / off-site (virtual) locations don't sell to customers — keep
+    // them out of the list. One already ticked on an old customer still shows,
+    // so it can be unticked.
+    final allBranches = (branchRows as List)
+        .where((b) => b['is_virtual'] != true || selectedBranches.contains(b['id']))
+        .toList();
     // New customers get an auto-generated code (highest + 1) up front; the
     // field is read-only. Existing customers keep their code (also read-only).
     String initialCode = customer?['code'] as String? ?? '';
