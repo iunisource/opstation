@@ -29,6 +29,8 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
   // Tree
   final Map<String, bool> _treeExpanded = {};
   String _search = '';
+  // Phone: one panel at a time — the account list, or the Add Account form.
+  bool _mobileForm = false;
   // parent id -> children, and which ids exist (built on load).
   Map<String, List<Map<String, dynamic>>> _kids = {};
   Set<String> _ids = {};
@@ -226,6 +228,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       });
       _snack('Account $code created');
       _resetForm();
+      if (mounted) setState(() => _mobileForm = false);
       await _load();
     } catch (e) { _snack(friendlyError('That did not save', e)); }
     setState(() => _saving = false);
@@ -290,7 +293,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
 
           // Account Group — dropdown for L1, read-only chip for L2+
           if (level == 1) DropdownButtonFormField<String>(
-            value: newGroup,
+            value: _groups.contains(newGroup) ? newGroup : null,
             decoration: const InputDecoration(labelText: 'Account Group'),
             items: ['Assets','Capital','Liability','Income','Expense']
                 .map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
@@ -350,7 +353,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
 
           const SizedBox(height: 12),
           DropdownButtonFormField<String?>(
-            value: selectedType,
+            value: _accountTypes.contains(selectedType) ? selectedType : null,
             decoration: const InputDecoration(labelText: 'Account Type (GL)'),
             items: [
               const DropdownMenuItem<String?>(value: null, child: Text('— None —')),
@@ -516,17 +519,20 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     final l2 = _sel1 != null ? _getLevel(2, group: _selectedGroup, parentId: _sel1!['id'] as String) : <Map<String, dynamic>>[];
     final l3 = _sel2 != null ? _getLevel(3, group: _selectedGroup, parentId: _sel2!['id'] as String) : <Map<String, dynamic>>[];
 
-    return Container(color: AppTheme.background, child: Row(children: [
-      // ── LEFT: ADD / EDIT FORM (compact) ──────────────────
-      SizedBox(width: 460, child: Container(decoration: const BoxDecoration(color: AppTheme.background, border: Border(right: BorderSide(color: AppTheme.border))), child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    final narrow = MediaQuery.of(context).size.width < 760;
+    // ── ADD / EDIT FORM ──────────────────
+    final form = SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.account_balance_outlined, color: AppTheme.primary, size: 20)),
+          if (narrow)
+            IconButton(icon: const Icon(Icons.arrow_back), tooltip: 'Back to accounts',
+                onPressed: () => setState(() => _mobileForm = false))
+          else
+            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.account_balance_outlined, color: AppTheme.primary, size: 20)),
           const SizedBox(width: 12),
-          const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Add Account', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
             Text('Select levels to navigate, then fill in account details', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          ]),
-          const Spacer(),
+          ])),
           TextButton(onPressed: _resetForm, child: const Text('Reset')),
         ]),
         const SizedBox(height: 20),
@@ -611,13 +617,21 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
             OutlinedButton(onPressed: _resetForm, child: const Text('Reset')),
           ]),
         ])),
-      ])))),
-      // ── RIGHT: ACCOUNT NAVIGATION (spacious) ─────────────
-      Expanded(child: Container(decoration: const BoxDecoration(color: Colors.white), child: Column(children: [
+      ]));
+    // ── ACCOUNT NAVIGATION ─────────────
+    final list = Container(decoration: const BoxDecoration(color: Colors.white), child: Column(children: [
         Container(padding: const EdgeInsets.fromLTRB(14, 14, 14, 8), decoration: BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             const Expanded(child: Text('Accounts', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
             Text('${_accounts.length} total', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            if (narrow) ...[
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                onPressed: () => setState(() => _mobileForm = true),
+                icon: const Icon(Icons.add, size: 16), label: const Text('Add'),
+              ),
+            ],
           ]),
           const SizedBox(height: 8),
           TextField(decoration: const InputDecoration(hintText: 'Search accounts...', prefixIcon: Icon(Icons.search, size: 15), isDense: true), onChanged: (v) => setState(() => _search = v)),
@@ -642,7 +656,13 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                 ..._buildTree(_accounts.where((a) => a['account_group'] == group && _isRoot(a)).toList()),
             ],
           ])),
-      ]))),
+      ]));
+    if (narrow) {
+      return Container(color: AppTheme.background, child: _mobileForm ? form : list);
+    }
+    return Container(color: AppTheme.background, child: Row(children: [
+      SizedBox(width: 460, child: Container(decoration: const BoxDecoration(color: AppTheme.background, border: Border(right: BorderSide(color: AppTheme.border))), child: form)),
+      Expanded(child: list),
     ]));
   }
 }
