@@ -29,6 +29,9 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
   // Tree
   final Map<String, bool> _treeExpanded = {};
   String _search = '';
+  // parent id -> children, and which ids exist (built on load).
+  Map<String, List<Map<String, dynamic>>> _kids = {};
+  Set<String> _ids = {};
 
   static const _groups = ['Assets', 'Capital', 'Liability', 'Income', 'Expense'];
   static const _accountTypes = ['asset', 'liability', 'equity', 'revenue', 'expense'];
@@ -44,11 +47,77 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     final orgId = _orgId; if (orgId == null) return;
     setState(() => _loading = true);
     try {
-      final rows = await Supabase.instance.client.from('chart_of_accounts')
-          .select().eq('org_id', orgId).order('level').order('code');
-      setState(() { _accounts = List<Map<String, dynamic>>.from(rows); _loading = false; });
+      // Page past the 1000-row cap.
+      final all = <Map<String, dynamic>>[];
+      var from = 0;
+      while (true) {
+        final page = await Supabase.instance.client.from('chart_of_accounts')
+            .select().eq('org_id', orgId).order('level').order('code').range(from, from + 999);
+        all.addAll(List<Map<String, dynamic>>.from(page));
+        if (page.length < 1000) break;
+        from += 1000;
+      }
+      _normalize(all);
+      setState(() { _accounts = all; _loading = false; });
     } catch (e) { _snack('Error: $e'); setState(() => _loading = false); }
   }
+
+  /// Accounts loaded straight via SQL can carry other spellings of the group
+  /// ("Asset", "Liabilities", "Revenue"…), no level, or a parent that isn't
+  /// there. Tidy them in memory so every account shows in the tree.
+  static String? _canonGroup(String? g) {
+    final v = (g ?? '').trim().toLowerCase();
+    if (v.isEmpty) return null;
+    if (v.startsWith('asset')) return 'Assets';
+    if (v.startsWith('capital') || v.startsWith('equity') || v.startsWith('owner')) return 'Capital';
+    if (v.startsWith('liabilit')) return 'Liability';
+    if (v.startsWith('income') || v.startsWith('revenue') || v.startsWith('sale')) return 'Income';
+    if (v.startsWith('expense') || v.startsWith('cost')) return 'Expense';
+    return null;
+  }
+
+  void _normalize(List<Map<String, dynamic>> all) {
+    final byId = {for (final a in all) '${a['id']}': a};
+    _ids = byId.keys.toSet();
+    _kids = {};
+    for (final a in all) {
+      a['name'] = '${a['name'] ?? ''}';
+      final pid = a['parent_id'] as String?;
+      if (pid != null && byId.containsKey(pid) && pid != a['id']) {
+        (_kids[pid] ??= []).add(a);
+      }
+    }
+    for (final a in all) {
+      // Walk up to the top account (cycle-safe).
+      final chain = <Map<String, dynamic>>[a];
+      final seen = <String>{'${a['id']}'};
+      var cur = a;
+      while (true) {
+        final pid = cur['parent_id'] as String?;
+        if (pid == null || !byId.containsKey(pid) || seen.contains(pid)) break;
+        cur = byId[pid]!;
+        seen.add(pid);
+        chain.add(cur);
+      }
+      final top = chain.last;
+      final grp = _canonGroup(top['account_group'] as String?) ?? _canonGroup(a['account_group'] as String?)
+          ?? chain.map((x) => _canonGroup(x['account_group'] as String?)).firstWhere((g) => g != null, orElse: () => null)
+          ?? 'Other';
+      a['account_group'] = grp;
+      final lv = (a['level'] as num?)?.toInt();
+      a['level'] = (lv == null || lv < 1) ? chain.length : lv;
+    }
+  }
+
+  bool _isRoot(Map<String, dynamic> a) {
+    final pid = a['parent_id'] as String?;
+    return pid == null || !_ids.contains(pid) || pid == a['id'];
+  }
+
+  List<String> get _shownGroups => [
+        ..._groups,
+        if (_accounts.any((a) => a['account_group'] == 'Other')) 'Other',
+      ];
 
   List<Map<String, dynamic>> _getLevel(int level, {String? group, String? parentId}) =>
       _accounts.where((a) => a['level'] == level
@@ -385,25 +454,29 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
     }
   }
 
-  bool _hasDescendantMatch(String nodeId, String q) {
-    for (final child in _accounts.where((a) => a['parent_id'] == nodeId)) {
+  bool _hasDescendantMatch(String nodeId, String q, [Set<String>? seen]) {
+    final s = seen ?? <String>{};
+    if (!s.add(nodeId)) return false;
+    for (final child in _kids[nodeId] ?? const <Map<String, dynamic>>[]) {
       if (matchesQuery('${child['name']} ${child['code'] ?? ''}', q)) return true;
-      if (_hasDescendantMatch(child['id'] as String, q)) return true;
+      if (_hasDescendantMatch('${child['id']}', q, s)) return true;
     }
     return false;
   }
 
-  List<Widget> _buildTree(List<Map<String, dynamic>> nodes, {int indent = 0}) {
+  List<Widget> _buildTree(List<Map<String, dynamic>> nodes, {int indent = 0, Set<String>? path}) {
     final result = <Widget>[];
+    final onPath = path ?? <String>{};
     for (final node in nodes) {
-      final id = node['id'] as String;
-      final level = node['level'] as int;
-      final code = node['code'] as String? ?? '';
-      final name = node['name'] as String;
-      final group = node['account_group'] as String;
+      final id = '${node['id']}';
+      if (onPath.contains(id)) continue; // broken parent loop in the data
+      final level = (node['level'] as num?)?.toInt() ?? 1;
+      final code = '${node['code'] ?? ''}';
+      final name = '${node['name'] ?? ''}';
+      final group = '${node['account_group'] ?? 'Other'}';
       final type = node['account_type'] as String?;
       final active = node['is_active'] as bool? ?? true;
-      final children = _accounts.where((a) => a['parent_id'] == id).toList();
+      final children = _kids[id] ?? const <Map<String, dynamic>>[];
       final hasChildren = children.isNotEmpty;
       final expanded = _treeExpanded[id] ?? false;
       final color = _groupColor(group);
@@ -432,7 +505,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
           ]),
         ),
       ));
-      if (isEffExpanded && hasChildren) result.addAll(_buildTree(children, indent: indent + 1));
+      if (isEffExpanded && hasChildren) result.addAll(_buildTree(children, indent: indent + 1, path: {...onPath, id}));
     }
     return result;
   }
@@ -551,7 +624,9 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
         ])),
         Expanded(child: _loading ? const Center(child: CircularProgressIndicator())
           : ListView(children: [
-            for (final group in _groups) ...[
+            if (_search.trim().isNotEmpty && !_accounts.any((a) => matchesQuery('${a['name']} ${a['code'] ?? ''}', _search.toLowerCase())))
+              const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No account matches your search.', style: TextStyle(color: AppTheme.textSecondary)))),
+            for (final group in _shownGroups) ...[
               InkWell(
                 onTap: () => setState(() => _treeExpanded['_g_$group'] = !(_treeExpanded['_g_$group'] ?? true)),
                 child: Container(color: _groupColor(group).withOpacity(0.07), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9), child: Row(children: [
@@ -563,7 +638,8 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
                   Icon((_treeExpanded['_g_$group'] ?? true) ? Icons.expand_less : Icons.expand_more, size: 14, color: _groupColor(group)),
                 ])),
               ),
-              if (_treeExpanded['_g_$group'] ?? true) ..._buildTree(_accounts.where((a) => a['account_group'] == group && a['level'] == 1).toList()),
+              if (_search.trim().isNotEmpty || (_treeExpanded['_g_$group'] ?? true))
+                ..._buildTree(_accounts.where((a) => a['account_group'] == group && _isRoot(a)).toList()),
             ],
           ])),
       ]))),
