@@ -33,6 +33,17 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   final Map<String, String> _routeAssignee = {};
   // route_id -> user_id of its current owner (one owner at a time).
   final Map<String, String> _routeOwnerId = {};
+  // "Unassigned customers" flow (org.unassigned_route_flow, SQL 386): every
+  // customer stays on some route; removed customers must get a next route.
+  bool _unassignedFlow = false;
+  bool _flowBusy = false;
+
+  bool get _isMaster {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
+
+  bool _isUnassignedRoute(Map<String, dynamic> r) => r['is_unassigned'] == true;
 
   @override
   void initState() {
@@ -108,6 +119,13 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
             stops: byRoute[(r as Map)['id'] as String] ?? const [],
           )
       ];
+      // The system "Unassigned customers" route always sits at the top.
+      _routes.sort((a, b) => (_isUnassignedRoute(b.data) ? 1 : 0) - (_isUnassignedRoute(a.data) ? 1 : 0));
+      try {
+        final f = await client.from('app_config').select('value')
+            .eq('org_id', orgId).eq('key', 'org.unassigned_route_flow').maybeSingle();
+        _unassignedFlow = (f?['value'] as String?) == 'true';
+      } catch (_) { _unassignedFlow = false; }
 
       // Warm the customer list in the background so it's usually ready by the
       // time a route editor / stop picker is opened — without blocking the list.
@@ -292,6 +310,32 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
           const Text('Routes',
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
           const Spacer(),
+          if (_isMaster) ...[
+            Tooltip(
+              message: 'When on, every customer stays on a route: customers on no route sit in '
+                  '"Unassigned customers", and a customer removed from a route must be given a next route.',
+              child: Container(
+                padding: const EdgeInsets.only(left: 10, right: 2),
+                decoration: BoxDecoration(
+                  color: _unassignedFlow ? AppTheme.primary.withOpacity(0.06) : Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _unassignedFlow ? AppTheme.primary : AppTheme.border),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.person_pin_circle_outlined, size: 16),
+                  if (MediaQuery.of(context).size.width >= 700) ...[
+                    const SizedBox(width: 4),
+                    const Text('Unassigned customers route', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  ],
+                  _flowBusy
+                      ? const Padding(padding: EdgeInsets.all(12),
+                          child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))
+                      : Switch(value: _unassignedFlow, onChanged: _setUnassignedFlow),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           OutlinedButton.icon(
               onPressed: () => context.push('/routes/import'),
               icon: const Icon(Icons.upload_file, size: 18),
@@ -363,10 +407,23 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                    Text(r['name'] as String? ?? '',
-                                        style: const TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 15)),
+                                    Row(children: [
+                                      Flexible(child: Text(r['name'] as String? ?? '',
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 15))),
+                                      if (_isUnassignedRoute(r)) ...[
+                                        const SizedBox(width: 8),
+                                        Tooltip(
+                                          message: 'Customers on no other route. Add them to a route to take them off this list.',
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                            decoration: BoxDecoration(color: Colors.orange.withOpacity(0.12), borderRadius: BorderRadius.circular(6)),
+                                            child: Text('System', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.orange.shade800)),
+                                          ),
+                                        ),
+                                      ],
+                                    ]),
                                     Text(
                                         '${kind == 'recurring' ? 'Recurring' : 'One-time'} · ${row.stops.length} stops',
                                         style: const TextStyle(
@@ -456,11 +513,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                   icon: const Icon(Icons.edit_outlined,
                                       size: 18),
                                   onPressed: () => _showDialog(context, row)),
-                              IconButton(
-                                  icon: const Icon(Icons.delete_outline,
-                                      size: 18, color: AppTheme.danger),
-                                  onPressed: () =>
-                                      _delete(r['id'] as String)),
+                              if (!(_isUnassignedRoute(r) && _unassignedFlow))
+                                IconButton(
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 18, color: AppTheme.danger),
+                                    onPressed: () =>
+                                        _delete(r['id'] as String)),
                             ]),
                             if (_targetsEnabled &&
                                 _routeAch[r['id'] as String] != null)
@@ -710,34 +768,189 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   }
 
   Future<void> _delete(String id) async {
+    final row = _routes.firstWhere((x) => x.data['id'] == id, orElse: () => const _RouteRow(data: {}, stops: []));
+    // Customers that would be left on no route.
+    final orphans = _orphansIfRemoved(id, [for (final st in row.stops) st['customer_id'] as String]);
+    String? moveTo;
+    final options = _nextRouteOptions(id);
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
         title: const Text('Delete Route'),
-        content: const Text(
-            'This will permanently remove the route and its stops. Continue?'),
+        content: SizedBox(width: 440, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('This will permanently remove the route and its stops. Continue?'),
+          if (_unassignedFlow && orphans.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text('${orphans.length} customer${orphans.length == 1 ? ' is' : 's are'} on no other route. Choose their next route:',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: moveTo, isExpanded: true,
+              decoration: const InputDecoration(isDense: true, labelText: 'Move customers to'),
+              items: [for (final o in options) DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis))],
+              onChanged: (v) => setD(() => moveTo = v),
+            ),
+          ],
+        ])),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context, rootNavigator: true)
-                  .pop(false),
+              onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false),
               child: const Text('Cancel')),
           ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.danger),
-              onPressed: () =>
-                  Navigator.of(context, rootNavigator: true).pop(true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+              onPressed: (_unassignedFlow && orphans.isNotEmpty && moveTo == null)
+                  ? null
+                  : () => Navigator.of(ctx, rootNavigator: true).pop(true),
               child: const Text('Delete')),
         ],
-      ),
+      )),
     );
-    if (confirm == true) {
-      final client = Supabase.instance.client;
-      // Delete child stops first, then the route. Both are scoped by id.
-      await client.from('route_stops').delete().eq('route_id', id);
-      await client.from('sales_routes').delete().eq('id', id);
-      _showSnack('Route deleted');
-      _load();
+    if (confirm != true) return;
+    final client = Supabase.instance.client;
+    try {
+      await client.rpc('delete_route', params: {'p_route': id, 'p_move_to': moveTo});
+    } catch (e) {
+      if (!_rpcMissing(e)) { _showSnack(_friendly(e)); return; }
+      // Older database (update 386 not run): delete as before.
+      try {
+        await client.from('route_stops').delete().eq('route_id', id);
+        await client.from('sales_routes').delete().eq('id', id);
+      } catch (e2) { _showSnack(_friendly(e2)); return; }
     }
+    _showSnack('Route deleted');
+    _load();
+  }
+
+  bool _rpcMissing(Object e) {
+    final m = e.toString();
+    return m.contains('PGRST202') || m.contains('Could not find the function');
+  }
+
+  String _friendly(Object e) {
+    final m = e.toString();
+    final hit = RegExp(r'message: ([^,}]+)').firstMatch(m);
+    final msg = hit?.group(1)?.trim() ?? m.split('\n').first;
+    if (msg.contains('violates foreign key')) return 'This route is used elsewhere (e.g. past trips) and can\'t be deleted — mark it inactive instead.';
+    return msg.startsWith('Exception') || msg.contains('PostgrestException') ? 'Could not save — please try again.' : msg;
+  }
+
+  /// Customers in [ids] that are on no route other than [routeId].
+  List<String> _orphansIfRemoved(String routeId, List<String> ids) {
+    final elsewhere = <String>{
+      for (final rr in _routes)
+        if (rr.data['id'] != routeId)
+          for (final st in rr.stops) st['customer_id'] as String,
+    };
+    return ids.where((c) => !elsewhere.contains(c)).toList();
+  }
+
+  /// Routes a removed customer can go to: every other real route; the
+  /// "Unassigned customers" route only when there is no other route at all.
+  List<(String, String)> _nextRouteOptions(String excludeId) {
+    final real = [
+      for (final rr in _routes)
+        if (rr.data['id'] != excludeId && !_isUnassignedRoute(rr.data))
+          ('${rr.data['id']}', '${rr.data['name'] ?? ''}'),
+    ]..sort((a, b) => a.$2.toLowerCase().compareTo(b.$2.toLowerCase()));
+    if (real.isNotEmpty) return real;
+    return [
+      for (final rr in _routes)
+        if (rr.data['id'] != excludeId && _isUnassignedRoute(rr.data))
+          ('${rr.data['id']}', '${rr.data['name'] ?? ''}'),
+    ];
+  }
+
+  /// Ask where each removed customer goes next. Returns customer → route, or
+  /// null when cancelled (the route editor then stays open).
+  Future<Map<String, String>?> _pickNextRoutes(String routeId, List<String> orphans) async {
+    final options = _nextRouteOptions(routeId);
+    final picked = <String, String>{};
+    String nameOf(String id) {
+      final c = _customers.firstWhere((x) => x['id'] == id, orElse: () => const {});
+      return c.isEmpty ? id : '${c['code'] ?? ''} · ${c['shop_name'] ?? ''}';
+    }
+    return showDialog<Map<String, String>>(
+      context: context,
+      builder: (_) => StatefulBuilder(builder: (ctx, setD) {
+        final done = orphans.every(picked.containsKey);
+        return AlertDialog(
+          title: const Text('Choose next route'),
+          content: SizedBox(width: 560, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${orphans.length} removed customer${orphans.length == 1 ? ' is' : 's are'} on no other route. '
+                'Pick a next route for each so no customer is left unassigned.',
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 10),
+            if (options.isEmpty)
+              const Text('There is no other route yet — create one first.', style: TextStyle(color: AppTheme.danger))
+            else ...[
+              if (orphans.length > 1)
+                DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  decoration: const InputDecoration(isDense: true, labelText: 'Set all to'),
+                  items: [for (final o in options) DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis))],
+                  onChanged: (v) => setD(() { if (v != null) for (final c in orphans) picked[c] = v; }),
+                ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 340),
+                child: ListView(shrinkWrap: true, children: [
+                  for (final c in orphans)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(children: [
+                        Expanded(flex: 5, child: Text(nameOf(c), style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
+                        const SizedBox(width: 8),
+                        Expanded(flex: 4, child: DropdownButtonFormField<String>(
+                          key: ValueKey('nr_${c}_${picked[c]}'),
+                          value: picked[c], isExpanded: true,
+                          decoration: const InputDecoration(isDense: true, hintText: 'Next route'),
+                          items: [for (final o in options) DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))],
+                          onChanged: (v) => setD(() { if (v != null) picked[c] = v; }),
+                        )),
+                      ]),
+                    ),
+                ]),
+              ),
+            ],
+          ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Back')),
+            ElevatedButton(
+              onPressed: done && options.isNotEmpty ? () => Navigator.of(ctx, rootNavigator: true).pop(Map<String, String>.from(picked)) : null,
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      }),
+    );
+  }
+
+  Future<void> _setUnassignedFlow(bool on) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(on ? 'Turn on "Unassigned customers"?' : 'Turn off "Unassigned customers"?'),
+      content: Text(on
+          ? 'A route "Unassigned customers" is created with every customer that is on no route. '
+            'New customers land there too. When a customer is removed from a route you\'ll be asked for their next route, '
+            'so no customer is left without one.'
+          : 'The "Unassigned customers" route is removed and routes work as before — customers can be '
+            'taken off routes without a next route.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: Text(on ? 'Turn on' : 'Turn off')),
+      ],
+    ));
+    if (ok != true) return;
+    setState(() => _flowBusy = true);
+    try {
+      final n = await Supabase.instance.client.rpc('set_unassigned_route_flow', params: {'p_org': orgId, 'p_on': on});
+      _showSnack(on ? 'Turned on — $n customer(s) placed on Unassigned customers' : 'Turned off');
+      await _load();
+    } catch (e) {
+      _showSnack(_rpcMissing(e) ? 'This feature isn\'t set up yet — run update 386 first.' : _friendly(e));
+    }
+    if (mounted) setState(() => _flowBusy = false);
   }
 
   void _showSnack(String msg) {
@@ -941,6 +1154,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               TextField(
                   controller: nameCtrl,
+                  enabled: !(route != null && _isUnassignedRoute(route.data)),
                   decoration:
                       const InputDecoration(labelText: 'Route Name')),
               const SizedBox(height: 12),
@@ -1031,6 +1245,20 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                   final client = Supabase.instance.client;
                   final now = DateTime.now();
 
+                  // Flow on: customers taken off this route and on no other
+                  // route need a next route before the editor can close.
+                  final oldIds = [for (final st in route?.stops ?? const []) st['customer_id'] as String];
+                  final removed = oldIds.where((c) => !selectedIds.contains(c)).toList();
+                  Map<String, String> moves = {};
+                  if (_unassignedFlow && route != null && removed.isNotEmpty) {
+                    final orphans = _orphansIfRemoved(route.data['id'] as String, removed);
+                    if (orphans.isNotEmpty) {
+                      final m = await _pickNextRoutes(route.data['id'] as String, orphans);
+                      if (m == null) return; // back to the editor
+                      moves = m;
+                    }
+                  }
+
                   try {
                     String routeId;
                     if (route == null) {
@@ -1049,30 +1277,33 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                       // Update
                       routeId = route.data['id'] as String;
                       await client.from('sales_routes').update({
-                        'name': nameCtrl.text.trim(),
+                        if (!_isUnassignedRoute(route.data)) 'name': nameCtrl.text.trim(),
                         'kind': kind,
                         'updated_at': now.toUtc().toIso8601String(),
                       }).eq('id', routeId);
-                      // Replace stops wholesale
-                      await client
-                          .from('route_stops')
-                          .delete()
-                          .eq('route_id', routeId);
                     }
 
-                    // Insert stops in selection order
-                    if (selectedIds.isNotEmpty) {
-                      final stopRows = [
-                        for (int i = 0; i < selectedIds.length; i++)
-                          {
-                            'route_id': routeId,
-                            'customer_id': selectedIds[i],
-                            'position': i + 1,
-                          }
-                      ];
-                      await client
-                          .from('route_stops')
-                          .insert(stopRows);
+                    // Customers: one server call that keeps the order, applies
+                    // the next-route moves, keeps "Unassigned customers" in
+                    // sync and sends the route-change notification.
+                    try {
+                      await client.rpc('save_route_customers', params: {
+                        'p_route': routeId,
+                        'p_customer_ids': selectedIds,
+                        'p_moves': [for (final e in moves.entries) {'customer_id': e.key, 'route_id': e.value}],
+                      });
+                    } catch (e) {
+                      if (!_rpcMissing(e)) rethrow;
+                      // Older database (update 386 not run): save as before.
+                      if (route != null) {
+                        await client.from('route_stops').delete().eq('route_id', routeId);
+                      }
+                      if (selectedIds.isNotEmpty) {
+                        await client.from('route_stops').insert([
+                          for (int i = 0; i < selectedIds.length; i++)
+                            {'route_id': routeId, 'customer_id': selectedIds[i], 'position': i + 1},
+                        ]);
+                      }
                     }
 
                     if (ctx.mounted) {
@@ -1085,8 +1316,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                   } catch (e) {
                     if (ctx.mounted) {
                       ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                          content:
-                              Text('Failed: ${e.toString().split('\n').first}')));
+                          content: Text(_friendly(e))));
                     }
                   }
                 },

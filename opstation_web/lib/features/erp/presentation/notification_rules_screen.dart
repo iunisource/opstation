@@ -106,6 +106,10 @@ const kNotifEvents = <NotifEvent>[
   NotifEvent('route_ended', 'Operations', 'Salesperson ended a route',
       'A salesperson ended a route (visits, sales and time in the message). Tap opens that route on the Live Map: start, stops in order, end.',
       branchScoped: false, module: 'operations'),
+  NotifEvent('customer_route_changed', 'Operations', 'Customer route changed',
+      'Customers were added to, removed from or moved between routes (or a route was deleted). '
+          'The message names the route, who changed it and which customers.',
+      branchScoped: false, module: 'operations'),
 ];
 
 const _creator = '__creator__';
