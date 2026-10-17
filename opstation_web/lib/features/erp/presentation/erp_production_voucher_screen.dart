@@ -12,6 +12,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../widgets/bom_specs_box.dart';
 
 class _PComp {
   static int _seq = 0;
@@ -62,6 +63,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   Map<String, dynamic>? _current;
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
+  Map<String, dynamic>? _specBom;
+  List<Map<String, dynamic>> _specDocs = const [];
   String? _fgId; String _fgLabel = '';
   double _bomBaseQty = 1;
   final _outputQtyCtrl = TextEditingController(text: '1');
@@ -179,6 +182,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       _current = null; _status = 'draft';
       _date = DateTime.now();
       _bomId = null; _bomLabel = ''; _fgId = null; _fgLabel = ''; _bomBaseQty = 1;
+      _specBom = null; _specDocs = const [];
       _outputQtyCtrl.text = '1'; _notesCtrl.clear();
       _components = []; _overheads = []; _baseComps = []; _baseOh = [];
     });
@@ -223,7 +227,23 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       });
       _fetchBase();
       _loadCompStock();
+      _loadSpecs();
     } catch (e) { _snack('Load error: $e'); }
+  }
+
+  /// The BOM's production specs (text + files), shown read-only.
+  Future<void> _loadSpecs() async {
+    final id = _bomId;
+    if (id == null) { if (mounted) setState(() { _specBom = null; _specDocs = const []; }); return; }
+    Map<String, dynamic>? bom;
+    try {
+      final row = await Supabase.instance.client.from('bom_headers')
+          .select('id, code, production_specs, specs_updated_at').eq('id', id).maybeSingle();
+      if (row != null) bom = Map<String, dynamic>.from(row);
+    } catch (_) {}
+    final docs = await loadBomSpecDocs(id);
+    if (!mounted || _bomId != id) return;
+    setState(() { _specBom = bom; _specDocs = docs; });
   }
 
   void _pickBom(String bomId) {
@@ -237,6 +257,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       if (_bomBaseQty <= 0) _bomBaseQty = 1;
     });
     _loadBomBase();
+    _loadSpecs();
   }
 
   Future<void> _fetchBase() async {
@@ -578,6 +599,10 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
                 ]),
               ]);
             }),
+            if (bomHasSpecs(_specBom, _specDocs)) ...[
+              const SizedBox(height: 16),
+              BomSpecsBox(bom: _specBom, docs: _specDocs),
+            ],
             if (_canViewCost) ...[
               const SizedBox(height: 20),
               _summaryCard(),

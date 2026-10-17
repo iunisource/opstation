@@ -21,6 +21,7 @@ import '../../../core/notifications/global_job_alert.dart';
 import '../../../core/permissions/access_control.dart';
 import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
+import '../widgets/bom_specs_box.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class _JobMat {
@@ -82,6 +83,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   String _origOhSig = '';
   DateTime _date = DateTime.now();
   String? _bomId; String _bomLabel = '';
+  // Production specs of the picked BOM (fresh row + attached files).
+  Map<String, dynamic>? _specBom;
+  List<Map<String, dynamic>> _specDocs = const [];
   String? _fgId; String _fgLabel = '';
   Map<String, String> _prodName = {}; // product id -> plain name (labels)
   Map<String, String> _prodCode = {}; // product id -> barcode, else SKU (labels)
@@ -475,6 +479,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _openEnded = false;
       _plannedQtyCtrl.text = '1'; _priorityCtrl.text = '0'; _wcCtrl.clear(); _assignedTo = null; _assignedWorkerId = null; _notesCtrl.clear();
       _customerId = null; _customerLabel = '';
+      _specBom = null; _specDocs = const [];
       _materials = []; _overheads = []; _baseComps = []; _baseOh = [];
       _origMatSig = ''; _origOhSig = '';
     });
@@ -550,8 +555,50 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _notesCtrl.text = j['notes'] as String? ?? '';
         _materials = newMats; _overheads = newOh;
       });
+      _loadSpecs();
       if (promptAck && mounted) _maybeShowAckDialog(j);
     } catch (e) { _snack('Load error: $e'); }
+  }
+
+  /// Fetch the BOM's production specs fresh (they may change after the list
+  /// was loaded, and an inactive BOM isn't in the list at all).
+  Future<void> _loadSpecs() async {
+    final id = _bomId;
+    if (id == null) { if (mounted) setState(() { _specBom = null; _specDocs = const []; }); return; }
+    Map<String, dynamic>? bom;
+    try {
+      final row = await Supabase.instance.client.from('bom_headers')
+          .select('id, code, production_specs, specs_updated_at').eq('id', id).maybeSingle();
+      if (row != null) bom = Map<String, dynamic>.from(row);
+    } catch (_) {/* specs not set up yet */}
+    final docs = await loadBomSpecDocs(id);
+    if (!mounted || _bomId != id) return;
+    setState(() { _specBom = bom; _specDocs = docs; });
+  }
+
+  /// Specs changed after this job was made (or last noted) and it isn't done.
+  bool get _specsUpdated {
+    final j = _current;
+    if (j == null || !_editable) return false;
+    final upd = DateTime.tryParse('${_specBom?['specs_updated_at'] ?? ''}');
+    if (upd == null) return false;
+    final seen = DateTime.tryParse('${j['specs_seen_at'] ?? j['created_at'] ?? ''}');
+    return seen == null || upd.isAfter(seen);
+  }
+
+  Future<void> _noteSpecs() async {
+    final j = _current; if (j == null) return;
+    final now = DateTime.now().toUtc().toIso8601String();
+    try {
+      await Supabase.instance.client.from('job_cards').update({'specs_seen_at': now}).eq('id', j['id'] as String);
+      setState(() => j['specs_seen_at'] = now);
+      final u = ref.read(currentUserProvider);
+      await _logJobAudit('specs_noted', notes: 'Updated production specs noted by ${u?.name ?? 'user'}');
+    } catch (e) {
+      _snack(e.toString().contains('specs_seen_at')
+          ? 'Production specs are not set up yet — run update 385 first.'
+          : 'Could not save — please try again.');
+    }
   }
 
   void _pickBom(String bomId) {
@@ -568,6 +615,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       if (_bomBaseQty <= 0) _bomBaseQty = 1;
     });
     _loadBomBase();
+    _loadSpecs();
   }
 
   Future<void> _loadBomBase() async {
@@ -1373,6 +1421,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       case 'batch_voided': return Icons.undo;
       case 'completed': return Icons.check_circle_outline;
       case 'acknowledged': return Icons.notifications_active_outlined;
+      case 'specs_noted': return Icons.assignment_turned_in_outlined;
       default: return Icons.circle_outlined;
     }
   }
@@ -1387,6 +1436,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       case 'batch_voided': return Colors.red;
       case 'completed': return Colors.green.shade700;
       case 'acknowledged': return Colors.orange.shade800;
+      case 'specs_noted': return Colors.amber.shade800;
       default: return Colors.grey;
     }
   }
@@ -1660,6 +1710,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final matCols = withPrices ? 4 : 3;
     final matBody = mat.toString().isEmpty ? '<tr><td colspan="$matCols" style="color:#999">No components.</td></tr>' : mat.toString();
 
+    final specsBlock = bomSpecsHtml(_specBom, _specDocs);
     final notes = _notesCtrl.text.trim();
     final remarksBlock = notes.isEmpty ? '' :
       '<div class="sec">Remarks</div><div class="remarks">${_esc(notes)}</div>';
@@ -1728,6 +1779,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
   <div><div class="k">Remaining</div><div class="v">${_trim(_remainingQty)}</div></div>
 </div>
 $cardsBlock
+$specsBlock
 $remarksBlock
 $recipeTable
 $ohSection
@@ -2437,6 +2489,10 @@ $runSection
                   ])
                 : _readonlyBox(_customerLabel.isEmpty ? '—' : _customerLabel))),
             ]),
+            if (bomHasSpecs(_specBom, _specDocs)) ...[
+              const SizedBox(height: 14),
+              BomSpecsBox(bom: _specBom, docs: _specDocs, updated: _specsUpdated, onNoted: _noteSpecs),
+            ],
             const SizedBox(height: 14),
             _labeled('Remarks (optional)', TextField(
               controller: _notesCtrl, enabled: _editable,

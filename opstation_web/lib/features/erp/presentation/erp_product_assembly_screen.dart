@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart' show bomSupervisePendingProvider;
 import 'product_lifecycle_view.dart';
+import '../widgets/voucher_docs_panel.dart';
 
 class _BomLine {
   static int _seq = 0;
@@ -61,6 +62,9 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   String? _fgId; String _fgLabel = '';
   final _outputQtyCtrl = TextEditingController(text: '1');
   final _nameCtrl = TextEditingController();
+  // Production specs: client / packing / printing instructions shown on every
+  // job card and production voucher made from this BOM.
+  final _specsCtrl = TextEditingController();
   String _status = 'active';
   List<_BomLine> _components = [];
   List<_BomLine> _waste = [];
@@ -86,7 +90,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   }
   @override
   void dispose() {
-    _outputQtyCtrl.dispose(); _nameCtrl.dispose();
+    _outputQtyCtrl.dispose(); _nameCtrl.dispose(); _specsCtrl.dispose();
     for (final l in _components) l.dispose();
     for (final l in _waste) l.dispose();
     for (final l in _overheads) l.dispose();
@@ -292,7 +296,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     for (final l in _overheads) l.dispose();
     setState(() {
       _current = null; _fgId = null; _fgLabel = ''; _status = 'active';
-      _outputQtyCtrl.text = '1'; _nameCtrl.clear();
+      _outputQtyCtrl.text = '1'; _nameCtrl.clear(); _specsCtrl.clear();
       _components = [_BomLine()]; _waste = []; _overheads = [];
     });
   }
@@ -352,6 +356,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         _status = b['status'] as String? ?? 'active';
         _outputQtyCtrl.text = _trim((b['output_qty'] as num? ?? 1).toDouble());
         _nameCtrl.text = b['name'] as String? ?? '';
+        _specsCtrl.text = b['production_specs'] as String? ?? '';
         _components = newComps.isEmpty ? [_BomLine()] : newComps;
         _waste = newWaste;
         _overheads = newOh;
@@ -401,16 +406,32 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           'id': bomId, 'org_id': orgId, 'code': code,
           'name': _nameCtrl.text.trim().isEmpty ? (_prodLabel[_fgId] ?? code) : _nameCtrl.text.trim(),
           'product_id': _fgId, 'output_qty': outQty, 'status': _status,
+          if (_specsCtrl.text.trim().isNotEmpty) ...{
+            'production_specs': _specsCtrl.text.trim(),
+            'specs_updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
           'created_by': userId, 'created_at': DateTime.now().toUtc().toIso8601String(),
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
         bomId = _current!['id'] as String; code = _current!['code'] as String? ?? '';
         final resend = _current!['rejected_at'] != null && _current!['supervised_at'] == null;
+        final oldSpecs = (_current!['production_specs'] as String?)?.trim() ?? '';
+        final newSpecs = _specsCtrl.text.trim();
+        final specsChanged = oldSpecs != newSpecs;
         await client.from('bom_headers').update({
           'name': _nameCtrl.text.trim().isEmpty ? (_prodLabel[_fgId] ?? code) : _nameCtrl.text.trim(),
           'product_id': _fgId, 'output_qty': outQty, 'status': _status,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
+          // Changed specs: open job cards flag "Specs updated", and (with the
+          // supervision flow on) the BOM goes back to Pending to be checked.
+          if (specsChanged) ...{
+            'production_specs': newSpecs.isEmpty ? null : newSpecs,
+            'specs_updated_at': DateTime.now().toUtc().toIso8601String(),
+            if (_superviseFlow && _current!['supervised_at'] != null) ...{
+              'supervised_at': null, 'supervised_by': null, 'supervised_by_name': null,
+            },
+          },
           // A rejected BOM goes back to Pending once its creator saves the fix.
           if (resend) ...{
             'rejected_at': null, 'rejected_by': null, 'rejected_by_name': null,
@@ -453,6 +474,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           'output_qty': outQty,
           'status': _status,
           'name': nameUsed,
+          'production_specs': _specsCtrl.text.trim(),
           'components': [
             for (final l in comps)
               {'product': _prodLabel[l.productId] ?? l.productId, 'qty': l.qty},
@@ -487,8 +509,74 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       _snack('BOM ' + code + ' saved');
       await _loadBoms();
       ref.invalidate(bomSupervisePendingProvider);
-    } catch (e) { _snack('Save failed: ' + e.toString()); }
+    } catch (e) {
+      _snack(e.toString().contains('production_specs') || e.toString().contains('specs_updated_at')
+          ? 'Production specs are not set up yet — run update 385 first.'
+          : 'Save failed: ' + e.toString());
+    }
     if (mounted) setState(() => _saving = false);
+  }
+
+  /// A new / removed spec file counts as a specs change too.
+  Future<void> _specsFileChanged(String action, String fileName) async {
+    final cur = _current; if (cur == null) return;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final resetSup = _superviseFlow && cur['supervised_at'] != null;
+    try {
+      await Supabase.instance.client.from('bom_headers').update({
+        'specs_updated_at': now,
+        if (resetSup) ...{
+          'supervised_at': null, 'supervised_by': null, 'supervised_by_name': null,
+        },
+      }).eq('id', cur['id'] as String);
+      if (mounted) setState(() {
+        _current = {...cur, 'specs_updated_at': now, if (resetSup) 'supervised_at': null};
+      });
+      ref.invalidate(bomSupervisePendingProvider);
+    } catch (_) {}
+  }
+
+  Widget _specsSection() {
+    final cur = _current;
+    final orgId = _orgId ?? '';
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(color: AppTheme.background, borderRadius: const BorderRadius.vertical(top: Radius.circular(10))),
+          child: Row(children: [
+            Container(width: 6, height: 14, decoration: BoxDecoration(color: Colors.amber.shade700, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            const Text('Production specs', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            if (!_narrow) const Expanded(child: Text('Shown on every job card and production voucher for this BOM — client branding, packing, printing, colours…',
+                style: TextStyle(fontSize: 10, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+          ])),
+        Padding(padding: const EdgeInsets.all(12), child: TextField(
+          controller: _specsCtrl, minLines: 3, maxLines: 10,
+          decoration: const InputDecoration(
+            hintText: 'e.g. Brand: XYZ Auto · Print logo on lid (black) · Box: white with client label · 20 pcs per carton, carton marked "XYZ"',
+            isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
+          style: const TextStyle(fontSize: 13),
+        )),
+        if (cur == null)
+          const Padding(padding: EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Text('Save the BOM first to attach artwork, label designs or sample photos.',
+                style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)))
+        else
+          Padding(padding: const EdgeInsets.fromLTRB(12, 0, 12, 12), child: VoucherDocsPanel(
+            voucherType: 'BOM',
+            voucherId: cur['id'] as String,
+            voucherNumber: '${cur['code'] ?? 'BOM'}_spec',
+            bucket: 'si-documents',
+            orgId: orgId,
+            userId: ref.read(currentUserProvider)?.id,
+            canWrite: true,
+            onAudit: _specsFileChanged,
+          )),
+      ]),
+    );
   }
 
   Future<void> _delete() async {
@@ -593,6 +681,9 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
 
     final nameLine =
         nm.isEmpty ? '' : '<div class="info"><b>Name / Notes:</b> ${esc(nm)}</div>';
+    final specs = _specsCtrl.text.trim();
+    final specsSection = specs.isEmpty ? ''
+        : '<h2>Production specs</h2><div style="white-space:pre-wrap;border:1px solid #999;padding:6px 8px;font-size:11.5px">${esc(specs)}</div>';
     final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BOM ${esc(code)}</title>'
@@ -614,7 +705,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         '$nameLine'
         '<div class="info"><b>Output Qty:</b> ${esc(outQty)} &nbsp;|&nbsp; <b>Status:</b> $statusLabel</div>'
         '<div class="info">Generated: $genTime</div>'
-        '$compSection$wasteSection$ohSection'
+        '$specsSection$compSection$wasteSection$ohSection'
         '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},350);};</script>'
         '</body></html>';
 
@@ -944,6 +1035,8 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
                   decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))),
               ])),
             ]),
+            const SizedBox(height: 22),
+            _specsSection(),
             const SizedBox(height: 22),
             _lineSection(
               title: 'Components (consumed)', accent: AppTheme.primary, lines: _components,
