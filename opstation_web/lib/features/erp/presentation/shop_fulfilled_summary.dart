@@ -61,6 +61,9 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
   String _so = 'all'; // all | copied | not_copied
   String? _productId;
   String _q = '';
+  // Spread each order's shipping charge equally over its units, so it is
+  // carried in the item prices (PDF, Copy to Sales Order) instead of lost.
+  bool _spreadShipping = false;
   List<Map<String, dynamic>> _rows = [];
   final Set<String> _sel = {};
   bool _loading = true;
@@ -164,6 +167,25 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
   List<_Agg> _aggregate(List<Map<String, dynamic>> orders) {
     final m = <String, _Agg>{};
     for (final o in orders) {
+      // Shipping per unit for this order (bundles count their products' units).
+      double perUnit = 0;
+      if (_spreadShipping) {
+        final ship = _n(o['shipping_total']);
+        double units = 0;
+        for (final l in _lines(o)) {
+          final q = _n(l['qty']);
+          final comps = (l['components'] as List? ?? const []);
+          if (comps.isNotEmpty) {
+            for (final c in comps) {
+              final cm = Map<String, dynamic>.from(c as Map);
+              units += _n(cm['qty']) > 0 ? _n(cm['qty']) : _n(cm['per']) * q;
+            }
+          } else {
+            units += q;
+          }
+        }
+        if (ship > 0 && units > 0) perUnit = ship / units;
+      }
       for (final l in _lines(o)) {
         final qty = _n(l['qty']);
         // The price it actually sold for: after its share of any discount code.
@@ -180,15 +202,16 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
           for (var i = 0; i < comps.length; i++) {
             final pid = '${comps[i]['product_id']}';
             final a = m.putIfAbsent(pid, () => _Agg(pid, pid, '${widget.products[pid]?['name'] ?? 'Product'}'));
-            a.qty += _n(comps[i]['qty']) > 0 ? _n(comps[i]['qty']) : _n(comps[i]['per']) * qty;
-            a.amount += wsum == 0 ? 0.0 : amount * weights[i] / wsum;
+            final cq = _n(comps[i]['qty']) > 0 ? _n(comps[i]['qty']) : _n(comps[i]['per']) * qty;
+            a.qty += cq;
+            a.amount += (wsum == 0 ? 0.0 : amount * weights[i] / wsum) + perUnit * cq;
             a.orders.add('${o['id']}');
           }
         } else if (l['product_id'] != null) {
           final pid = '${l['product_id']}';
           final a = m.putIfAbsent(pid, () => _Agg(pid, pid, '${widget.products[pid]?['name'] ?? l['title'] ?? 'Product'}'));
           a.qty += qty;
-          a.amount += amount;
+          a.amount += amount + perUnit * qty;
           a.orders.add('${o['id']}');
         } else {
           final key = 'title:${l['title']}|${l['variant_title'] ?? ''}';
@@ -196,7 +219,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
           final a = m.putIfAbsent(key, () => _Agg(key, null,
               '${l['title'] ?? 'Item'}${vt.isNotEmpty && vt != 'Default Title' ? ' - $vt' : ''} (not matched)'));
           a.qty += qty;
-          a.amount += amount;
+          a.amount += amount + perUnit * qty;
           a.orders.add('${o['id']}');
         }
       }
@@ -221,6 +244,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
         if (_so == 'not_copied') 'Not copied to SO',
         if (_productId != null) 'Product: ${widget.products[_productId]?['name'] ?? ''}',
         if (_q.trim().isNotEmpty) 'Search: ${_q.trim()}',
+        if (_spreadShipping) 'Shipping included in item prices',
       ].join('  |  ');
 
   // ── PDF ──────────────────────────────────────────────────────────────────
@@ -262,6 +286,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
             ('Units', _qf(units)),
             ('Order value', '$cur ${_money.format(total)}'),
             ('COD to collect', '$cur ${_money.format(cod)}'),
+            if (_spreadShipping) ('Shipping (in prices)', '$cur ${_money.format(orders.fold<double>(0, (a, o) => a + _n(o['shipping_total'])))}'),
           ])
             pw.Expanded(child: pw.Container(
               margin: const pw.EdgeInsets.only(right: 6),
@@ -279,6 +304,10 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
             : 'Price = what it sold for (after any discount code), averaged across the selected orders — '
               'the actual price where an item is in one order only. Bundle prices are shared across the products inside them.',
             style: const pw.TextStyle(fontSize: 7.5, color: grey)),
+        if (_spreadShipping)
+          pw.Text('Shipping charges (${_t(cur)} ${_money.format(orders.fold<double>(0, (a, o) => a + _n(o['shipping_total'])))}) '
+              'are included: each order\'s shipping is divided equally over its units and added to their prices.',
+              style: pw.TextStyle(fontSize: 7.5, color: grey, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 4),
         pw.Table(
           border: pw.TableBorder(horizontalInside: const pw.BorderSide(color: line, width: 0.5),
@@ -625,6 +654,29 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
                   Text(k.$2, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                 ]),
               ),
+            Tooltip(
+              message: 'Each order\'s shipping charge is divided equally over all the units in that order and added to '
+                  'their prices — in the item list, the PDF and Copy to Sales Order — so it isn\'t left out.',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => setState(() => _spreadShipping = !_spreadShipping),
+                child: Container(
+                  padding: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: _spreadShipping ? AppTheme.primary.withOpacity(0.06) : Colors.white,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _spreadShipping ? AppTheme.primary : AppTheme.border)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Checkbox(value: _spreadShipping, onChanged: (v) => setState(() => _spreadShipping = v == true)),
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      const Text('Add shipping to item prices', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                      Text('Shipping $cur ${_money.format(target.fold<double>(0, (a, o) => a + _n(o['shipping_total'])))}'.trim(),
+                          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ]),
+                  ]),
+                ),
+              ),
+            ),
             const SizedBox(width: 6),
             OutlinedButton.icon(
               icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
