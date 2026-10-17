@@ -558,12 +558,11 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
   let status = prev?.status ?? "new";
   if (o.cancelledAt) status = "cancelled";
   else if (o.displayFulfillmentStatus === "FULFILLED" && status !== "fulfilled") {
-    // Fulfilled in Shopify — often a courier app (e.g. DEX) books AND fulfils
-    // at once. An order we already had waiting to be picked stays in the
-    // queue so it's still scanned and packed (shown as "booked in Shopify");
-    // anything else (old / packed) is simply done.
-    if (!(prev && (prev.status === "new" || prev.status === "picking"))) status = "fulfilled";
+    // Fulfilled in Shopify directly (by hand or by a courier app): it's done
+    // there, so it's done here too — it leaves the work queue.
+    status = "fulfilled";
   }
+  const closedInShopify = !!prev && prev.status !== "fulfilled" && status === "fulfilled" && !o.cancelledAt;
   // Un-fulfilled again in Shopify (fulfilment cancelled / undone): bring it
   // back to the work queue so it can be shipped again.
   let reopened = false;
@@ -599,6 +598,9 @@ async function saveOrder(admin: SupabaseClient, store: Store, cat: Catalog, o: a
     currency: o.totalPriceSet?.shopMoney?.currencyCode ?? null,
     lines, status, updated_at: new Date().toISOString(),
   };
+  if (closedInShopify) {
+    Object.assign(row, { fulfilled_at: new Date().toISOString(), fulfilled_by_name: "Shopify" });
+  }
   if (reopened) {
     Object.assign(row, {
       reopened_at: new Date().toISOString(),
