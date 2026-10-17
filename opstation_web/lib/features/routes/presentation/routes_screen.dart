@@ -784,12 +784,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
             Text('${orphans.length} customer${orphans.length == 1 ? ' is' : 's are'} on no other route. Choose their next route:',
                 style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
             const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              value: moveTo, isExpanded: true,
-              decoration: const InputDecoration(isDense: true, labelText: 'Move customers to'),
-              items: [for (final o in options) DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis))],
-              onChanged: (v) => setD(() => moveTo = v),
-            ),
+            _routePickField(options, moveTo, 'Move customers to', (v) => setD(() => moveTo = v)),
           ],
         ])),
         actions: [
@@ -884,12 +879,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
               const Text('There is no other route yet — create one first.', style: TextStyle(color: AppTheme.danger))
             else ...[
               if (orphans.length > 1)
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  decoration: const InputDecoration(isDense: true, labelText: 'Set all to'),
-                  items: [for (final o in options) DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis))],
-                  onChanged: (v) => setD(() { if (v != null) for (final c in orphans) picked[c] = v; }),
-                ),
+                _routePickField(options, null, 'Set all to…', (v) => setD(() { for (final c in orphans) picked[c] = v; })),
               const SizedBox(height: 8),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 340),
@@ -900,13 +890,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                       child: Row(children: [
                         Expanded(flex: 5, child: Text(nameOf(c), style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
                         const SizedBox(width: 8),
-                        Expanded(flex: 4, child: DropdownButtonFormField<String>(
-                          key: ValueKey('nr_${c}_${picked[c]}'),
-                          value: picked[c], isExpanded: true,
-                          decoration: const InputDecoration(isDense: true, hintText: 'Next route'),
-                          items: [for (final o in options) DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)))],
-                          onChanged: (v) => setD(() { if (v != null) picked[c] = v; }),
-                        )),
+                        Expanded(flex: 4, child: _routePickField(options, picked[c], 'Next route', (v) => setD(() => picked[c] = v))),
                       ]),
                     ),
                 ]),
@@ -920,6 +904,60 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
               child: const Text('Save'),
             ),
           ],
+        );
+      }),
+    );
+  }
+
+  /// Tappable field that opens a searchable route list.
+  Widget _routePickField(List<(String, String)> options, String? value, String hint, void Function(String) onPick) {
+    final name = value == null ? null : options.firstWhere((o) => o.$1 == value, orElse: () => ('', '')).$2;
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: () async {
+        final v = await _searchRoute(options, hint);
+        if (v != null) onPick(v);
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(isDense: true, border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            suffixIcon: const Icon(Icons.search, size: 18)),
+        child: Text(name == null || name.isEmpty ? hint : name,
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 13, color: name == null || name.isEmpty ? AppTheme.textSecondary : null)),
+      ),
+    );
+  }
+
+  Future<String?> _searchRoute(List<(String, String)> options, String title) {
+    final q = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (_) => StatefulBuilder(builder: (ctx, setD) {
+        final terms = q.text.trim().toLowerCase().split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+        final shown = options.where((o) => terms.every(o.$2.toLowerCase().contains)).toList();
+        return AlertDialog(
+          title: Text(title.replaceAll('…', ''), style: const TextStyle(fontSize: 16)),
+          content: SizedBox(width: 460, height: 420, child: Column(children: [
+            TextField(
+              controller: q, autofocus: true,
+              onChanged: (_) => setD(() {}),
+              onSubmitted: (_) { if (shown.length == 1) Navigator.of(ctx, rootNavigator: true).pop(shown.first.$1); },
+              decoration: const InputDecoration(hintText: 'Search routes…', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: shown.isEmpty
+                ? const Center(child: Text('No route matches.', style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView.builder(
+                    itemCount: shown.length,
+                    itemBuilder: (_, i) => ListTile(
+                      dense: true,
+                      title: Text(shown[i].$2, style: const TextStyle(fontSize: 13)),
+                      onTap: () => Navigator.of(ctx, rootNavigator: true).pop(shown[i].$1),
+                    ),
+                  )),
+          ])),
+          actions: [TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel'))],
         );
       }),
     );
