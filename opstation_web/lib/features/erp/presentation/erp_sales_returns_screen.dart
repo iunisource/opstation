@@ -422,6 +422,8 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     ref.listen(selectedBranchProvider, (_, __) { _selectedId = null; _detail = {}; _items = []; _loadList(); });
     return Container(color: AppTheme.background, child: CollapsibleListPane(
       paneWidth: 360,
+      detailActive: _selectedId != null,
+      onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
       listChild: _buildList(),
       detailChild: _selectedId == null
           ? const Center(child: Text('Select or create a Sales Return Note', style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
@@ -465,13 +467,12 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     final cust = _detail['customers'] as Map?;
     final status = _detail['status'] as String? ?? 'draft';
     final isInvoiced = status == 'invoiced';
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(padding: const EdgeInsets.fromLTRB(24, 16, 24, 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const Text('Sales Return Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
-          ])),
+    final narrow = MediaQuery.of(context).size.width < 700;
+    final title = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(_detail['voucher_number'] as String? ?? '-', style: TextStyle(fontSize: narrow ? 18 : 22, fontWeight: FontWeight.w700)),
+      const Text('Sales Return Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
+    ]);
+    final actions = <Widget>[
           if (!_isVoided && _isDraft) ...[
             ElevatedButton.icon(icon: const Icon(Icons.check, size: 16), label: const Text('Confirm Return'), onPressed: _confirmReturn),
             const SizedBox(width: 8),
@@ -487,8 +488,17 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           if (_canEditDate) IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
           if (_canDelete && !_isVoided) IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _void),
-        ])),
-      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    ];
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(padding: EdgeInsets.fromLTRB(narrow ? 12 : 24, narrow ? 10 : 16, narrow ? 12 : 24, narrow ? 10 : 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+        child: narrow
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                title,
+                const SizedBox(height: 6),
+                Wrap(spacing: 0, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+              ])
+            : Row(children: [Expanded(child: title), ...actions])),
+      Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
           _SrnChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
           _SrnChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
@@ -510,7 +520,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
         const SizedBox(height: 16),
         Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(children: [
-            Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+            Container(padding: EdgeInsets.symmetric(horizontal: narrow ? 10 : 16, vertical: 10), decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
               child: const Row(children: [
                 Expanded(flex: 5, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
                 Expanded(flex: 2, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
@@ -521,7 +531,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
             if (_items.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('No items — add below', style: TextStyle(color: AppTheme.textSecondary))),
             ..._items.map((it) {
               final qty = (it['quantity'] as num?)?.toDouble() ?? 0;
-              return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              return Padding(padding: EdgeInsets.symmetric(horizontal: narrow ? 10 : 16, vertical: 8),
                 child: Row(children: [
                   Expanded(flex: 5, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
@@ -534,9 +544,9 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
             }),
             if (_isDraft) ...[
               const Divider(height: 1),
-              Container(color: AppTheme.background, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(children: [
-                  Expanded(flex: 5, child: Builder(builder: (ctx) {
+              Container(color: AppTheme.background, padding: EdgeInsets.symmetric(horizontal: narrow ? 10 : 16, vertical: 8),
+                child: Flex(direction: narrow ? Axis.vertical : Axis.horizontal, crossAxisAlignment: narrow ? CrossAxisAlignment.stretch : CrossAxisAlignment.center, children: [
+                  _flexOrFull(narrow, 5, Builder(builder: (ctx) {
                     final sel = _addProductId == null ? null : _products.firstWhere((x) => x['id'] == _addProductId, orElse: () => <String, dynamic>{});
                     final name = (sel == null || sel.isEmpty) ? null : sel['name'] as String?;
                     return InkWell(
@@ -551,6 +561,8 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                       ),
                     );
                   })),
+                  if (narrow) const SizedBox(height: 8),
+                  _addControls(narrow, [
                   Expanded(flex: 2, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: DropdownButtonFormField<String>(value: _addUomId, isDense: true, isExpanded: true,
                       decoration: const InputDecoration(hintText: 'UOM', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 6)),
@@ -560,6 +572,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                     child: TextField(controller: _addQtyCtrl, focusNode: _addQtyFocus, decoration: const InputDecoration(hintText: 'Qty', isDense: true), textAlign: TextAlign.right,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true), textInputAction: TextInputAction.done, onSubmitted: (_) => _addItemAndPickNext()))),
                   SizedBox(width: 44, child: IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary), tooltip: 'Add', onPressed: _addItem)),
+                  ]),
                 ])),
             ],
           ])),
@@ -583,6 +596,13 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       ]))),
     ]);
   }
+
+  // Phone: the product picker takes the full width, then UOM / Qty / Add on
+  // the next line. Desktop: everything on one line as before.
+  Widget _flexOrFull(bool narrow, int flex, Widget child) => narrow ? child : Expanded(flex: flex, child: child);
+  Widget _addControls(bool narrow, List<Widget> children) => narrow
+      ? Row(children: children)
+      : Expanded(flex: 4, child: Row(children: children));
 }
 
 class _CustomerPickDialog extends StatefulWidget {

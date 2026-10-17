@@ -41,7 +41,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   bool _superviseBusy = false;
   final Set<String> _supSelected = {}; // SRI ids ticked for selected-bulk supervise
 
-  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); _loadSuperviseFlow(); WidgetsBinding.instance.addPostFrameCallback((_) => _openFocus()); }
+  @override void initState() { super.initState(); _loadList(); _loadPriceEditPolicy(); _loadDateEditPolicy(); _loadSuperviseFlow(); WidgetsBinding.instance.addPostFrameCallback((_) => _openFocus()); }
 
   String? _focusDone;
   @override
@@ -108,6 +108,49 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     } catch (_) {/* fail open: keep current behavior */}
   }
   bool get _canEditPrices => _isDraft && _priceEditAllowed;
+
+  // Admin toggle org.sri_date_editable: when ON, the users listed in
+  // org.sri_date_edit_users may change the date on a DRAFT SRI. Admins always
+  // can. Once issued the date is fixed (it is already posted to the ledger).
+  bool _dateEditAllowed = false;
+  Future<void> _loadDateEditPolicy() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config').select('key, value').eq('org_id', orgId)
+          .inFilter('key', ['org.sri_date_editable', 'org.sri_date_edit_users']);
+      final cfg = {for (final r in rows as List) r['key'] as String: (r['value'] as String? ?? '')};
+      bool allowed = false;
+      if (cfg['org.sri_date_editable'] == 'true') {
+        final uid = ref.read(currentUserProvider)?.id;
+        final ids = (cfg['org.sri_date_edit_users'] ?? '')
+            .split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+        allowed = uid != null && ids.contains(uid);
+      }
+      if (mounted && allowed != _dateEditAllowed) setState(() => _dateEditAllowed = allowed);
+    } catch (_) {}
+  }
+  bool get _canEditDate => (_isAdmin || _dateEditAllowed) && _isDraft && !_isVoided;
+
+  Future<void> _pickDate() async {
+    if (!_canEditDate) { _showSnack('The date can only be changed on a draft invoice by allowed users.'); return; }
+    final cur = _detail['voucher_date'] != null ? DateTime.tryParse(_detail['voucher_date'] as String) : null;
+    final picked = await showDatePicker(context: context, initialDate: cur ?? DateTime.now(),
+        firstDate: DateTime(2020), lastDate: DateTime(2100));
+    if (picked == null) return;
+    final iso = DateFormat('yyyy-MM-dd').format(picked);
+    try {
+      await Supabase.instance.client.from('sales_return_invoices')
+          .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _detail['id']);
+      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
+      if (mounted) setState(() {
+        _detail['voucher_date'] = iso;
+        final i = _invoices.indexWhere((r) => r['id'] == _detail['id']);
+        if (i >= 0) _invoices[i]['voucher_date'] = iso;
+      });
+      _showSnack('Date changed');
+    } catch (e) { _showSnack(friendlyError('The date could not be changed', e)); }
+  }
 
   void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -497,6 +540,8 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     ref.listen(selectedBranchProvider, (_, __) { _selectedId = null; _detail = {}; _items = []; _loadList(); });
     return Container(color: AppTheme.background, child: CollapsibleListPane(
       paneWidth: 360,
+      detailActive: _selectedId != null,
+      onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
       listChild: _buildList(),
       detailChild: _selectedId == null
           ? const Center(child: Text('Select or create a Sales Return Invoice', style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
@@ -612,13 +657,12 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     if (_detailLoading) return const Center(child: CircularProgressIndicator());
     final cust = _detail['customers'] as Map?;
     final srnVoucher = _detail['sales_returns']?['voucher_number'] as String?;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(padding: const EdgeInsets.fromLTRB(24, 16, 24, 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-            const Text('Sales Return Invoice', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
-          ])),
+    final narrow = MediaQuery.of(context).size.width < 700;
+    final title = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(_detail['voucher_number'] as String? ?? '-', style: TextStyle(fontSize: narrow ? 18 : 22, fontWeight: FontWeight.w700)),
+      const Text('Sales Return Invoice', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
+    ]);
+    final actions = <Widget>[
           if (!_isVoided && _isDraft) ...[
             ElevatedButton.icon(icon: const Icon(Icons.check_circle_outline, size: 16), label: const Text('Issue Invoice'),
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _issueInvoice),
@@ -643,13 +687,27 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
                 onPressed: _clearSupervision),
             const SizedBox(width: 4),
           ],
+          if (_canEditDate) IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Change date', onPressed: _pickDate),
           IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), onPressed: _print),
           if (_canDelete && !_isVoided) IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _void),
-        ])),
-      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    ];
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(padding: EdgeInsets.fromLTRB(narrow ? 12 : 24, narrow ? 10 : 16, narrow ? 12 : 24, narrow ? 10 : 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+        child: narrow
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                title,
+                const SizedBox(height: 6),
+                Wrap(runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
+              ])
+            : Row(children: [Expanded(child: title), ...actions])),
+      Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
           _SriChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
-          _SriChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
+          InkWell(
+            onTap: _canEditDate ? _pickDate : null,
+            borderRadius: BorderRadius.circular(6),
+            child: _SriChip(label: 'Date', value: (_detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-') + (_canEditDate ? '  ✎' : '')),
+          ),
           _SriChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (srnVoucher != null) _SriChip(label: 'SRN #', value: srnVoucher),
           _SriChip(label: 'Status', value: _isVoided ? 'voided' : (_isLocked ? 'issued' : 'draft')),
@@ -679,6 +737,10 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         const SizedBox(height: 16),
         Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(children: [
+            if (narrow)
+              Container(width: double.infinity, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+                child: Text('Items (${_items.length})', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary)))
+            else
             Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
               child: const Row(children: [
                 Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary))),
@@ -696,6 +758,34 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
               final price = (it['unit_price'] as num?)?.toDouble() ?? 0;
               final disc  = (it['discount']   as num?)?.toDouble() ?? 0;
               final lt    = (it['line_total'] as num?)?.toDouble() ?? qty * price * (1 - disc / 100);
+              if (narrow) {
+                // Phone: one card per item — name on top, then qty, price,
+                // discount and total on one line.
+                InputDecoration dec(String l) => InputDecoration(labelText: l, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6));
+                return Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    if (it['products']?['sku'] != null) Text(it['products']!['sku'] as String, style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                    const SizedBox(height: 6),
+                    Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                      Text('${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)} ${it['uoms']?['abbreviation'] ?? ''}',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
+                      const SizedBox(width: 8),
+                      Expanded(flex: 3, child: _canEditPrices
+                          ? TextField(controller: _priceCtrl[id], decoration: dec('Price'), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemPrice(id))
+                          : Text('@ ${price.toStringAsFixed(2)}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12.5))),
+                      const SizedBox(width: 6),
+                      Expanded(flex: 2, child: _canEditPrices
+                          ? TextField(controller: _discCtrl[id], decoration: dec('Disc %'), textAlign: TextAlign.right, keyboardType: const TextInputType.numberWithOptions(decimal: true), onSubmitted: (_) => _saveItemPrice(id))
+                          : Text(disc > 0 ? '-${disc.toStringAsFixed(0)}%' : '', textAlign: TextAlign.right, style: const TextStyle(fontSize: 12.5))),
+                      const SizedBox(width: 8),
+                      Expanded(flex: 3, child: Text(money(lt), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
+                    ]),
+                  ]),
+                );
+              }
               return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Row(children: [
                   Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

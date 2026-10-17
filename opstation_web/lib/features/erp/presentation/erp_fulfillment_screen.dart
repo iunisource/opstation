@@ -1362,7 +1362,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           if (showDetail)
             IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _selId = null)),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Fulfillment', style: TextStyle(fontSize: narrow ? 22 : 26, fontWeight: FontWeight.w800)),
+            Text('Fulfillment', maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: narrow ? 18 : 26, fontWeight: FontWeight.w800)),
             if (!narrow)
               const Text('Scan to pick, pack and ship online-store orders.',
                   style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
@@ -1820,15 +1821,6 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                     color: pickedAll ? Colors.green.shade700 : null)),
               ]),
               const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity, height: 52,
-                child: FilledButton.icon(
-                  icon: const Icon(Icons.photo_camera_outlined),
-                  label: const Text('Scan with camera', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                  onPressed: () => _scanKey.currentState?.openCamera(),
-                ),
-              ),
-              const SizedBox(height: 8),
               scanBar,
               if (pickedAll && checksNeeded) _nextScanPrompt(o, mobile),
             ]),
@@ -1993,58 +1985,83 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         // sticky action bar
         if (canWork)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: EdgeInsets.symmetric(horizontal: mobile ? 10 : 16, vertical: mobile ? 8 : 12),
             decoration: const BoxDecoration(
               border: Border(top: BorderSide(color: AppTheme.border)),
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(14)),
               color: Colors.white,
             ),
-            child: Row(children: [
-              Expanded(child: Text(
+            child: () {
+              final msg = Text(
                 pickedAll
                     ? (checksNeeded
                         ? 'All picked — scan ${_nextCheck(o)}.'
                         : st == 'packed' ? 'Packed — fulfil it with the courier details.' : 'All picked — pack it and fulfil.')
                     : auto
-                        ? 'Auto-fulfil is on: it ships when the last item is scanned (or waits packed if not booked yet).'
+                        ? (mobile
+                            ? '${_q(n - p)} left · Auto-fulfil on'
+                            : 'Auto-fulfil is on: it ships when the last item is scanned (or waits packed if not booked yet).')
                         : '${_q(n - p)} item${n - p == 1 ? '' : 's'} left to scan.',
+                maxLines: mobile ? 1 : 2,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600,
                     color: pickedAll ? Colors.green.shade800 : AppTheme.textSecondary),
-              )),
-              if (st == 'picking' || st == 'packed')
-                TextButton(
-                  onPressed: _busy ? null : () async {
-                    final ls = _lines(o);
-                    for (final l in ls) {
-                      l['picked'] = 0;
-                      if (_isBundle(l)) l['components'] = [for (final c in _comps(l)) {...c, 'picked': 0}];
-                    }
-                    await _saveLines(o, ls, status: 'new');
-                  },
-                  child: const Text('Restart'),
-                ),
-              const SizedBox(width: 6),
-              if (st != 'packed')
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.inventory_2_outlined, size: 18),
-                  label: const Text('Packed'),
-                  onPressed: _busy || !pickedAll || slipNeeded ? null : () => _markPacked(o),
-                ),
-              const SizedBox(width: 8),
-              if (pickedAll && checksNeeded)
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: Colors.indigo),
-                  icon: const Icon(Icons.qr_code_scanner, size: 18),
-                  label: Text(_nextCheck(o)!.contains('label') ? 'Scan label' : 'Scan slip'),
-                  onPressed: () => _startNextScan(mobile),
-                )
-              else
-                FilledButton.icon(
-                  icon: const Icon(Icons.local_shipping_outlined, size: 18),
-                  label: const Text('Fulfil'),
-                  onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
-                ),
-            ]),
+              );
+              Future<void> restart() async {
+                final ls = _lines(o);
+                for (final l in ls) {
+                  l['picked'] = 0;
+                  if (_isBundle(l)) l['components'] = [for (final c in _comps(l)) {...c, 'picked': 0}];
+                }
+                await _saveLines(o, ls, status: 'new');
+              }
+              final canRestart = st == 'picking' || st == 'packed';
+              final packedBtn = st != 'packed'
+                  ? OutlinedButton.icon(
+                      icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                      label: const Text('Packed'),
+                      onPressed: _busy || !pickedAll || slipNeeded ? null : () => _markPacked(o),
+                    )
+                  : null;
+              final mainBtn = (pickedAll && checksNeeded)
+                  ? FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: Colors.indigo),
+                      icon: const Icon(Icons.qr_code_scanner, size: 18),
+                      label: Text(_nextCheck(o)!.contains('label') ? 'Scan label' : 'Scan slip'),
+                      onPressed: () => _startNextScan(mobile),
+                    )
+                  : FilledButton.icon(
+                      icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                      label: const Text('Fulfil'),
+                      onPressed: _busy || !pickedAll ? null : () => _fulfil(o),
+                    );
+              if (mobile) {
+                // Phone: short status line on top, buttons on one row below.
+                return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  msg,
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    if (canRestart)
+                      IconButton(
+                        tooltip: 'Restart picking',
+                        icon: const Icon(Icons.restart_alt),
+                        onPressed: _busy ? null : restart,
+                      ),
+                    if (packedBtn != null) ...[Expanded(child: packedBtn), const SizedBox(width: 8)],
+                    Expanded(child: mainBtn),
+                  ]),
+                ]);
+              }
+              return Row(children: [
+                Expanded(child: msg),
+                if (canRestart)
+                  TextButton(onPressed: _busy ? null : restart, child: const Text('Restart')),
+                const SizedBox(width: 6),
+                if (packedBtn != null) packedBtn,
+                const SizedBox(width: 8),
+                mainBtn,
+              ]);
+            }(),
           ),
       ]),
     );

@@ -403,6 +403,14 @@ const List<_AdminToggle> _toggles = [
         'instead of it being fixed to the creation date. Admins can always edit dates.',
   ),
   _AdminToggle(
+    'org.sri_date_editable',
+    'Allow editing date on Sales Return Invoices',
+    'When ON, the users selected below can change the date on a draft Sales '
+        'Return Invoice (SRI). Once the invoice is issued the date is fixed. '
+        'Admins can always change the date on a draft.',
+    users: _UsersField('org.sri_date_edit_users', 'Users allowed to change the SRI date'),
+  ),
+  _AdminToggle(
     'org.show_org_name_sales',
     'Show company name on sale vouchers',
     'When ON (default), your organization name prints in the header of Sales '
@@ -660,6 +668,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.foc_enabled',
     'org.customer_targets_enabled',
     'org.srn_date_editable',
+    'org.sri_date_editable',
     'org.doc_review_flow_si',
     'org.si_supervise_flow',
     'org.do_supervise_flow',
