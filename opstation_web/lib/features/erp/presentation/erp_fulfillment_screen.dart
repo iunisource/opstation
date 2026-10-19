@@ -18,6 +18,7 @@ import '../../../core/widgets/scan_feedback.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../services/packing_slip_pdf.dart';
+import '../services/shipping_label_pdf.dart';
 import 'shop_product_matching.dart';
 import 'shop_fulfilled_summary.dart';
 import 'shop_dispatch.dart';
@@ -818,7 +819,202 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     html.window.open('https://$domain/admin/orders/$id', '_blank');
   }
 
+  // ── courier booking (shipping label) ───────────────────────────────────────
+  static const _courierNames = <String, String>{
+    'dex': 'DEX Logistics', 'postex': 'PostEx', 'leopards': 'Leopards', 'trax': 'Trax',
+    'mnp': 'M&P', 'blueex': 'BlueEx', 'tcs': 'TCS', 'test': 'Test courier (no real booking)',
+  };
+
+  Map<String, dynamic> _storeOf(Map<String, dynamic> o) =>
+      _stores.firstWhere((s) => s['id'] == o['store_id'], orElse: () => <String, dynamic>{});
+
+  bool _hasTracking(Map<String, dynamic> o) {
+    final si = Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
+    return '${o['tracking_number'] ?? ''}'.trim().isNotEmpty || '${si['number'] ?? ''}'.trim().isNotEmpty;
+  }
+
+  /// Asks "Book the courier and print the label?"; books on Yes and prints the
+  /// label. Returns true when a booking was made (order fields updated).
+  Future<bool> _askBookCourier(Map<String, dynamic> o) async {
+    final st = _storeOf(o);
+    final provider = '${st['courier_provider'] ?? ''}';
+    if (provider.isEmpty) return false;
+    final name = _courierNames[provider] ?? provider;
+    final cod = _collect(o);
+    final weight = TextEditingController(text: '0.5');
+    final pieces = TextEditingController(text: '1');
+    final go = await showDialog<bool>(context: context, builder: (d) => AlertDialog(
+      title: Text('Book $name and print the shipping label?'),
+      content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${o['order_no'] ?? ''} · ${o['customer_name'] ?? ''} · '
+            '${cod > 0 ? 'COD ${NumberFormat('#,##0.##').format(cod)}' : 'Prepaid'}',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        const Text('The tracking number and link are filled in for you and sent to the customer with the shipping email.',
+            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: TextField(controller: weight, keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Weight (kg)', isDense: true, border: OutlineInputBorder()))),
+          const SizedBox(width: 10),
+          Expanded(child: TextField(controller: pieces, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Pieces', isDense: true, border: OutlineInputBorder()))),
+        ]),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('No, I\'ll enter it')),
+        FilledButton.icon(icon: const Icon(Icons.local_shipping_outlined, size: 18), label: const Text('Book & print label'),
+            onPressed: () => Navigator.of(d, rootNavigator: true).pop(true)),
+      ],
+    ));
+    if (go != true || !mounted) return false;
+    setState(() => _busy = true);
+    try {
+      final r = await _call({
+        'action': 'courier_book', 'order_id': o['id'], 'cod': cod,
+        'weight_kg': double.tryParse(weight.text.trim()) ?? 0.5,
+        'pieces': int.tryParse(pieces.text.trim()) ?? 1,
+      });
+      o['tracking_company'] = r['company'];
+      o['tracking_number'] = r['number'];
+      o['tracking_url'] = r['url'];
+      o['label_url'] = r['label_url'];
+      o['courier_booked_at'] = DateTime.now().toUtc().toIso8601String();
+      _snack('Booked with ${r['company'] ?? name}: ${r['number']}');
+      await _printShippingLabel(o, labelBase64: r['label_pdf_base64'] as String?,
+          weightKg: double.tryParse(weight.text.trim()), pieces: int.tryParse(pieces.text.trim()) ?? 1);
+      return true;
+    } catch (e) {
+      _snack('Courier not booked: $e');
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// The courier's own label when it sent one, otherwise Opstation's label.
+  Future<void> _printShippingLabel(Map<String, dynamic> o, {String? labelBase64, double? weightKg, int pieces = 1}) async {
+    final number = '${o['tracking_number'] ?? ''}';
+    if (number.isEmpty) { _snack('Book the courier first.'); return; }
+    try {
+      if (labelBase64 != null && labelBase64.isNotEmpty) {
+        await showPdf(base64Decode(labelBase64), 'Shipping label ${o['order_no'] ?? ''}');
+        return;
+      }
+      final lu = '${o['label_url'] ?? ''}';
+      if (lu.startsWith('http')) { html.window.open(lu, '_blank'); return; }
+      final bytes = await ShippingLabelPdf.build(
+        order: o, courier: '${o['tracking_company'] ?? 'Courier'}', trackingNumber: number,
+        storeName: _storeName(o['store_id'] as String?), cod: _collect(o), weightKg: weightKg, pieces: pieces);
+      await showPdf(bytes, 'Shipping label ${o['order_no'] ?? ''}');
+    } catch (e) {
+      _snack('Could not make the label: $e');
+    }
+  }
+
+  Future<void> _courierSettings() async {
+    final active = _stores.where((s) => s['is_active'] == true).toList();
+    if (active.isEmpty) return;
+    var sel = active.first;
+    String provider = '${sel['courier_provider'] ?? ''}';
+    bool ask = sel['courier_ask'] != false;
+    bool test = sel['courier_test'] == true;
+    final key = TextEditingController(), secret = TextEditingController(),
+        account = TextEditingController(), pickup = TextEditingController();
+    void loadFor(Map<String, dynamic> s) {
+      sel = s; provider = '${s['courier_provider'] ?? ''}';
+      ask = s['courier_ask'] != false; test = s['courier_test'] == true;
+      key.clear(); secret.clear(); account.clear(); pickup.clear();
+    }
+    final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) {
+      final keySet = sel['courier_key_set'] == true;
+      InputDecoration dec(String l) => InputDecoration(labelText: l, isDense: true, border: const OutlineInputBorder(),
+          hintText: keySet ? 'Saved — leave blank to keep' : null);
+      return AlertDialog(
+        title: const Text('Courier settings'),
+        content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Book the courier and print its shipping label straight from Fulfil. The tracking number and link go '
+              'to Shopify, so the customer gets them in the shipping email.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 12),
+          if (active.length > 1) ...[
+            DropdownButtonFormField<String>(
+              value: sel['id'] as String, isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Store', isDense: true, border: OutlineInputBorder()),
+              items: [for (final s in active) DropdownMenuItem(value: s['id'] as String, child: Text('${s['name'] ?? s['shop_domain']}'))],
+              onChanged: (v) => setD(() => loadFor(active.firstWhere((s) => s['id'] == v))),
+            ),
+            const SizedBox(height: 10),
+          ],
+          DropdownButtonFormField<String>(
+            value: provider, isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Courier', isDense: true, border: OutlineInputBorder()),
+            items: [
+              const DropdownMenuItem(value: '', child: Text('None — enter tracking by hand')),
+              for (final e in _courierNames.entries) DropdownMenuItem(value: e.key, child: Text(e.value)),
+            ],
+            onChanged: (v) => setD(() => provider = v ?? ''),
+          ),
+          if (provider.isNotEmpty && provider != 'test') ...[
+            const SizedBox(height: 10),
+            TextField(controller: key, obscureText: true, decoration: dec('API key / token')),
+            const SizedBox(height: 8),
+            TextField(controller: secret, obscureText: true, decoration: dec('API secret / password (if any)')),
+            const SizedBox(height: 8),
+            TextField(controller: account, decoration: dec('Account / merchant ID (if any)')),
+            const SizedBox(height: 8),
+            TextField(controller: pickup, decoration: dec('Pickup address ID (if any)')),
+            const SizedBox(height: 4),
+            Text(keySet ? 'Keys are saved. Only the server can read them.' : 'Keys are kept on the server only — no one can read them back here.',
+                style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            SwitchListTile(dense: true, contentPadding: EdgeInsets.zero, value: test,
+                onChanged: (v) => setD(() => test = v),
+                title: const Text('Test mode (courier sandbox)'),
+                subtitle: const Text('Bookings go to the courier\'s test system — no real pickups.')),
+          ],
+          if (provider.isNotEmpty)
+            SwitchListTile(dense: true, contentPadding: EdgeInsets.zero, value: ask,
+                onChanged: (v) => setD(() => ask = v),
+                title: const Text('Ask to book when fulfilling'),
+                subtitle: const Text('Fulfil first asks "Book the courier and print the label?" when an order has no tracking yet.')),
+          if (provider == 'test')
+            const Padding(padding: EdgeInsets.only(top: 6), child: Text(
+                'Test courier makes a dummy tracking number and prints Opstation\'s label, to try the flow. '
+                'Fulfilling still sends that number to Shopify — use it on a test order.',
+                style: TextStyle(fontSize: 11.5, color: Colors.deepOrange))),
+        ]))),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(true), child: const Text('Save')),
+        ],
+      );
+    }));
+    if (ok != true) return;
+    try {
+      final r = await _call({
+        'action': 'courier_settings', 'store_id': sel['id'],
+        'provider': provider.isEmpty ? null : provider, 'ask': ask, 'test_mode': test,
+        'api_key': key.text.trim(), 'api_secret': secret.text.trim(),
+        'account_id': account.text.trim(), 'pickup_id': pickup.text.trim(),
+      });
+      sel['courier_provider'] = provider.isEmpty ? null : provider;
+      sel['courier_ask'] = ask;
+      sel['courier_test'] = test;
+      sel['courier_key_set'] = r['key_set'] == true;
+      if (mounted) setState(() {});
+      _snack('Courier settings saved');
+    } catch (e) {
+      _snack('Could not save: $e');
+    }
+  }
+
   Future<void> _fulfil(Map<String, dynamic> o) async {
+    // Courier connected and no tracking yet → offer to book it and print the label.
+    final st = _storeOf(o);
+    if ('${st['courier_provider'] ?? ''}'.isNotEmpty && st['courier_ask'] != false && !_hasTracking(o)) {
+      await _askBookCourier(o);
+      if (!mounted) return;
+    }
     // Prefill: what was typed before, else a booking found on the store order.
     Map<String, dynamic> si() => Map<String, dynamic>.from((o['ship_info'] as Map?) ?? const {});
     final company = TextEditingController(text: '${o['tracking_company'] ?? si()['company'] ?? ''}');
@@ -830,10 +1026,26 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (d, setD) {
       final found = si();
       final hasBooking = '${found['number'] ?? ''}'.isNotEmpty;
+      final bookedHere = o['courier_booked_at'] != null && '${o['tracking_number'] ?? ''}'.isNotEmpty;
+      final canBook = '${_storeOf(o)['courier_provider'] ?? ''}'.isNotEmpty;
       return AlertDialog(
         title: Text('Fulfil ${o['order_no'] ?? ''}'),
         content: SizedBox(width: 460, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (hasBooking)
+          if (bookedHere)
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.green.withOpacity(0.07), borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.withOpacity(0.4))),
+              child: Row(children: [
+                const Icon(Icons.check_circle_outline, color: Colors.green, size: 18),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Booked with ${o['tracking_company'] ?? 'the courier'}: ${o['tracking_number']}. Filled in below.',
+                    style: const TextStyle(fontSize: 12.5))),
+                TextButton.icon(icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Label'),
+                    onPressed: () => _printShippingLabel(o)),
+              ]),
+            )
+          else if (hasBooking)
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(color: Colors.green.withOpacity(0.07), borderRadius: BorderRadius.circular(8),
@@ -856,7 +1068,20 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 const Text('Book it with your courier app in Shopify (or the courier portal), then press "Check again" — '
                     'the tracking number is picked up and filled in.', style: TextStyle(fontSize: 12)),
                 const SizedBox(height: 6),
-                Wrap(spacing: 8, children: [
+                Wrap(spacing: 8, runSpacing: 6, children: [
+                  if (canBook)
+                    FilledButton.icon(
+                      icon: const Icon(Icons.local_shipping_outlined, size: 16),
+                      label: Text('Book ${_courierNames[_storeOf(o)['courier_provider']] ?? 'courier'}'),
+                      onPressed: () async {
+                        if (await _askBookCourier(o)) {
+                          company.text = '${o['tracking_company'] ?? ''}';
+                          number.text = '${o['tracking_number'] ?? ''}';
+                          url.text = '${o['tracking_url'] ?? ''}';
+                          setD(() {});
+                        }
+                      },
+                    ),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.open_in_new, size: 16),
                     label: const Text('Book in Shopify'),
@@ -1413,6 +1638,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (v == 'recheck' && !_busy) _syncNow(days: 14);
               if (v == 'scan') _scanSettings();
               if (v == 'pin') _pinDialog();
+              if (v == 'courier') _courierSettings();
               if (v == 'stores') _stores.isEmpty && _isAdmin ? _connectDialog() : _storesDialog();
             },
             itemBuilder: (_) => [
@@ -1427,6 +1653,9 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               if (_isAdmin && _stores.any((s) => s['is_active'] == true))
                 const PopupMenuItem(value: 'pin', child: ListTile(dense: true, leading: Icon(Icons.password),
                     title: Text('Item cancel passcode'), subtitle: Text('Needed to cancel an item while picking'))),
+              if (_isAdmin && _stores.any((s) => s['is_active'] == true))
+                const PopupMenuItem(value: 'courier', child: ListTile(dense: true, leading: Icon(Icons.local_shipping_outlined),
+                    title: Text('Courier settings'), subtitle: Text('Book the courier and print its label from here'))),
               PopupMenuItem(value: 'stores', child: ListTile(dense: true, leading: const Icon(Icons.storefront_outlined),
                   title: Text(_stores.isEmpty ? 'Connect store' : 'Stores (${_stores.where((s) => s['is_active'] == true).length})'))),
             ],

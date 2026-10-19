@@ -23,6 +23,7 @@
 
 // Pinned npm import: esm.sh's floating "@2" build broke bundling (Oct 2026).
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.45.4";
+import { bookParcel, COURIERS, type Parcel } from "./couriers.ts";
 
 const API_VERSION = "2026-07";
 const FN_URL = "https://xgptodkasmytddmdnbtb.supabase.co/functions/v1/shopify";
@@ -1060,6 +1061,74 @@ Deno.serve(async (req) => {
         fulfil_error: null, updated_at: new Date().toISOString(),
       }).eq("id", order.id);
       return json({ ok: true, already: r.already });
+    }
+    if (action === "courier_settings") {
+      // Admins: which courier books this store's parcels, and its API keys.
+      // Keys are kept where app users can't read them; blank = keep current.
+      if (!isAdminRole(mine.role)) return json({ error: "Only an admin can change courier settings." }, 403);
+      const provider = body.provider ? String(body.provider) : null;
+      if (provider && !COURIERS[provider]) return json({ error: "Unknown courier." }, 400);
+      const { data: cur } = await admin.from("shop_courier_secrets").select("*").eq("store_id", store.id).maybeSingle();
+      const keep = (k: string) => (body[k] === undefined || body[k] === null || String(body[k]).trim() === "")
+        ? (body.clear_keys ? null : (cur?.[k] ?? null)) : String(body[k]).trim();
+      const secret = {
+        store_id: store.id, provider,
+        api_key: keep("api_key"), api_secret: keep("api_secret"),
+        account_id: keep("account_id"), pickup_id: keep("pickup_id"),
+        updated_at: new Date().toISOString(),
+      };
+      const { error: se } = await admin.from("shop_courier_secrets").upsert(secret, { onConflict: "store_id" });
+      if (se) throw new Error(se.message);
+      await admin.from("shop_stores").update({
+        courier_provider: provider,
+        courier_ask: body.ask !== false,
+        courier_test: body.test_mode === true,
+        courier_key_set: !!secret.api_key,
+      }).eq("id", store.id);
+      return json({ ok: true, key_set: !!secret.api_key });
+    }
+    if (action === "courier_book") {
+      // Book the parcel with the store's courier → tracking number, link, label.
+      if (order.status === "cancelled") return json({ error: "This order was cancelled." }, 400);
+      if (order.tracking_number && !body.force) {
+        return json({ ok: true, already: true, company: order.tracking_company, number: order.tracking_number,
+          url: order.tracking_url, label_url: order.label_url ?? null });
+      }
+      const { data: st } = await admin.from("shop_stores").select("courier_provider, courier_test").eq("id", store.id).single();
+      const { data: cs } = await admin.from("shop_courier_secrets").select("*").eq("store_id", store.id).maybeSingle();
+      const provider = String(st?.courier_provider ?? "");
+      if (!provider) return json({ error: "Choose a courier in Courier settings first." }, 400);
+      const a = (order.ship_to ?? {}) as Record<string, unknown>;
+      // deno-lint-ignore no-explicit-any
+      const lines = ((order.lines ?? []) as any[]).filter((l) => Number(l.qty ?? 0) > 0);
+      const parcel: Parcel = {
+        order_no: String(order.order_no ?? ""),
+        name: String(a.name ?? order.customer_name ?? ""),
+        phone: String(a.phone ?? order.phone ?? ""),
+        email: order.email ?? null,
+        address1: String(a.address1 ?? ""), address2: String(a.address2 ?? ""),
+        city: String(a.city ?? ""), province: String(a.province ?? ""),
+        zip: String(a.zip ?? ""), country: String(a.country ?? a.countryCodeV2 ?? ""),
+        cod: Math.max(0, Number(body.cod ?? 0)),
+        weight_kg: Math.max(0.1, Number(body.weight_kg ?? 0.5)),
+        pieces: Math.max(1, Math.round(Number(body.pieces ?? 1))),
+        items: lines.map((l) => `${Number(l.qty)} x ${l.title}`).join(", ").slice(0, 240),
+        note: order.note ?? null,
+      };
+      if (!parcel.address1 || !parcel.city) return json({ error: "This order has no full delivery address — add it in Shopify first." }, 400);
+      if (!parcel.phone) return json({ error: "This order has no phone number — the courier needs one." }, 400);
+      const b = await bookParcel({
+        provider, api_key: cs?.api_key, api_secret: cs?.api_secret,
+        account_id: cs?.account_id, pickup_id: cs?.pickup_id, test_mode: st?.courier_test === true,
+      }, parcel);
+      await admin.from("shop_orders").update({
+        tracking_company: b.company, tracking_number: b.number, tracking_url: b.url ?? null,
+        label_url: b.label_url ?? null, courier_booked_at: new Date().toISOString(),
+        courier_booking: { provider, by: mine.name ?? null, weight_kg: parcel.weight_kg, pieces: parcel.pieces, cod: parcel.cod, raw: b.raw ?? null },
+        updated_at: new Date().toISOString(),
+      }).eq("id", order.id);
+      return json({ ok: true, company: b.company, number: b.number, url: b.url ?? null,
+        label_url: b.label_url ?? null, label_pdf_base64: b.label_pdf_base64 ?? null });
     }
     if (action === "set_cancel_pin") {
       // Admins: the passcode needed to cancel an item while picking. Only a
