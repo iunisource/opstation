@@ -377,6 +377,13 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     if (outQty <= 0) { _snack('Output quantity must be greater than 0'); return; }
     final comps = _components.where((l) => l.productId != null && l.qty > 0).toList();
     if (comps.isEmpty) { _snack('Add at least one component'); return; }
+    // A recipe can't use its own finished product as an ingredient — each batch
+    // would consume and re-produce the same item, so the real product never
+    // gets stock (and the cost loops back on itself).
+    if (comps.any((l) => l.productId == _fgId) || _waste.any((l) => l.productId == _fgId && l.qty > 0)) {
+      _snack('The finished product can\'t also be a component of its own BOM. Pick the packed / finished item as the Finished Product.');
+      return;
+    }
     final wastes = _waste.where((l) => l.productId != null && l.qty > 0).toList();
     final ohs = _overheads.where((l) => l.rateId != null && l.qty != 0).toList();
     final userId = ref.read(currentUserProvider)?.id ?? '';
