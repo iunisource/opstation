@@ -117,19 +117,47 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     final orgId = _orgId;
     if (orgId == null) return;
     final c = Supabase.instance.client;
-    final costById = {for (final p in _products) p.id: p.cost};
-    final headers = List<Map<String, dynamic>>.from(await c.from('bom_headers')
-        .select('id, product_id, output_qty').eq('org_id', orgId).eq('status', 'active'));
+    // Every query is paged / chunked: the database returns at most 1000 rows
+    // per call, so with many BOMs the components list was cut off and most
+    // recipes were costed with missing parts (or fell back to purchase cost).
+    Future<List<Map<String, dynamic>>> pageAll(dynamic Function(int from, int to) q) async {
+      final out = <Map<String, dynamic>>[];
+      for (int from = 0;; from += 1000) {
+        final page = List<Map<String, dynamic>>.from(await q(from, from + 999));
+        out.addAll(page);
+        if (page.length < 1000 || from > 500000) break;
+      }
+      return out;
+    }
+    final headers = await pageAll((f, t) => c.from('bom_headers')
+        .select('id, product_id, output_qty').eq('org_id', orgId).eq('status', 'active').order('id').range(f, t));
     final bomIds = headers.map((h) => h['id'] as String).toList();
-    final comps = bomIds.isEmpty ? <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(
-        await c.from('bom_components').select('bom_id, product_id, quantity').inFilter('bom_id', bomIds));
-    final ohs = bomIds.isEmpty ? <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(
-        await c.from('bom_overheads').select('bom_id, amount').inFilter('bom_id', bomIds));
+    final comps = <Map<String, dynamic>>[];
+    final ohs = <Map<String, dynamic>>[];
+    for (var i = 0; i < bomIds.length; i += 100) {
+      final chunk = bomIds.sublist(i, i + 100 > bomIds.length ? bomIds.length : i + 100);
+      comps.addAll(await pageAll((f, t) => c.from('bom_components')
+          .select('bom_id, product_id, quantity').inFilter('bom_id', chunk).order('id').range(f, t)));
+      ohs.addAll(await pageAll((f, t) => c.from('bom_overheads')
+          .select('bom_id, amount').inFilter('bom_id', chunk).order('id').range(f, t)));
+    }
+    // Component costs: from the product list, plus any component that isn't in
+    // it (e.g. an inactive raw material) fetched directly.
+    final costById = {for (final p in _products) p.id: p.cost};
+    final missing = {for (final r in comps) '${r['product_id']}'}..removeWhere(costById.containsKey);
+    final miss = missing.toList();
+    for (var i = 0; i < miss.length; i += 100) {
+      final chunk = miss.sublist(i, i + 100 > miss.length ? miss.length : i + 100);
+      final rows = await c.from('products').select('id, cost_price').inFilter('id', chunk);
+      for (final r in rows as List) {
+        costById['${r['id']}'] = (r['cost_price'] as num?)?.toDouble() ?? 0;
+      }
+    }
     final compByBom = <String, double>{};
     for (final r in comps) {
       final bid = r['bom_id'] as String;
       final qty = (r['quantity'] as num?)?.toDouble() ?? 0;
-      final cc = costById[r['product_id'] as String?] ?? 0;
+      final cc = costById['${r['product_id']}'] ?? 0;
       compByBom[bid] = (compByBom[bid] ?? 0) + qty * cc;
     }
     final ohByBom = <String, double>{};
