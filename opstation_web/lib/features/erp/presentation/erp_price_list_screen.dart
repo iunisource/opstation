@@ -52,6 +52,8 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   final _searchCtrl = TextEditingController();     // brand / keyword filter (name or SKU)
   final Set<String> _pickedIds = {};               // explicit product picks (overrides the filtered set)
   final _marginCtrl = TextEditingController(); // user-entered; 15 shown only as a hint
+  // Remarks / terms printed at the end of the PDF & Excel — only when filled.
+  final _remarksCtrl = TextEditingController();
   String _source = 'purchase'; // purchase | selling | bom
   String _method = 'markup';   // markup (× (1+m)) | margin (÷ (1−m))
   String _title = 'Price List'; // printed heading: 'Price List' | 'Cost Sheet'
@@ -71,6 +73,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   @override
   void dispose() {
     _marginCtrl.dispose();
+    _remarksCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -516,7 +519,18 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         'source': _source, 'source_label': _sourceLabel, 'method': _method, 'method_label': _methodLabel,
         'margin': _margin, 'main_groups': _mains.toList(), 'groups': _groups.toList(), 'sub_groups': _subs.toList(),
         'search': _searchCtrl.text.trim(), 'picked_products': _pickedIds.length, 'picked_ids': _pickedIds.toList(),
+        if (_remarksCtrl.text.trim().isNotEmpty) 'remarks': _remarksCtrl.text.trim(),
       };
+
+  /// Remarks for the document: the saved list's when viewing one, else typed.
+  String get _outRemarks {
+    final snap = _snap;
+    if (snap != null) {
+      final st = snap['settings'];
+      return st is Map ? '${st['remarks'] ?? ''}'.trim() : '';
+    }
+    return _remarksCtrl.text.trim();
+  }
 
   List<Map<String, dynamic>> _linesJson(List<_Line> lines) => [
         for (final l in lines)
@@ -599,6 +613,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     final known = {for (final p in _products) p.id};
     final missing = lines.where((l) => !known.contains('${l['product_id']}')).length;
     _searchCtrl.text = (st['search'] as String?) ?? '';
+    _remarksCtrl.text = '${st['remarks'] ?? ''}';
     setState(() {
       _source = (st['source'] as String?) ?? 'purchase';
       _method = (st['method'] as String?) ?? 'markup';
@@ -931,6 +946,17 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
           },
           cellAlignments: const {0: pw.Alignment.centerLeft, 3: pw.Alignment.center, 4: pw.Alignment.centerRight},
         ),
+        if (_outRemarks.isNotEmpty) ...[
+          pw.SizedBox(height: 16),
+          pw.Text('Remarks', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 4),
+          pw.Container(
+            width: double.infinity,
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: PdfColors.grey400, width: 0.6)),
+            child: pw.Text(_outRemarks, style: const pw.TextStyle(fontSize: 9.5, lineSpacing: 2)),
+          ),
+        ],
       ],
     ));
     await outputPdf(await doc.save(), _outTitle);
@@ -1011,6 +1037,18 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     sheet.merge(at(0, r), at(lastCol, r),
         customValue: xls.TextCellValue('${rows.length} item${rows.length == 1 ? '' : 's'}'));
     sheet.cell(at(0, r)).cellStyle = stampStyle;
+
+    final remarks = _outRemarks;
+    if (remarks.isNotEmpty) {
+      r += 2;
+      sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue('Remarks'));
+      sheet.cell(at(0, r)).cellStyle = xls.CellStyle(bold: true, fontSize: 11, fontColorHex: c('#1E3A8A'));
+      for (final line in remarks.split('\n')) {
+        r++;
+        sheet.merge(at(0, r), at(lastCol, r), customValue: xls.TextCellValue(line));
+        sheet.cell(at(0, r)).cellStyle = xls.CellStyle(fontSize: 10);
+      }
+    }
 
     sheet.setColumnWidth(0, 7);
     sheet.setColumnWidth(1, 14);
@@ -1144,6 +1182,18 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                     style: TextButton.styleFrom(foregroundColor: const Color(0xFF3730A3)),
                   ),
                 ]),
+                if (_snap == null) ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _remarksCtrl, minLines: 1, maxLines: 5,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Remarks / terms (optional)',
+                      hintText: 'e.g. Prices valid till 31 Oct · Ex-factory Lahore · 50% advance, balance on delivery',
+                      helperText: 'Printed at the end of the PDF and Excel only when filled in.',
+                      isDense: true, border: OutlineInputBorder()),
+                  ),
+                ],
               ]),
             ),
             const SizedBox(height: 10),
