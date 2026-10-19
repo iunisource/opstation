@@ -1093,7 +1093,12 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       DropdownMenuItem(value: 'selling', child: Text('Selling (selling price)')),
                       DropdownMenuItem(value: 'bom', child: Text('BoM (recipe roll-up)')),
                     ],
-                    onChanged: (v) => setState(() => _source = v ?? 'purchase'),
+                    onChanged: (v) async {
+                      setState(() => _source = v ?? 'purchase');
+                      // Load the recipe costs straight away, so the table shows
+                      // BoM rates now (not purchase cost until the PDF is made).
+                      if (_source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
+                    },
                   )),
                   SizedBox(width: 240, child: DropdownButtonFormField<String>(
                     value: _method, isDense: true,
@@ -1197,6 +1202,16 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       SizedBox(width: 80, child: Text(p.sku, style: const TextStyle(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
                       Expanded(child: Builder(builder: (_) {
                         final name = Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis);
+                        // BoM chosen but this product has no active recipe → its
+                        // purchase cost is used instead. Say so, don't hide it.
+                        if (live && _source == 'bom' && _bomLoaded && !_bomRate.containsKey(p.productId)) {
+                          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            name,
+                            const SizedBox(height: 2),
+                            const Text('No active BoM for this product — rate is from its purchase cost',
+                                style: TextStyle(fontSize: 11, color: Color(0xFFB91C1C))),
+                          ]);
+                        }
                         if (!p.edited) return name;
                         // Manually quoted: show what that rate works out to vs the formula.
                         final src = live ? byId[p.productId] : null;
