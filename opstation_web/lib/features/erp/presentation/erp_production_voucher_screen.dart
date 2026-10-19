@@ -13,6 +13,7 @@ import '../../../core/permissions/access_control.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../widgets/bom_specs_box.dart';
+import '../services/production_labels.dart';
 
 class _PComp {
   static int _seq = 0;
@@ -453,8 +454,21 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       if (mounted) setState(() { _current = updated; _status = updated['status'] as String? ?? 'posted'; });
       await _loadVouchers();
       await _loadVoucher(updated);
+      if (mounted) setState(() => _posting = false);
+      // Offer labels for the output (Admin Settings can switch this off).
+      if (mounted && await askLabelsAfterProduction(_orgId)) await _printLabels(ask: true);
+      return;
     } catch (e) { _snack('Post failed: ' + e.toString()); }
     if (mounted) setState(() => _posting = false);
+  }
+
+  Future<void> _printLabels({bool ask = false}) async {
+    final v = _current; if (v == null) return;
+    final no = '${v['voucher_number'] ?? ''}';
+    await printProductLabels(context,
+      productId: _fgId, fallbackName: _fgLabel, qty: _outQty, batch: no,
+      date: DateTime.tryParse('${v['voucher_date'] ?? ''}'),
+      title: ask ? 'Print product labels?' : 'Labels · $no');
   }
 
   Future<void> _delete() async {
@@ -539,6 +553,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
               decoration: BoxDecoration(color: Colors.green.withOpacity(0.13), borderRadius: BorderRadius.circular(4)),
               child: Text('Posted', style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontWeight: FontWeight.w700))),
             if (_isDraft && _current != null) IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: _delete, tooltip: 'Delete draft'),
+            if (!_isDraft && _current != null) IconButton(icon: const Icon(Icons.label_outline, size: 20), onPressed: () => _printLabels(), tooltip: 'Print product labels'),
             const SizedBox(width: 8),
             if (_isDraft && narrow) IconButton(
               tooltip: 'Save draft',

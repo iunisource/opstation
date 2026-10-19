@@ -22,6 +22,7 @@ import '../../../core/permissions/access_control.dart';
 import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
 import '../widgets/bom_specs_box.dart';
+import '../services/production_labels.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class _JobMat {
@@ -915,6 +916,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                 final updated = await client.from('job_cards').select().eq('id', jobId).single();
                 await _loadJobs();
                 await _loadJob(updated);
+                // Offer labels for the good units (Admin Settings can switch this off).
+                if (mounted && accepted > 0 && await askLabelsAfterProduction(_orgId)) {
+                  final run = _runs.firstWhere((r) => r['id'] == runId,
+                      orElse: () => {'run_no': nextNo, 'run_date': dateStr, 'produced_qty': produced, 'accepted_qty': accepted});
+                  if (mounted) await _printRunLabels(run, ask: true);
+                }
               } catch (e) {
                 try {
                   await Supabase.instance.client.from('qc_inspections').delete().eq('run_id', runId);
@@ -1012,7 +1019,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 
   // Labels for a posted batch: product, its barcode (else SKU), batch number
   // (JOB-…-R#) and the batch date. Copies default to the accepted quantity.
-  Future<void> _printRunLabels(Map<String, dynamic> run) async {
+  Future<void> _printRunLabels(Map<String, dynamic> run, {bool ask = false}) async {
     final pid = _fgId;
     final name = (pid != null ? _prodName[pid] : null) ?? _fgLabel;
     final code = pid != null ? _prodCode[pid] : null;
@@ -1021,7 +1028,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final accepted = (run['accepted_qty'] as num? ?? run['produced_qty'] as num? ?? 0).toDouble();
     await showLabelPrintDialog(
       context,
-      title: 'Labels · $jobNo R${run['run_no']}',
+      title: ask ? 'Print labels for batch R${run['run_no']}?' : 'Labels · $jobNo R${run['run_no']}',
       items: [LabelData(
         name: name,
         code: (code ?? '').isEmpty ? null : code,

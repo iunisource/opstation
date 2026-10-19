@@ -202,6 +202,14 @@ const List<_AdminToggle> _toggles = [
   // _AdminToggle('org.some_flag', 'Title shown to admin', 'What it does.'),
 
   _AdminToggle(
+    'org.ask_labels_after_production',
+    'Ask for labels after production',
+    'When ON (default), after a Job Card batch or a Production Voucher is posted, the label dialog opens '
+        'with one label per unit made (the count can be changed, or press Cancel to skip). '
+        'Turn OFF to stop asking — labels can still be printed any time from the batch or voucher.',
+    defaultOn: true,
+  ),
+  _AdminToggle(
     'org.job_ack_flow',
     'New job alert & acknowledgement (Job Cards)',
     'When ON, a loud buzzer sounds on open Job Card screens whenever a new job '
@@ -693,6 +701,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Manufacturing', Icons.precision_manufacturing_outlined, [
     'org.job_card_price_restrict',
+    'org.ask_labels_after_production',
     'org.job_ack_flow',
     'org.job_ack_skip_admin',
     'org.production_updates_cost_price',
