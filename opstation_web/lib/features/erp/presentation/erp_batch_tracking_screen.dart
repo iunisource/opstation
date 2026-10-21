@@ -97,7 +97,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
             .eq('org_id', org).neq('status', 'void')
             .order('received_on', ascending: false).limit(2000),
         _db.from('product_serials')
-            .select('id, serial, product_id, carton_id, source_type, source_id, source_number, branch_id, produced_on, warranty_months, status, dispatched_on')
+            .select('id, serial, product_id, carton_id, source_type, source_id, source_number, branch_id, produced_on, warranty_months, status, dispatched_on, customer_name, sold_doc_number')
             .eq('org_id', org).order('created_at', ascending: false).order('serial', ascending: false).limit(2000),
         _db.from('product_cartons')
             .select('id, carton_no, product_id, source_type, source_id, source_number, branch_id, qty, status, created_at')
@@ -273,7 +273,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
     );
   }
 
-  String _status(String? s) => switch (s) { 'in_stock' => 'In stock', 'dispatched' => 'Dispatched', 'void' => 'Cancelled', 'broken' => 'Taken apart', _ => s ?? '-' };
+  String _status(String? s) => switch (s) { 'in_stock' => 'In stock', 'dispatched' => 'Sold', 'void' => 'Cancelled', 'broken' => 'Taken apart', _ => s ?? '-' };
 
   Future<Widget> _serialCard(Map<String, dynamic> s) async {
     await _names([s['product_id']]);
@@ -294,6 +294,12 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
       _kv('Made in', '${_src(s)} ${s['source_number'] ?? ''}', onTap: s['source_type'] == 'production' ? () => _openSource(s) : null),
       _kv('Made on', BatchTracking.date(s['produced_on'])),
       if (s['branch_id'] != null) _kv('Branch', _branchName[s['branch_id']] ?? '-'),
+      if (s['status'] == 'dispatched') ...[
+        _kv('Sold to', '${s['customer_name'] ?? 'Walk-in'}'),
+        _kv('Sold on', '${BatchTracking.date(s['dispatched_on'])}  ·  ${s['sold_doc_type'] == 'pos' ? 'POS' : 'DO'} ${s['sold_doc_number'] ?? ''}',
+            onTap: s['sold_doc_type'] == 'do' && s['sold_doc_id'] != null
+                ? () => context.go('/erp/delivery-orders?focus=${s['sold_doc_id']}') : null),
+      ],
       if (s['broken_number'] != null) _kv('Taken apart in', '${s['broken_number']}', color: AppTheme.danger),
       if (carton != null) _kv('Carton', '$carton', onTap: () => _trace('$carton')),
       _kv('Warranty', months <= 0 ? 'None' : until != null
@@ -535,9 +541,9 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
   }
 
   Widget _serialsTable() {
-    final list = _serials.where((s) => _match([s['serial'], s['carton_no'], s['source_number'], _p(s['product_id'])])).toList();
+    final list = _serials.where((s) => _match([s['serial'], s['carton_no'], s['source_number'], _p(s['product_id']), s['customer_name'], s['sold_doc_number']])).toList();
     return _table(
-      const [('Serial', 3, false), ('Product', 4, false), ('Carton', 2, false), ('Made in', 3, false), ('Made on', 2, false), ('Status', 2, false)],
+      const [('Serial', 3, false), ('Product', 4, false), ('Carton', 2, false), ('Made in', 3, false), ('Made on', 2, false), ('Status', 2, false), ('Sold to', 3, false)],
       [for (final s in list) [
         _t('${s['serial']}', bold: true),
         _t(_p(s['product_id'])),
@@ -545,6 +551,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
         _t('${s['source_number'] ?? ''}'),
         _t(BatchTracking.date(s['produced_on'])),
         _t(_status(s['status'] as String?), color: s['status'] == 'void' ? AppTheme.danger : null),
+        _t(s['status'] == 'dispatched' ? '${s['customer_name'] ?? 'Walk-in'}  ·  ${BatchTracking.date(s['dispatched_on'])}' : '-'),
       ]],
       [for (final s in list) () => _trace('${s['serial']}')],
     );

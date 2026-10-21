@@ -16,6 +16,7 @@ import 'erp_pos_held_bills_screen.dart';
 import 'dart:js_util' as js_util;
 import 'dart:js_util' as js_util;
 import '../../../core/utils/friendly_error.dart';
+import '../services/batch_tracking.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 // Cash actually collected for a transaction: the Cash tender from
@@ -1271,6 +1272,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   double get _totalDiscount => _cartItemDiscounts + _orderDiscountAmt;
 
   bool _checkingOut = false;
+  String? _btScanMode; // batch tracking: off | optional | mandatory (read once)
   // ── Phase 1: tender helpers ─────────────────────────────────────────────
   Map<String, dynamic>? _methodByCode(String code) {
     for (final m in _payMethods) { if (m['code'] == code) return m; }
@@ -1491,7 +1493,23 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final stock = (item['stock_qty'] as num?)?.toDouble() ?? 0;
       if (!_allowNoStock && (stock <= 0 || qty > stock)) { _showSnack('Insufficient stock for "${item['name']}": ${(stock < 0 ? 0 : stock).toStringAsFixed(0)} available'); return; }
     }
+    // Batch tracking: scan the serial units being sold (off / optional / mandatory).
     _checkingOut = true;
+    List<String> soldSerials = const [];
+    try {
+      _btScanMode ??= await DispatchSerials.mode(_orgId);
+      if (_btScanMode != 'off' && _orgId != null && mounted) {
+        final lines = <String, (String, double)>{};
+        for (final item in _cart) {
+          final pid = item['product_id'] as String?;
+          if (pid == null) continue;
+          lines[pid] = ('${item['name'] ?? ''}', (lines[pid]?.$2 ?? 0) + ((item['quantity'] as num?)?.toDouble() ?? 0));
+        }
+        final r = await DispatchSerials.scan(context, orgId: _orgId!, lines: lines, mode: _btScanMode!, title: 'Scan units sold');
+        if (r == null) { _checkingOut = false; return; }
+        soldSerials = DispatchSerials.flat(r);
+      }
+    } catch (_) {}
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
     try {
@@ -1573,6 +1591,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       // Customer balances are GL-computed (via the sale's AR posting under
       // customer_id) — no separate balance column to maintain.
       final custShop = _selectedCustomer?['shop_name'] as String?;
+      if (soldSerials.isNotEmpty && orgId != null) {
+        final n = await DispatchSerials.markSold(orgId: orgId, docType: 'pos', docId: txnId, docNumber: txnNumber,
+            customerId: _selectedCustomer?['id'] as String?,
+            customerName: custShop ?? _selectedPosCustomer?['name'] as String?,
+            serials: soldSerials);
+        if (n == null) _showSnack('Sale saved, but the serial numbers were not recorded.');
+      }
       setState(() {
         // Decrement local stock for the sold items so the till reflects it
         // instantly — this removes the need for the slow full reload post-sale.
@@ -1621,6 +1646,22 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       _showSnack('This sale has no customer — attach a customer to refund to their account, or choose Cash.');
       return;
     }
+    // Batch tracking: scan the units coming back so their serials return to stock.
+    List<String> backSerials = const [];
+    if (_orgId != null && originalTxn['id'] is String && await BatchTracking.isOn(_orgId)) {
+      final lines = <String, (String, double)>{};
+      for (final item in returnItems) {
+        final pid = item['product_id'] as String?;
+        if (pid == null) continue;
+        lines[pid] = ('${item['products']?['name'] ?? item['name'] ?? ''}',
+            (lines[pid]?.$2 ?? 0) + ((item['return_qty'] as num?)?.toDouble() ?? 0));
+      }
+      if (!mounted) return;
+      final r = await DispatchSerials.scan(context, orgId: _orgId!, lines: lines, mode: 'optional',
+          title: 'Scan units returned', returnFromDocId: originalTxn['id'] as String);
+      if (r == null) return;
+      backSerials = DispatchSerials.flat(r);
+    }
     final orgId = _orgId; final userId = ref.read(currentUserProvider)?.id;
     final branchId = _session['branch_id'] as String;
     try {
@@ -1661,6 +1702,9 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         }).toList(),
         'p_branch_id': branchId,
       });
+      if (backSerials.isNotEmpty) {
+        await DispatchSerials.markReturned(orgId: orgId ?? '', docId: originalTxn['id'] as String, serials: backSerials);
+      }
       _showSnack('Return processed — Rs. ${money(returnTotal)} refunded');
       await _loadData();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }

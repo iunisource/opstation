@@ -53,6 +53,16 @@ class _UsersField {
   const _UsersField(this.key, this.label, {this.accounts = false});
 }
 
+/// An optional one-of-several choice attached to a toggle (e.g. Off /
+/// Optional / Mandatory). Shown (and saved) only while the parent toggle is ON.
+class _ChoiceField {
+  final String key;
+  final String label;
+  final List<(String, String)> options; // (stored value, label)
+  final String defaultValue;
+  const _ChoiceField(this.key, this.label, this.options, this.defaultValue);
+}
+
 /// Definition of a single org-level admin toggle.
 /// To add a new setting, append one entry to [_toggles] below — the screen
 /// renders, loads, and persists it automatically. Boolean values are stored in
@@ -66,9 +76,10 @@ class _AdminToggle {
   final _TextSetting? text; // optional free-text companion
   final _BranchField? branch; // optional branch-picker companion
   final _UsersField? users; // optional user multi-select companion
+  final _ChoiceField? choice; // optional one-of-several companion
   final bool defaultOn; // value used when no app_config row exists yet
   const _AdminToggle(this.key, this.title, this.subtitle,
-      {this.number, this.text, this.branch, this.users, this.defaultOn = false});
+      {this.number, this.text, this.branch, this.users, this.choice, this.defaultOn = false});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -385,7 +396,14 @@ const List<_AdminToggle> _toggles = [
         'items, production records which component batches were used (oldest '
         'first, or picked by hand) and gives serial products unit serials and '
         'carton labels. Everything can be looked up in Inventory → Batch Tracking. '
+        'Serial units can be scanned on the Delivery Order and at POS, so each one '
+        'records its customer and sale date (the customer warranty starts then). '
         'When OFF, nothing changes from how stock works today.',
+    choice: _ChoiceField('org.bt_dispatch_scan', 'Scan serials at dispatch (Delivery Order & POS)', [
+      ('off', 'Off — no scanning'),
+      ('optional', 'Optional — ask, can skip'),
+      ('mandatory', 'Mandatory — every unit must be scanned'),
+    ], 'optional'),
   ),
   _AdminToggle(
     'org.show_product_images',
@@ -785,6 +803,7 @@ class _ErpAdminSettingsScreenState
   final Map<String, TextEditingController> _numCtrls = {};
   final Map<String, TextEditingController> _textCtrls = {};
   final Map<String, String> _branchValues = {}; // branch-picker companions ('all' or branch id)
+  final Map<String, String> _choiceValues = {}; // one-of-several companions
   final Map<String, Set<String>> _userValues = {}; // user multi-select companions
   List<Map<String, dynamic>> _branches = [];
   List<Map<String, dynamic>> _orgUsers = [];
@@ -928,6 +947,11 @@ class _ErpAdminSettingsScreenState
                 (storedB == 'all' ||
                     branches.any((br) => br['id'] == storedB));
             _branchValues[b.key] = valid ? storedB : 'all';
+          }
+          final ch = t.choice;
+          if (ch != null) {
+            final v = cfg[ch.key]?.trim();
+            _choiceValues[ch.key] = (v != null && ch.options.any((o) => o.$1 == v)) ? v : ch.defaultValue;
           }
           final u = t.users;
           if (u != null) {
@@ -1289,6 +1313,46 @@ class _ErpAdminSettingsScreenState
     }
   }
 
+  Future<void> _saveChoice(_ChoiceField c, String value) async {
+    final old = _choiceValues[c.key] ?? c.defaultValue;
+    setState(() { _choiceValues[c.key] = value; _saving.add(c.key); });
+    try {
+      await _persist(c.key, value);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _choiceValues[c.key] = old);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(c.key));
+    }
+  }
+
+  Widget _choiceRow(_ChoiceField c) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Flexible(child: Text(c.label, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary))),
+          if (_saving.contains(c.key)) ...[
+            const SizedBox(width: 10),
+            const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)),
+          ],
+        ]),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          value: _choiceValues[c.key] ?? c.defaultValue,
+          isExpanded: true,
+          style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+          decoration: const InputDecoration(isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
+          items: [for (final o in c.options) DropdownMenuItem(value: o.$1, child: Text(o.$2))],
+          onChanged: (v) { if (v != null) _saveChoice(c, v); },
+        ),
+      ]),
+    );
+  }
+
   Widget _branchRow(_BranchField b) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
@@ -1491,7 +1555,7 @@ class _ErpAdminSettingsScreenState
   Widget _toggleCard(_AdminToggle t) {
     final on = _values[t.key] ?? false;
     final hasCompanion =
-        on && (t.number != null || t.text != null || t.branch != null || t.users != null);
+        on && (t.number != null || t.text != null || t.branch != null || t.users != null || t.choice != null);
     return Container(
       decoration: BoxDecoration(
         color: on ? AppTheme.primary.withOpacity(0.045) : Colors.white,
@@ -1551,6 +1615,7 @@ class _ErpAdminSettingsScreenState
             if (t.text != null) _textRow(t.text!),
             if (t.branch != null) _branchRow(t.branch!),
             if (t.users != null) _usersRow(t.users!),
+            if (t.choice != null) _choiceRow(t.choice!),
           ],
         ],
       ),

@@ -334,3 +334,205 @@ class _ComponentBatchPickerState extends State<ComponentBatchPicker> {
     ]));
   }
 }
+
+/// Serial scan at dispatch (Delivery Order, POS) — Admin Settings → Batch &
+/// warranty tracking → "Scan serials at dispatch": off | optional | mandatory.
+class DispatchSerials {
+  static SupabaseClient get _db => Supabase.instance.client;
+
+  /// 'off' | 'optional' | 'mandatory'. Off whenever batch tracking is off.
+  static Future<String> mode(String? orgId) async {
+    if (!await BatchTracking.isOn(orgId)) return 'off';
+    try {
+      final r = await _db.from('app_config').select('value')
+          .eq('org_id', orgId!).eq('key', 'org.bt_dispatch_scan').limit(1).maybeSingle();
+      final v = '${r?['value'] ?? ''}';
+      return const ['off', 'optional', 'mandatory'].contains(v) ? v : 'optional';
+    } catch (_) {
+      return 'optional';
+    }
+  }
+
+  /// Scan dialog. [lines]: product id → (name, qty). Only Serial products are
+  /// asked for. Returns product id → serials, {} when nothing to scan / skipped,
+  /// or null when the user cancelled (stop the save).
+  /// For a return, pass [returnFromDocId]: serials must have been sold on it.
+  static Future<Map<String, List<String>>?> scan(BuildContext context, {
+    required String orgId,
+    required Map<String, (String, double)> lines,
+    required String mode,
+    String title = 'Scan serial numbers',
+    String? returnFromDocId,
+  }) async {
+    if (mode == 'off' || lines.isEmpty) return {};
+    final tracked = await BatchTracking.trackedProducts(lines.keys.toList());
+    final serialLines = <String, (String, int)>{
+      for (final e in lines.entries)
+        if (tracked[e.key]?['batch_tracking'] == 'serial' && e.value.$2 >= 1) e.key: (e.value.$1, e.value.$2.floor()),
+    };
+    if (serialLines.isEmpty || !context.mounted) return {};
+    final picked = <String, List<String>>{for (final k in serialLines.keys) k: <String>[]};
+    final ctrl = TextEditingController();
+    final focus = FocusNode();
+    String? msg;
+    bool busy = false;
+    final isReturn = returnFromDocId != null;
+    final mandatory = mode == 'mandatory' && !isReturn;
+
+    Future<void> add(String raw, void Function(void Function()) setS) async {
+      final code = raw.trim();
+      if (code.isEmpty) return;
+      setS(() { busy = true; msg = null; });
+      try {
+        var rows = List<Map<String, dynamic>>.from(await _db.from('product_serials')
+            .select('serial, product_id, status, sold_doc_id')
+            .eq('org_id', orgId).ilike('serial', code).limit(1) as List);
+        if (rows.isEmpty) {
+          final ct = await _db.from('product_cartons').select('id').eq('org_id', orgId).ilike('carton_no', code).limit(1).maybeSingle();
+          if (ct != null) {
+            rows = List<Map<String, dynamic>>.from(await _db.from('product_serials')
+                .select('serial, product_id, status, sold_doc_id').eq('carton_id', ct['id']).order('serial') as List);
+          }
+        }
+        if (rows.isEmpty) { msg = '$code was not found.'; return; }
+        int added = 0; final skipped = <String>[];
+        for (final r in rows) {
+          final pid = '${r['product_id']}';
+          final s = '${r['serial']}';
+          final line = serialLines[pid];
+          if (line == null) { skipped.add('$s is not on this ${isReturn ? 'return' : 'order'}'); continue; }
+          if (isReturn ? (r['status'] != 'dispatched' || r['sold_doc_id'] != returnFromDocId) : r['status'] != 'in_stock') {
+            skipped.add(isReturn ? '$s was not sold on this receipt' : '$s is not in stock'); continue;
+          }
+          final list = picked[pid]!;
+          if (list.any((x) => x.toUpperCase() == s.toUpperCase())) { skipped.add('$s already scanned'); continue; }
+          if (list.length >= line.$2) { skipped.add('${line.$1}: all ${line.$2} already scanned'); continue; }
+          list.add(s); added++;
+        }
+        if (skipped.isNotEmpty) msg = skipped.length > 3 ? '${skipped.take(3).join(' · ')} …' : skipped.join(' · ');
+        if (added > 1 && skipped.isEmpty) msg = 'Carton: $added units added';
+      } catch (_) {
+        msg = 'Could not check that code. Please try again.';
+      } finally {
+        ctrl.clear();
+        setS(() => busy = false);
+        focus.requestFocus();
+      }
+    }
+
+    final res = await showDialog<Map<String, List<String>>>(context: context, barrierDismissible: false,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
+      final total = serialLines.values.fold<int>(0, (s, l) => s + l.$2);
+      final done = picked.values.fold<int>(0, (s, l) => s + l.length);
+      final complete = serialLines.entries.every((e) => picked[e.key]!.length >= e.value.$2);
+      return AlertDialog(
+        title: Text(title),
+        content: SizedBox(width: 520, child: SingleChildScrollView(child: Column(
+            mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(isReturn
+              ? 'Scan the units coming back so they return to stock. You can skip this.'
+              : mandatory
+                  ? 'Scan every unit (or a carton label) before saving.'
+                  : 'Scan the units (or a carton label) going out. You can skip this.',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: TextField(controller: ctrl, focusNode: focus, autofocus: true, enabled: !busy,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (v) => add(v, setS),
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.qr_code_scanner, size: 18), hintText: 'Scan or type a serial or carton number'))),
+            const SizedBox(width: 8),
+            ElevatedButton(onPressed: busy ? null : () => add(ctrl.text, setS), child: const Text('Add')),
+          ]),
+          if (msg != null) Padding(padding: const EdgeInsets.only(top: 6),
+              child: Text(msg!, style: TextStyle(fontSize: 11.5,
+                  color: msg!.startsWith('Carton:') ? AppTheme.success : AppTheme.danger))),
+          const SizedBox(height: 12),
+          Text('$done of $total scanned', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          for (final e in serialLines.entries) Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(6), border: Border.all(
+                color: picked[e.key]!.length >= e.value.$2 ? AppTheme.success.withOpacity(0.5) : AppTheme.border)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(e.value.$1, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600))),
+                Text('${picked[e.key]!.length} / ${e.value.$2}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                    color: picked[e.key]!.length >= e.value.$2 ? AppTheme.success : AppTheme.textSecondary)),
+              ]),
+              if (picked[e.key]!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Wrap(spacing: 5, runSpacing: 5, children: [
+                  for (final s in picked[e.key]!) InputChip(visualDensity: VisualDensity.compact,
+                      label: Text(s, style: const TextStyle(fontSize: 11)),
+                      onDeleted: () => setS(() => picked[e.key]!.remove(s))),
+                ]),
+              ],
+            ]),
+          ),
+        ]))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          if (!mandatory) TextButton(onPressed: () => Navigator.pop(ctx, <String, List<String>>{}), child: const Text('Skip')),
+          ElevatedButton(
+            onPressed: (mandatory && !complete) || busy ? null : () => Navigator.pop(ctx, picked),
+            child: Text(mandatory && !complete ? '${total - done} left' : 'Continue')),
+        ],
+      );
+    }));
+    // Not disposed here: the dialog may still be animating out.
+    return res;
+  }
+
+  static List<String> flat(Map<String, List<String>>? m) =>
+      [for (final l in (m ?? const <String, List<String>>{}).values) ...l];
+
+  /// Records the sale on the serials. Returns the count, or null on failure.
+  static Future<int?> markSold({
+    required String orgId,
+    required String docType, // 'do' | 'pos'
+    required String docId,
+    required String docNumber,
+    String? customerId,
+    String? customerName,
+    DateTime? date,
+    required List<String> serials,
+  }) async {
+    if (serials.isEmpty) return 0;
+    try {
+      final r = await _db.rpc('bt_dispatch_serials', params: {
+        'p_org': orgId, 'p_doc_type': docType, 'p_doc_id': docId, 'p_doc_number': docNumber,
+        'p_customer': customerId, 'p_customer_name': customerName,
+        'p_date': DateFormat('yyyy-MM-dd').format(date ?? DateTime.now()),
+        'p_serials': serials,
+      });
+      return (r as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<int?> markReturned({required String orgId, String? docId, required List<String> serials}) async {
+    if (serials.isEmpty) return 0;
+    try {
+      final r = await _db.rpc('bt_return_serials', params: {'p_org': orgId, 'p_doc_id': docId, 'p_serials': serials});
+      return (r as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Serials sold on one document.
+  static Future<List<Map<String, dynamic>>> soldOn(String docType, String docId) async {
+    try {
+      final r = await _db.from('product_serials').select('serial, product_id')
+          .eq('sold_doc_type', docType).eq('sold_doc_id', docId).order('serial');
+      return List<Map<String, dynamic>>.from(r as List);
+    } catch (_) {
+      return [];
+    }
+  }
+}

@@ -13,6 +13,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../services/batch_tracking.dart';
 import '../widgets/opening_date_guard.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../widgets/voucher_docs_panel.dart';
@@ -1576,6 +1577,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   bool _doSuperviseBusy = false;
   bool _canSupervise = false;
   String _doSupFilter = 'all'; // supervision filter: all | yes | no
+  // Batch & warranty tracking: serials scanned before saving this DO.
+  bool _btOn = false;
+  Map<String, List<String>>? _pendingSerials;
 
   @override
   void initState() {
@@ -1721,21 +1725,22 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       try {
         final cfg = await client.from('app_config').select('key,value')
             .eq('org_id', _orgId ?? '')
-            .inFilter('key', ['org.delivery_flow_enabled', 'org.voucher_dates_editable', 'org.do_supervise_flow', 'org.do_supervisor_users']);
-        bool flow = true, datesEd = false, supFlow = false;
+            .inFilter('key', ['org.delivery_flow_enabled', 'org.voucher_dates_editable', 'org.do_supervise_flow', 'org.do_supervisor_users', 'org.batch_tracking']);
+        bool flow = true, datesEd = false, supFlow = false, btOn = false;
         String supUsers = '';
         for (final r in cfg as List) {
           if (r['key'] == 'org.delivery_flow_enabled') flow = r['value'] != 'false';
           if (r['key'] == 'org.voucher_dates_editable') datesEd = r['value'] == 'true';
           if (r['key'] == 'org.do_supervise_flow') supFlow = r['value'] == 'true';
           if (r['key'] == 'org.do_supervisor_users') supUsers = (r['value'] as String?) ?? '';
+          if (r['key'] == 'org.batch_tracking') btOn = r['value'] == 'true';
         }
         final role = ref.read(currentUserProvider)?.role;
         final uid = ref.read(currentUserProvider)?.id;
         final extraIds = supUsers.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
         final canSup = role == WebUserRole.masterAdmin || role == WebUserRole.admin ||
             (uid != null && extraIds.contains(uid));
-        if (mounted) setState(() { _deliveryFlow = flow; _datesEditable = datesEd; _doSuperviseFlow = supFlow; _canSupervise = canSup; });
+        if (mounted) setState(() { _deliveryFlow = flow; _datesEditable = datesEd; _doSuperviseFlow = supFlow; _canSupervise = canSup; _btOn = btOn; });
       } catch (_) {}
     } catch (_) { setState(() => _detailLoading = false); }
   }
@@ -1817,6 +1822,55 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       await _loadList();
       await _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack('Could not void: $e'); }
+  }
+
+  // Serial numbers sent on this DO — view, and scan any not recorded yet.
+  Future<void> _doSerials() async {
+    final orgId = _orgId; final doId = _detail['id'] as String?;
+    if (orgId == null || doId == null) return;
+    final sold = await DispatchSerials.soldOn('do', doId);
+    final soldCount = <String, int>{};
+    for (final s in sold) { soldCount['${s['product_id']}'] = (soldCount['${s['product_id']}'] ?? 0) + 1; }
+    final open = <String, (String, double)>{};
+    for (final it in _items) {
+      final pid = it['product_id'] as String?;
+      if (pid == null) continue;
+      final q = (it['qty_delivered'] as num?)?.toDouble() ?? 0;
+      open[pid] = ('${it['products']?['name'] ?? ''}', (open[pid]?.$2 ?? 0) + q);
+    }
+    for (final pid in open.keys.toList()) {
+      final left = open[pid]!.$2 - (soldCount[pid] ?? 0);
+      if (left >= 1) { open[pid] = (open[pid]!.$1, left); } else { open.remove(pid); }
+    }
+    final tracked = await BatchTracking.trackedProducts(open.keys.toList());
+    open.removeWhere((k, _) => tracked[k]?['batch_tracking'] != 'serial');
+    final voided = _detail['is_voided'] == true;
+    if (!mounted) return;
+    final more = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: Text('Serial numbers · ${_detail['voucher_number'] ?? ''}'),
+      content: SizedBox(width: 440, child: sold.isEmpty
+          ? const Text('No serial numbers recorded on this delivery.', style: TextStyle(color: AppTheme.textSecondary))
+          : SingleChildScrollView(child: Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final s in sold) ActionChip(visualDensity: VisualDensity.compact,
+                  label: Text('${s['serial']}', style: const TextStyle(fontSize: 11.5)),
+                  onPressed: () { Navigator.pop(ctx); context.go('/erp/batch-tracking?q=${Uri.encodeComponent('${s['serial']}')}'); }),
+            ]))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Close')),
+        if (!voided && open.isNotEmpty)
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Scan units')),
+      ],
+    ));
+    if (more != true || !mounted) return;
+    final r = await DispatchSerials.scan(context, orgId: orgId, lines: open, mode: 'optional',
+        title: 'Scan units · ${_detail['voucher_number'] ?? ''}');
+    final serials = DispatchSerials.flat(r);
+    if (serials.isEmpty) return;
+    final n = await DispatchSerials.markSold(orgId: orgId, docType: 'do', docId: doId,
+        docNumber: '${_detail['voucher_number'] ?? ''}',
+        customerId: _detail['customer_id'] as String?, customerName: _detail['customers']?['shop_name'] as String?,
+        date: DateTime.tryParse('${_detail['voucher_date'] ?? ''}'), serials: serials);
+    _showSnack(n == null ? 'The serial numbers were not recorded. Please try again.' : '$n serial${n == 1 ? '' : 's'} recorded');
   }
 
   Future<void> _markDelivered() async {
@@ -2328,6 +2382,27 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   }
 
   Future<void> _saveDeliveryOrder() async {
+    // Batch tracking: scan the serial units going out (Admin Settings decides
+    // off / optional / mandatory). Cancel stops the save.
+    _pendingSerials = null;
+    final scanMode = await DispatchSerials.mode(_orgId);
+    if (scanMode != 'off' && _orgId != null) {
+      final lines = <String, (String, double)>{};
+      for (final e in _deliverQtyCtrl.entries) {
+        final q = double.tryParse(e.value.text.trim()) ?? 0;
+        if (q <= 0) continue;
+        final so = _soItems.firstWhere((i) => i['id'] == e.key, orElse: () => {});
+        if (so.isEmpty || so['product_id'] == null) continue;
+        final pid = so['product_id'] as String;
+        lines[pid] = ('${so['products']?['name'] ?? ''}', (lines[pid]?.$2 ?? 0) + q);
+      }
+      if (!mounted) return;
+      final r = await DispatchSerials.scan(context, orgId: _orgId!, lines: lines, mode: scanMode,
+          title: 'Scan units · ${_detail['voucher_number'] ?? ''}');
+      if (r == null) return;
+      _pendingSerials = r;
+    }
+    if (!mounted) return;
     SavingOverlay.show(context, label: 'Saving…');
     try {
       // Persist collect amount BEFORE _saveDelivery() — save_delivery_order locks
@@ -2421,7 +2496,22 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'p_lines': lines,
         'p_moved_at': movedAtForVoucher(_detail['voucher_date'] as String?),
       });
-      _showSnack('Delivery saved — stock deducted');
+      final serials = DispatchSerials.flat(_pendingSerials);
+      _pendingSerials = null;
+      if (serials.isNotEmpty && orgId != null) {
+        final n = await DispatchSerials.markSold(orgId: orgId, docType: 'do', docId: _detail['id'] as String,
+            docNumber: '${_detail['voucher_number'] ?? ''}',
+            customerId: _detail['customer_id'] as String?,
+            customerName: _detail['customers']?['shop_name'] as String?,
+            date: DateTime.tryParse('${_detail['voucher_date'] ?? ''}'), serials: serials);
+        if (n == null) {
+          _showSnack('Delivery saved, but the serial numbers were not recorded. Use the Serials button on this DO to record them.');
+        } else {
+          _showSnack('Delivery saved — stock deducted · $n serial${n == 1 ? '' : 's'} recorded');
+        }
+      } else {
+        _showSnack('Delivery saved — stock deducted');
+      }
       await _loadList();
       await _loadDetail(_detail['id'] as String);
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -2796,6 +2886,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
               IconButton(icon: const Icon(Icons.check_circle_outline, color: AppTheme.success), tooltip: 'Mark Delivered (self-pickup / manual)', onPressed: _markDelivered),
             IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _printDO),
+            if (_btOn && _items.isNotEmpty)
+              IconButton(icon: const Icon(Icons.qr_code_2_outlined, color: AppTheme.textSecondary), tooltip: 'Serial numbers', onPressed: _doSerials),
             if (_canDelete && !isVoided)
               IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _deleteDO),
           ];
