@@ -583,60 +583,67 @@ class _LocationHealthBar extends StatelessWidget {
 
     final acc = fix.available ? fix.accuracyMeters : null;
 
-    // Bands chosen against the geofence, not in the abstract: a 100m fence with a
-    // 90m error is a coin toss, which is precisely the failure the reps hit.
-    final Color tone;
-    final String label;
-    final double bar;
+    // GPS strength — shown small, as a reference only.
+    final Color gpsTone;
+    final String gpsLabel;
     if (acc == null) {
-      tone = AppColors.textSecondaryLight;
-      label = searching ? 'Finding your location…' : 'Location unavailable';
-      bar = 0.08;
+      gpsTone = AppColors.textSecondaryLight;
+      gpsLabel = searching ? 'Finding your location…' : 'Location unavailable';
     } else if (acc <= 20) {
-      tone = AppColors.success;
-      label = 'Strong signal — ready';
-      bar = 1.0;
+      gpsTone = AppColors.success;
+      gpsLabel = 'GPS strong';
     } else if (acc <= 50) {
-      tone = AppColors.warningDark;
-      label = searching ? 'Improving… you can wait a moment' : 'Fair signal';
-      bar = 0.6;
+      gpsTone = AppColors.warningDark;
+      gpsLabel = searching ? 'GPS fair — improving' : 'GPS fair';
     } else {
-      tone = AppColors.dangerDark;
-      label = searching ? 'Weak — waiting for a better fix…' : 'Weak signal';
-      bar = 0.28;
+      gpsTone = AppColors.dangerDark;
+      gpsLabel = searching ? 'GPS weak — improving' : 'GPS weak';
     }
 
+    // The main line and the bar follow what decides the visit: is the rep
+    // inside the shop's fence? Green when inside, whatever the GPS strength —
+    // a "fair" signal that is still inside the fence used to look orange and
+    // confused the team.
     final inRange = distance != null && distance! <= radius;
+    final Color tone = distance == null
+        ? AppColors.textSecondaryLight
+        : inRange ? AppColors.success : AppColors.warningDark;
+    final double bar = distance == null
+        ? 0.08
+        : inRange ? 1.0 : (radius / distance!).clamp(0.08, 0.95).toDouble();
+    final String main = distance == null
+        ? (searching ? 'Checking distance to the shop…' : 'Distance to the shop not known')
+        : inRange
+            ? '${distance!.round()} m from the shop — inside the ${radius.round()} m fence'
+            : '${distance!.round()} m from the shop — outside the ${radius.round()} m fence';
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      padding: const EdgeInsets.fromLTRB(12, 9, 12, 12),
       decoration: BoxDecoration(
         color: tone.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: tone.withValues(alpha: 0.30)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Reference line: GPS strength.
         Row(children: [
           if (searching)
             SizedBox(
-              width: 13, height: 13,
-              child: CircularProgressIndicator(strokeWidth: 2, color: tone),
+              width: 11, height: 11,
+              child: CircularProgressIndicator(strokeWidth: 1.6, color: gpsTone),
             )
           else
             Icon(
               acc == null ? Icons.location_disabled
                 : acc <= 20 ? Icons.gps_fixed
                 : Icons.gps_not_fixed,
-              size: 15, color: tone,
+              size: 13, color: gpsTone,
             ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
-            child: Text(label,
-                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: tone)),
+            child: Text(acc == null ? gpsLabel : '$gpsLabel  ·  ±${acc.round()} m',
+                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: gpsTone)),
           ),
-          if (acc != null)
-            Text('±${acc.round()} m',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: tone)),
           if (!searching)
             InkWell(
               onTap: onRetry,
@@ -645,6 +652,18 @@ class _LocationHealthBar extends StatelessWidget {
                 child: Icon(Icons.refresh, size: 16, color: AppColors.textSecondaryLight),
               ),
             ),
+        ]),
+        const SizedBox(height: 7),
+        // Main line: inside / outside the fence.
+        Row(children: [
+          Icon(distance == null ? Icons.near_me_outlined
+                : inRange ? Icons.check_circle : Icons.error_outline,
+              size: 15, color: tone),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(main,
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: tone)),
+          ),
         ]),
         const SizedBox(height: 8),
         ClipRRect(
@@ -660,25 +679,6 @@ class _LocationHealthBar extends StatelessWidget {
             ),
           ),
         ),
-        if (distance != null) ...[
-          const SizedBox(height: 7),
-          Row(children: [
-            Icon(inRange ? Icons.check_circle : Icons.error_outline,
-                size: 13,
-                color: inRange ? AppColors.success : AppColors.warningDark),
-            const SizedBox(width: 5),
-            Text(
-              inRange
-                  ? '${distance!.round()} m from the shop — inside the ${radius.round()} m fence'
-                  : '${distance!.round()} m from the shop — outside the ${radius.round()} m fence',
-              style: TextStyle(
-                fontSize: 11.5,
-                color: inRange ? AppColors.success : AppColors.warningDark,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ]),
-        ],
       ]),
     );
   }
