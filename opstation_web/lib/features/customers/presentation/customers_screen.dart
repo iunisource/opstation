@@ -50,6 +50,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   // Labels for the "Show" (data-quality) filter, shared by the modal and chips.
   Map<String, String> get _missingLabels => {
     if (!widget.crmMode && _customerSuperviseEnabled) 'supervise_pending': 'Supervision pending',
+    if (!widget.crmMode && (_reviewPendingIds.isNotEmpty || _missingFilter == 'review_pending'))
+      'review_pending': 'Changes to review (${_reviewPendingIds.length})',
     'all': 'All customers',
     'contact': 'Missing: Contact Person',
     'phone': 'Missing: Phone',
@@ -258,6 +260,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             return _isMalformed(c);
           case 'supervise_pending':
             return c['supervised_at'] == null; // not yet supervised
+          case 'review_pending':
+            return _reviewPendingIds.contains(c['id']); // edits / field locations to review
           default:
             return true;
         }
@@ -468,15 +472,37 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
               ),
             ),
             const SizedBox(width: 8),
+            // Red count = customers with changes waiting for review; tapping the
+            // chip next to it shows just those.
             Badge(
-              isLabelVisible: _moreFilterCount > 0,
-              label: Text('$_moreFilterCount'),
-              child: IconButton.outlined(
-                tooltip: 'Filters',
-                onPressed: _openMoreFilters,
-                icon: Icon(Icons.filter_list, color: _moreFilterCount > 0 ? AppTheme.primary : null),
+              isLabelVisible: !widget.crmMode && _reviewPendingIds.isNotEmpty,
+              backgroundColor: AppTheme.danger,
+              alignment: AlignmentDirectional.topStart,
+              offset: const Offset(-6, -6),
+              label: Text('${_reviewPendingIds.length}'),
+              child: Badge(
+                isLabelVisible: _moreFilterCount > 0,
+                label: Text('$_moreFilterCount'),
+                child: IconButton.outlined(
+                  tooltip: _reviewPendingIds.isNotEmpty
+                      ? 'Filters — ${_reviewPendingIds.length} customer${_reviewPendingIds.length == 1 ? '' : 's'} with changes to review'
+                      : 'Filters',
+                  onPressed: _openMoreFilters,
+                  icon: Icon(Icons.filter_list, color: _moreFilterCount > 0 ? AppTheme.primary : null),
+                ),
               ),
             ),
+            if (!widget.crmMode && _reviewPendingIds.isNotEmpty && _missingFilter != 'review_pending') ...[
+              const SizedBox(width: 8),
+              ActionChip(
+                avatar: const Icon(Icons.rate_review_outlined, size: 16, color: AppTheme.danger),
+                label: Text('${_reviewPendingIds.length} to review',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.danger)),
+                side: BorderSide(color: AppTheme.danger.withOpacity(0.4)),
+                backgroundColor: AppTheme.danger.withOpacity(0.06),
+                onPressed: () { setState(() => _missingFilter = 'review_pending'); _filter(); },
+              ),
+            ],
           ]),
           if (_moreFilterCount > 0) Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -967,6 +993,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       final rr = await Supabase.instance.client.from('customer_edit_reviews').select('customer_id')
           .eq('org_id', orgId).eq('status', 'pending').limit(5000);
       if (mounted) setState(() => _reviewPendingIds = {for (final x in rr as List) '${x['customer_id']}'});
+      if (mounted && _missingFilter == 'review_pending') _filter();
       ref.invalidate(customerSupervisePendingProvider);
     } catch (_) {}
   }
