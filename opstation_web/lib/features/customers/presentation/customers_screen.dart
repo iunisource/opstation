@@ -14,6 +14,7 @@ import '../../../core/widgets/responsive.dart';
 
 import 'customer_history_screen.dart';
 import 'erp_customer_360_screen.dart';
+import 'customer_edit_review.dart';
 
 class CustomersScreen extends ConsumerStatefulWidget {
   final bool crmMode;
@@ -1253,8 +1254,19 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   )),
                 const SizedBox(height: 16),
                 // Location
-                const Align(alignment: Alignment.centerLeft,
-                  child: Text('Location Coordinates', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                Row(children: [
+                  const Expanded(child: Text('Location Coordinates', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
+                  if (customer != null)
+                    TextButton.icon(
+                      icon: const Icon(Icons.history, size: 16),
+                      label: const Text('Location history', style: TextStyle(fontSize: 12)),
+                      onPressed: () => showLocationLifecycle(ctx,
+                          customerId: customer['id'] as String,
+                          shopName: '${customer['shop_name'] ?? ''}',
+                          currentLat: (customer['latitude'] as num?)?.toDouble(),
+                          currentLng: (customer['longitude'] as num?)?.toDouble()),
+                    ),
+                ]),
                 const SizedBox(height: 4),
                 const Align(alignment: Alignment.centerLeft,
                   child: Text('Enter GPS coordinates manually or use the mobile app to set location on-site.',

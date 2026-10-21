@@ -88,6 +88,132 @@ class CustomerReviews {
   }
 }
 
+/// Location lifecycle: every location change for a shop (newest first) —
+/// who, when, how (field photo / edit), old → new, accuracy, and what the
+/// supervisor did. Opened from Customer 360 → Location and the customer form.
+Future<void> showLocationLifecycle(BuildContext context, {
+  required String customerId,
+  required String shopName,
+  double? currentLat,
+  double? currentLng,
+}) async {
+  final db = Supabase.instance.client;
+  List<Map<String, dynamic>> rows = [];
+  final urls = <String, String>{};
+  String? error;
+  try {
+    rows = List<Map<String, dynamic>>.from(await db.from('customer_edit_reviews').select()
+        .eq('customer_id', customerId).eq('kind', 'location').order('changed_at', ascending: false).limit(100) as List);
+    final paths = rows.map((r) => r['photo_path']).whereType<String>().where((p) => p.isNotEmpty).toList();
+    if (paths.isNotEmpty) {
+      try {
+        final r = await db.storage.from('opstation-photos').createSignedUrls(paths, 3600);
+        for (final s in r) {
+          if (s.signedUrl != null) urls[s.path!] = s.signedUrl!;
+        }
+      } catch (_) {}
+    }
+  } catch (e) {
+    error = friendlyError('Could not load the location history', e);
+  }
+  if (!context.mounted) return;
+
+  String coords(Object? la, Object? lo) {
+    final a = (la as num?)?.toDouble(), b = (lo as num?)?.toDouble();
+    return a == null || b == null ? 'No location' : '${a.toStringAsFixed(6)}, ${b.toStringAsFixed(6)}';
+  }
+
+  Widget statusChip(Map r) {
+    final st = '${r['status'] ?? 'pending'}';
+    final (Color c, String t) = switch (st) {
+      'supervised' => (AppTheme.success, 'Supervised'),
+      'reverted' => (AppTheme.danger, 'Reverted'),
+      _ => (Colors.amber.shade800, 'Pending review'),
+    };
+    final d = DateTime.tryParse('${r['reviewed_at'] ?? ''}')?.toLocal();
+    return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+        child: Text(t, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
+      ),
+      if (st != 'pending' && r['reviewed_by_name'] != null)
+        Padding(padding: const EdgeInsets.only(top: 2), child: Text(
+            '${r['reviewed_by_name']}${d == null ? '' : ' · ${DateFormat('d MMM y').format(d)}'}',
+            style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary))),
+    ]);
+  }
+
+  await showDialog(context: context, builder: (ctx) => AlertDialog(
+    title: Text('Location history · $shopName'),
+    content: SizedBox(width: 560, child: error != null
+        ? Text(error, style: const TextStyle(color: AppTheme.danger))
+        : SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8)),
+              child: Row(children: [
+                const Icon(Icons.location_on_outlined, size: 16, color: AppTheme.primary),
+                const SizedBox(width: 6),
+                const Text('Now: ', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+                Expanded(child: Text(coords(currentLat, currentLng), style: const TextStyle(fontSize: 12.5))),
+              ]),
+            ),
+            const SizedBox(height: 10),
+            if (rows.isEmpty)
+              const Text('No location changes recorded yet. Changes are recorded from the day "Supervision for customer edits" or "Salesperson can add shop location" was switched on.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            for (var i = 0; i < rows.length; i++) Builder(builder: (_) {
+              final r = rows[i];
+              final ch = (r['changes'] as Map?) ?? const {};
+              final url = urls['${r['photo_path'] ?? ''}'];
+              final acc = (r['accuracy_m'] as num?)?.toDouble();
+              final field = r['source'] == 'field_capture';
+              return IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                // timeline rail
+                SizedBox(width: 22, child: Column(children: [
+                  Container(width: 10, height: 10, margin: const EdgeInsets.only(top: 6),
+                      decoration: BoxDecoration(shape: BoxShape.circle,
+                          color: i == 0 ? AppTheme.primary : AppTheme.border)),
+                  if (i < rows.length - 1) Expanded(child: Container(width: 2, color: AppTheme.border)),
+                ])),
+                Expanded(child: Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (url != null) ...[
+                      InkWell(
+                        onTap: () => showDialog(context: ctx, builder: (c2) => Dialog(
+                            child: InteractiveViewer(child: Image.network(url, fit: BoxFit.contain)))),
+                        child: ClipRRect(borderRadius: BorderRadius.circular(6),
+                            child: Image.network(url, width: 64, height: 64, fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const SizedBox(width: 64, height: 64))),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${field ? 'Taken in the field' : 'Edited'} · ${_who(r)}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 3),
+                      Text('${coords((ch['latitude'] as Map?)?['old'], (ch['longitude'] as Map?)?['old'])}  →  '
+                          '${coords(r['captured_lat'] ?? (ch['latitude'] as Map?)?['new'], r['captured_lng'] ?? (ch['longitude'] as Map?)?['new'])}',
+                          style: const TextStyle(fontSize: 12)),
+                      if (acc != null) Text('GPS ±${acc.round()} m${r['is_mocked'] == true ? '  ·  ⚠ fake GPS reported' : ''}',
+                          style: TextStyle(fontSize: 11.5, color: r['is_mocked'] == true ? AppTheme.danger : AppTheme.textSecondary)),
+                      if ((r['note'] ?? '').toString().isNotEmpty)
+                        Text('Note: ${r['note']}', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                    ])),
+                    const SizedBox(width: 8),
+                    statusChip(r),
+                  ]),
+                )),
+              ]));
+            }),
+          ]))),
+    actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+  ));
+}
+
 const _labels = {
   'shop_name': 'Shop name', 'code': 'Code', 'contact_person': 'Contact', 'phone': 'Phone',
   'address': 'Address', 'category': 'Category', 'group_name': 'Group', 'credit_limit': 'Credit limit',

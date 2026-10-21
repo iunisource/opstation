@@ -103,6 +103,13 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     }
   }
 
+  Widget _locHistoryButton(double? lat, double? lng) => IconButton(
+        tooltip: 'Location history',
+        icon: const Icon(Icons.history, size: 18, color: AppTheme.primary),
+        onPressed: () => showLocationLifecycle(context,
+            customerId: _customerId, shopName: _shopName, currentLat: lat, currentLng: lng),
+      );
+
   /// After a Supervise / Revert: fresh customer row + reviews.
   Future<void> _afterReview() async {
     try {
@@ -1451,11 +1458,14 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                       label: const Text('Open in Maps'),
                       onPressed: () => _openMaps(lat, lng),
                     ),
+                    _locHistoryButton(lat, lng),
                   ],
                 )
-              : const Text('No location set for this shop.',
-                  style:
-                      TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              : Row(children: [
+                  const Expanded(child: Text('No location set for this shop.',
+                      style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                  _locHistoryButton(null, null),
+                ]),
             PendingLocationReview(data: _reviews, onDone: _afterReview),
           ]),
         ),
