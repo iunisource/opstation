@@ -629,7 +629,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         padding: const EdgeInsets.all(40),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 400),
-          child: AutofillGroup(child: Column(
+          child: AutofillGroup(
+            // Never "commit" on dispose: on the web that submits a hidden form,
+            // which reloads the page. On a refresh the login screen mounts for
+            // a split second while the session restores; the reload then cut
+            // the session refresh short and signed the user out.
+            onDisposeAction: AutofillContextAction.cancel,
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
