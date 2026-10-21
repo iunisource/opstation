@@ -1626,7 +1626,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final opsErpItems = <Widget>[
     if (show('/dashboard')) _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
     if (show('/team')) _menuItem(context, 'Team', Icons.people_outline, '/team', location),
+    // Same Customers screen as Sales → Customers, same permission.
+    if (show('/customers')) _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location, badge: customerSupervisePending),
     if (show('/routes')) _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
+    if (show('/deliveries')) _menuItem(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
     if (show('/operations/route-roster')) _menuItem(context, 'Route Roster', Icons.calendar_view_week_outlined, '/operations/route-roster', location),
     if (show('/live-map')) _menuItem(context, 'Live Map', Icons.map_outlined, '/live-map', location),
     if (show('/operations/retailers')) _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
@@ -1710,7 +1713,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         // ERP users get an Operations menu with just the screens granted to them.
         if (isErpUser && opsErpItems.isNotEmpty && modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            const ['/dashboard', '/team', '/routes', '/operations/route-roster', '/live-map', '/operations/retailers',
+            const ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/operations/route-roster', '/live-map', '/operations/retailers',
              '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications'],
             opsErpItems),
 

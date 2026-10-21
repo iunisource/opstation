@@ -451,6 +451,13 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   ),
               ]),
             )),
+        if (mod.key == 'operations')
+          const Padding(
+            padding: EdgeInsets.fromLTRB(40, 6, 12, 0),
+            child: Text('Customers are granted under Sales → Customers, and Deliveries under Logistics. '
+                'Once granted there, they also show in the Operations menu.',
+                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ),
         const SizedBox(height: 6),
         const Divider(height: 1),
       ],
@@ -506,6 +513,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
     final selectedBranches = Set<String>.from(currentBranches);
     String currentScope = '*';
     final expandedModules = <String>{};
+    bool saving = false; // Save in progress — disables the buttons, shows a spinner
 
     showDialog(
       context: context,
@@ -622,10 +630,13 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(),
+                onPressed: saving ? null : () => Navigator.of(ctx, rootNavigator: true).pop(),
                 child: const Text('Cancel')),
             ElevatedButton(
-              onPressed: () async {
+              style: ElevatedButton.styleFrom(
+                  disabledBackgroundColor: AppTheme.primary.withOpacity(0.75),
+                  disabledForegroundColor: Colors.white),
+              onPressed: saving ? null : () async {
                 if (nameCtrl.text.trim().isEmpty || (user == null && emailCtrl.text.trim().isEmpty)) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
                       const SnackBar(content: Text('Name and email are required')));
@@ -642,6 +653,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   return;
                 }
 
+                setS(() => saving = true);
                 try {
                   String userId;
                   if (user == null) {
@@ -697,20 +709,24 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   final toAddBr = selectedBranches.difference(existingBranchIds);
                   final toRemoveBr = existingBranchIds.difference(selectedBranches);
                   int bseq = 0;
-                  for (final bid in toAddBr) {
-                    await client.from('erp_user_branches').insert({
-                      'id': 'eub_${DateTime.now().microsecondsSinceEpoch}_${bseq++}',
-                      'org_id': orgId,
-                      'user_id': userId,
-                      'branch_id': bid,
-                    });
+                  final stamp = DateTime.now().microsecondsSinceEpoch;
+                  if (toAddBr.isNotEmpty) {
+                    await client.from('erp_user_branches').insert([
+                      for (final bid in toAddBr)
+                        {
+                          'id': 'eub_${stamp}_${bseq++}',
+                          'org_id': orgId,
+                          'user_id': userId,
+                          'branch_id': bid,
+                        },
+                    ]);
                   }
-                  for (final bid in toRemoveBr) {
+                  if (toRemoveBr.isNotEmpty) {
                     await client
                         .from('erp_user_branches')
                         .delete()
                         .eq('user_id', userId)
-                        .eq('branch_id', bid);
+                        .inFilter('branch_id', toRemoveBr.toList());
                   }
 
                   // Permissions — branch-scoped diff (Option A). A pair is
@@ -731,33 +747,40 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                     for (final k in keys) desiredPairs.add('$scope|$k');
                   });
                   final grantedBy = ref.read(currentUserProvider)?.id;
+                  // One request for all new grants, one per scope for removals
+                  // (was one request per checkbox — the slow, silent save).
                   int pseq = 0;
-                  for (final pair in desiredPairs.difference(existingPairs)) {
-                    final i = pair.indexOf('|');
-                    final scope = pair.substring(0, i);
-                    final perm = pair.substring(i + 1);
-                    await client.from('user_permissions').insert({
-                      'id': 'up_${DateTime.now().microsecondsSinceEpoch}_${pseq++}',
-                      'org_id': orgId,
-                      'user_id': userId,
-                      'permission': perm,
-                      'branch_id': scope == '*' ? null : scope,
-                      'granted_by': grantedBy,
-                    });
+                  final toAdd = desiredPairs.difference(existingPairs);
+                  if (toAdd.isNotEmpty) {
+                    await client.from('user_permissions').insert([
+                      for (final pair in toAdd)
+                        {
+                          'id': 'up_${stamp}_${pseq++}',
+                          'org_id': orgId,
+                          'user_id': userId,
+                          'permission': pair.substring(pair.indexOf('|') + 1),
+                          'branch_id': pair.substring(0, pair.indexOf('|')) == '*'
+                              ? null
+                              : pair.substring(0, pair.indexOf('|')),
+                          'granted_by': grantedBy,
+                        },
+                    ]);
                   }
+                  final toRemove = <String, List<String>>{};
                   for (final pair in existingPairs.difference(desiredPairs)) {
                     final i = pair.indexOf('|');
-                    final scope = pair.substring(0, i);
-                    final perm = pair.substring(i + 1);
+                    (toRemove[pair.substring(0, i)] ??= []).add(pair.substring(i + 1));
+                  }
+                  for (final e in toRemove.entries) {
                     final del = client
                         .from('user_permissions')
                         .delete()
                         .eq('user_id', userId)
-                        .eq('permission', perm);
-                    if (scope == '*') {
+                        .inFilter('permission', e.value);
+                    if (e.key == '*') {
                       await del.isFilter('branch_id', null);
                     } else {
-                      await del.eq('branch_id', scope);
+                      await del.eq('branch_id', e.key);
                     }
                   }
 
@@ -766,11 +789,18 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   _load();
                 } catch (e) {
                   if (ctx.mounted) {
+                    setS(() => saving = false);
                     ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
                   }
                 }
               },
-              child: Text(user == null ? 'Create' : 'Save'),
+              child: saving
+                  ? const Row(mainAxisSize: MainAxisSize.min, children: [
+                      SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                      SizedBox(width: 10),
+                      Text('Saving…'),
+                    ])
+                  : Text(user == null ? 'Create' : 'Save'),
             ),
           ],
         ),
