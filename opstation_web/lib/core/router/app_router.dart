@@ -301,7 +301,11 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc.startsWith('/deliveries/') ||
                 loc == '/dispatch-orders';
             // Route Roster (Operations) is registry-gated too.
-            final permScopedOps = loc == '/operations/route-roster';
+            final permScopedOps = const {
+              '/dashboard', '/team', '/routes', '/operations/route-roster', '/live-map',
+              '/operations/retailers', '/reports', '/compliance', '/operations/files',
+              '/operations/notifications',
+            }.contains(loc);
             // Management (Assets / Asset Report / Facility) is registry-gated
             // and lives outside /erp/ — the menu showed it, but this check used
             // to bounce the click straight back home.

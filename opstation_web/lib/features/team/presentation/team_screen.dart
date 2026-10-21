@@ -288,7 +288,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
             const Center(child: CircularProgressIndicator())
           else
             Expanded(
-              child: HScrollOnNarrow(minWidth: 900, child: Container(
+              child: HScrollOnNarrow(minWidth: 1000, child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
@@ -308,7 +308,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                         Expanded(flex: 2, child: Text('Role', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         Expanded(flex: 1, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        SizedBox(width: 260),
+                        SizedBox(width: 340),
                       ]),
                     ),
                     const Divider(height: 1),
@@ -354,7 +354,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                 child: Text(isActive ? 'Active' : 'Inactive',
                                   style: TextStyle(color: isActive ? AppTheme.success : AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w600)),
                               )),
-                              SizedBox(width: 260, child: SingleChildScrollView(scrollDirection: Axis.horizontal, reverse: true, child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              SizedBox(width: 340, child: SingleChildScrollView(scrollDirection: Axis.horizontal, reverse: true, child: Row(mainAxisSize: MainAxisSize.min, children: [
                                 IconButton(
                                   icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
                                   onPressed: () => Navigator.of(context).push(MaterialPageRoute(

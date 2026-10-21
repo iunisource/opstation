@@ -469,6 +469,7 @@ class AuthController extends AsyncNotifier<WebUser?> {
 
   Future<void> signOut() async {
     applyOrgHeader(null);
+    SessionDiagnostics.markIntentional();
     SessionDiagnostics.intentionalSignOut = true;
     try {
       await Supabase.instance.client.auth.signOut();

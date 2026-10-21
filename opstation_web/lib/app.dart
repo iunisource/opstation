@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/router/app_router.dart';
 import 'features/auth/auth_controller.dart';
+import 'core/auth/session_diagnostics.dart';
 import 'core/theme/app_theme.dart';
 
 class OpstationWebApp extends ConsumerStatefulWidget {
@@ -182,6 +183,7 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
         await Supabase.instance.client.auth
             .updateUser(UserAttributes(password: newPass));
         // Clear the temporary recovery session so they sign in fresh.
+        SessionDiagnostics.markIntentional();
         await Supabase.instance.client.auth.signOut();
         ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(
           const SnackBar(

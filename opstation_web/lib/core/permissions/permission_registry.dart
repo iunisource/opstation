@@ -200,11 +200,21 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('automation', 'Automation', Icons.bolt_outlined, [
     PermItem('automation', 'Automation Rules', PermKind.doc, '/erp/automation'),
   ], moduleGated: false),
-  // Operations — only the screens that are permission-scoped (the rest of the
-  // Operations menu is admin-tier). Route Roster: Edit = make changes;
-  // Add = view & print only.
+  // Operations — every screen of the Operations menu except App Settings
+  // (master admin only). Customers sit under Sales and Deliveries under
+  // Logistics. Route Roster: Edit = make changes; Add = view & print only.
   PermModule('operations', 'Operations', Icons.local_shipping_outlined, [
+    PermItem('ops_dashboard', 'Dashboard', PermKind.report, '/dashboard'),
+    PermItem('team', 'Team', PermKind.doc, '/team'),
+    PermItem('routes', 'Routes', PermKind.doc, '/routes'),
     PermItem('route_roster', 'Route Roster (Add = view & print, Edit = change)', PermKind.doc, '/operations/route-roster'),
+    PermItem('live_map', 'Live Map', PermKind.report, '/live-map'),
+    PermItem('ops_retailers', 'Retailers', PermKind.doc, '/operations/retailers'),
+    PermItem('field_reports', 'Reports', PermKind.report, '/reports'),
+    PermItem('combined_trip_summary', 'Combined Trip Summary', PermKind.report, '/reports/combined-summary'),
+    PermItem('compliance', 'Compliance', PermKind.report, '/compliance'),
+    PermItem('ops_files', 'Files', PermKind.doc, '/operations/files'),
+    PermItem('ops_notifications', 'Notifications', PermKind.doc, '/operations/notifications'),
   ]),
   PermModule('crm', 'CRM', Icons.contacts_outlined, [
     PermItem('crm_customers', 'CRM Customers', PermKind.doc, '/crm/customers'),

@@ -13,10 +13,17 @@ class SessionDiagnostics {
   /// Set while the user (or the app on purpose) is signing out, so that sign-out
   /// is not reported as an unexpected one.
   static bool intentionalSignOut = false;
+  // The "signed out" event arrives a moment AFTER signOut() returns, so a flag
+  // that is switched straight back off missed it and every normal Log out was
+  // reported as unexpected. Keep a short grace window instead.
+  static DateTime? _intentionalUntil;
+  static void markIntentional() =>
+      _intentionalUntil = DateTime.now().add(const Duration(seconds: 15));
 
   /// Remember that the session ended without the user pressing Log out.
   static void recordUnexpectedSignOut() {
     if (intentionalSignOut) return;
+    if (_intentionalUntil != null && DateTime.now().isBefore(_intentionalUntil!)) return;
     try {
       html.window.localStorage[_reasonKey] = '${DateTime.now().toIso8601String()}|session_ended';
     } catch (_) {}
@@ -24,6 +31,11 @@ class SessionDiagnostics {
 
   /// Returns the stored unexpected-logout time (within the last hour), once.
   static DateTime? takeUnexpectedSignOut() {
+    // Just logged out on purpose → never show the banner.
+    if (_intentionalUntil != null && DateTime.now().isBefore(_intentionalUntil!)) {
+      try { html.window.localStorage.remove(_reasonKey); } catch (_) {}
+      return null;
+    }
     try {
       final v = html.window.localStorage.remove(_reasonKey);
       if (v == null) return null;

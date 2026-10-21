@@ -369,13 +369,15 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
             if (grantedCount > 0)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: Text('$grantedCount',
+                child: Text(allOn ? 'All' : '$grantedCount of ${keys.length}',
                     style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
               ),
+            // ON whenever anything in the module is granted (it used to show OFF
+            // for a partly-granted module, which hid live access). Off = clear all.
             Tooltip(
-              message: allOn ? 'Clear all in module' : 'Grant all in module',
+              message: grantedCount > 0 ? 'Clear all in module' : 'Grant all in module',
               child: Switch(
-                value: allOn,
+                value: grantedCount > 0,
                 onChanged: (v) => setS(() {
                   if (v) {
                     sel.addAll(keys);

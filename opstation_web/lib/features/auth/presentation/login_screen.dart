@@ -32,7 +32,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   // Rotating headline word on the brand panel.
   static const _rotWords = ['trading.', 'distribution.', 'manufacturing.', 'retail.', 'your empire.'];
-  int _rotIndex = 0;
+  // A ValueNotifier, not setState: rebuilding the whole screen every 2.6 s
+  // while the browser autofilled / the user typed left the password field
+  // hard to edit at times.
+  final _rotIndex = ValueNotifier<int>(0);
   Timer? _rotTimer;
 
   // Shown above the form: the computer clock is wrong, and/or the last session
@@ -83,10 +86,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.initState();
     _loadRemember();
     _diagnose();
+    // Browser-autofilled text sometimes arrives without a caret, so the field
+    // won't take edits until clicked again. Put the caret at the end on focus.
+    void caretToEnd(FocusNode f, TextEditingController c) {
+      f.addListener(() {
+        if (!f.hasFocus) return;
+        final sel = c.selection;
+        if (!sel.isValid || sel.end > c.text.length) {
+          c.selection = TextSelection.collapsed(offset: c.text.length);
+        }
+      });
+    }
+    caretToEnd(_emailFocus, _emailCtrl);
+    caretToEnd(_passFocus, _passCtrl);
     // If this screen was rebuilt mid-sign-in, finish a pending org choice.
     WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _maybeRunOrgChoice(); });
     _rotTimer = Timer.periodic(const Duration(milliseconds: 2600), (_) {
-      if (mounted) setState(() => _rotIndex = (_rotIndex + 1) % _rotWords.length);
+      if (mounted) _rotIndex.value = (_rotIndex.value + 1) % _rotWords.length;
     });
   }
 
@@ -146,6 +162,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     _passCtrl.dispose();
     _emailFocus.dispose();
     _passFocus.dispose();
+    _rotIndex.dispose();
     super.dispose();
   }
 
@@ -503,7 +520,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
                 SizedBox(
                   height: 58,
-                  child: AnimatedSwitcher(
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: _rotIndex,
+                    builder: (_, rot, __) => AnimatedSwitcher(
                     duration: const Duration(milliseconds: 450),
                     switchInCurve: Curves.easeOutCubic,
                     switchOutCurve: Curves.easeInCubic,
@@ -517,8 +536,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                     ),
                     child: Text(
-                      _rotWords[_rotIndex],
-                      key: ValueKey(_rotIndex),
+                      _rotWords[rot],
+                      key: ValueKey(rot),
                       style: const TextStyle(
                           color: Color(0xFF4B84F5),
                           fontSize: 46,
@@ -526,6 +545,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           height: 1.08,
                           letterSpacing: -1.2),
                     ),
+                  ),
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -609,7 +629,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         padding: const EdgeInsets.all(40),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 400),
-          child: Column(
+          child: AutofillGroup(child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -803,7 +823,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ]),
               ),
             ],
-          ),
+          )),
         ),
       ),
     );

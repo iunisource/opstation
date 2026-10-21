@@ -1623,6 +1623,20 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         ]),
     ];
 
+  final opsErpItems = <Widget>[
+    if (show('/dashboard')) _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
+    if (show('/team')) _menuItem(context, 'Team', Icons.people_outline, '/team', location),
+    if (show('/routes')) _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
+    if (show('/operations/route-roster')) _menuItem(context, 'Route Roster', Icons.calendar_view_week_outlined, '/operations/route-roster', location),
+    if (show('/live-map')) _menuItem(context, 'Live Map', Icons.map_outlined, '/live-map', location),
+    if (show('/operations/retailers')) _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
+    if (show('/reports')) _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
+    if (show('/reports/combined-summary')) _menuItem(context, 'Combined Trip Summary', Icons.route_outlined, '/reports/combined-summary', location),
+    if (show('/compliance')) _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
+    if (show('/operations/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
+    if (show('/operations/notifications')) _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
+  ];
+
   return <Widget>[
         if (user?.role == WebUserRole.superAdmin) ...[
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
@@ -1692,12 +1706,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ...splitErpMenus(),
         ],
 
-        // Route Roster is the one permission-scoped Operations screen: ERP users
-        // granted it get an Operations menu with just that item.
-        if (isErpUser && show('/operations/route-roster'))
+        // ERP users get an Operations menu with just the screens granted to them.
+        if (isErpUser && opsErpItems.isNotEmpty && modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/operations/route-roster'],
-            [_menuItem(context, 'Route Roster', Icons.calendar_view_week_outlined, '/operations/route-roster', location)]),
+            const ['/dashboard', '/team', '/routes', '/operations/route-roster', '/live-map', '/operations/retailers',
+             '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications'],
+            opsErpItems),
 
         // Assets/Facility grants live outside erpMenuItems (their menu is built
         // inline from show()), so count them in the gate too.
