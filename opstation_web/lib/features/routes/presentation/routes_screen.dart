@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/utils/friendly_error.dart';
+import '../../dashboard/presentation/dashboard_screen.dart' show showActiveRoutesDialog;
 
 class RoutesScreen extends ConsumerStatefulWidget {
   const RoutesScreen({super.key});
@@ -38,6 +40,39 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   bool _unassignedFlow = false;
   bool _flowBusy = false;
 
+  int? _activeCount; // routes being run right now (trips not ended)
+
+  /// Admins delete routes; everyone else may only disable / enable them.
+  bool get _isAdminTier {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
+
+  Future<void> _loadActiveCount() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    try {
+      final r = await Supabase.instance.client.from('trips').select('id')
+          .eq('org_id', orgId).filter('ended_at', 'is', null);
+      if (mounted) setState(() => _activeCount = (r as List).length);
+    } catch (_) {}
+  }
+
+  Future<void> _setActive(Map<String, dynamic> r, bool active) async {
+    try {
+      await Supabase.instance.client.from('sales_routes')
+          .update({'is_active': active}).eq('id', r['id']);
+      if (!mounted) return;
+      setState(() => r['is_active'] = active);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(active ? 'Route enabled' : 'Route disabled'), behavior: SnackBarBehavior.floating));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(friendlyError('That did not save', e)), behavior: SnackBarBehavior.floating));
+    }
+  }
+
   bool get _isMaster {
     final r = ref.read(currentUserProvider)?.role;
     return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
@@ -50,6 +85,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     super.initState();
     _searchCtrl.addListener(_filter);
     _load();
+    _loadActiveCount();
   }
 
   @override
@@ -349,6 +385,42 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
         const SizedBox(height: 8),
         Text('${_filtered.length} of ${_routes.length} routes',
             style: const TextStyle(color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        // Active routes — who is out right now. Collections are not shown here
+        // (this screen is shared with non-admin users).
+        Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () {
+              final orgId = ref.read(currentUserProvider)?.orgId;
+              if (orgId == null) return;
+              showActiveRoutesDialog(context, orgId: orgId, showAmounts: false)
+                  .then((_) => _loadActiveCount());
+            },
+            child: Container(
+              width: 260,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.border)),
+              child: Row(children: [
+                Container(
+                  width: 38, height: 38,
+                  decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.directions_walk, color: AppTheme.success, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_activeCount == null ? '…' : '$_activeCount',
+                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  const Text('Active routes now', style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                ])),
+                const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+              ]),
+            ),
+          ),
+        ),
         const SizedBox(height: 16),
         TextField(
           controller: _searchCtrl,
@@ -513,12 +585,25 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                   icon: const Icon(Icons.edit_outlined,
                                       size: 18),
                                   onPressed: () => _showDialog(context, row)),
-                              if (!(_isUnassignedRoute(r) && _unassignedFlow))
+                              if (_isAdminTier && !(_isUnassignedRoute(r) && _unassignedFlow))
                                 IconButton(
                                     icon: const Icon(Icons.delete_outline,
                                         size: 18, color: AppTheme.danger),
                                     onPressed: () =>
                                         _delete(r['id'] as String)),
+                              // Non-admins: disable only an empty route; enable any.
+                              if (!_isAdminTier && !_isUnassignedRoute(r) && (!isActive || row.stops.isEmpty))
+                                IconButton(
+                                    icon: Icon(isActive ? Icons.block : Icons.check_circle_outline,
+                                        size: 18, color: isActive ? AppTheme.danger : AppTheme.success),
+                                    tooltip: isActive ? 'Disable route' : 'Enable route',
+                                    onPressed: () => _setActive(r, !isActive)),
+                              if (!_isAdminTier && !_isUnassignedRoute(r) && isActive && row.stops.isNotEmpty)
+                                const Tooltip(
+                                  message: 'Only an empty route can be disabled. Move its customers off first.',
+                                  child: Padding(padding: EdgeInsets.all(8),
+                                      child: Icon(Icons.block, size: 18, color: AppTheme.border)),
+                                ),
                             ]),
                             if (_targetsEnabled &&
                                 _routeAch[r['id'] as String] != null)

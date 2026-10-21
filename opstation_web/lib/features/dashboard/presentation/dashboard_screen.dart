@@ -1106,7 +1106,8 @@ class _SalespersonExpansion extends StatelessWidget {
 
 class _VisitDetailRow extends StatefulWidget {
   final _VisitRow v;
-  const _VisitDetailRow({required this.v});
+  final bool showAmount;
+  const _VisitDetailRow({required this.v, this.showAmount = true});
 
   @override
   State<_VisitDetailRow> createState() => _VisitDetailRowState();
@@ -1151,12 +1152,14 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              'Rs ${_fmtNumber(v.amount)}',
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w700),
-            ),
+            if (widget.showAmount) ...[
+              const SizedBox(width: 8),
+              Text(
+                'Rs ${_fmtNumber(v.amount)}',
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+            ],
           ],
         ),
       ),
@@ -1367,11 +1370,28 @@ String _fmtNumber(int n) {
 // trip (ended_at IS NULL), showing route name + rep, expanding to that trip's
 // visits so far (customer, time, status, amount).
 
+/// Active routes modal, also used by the Routes screen (shared access there,
+/// so it is opened with [showAmounts] false — collections stay confidential).
+Future<void> showActiveRoutesDialog(BuildContext context, {required String orgId, bool showAmounts = true}) {
+  return showDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    builder: (_) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
+        child: _ActiveRoutesView(orgId: orgId, date: DateTime.now(), showAmounts: showAmounts),
+      ),
+    ),
+  );
+}
+
 class _ActiveRoutesView extends StatefulWidget {
   final String orgId;
   final bool completed; // false = active (ended_at null), true = ended today
   final DateTime date;
-  const _ActiveRoutesView({required this.orgId, this.completed = false, required this.date});
+  final bool showAmounts;
+  const _ActiveRoutesView({required this.orgId, this.completed = false, required this.date, this.showAmounts = true});
 
   @override
   State<_ActiveRoutesView> createState() => _ActiveRoutesViewState();
@@ -1559,7 +1579,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              for (final r in _routes) _ActiveRouteExpansion(r: r),
+                              for (final r in _routes) _ActiveRouteExpansion(r: r, showAmounts: widget.showAmounts),
                             ],
                           ),
                         ),
@@ -1571,7 +1591,8 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
 
 class _ActiveRouteExpansion extends StatefulWidget {
   final _ActiveRoute r;
-  const _ActiveRouteExpansion({required this.r});
+  final bool showAmounts;
+  const _ActiveRouteExpansion({required this.r, this.showAmounts = true});
 
   @override
   State<_ActiveRouteExpansion> createState() => _ActiveRouteExpansionState();
@@ -1623,14 +1644,16 @@ class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
             style:
                 const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
           ),
-          trailing: Text(
-            'Rs ${_fmtNumber(r.collected)}',
-            style: const TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-              color: AppTheme.success,
-            ),
-          ),
+          trailing: widget.showAmounts
+              ? Text(
+                  'Rs ${_fmtNumber(r.collected)}',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.success,
+                  ),
+                )
+              : null,
           children: [
             const Divider(height: 1),
             const SizedBox(height: 8),
@@ -1642,7 +1665,7 @@ class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
                         fontSize: 12, color: AppTheme.textSecondary)),
               )
             else ...[
-              for (final v in visited) _VisitDetailRow(v: v),
+              for (final v in visited) _VisitDetailRow(v: v, showAmount: widget.showAmounts),
               if (visited.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 6),
@@ -1673,7 +1696,7 @@ class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
                   ),
                 ),
                 if (_showRemaining)
-                  for (final v in remaining) _VisitDetailRow(v: v),
+                  for (final v in remaining) _VisitDetailRow(v: v, showAmount: widget.showAmounts),
               ],
             ],
           ],
