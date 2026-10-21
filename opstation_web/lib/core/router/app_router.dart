@@ -164,6 +164,7 @@ import '../../features/superadmin/presentation/org_profile_screen.dart' deferred
 import '../../features/erp/presentation/erp_pending_po_items_screen.dart' deferred as _s153;
 import '../../features/erp/presentation/erp_label_printing_screen.dart' deferred as _s154;
 import '../../features/erp/presentation/erp_fulfillment_screen.dart' deferred as _s155;
+import '../../features/erp/presentation/erp_batch_tracking_screen.dart' deferred as _s156;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -461,6 +462,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/stock-value-report', builder: (_, __) => _deferred(_s083.loadLibrary(), () => _s083.ErpStockValueReportScreen())),
           GoRoute(path: '/erp/stock-balance-report', builder: (_, __) => _deferred(_s084.loadLibrary(), () => _s084.ErpStockBalanceReportScreen())),
           GoRoute(path: '/erp/stock-aging-report', builder: (_, __) => _deferred(_s086.loadLibrary(), () => _s086.ErpStockAgingReportScreen())),
+          GoRoute(path: '/erp/batch-tracking', builder: (_, state) => _deferred(_s156.loadLibrary(), () => _s156.ErpBatchTrackingScreen(query: state.uri.queryParameters['q']))),
           GoRoute(path: '/erp/inventory-integrity', builder: (_, __) => _deferred(_s085.loadLibrary(), () => _s085.ErpInventoryIntegrityScreen())),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => _deferred(_s106.loadLibrary(), () => _s106.ErpProductClassificationsScreen())),
           GoRoute(path: '/erp/users', builder: (_, __) => _deferred(_s107.loadLibrary(), () => _s107.ErpUsersScreen())),

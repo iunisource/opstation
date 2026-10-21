@@ -227,6 +227,20 @@ final customerTargetsEnabledProvider = FutureProvider<bool>((ref) async {
   }
 });
 
+// Admin Settings → Batch & warranty tracking (org.batch_tracking). Gates the
+// Inventory → Batch Tracking menu item.
+final batchTrackingEnabledProvider = FutureProvider<bool>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return false;
+  try {
+    final res = await Supabase.instance.client.from('app_config').select('value')
+        .eq('org_id', user.orgId!).eq('key', 'org.batch_tracking').maybeSingle();
+    return (res?['value'] as String?) == 'true';
+  } catch (_) {
+    return false;
+  }
+});
+
 // Count of assets with maintenance overdue for the current org (nav badge).
 final assetsDueCountProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
@@ -1263,6 +1277,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final attReviewPending = gate('/hr/attendance-review', ref.watch(attendanceReviewPendingCountProvider).valueOrNull ?? 0);
   final leavePending = gate('/hr/leave', ref.watch(leavePendingCountProvider).valueOrNull ?? 0);
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
+  final batchTrackingOn = ref.watch(batchTrackingEnabledProvider).valueOrNull ?? false;
 
   final isAdminTier = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin;
   final isDispatch = user?.role == WebUserRole.dispatchManager;
@@ -1288,6 +1303,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/stock-value-report')) _menuItem(context, 'Stock Value Report', Icons.payments_outlined, '/erp/stock-value-report', location),
       if (show('/erp/stock-balance-report')) _menuItem(context, 'Stock Balance Report', Icons.inventory_outlined, '/erp/stock-balance-report', location),
       if (show('/erp/stock-aging-report')) _menuItem(context, 'Stock Aging Report', Icons.hourglass_bottom_outlined, '/erp/stock-aging-report', location),
+      if (batchTrackingOn && show('/erp/batch-tracking')) _menuItem(context, 'Batch Tracking', Icons.qr_code_2_outlined, '/erp/batch-tracking', location),
       if (show('/erp/inventory-integrity')) _menuItem(context, 'Inventory Integrity', Icons.rule_outlined, '/erp/inventory-integrity', location, badge: integrityCount),
       if (show('/erp/purchase-variance')) _menuItem(context, 'Purchase Price Variance', Icons.trending_up_outlined, '/erp/purchase-variance', location),
       if (show('/erp/demand-plan')) _menuItem(context, 'Demand Planner', Icons.insights_outlined, '/erp/demand-plan', location),
@@ -1514,7 +1530,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(inventoryItems))
         _navMenu(context, 'Inventory', Icons.inventory_2_outlined, location,
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
-           '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/purchase-variance',
+           '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/batch-tracking', '/erp/purchase-variance',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan', '/erp/price-list'],
           _trimDividers(inventoryItems), badge: transferPending + integrityCount + productSupervisePending),
       if (_hasItems(purchaseItems))

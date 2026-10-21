@@ -14,6 +14,7 @@ import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
+import '../services/batch_tracking.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 import '../widgets/void_flow.dart';
@@ -50,6 +51,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool _detailLoading = false;
   bool _datesEditable = false;
   bool _confirmBusy = false; // double-click guard for Confirm Receipt
+  // Batch & warranty tracking (Admin Settings): tracked product id → product row.
+  Map<String, Map<String, dynamic>> _btProducts = {};
   bool _superviseEnabled = false; // org toggle: docs + remarks + Supervise
   bool _superviseBusy = false;
   String _search = '';
@@ -159,6 +162,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       final items = await client.from('purchase_grn_items')
           .select('*,products(name,sku),uoms(abbreviation)').eq('grn_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: null, createdById: grn['created_by'] as String?);
+      Map<String, Map<String, dynamic>> bt = {};
+      if (await BatchTracking.isOn(_orgId)) {
+        bt = await BatchTracking.trackedProducts(
+            [for (final it in items as List) if (it['product_id'] is String) it['product_id'] as String]);
+      }
       bool datesEd = false;
       try { final c = await client.from('app_config').select('value').eq('org_id', _orgId ?? '').eq('key', 'org.voucher_dates_editable').maybeSingle(); datesEd = (c?['value'] as String?) == 'true'; } catch (_) {}
       bool superviseEn = false;
@@ -175,6 +183,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _meta = meta; _detailLoading = false; _datesEditable = datesEd;
         _superviseEnabled = superviseEn;
         _linkedPis = pis;
+        _btProducts = bt;
         _remarksCtrl.text = (grn['remarks'] as String?) ?? '';
         _initReceivedCtrls();
       });
@@ -401,6 +410,81 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     } finally {
       SavingOverlay.hide();
       if (mounted) setState(() => _adjustBusy = false);
+    }
+  }
+
+  // ── Batch & warranty (tracked products only) ──────────────────────────────
+  String _btBatchNo(Map it) {
+    final b = '${it['batch_no'] ?? ''}'.trim();
+    return b.isNotEmpty ? b : '${_detail['voucher_number'] ?? ''}';
+  }
+
+  DateTime? _btWarranty(Map it) {
+    final w = DateTime.tryParse('${it['warranty_until'] ?? ''}');
+    if (w != null) return w;
+    final months = (_btProducts[it['product_id']]?['warranty_months'] as num?)?.toInt() ?? 0;
+    final d = DateTime.tryParse('${_detail['voucher_date'] ?? ''}');
+    if (months <= 0 || d == null) return null;
+    return DateTime(d.year, d.month + months, d.day);
+  }
+
+  Widget _batchLine(Map<String, dynamic> it) {
+    final w = _btWarranty(it);
+    final canEdit = _detail['is_voided'] != true;
+    return Padding(padding: const EdgeInsets.only(top: 3), child: InkWell(
+      onTap: canEdit ? () => _editBatch(it) : null,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.qr_code_2_outlined, size: 12, color: AppTheme.primary),
+        const SizedBox(width: 4),
+        Flexible(child: Text(
+          'Batch ${_btBatchNo(it)}${w != null ? '  ·  Warranty till ${DateFormat('d MMM y').format(w)}' : ''}',
+          style: const TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600),
+          overflow: TextOverflow.ellipsis)),
+        if (canEdit) ...[const SizedBox(width: 4), const Icon(Icons.edit_outlined, size: 11, color: AppTheme.primary)],
+      ]),
+    ));
+  }
+
+  Future<void> _editBatch(Map<String, dynamic> it) async {
+    final batchCtrl = TextEditingController(text: _btBatchNo(it));
+    DateTime? warranty = _btWarranty(it);
+    final res = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+      title: Text('Batch · ${it['products']?['name'] ?? ''}'),
+      content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        TextField(controller: batchCtrl, autofocus: true,
+          decoration: const InputDecoration(labelText: 'Batch / lot number', isDense: true,
+              helperText: 'Leave as the GRN number if the supplier gives none')),
+        const SizedBox(height: 14),
+        InkWell(
+          onTap: () async {
+            final d = await showDatePicker(context: ctx, initialDate: warranty ?? DateTime.now(),
+                firstDate: DateTime(2000), lastDate: DateTime(2100));
+            if (d != null) setS(() => warranty = d);
+          },
+          child: InputDecorator(
+            decoration: InputDecoration(labelText: 'Supplier warranty until', isDense: true,
+              suffixIcon: const Icon(Icons.event, size: 18)),
+            child: Text(warranty == null ? 'Not set — tap to choose' : DateFormat('d MMM y').format(warranty!)),
+          ),
+        ),
+      ])),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+      ],
+    )));
+    if (res != true) return;
+    final b = batchCtrl.text.trim();
+    final data = {
+      'batch_no': (b.isEmpty || b == '${_detail['voucher_number'] ?? ''}') ? null : b,
+      'warranty_until': warranty == null ? null : DateFormat('yyyy-MM-dd').format(warranty!),
+    };
+    try {
+      await Supabase.instance.client.from('purchase_grn_items').update(data).eq('id', it['id']);
+      setState(() { it['batch_no'] = data['batch_no']; it['warranty_until'] = data['warranty_until']; });
+      _showSnack('Batch saved');
+    } catch (e) {
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 
@@ -852,6 +936,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                   Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
                     if (it['products']?['sku'] != null) Text(it['products']!['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                    if (_btProducts.containsKey(it['product_id'])) _batchLine(it),
                   ])),
                   Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 2, child: Text(ordered.toStringAsFixed(ordered % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(color: AppTheme.textSecondary))),

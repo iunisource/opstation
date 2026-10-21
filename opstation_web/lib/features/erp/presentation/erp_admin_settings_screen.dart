@@ -378,6 +378,16 @@ const List<_AdminToggle> _toggles = [
         'checkbox is hidden; products already flagged keep their behaviour.',
   ),
   _AdminToggle(
+    'org.batch_tracking',
+    'Batch & warranty tracking',
+    'When ON, products can be set to track by Batch or Serial with a warranty '
+        'period. GRNs then record a batch/lot and supplier warranty date for those '
+        'items, production records which component batches were used (oldest '
+        'first, or picked by hand) and gives serial products unit serials and '
+        'carton labels. Everything can be looked up in Inventory → Batch Tracking. '
+        'When OFF, nothing changes from how stock works today.',
+  ),
+  _AdminToggle(
     'org.show_product_images',
     'Show product images in the retailer app',
     'When ON, retailers browsing your catalogue see brand logos and product '
@@ -712,6 +722,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.transfer_alert_skip_admin',
     'org.processor_overdue_reminder',
     'org.consignment_enabled',
+    'org.batch_tracking',
     'org.hide_main_groups_by_branch',
     'org.product_supervise_flow',
   ]),
@@ -950,6 +961,7 @@ class _ErpAdminSettingsScreenState
       'value': value,
       'org_id': orgId,
     }, onConflict: 'key,org_id,branch_id');
+    if (key == 'org.batch_tracking') ref.invalidate(batchTrackingEnabledProvider);
   }
 
   Future<void> _setSeriousFlag(String column, bool v) async {

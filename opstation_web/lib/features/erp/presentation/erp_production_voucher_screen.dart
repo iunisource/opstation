@@ -14,6 +14,7 @@ import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../widgets/bom_specs_box.dart';
 import '../services/production_labels.dart';
+import '../services/batch_tracking.dart';
 
 class _PComp {
   static int _seq = 0;
@@ -435,9 +436,20 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
     if (id == null) return;
     final shortage = await _componentShortage();
     if (shortage != null) { _snack(shortage); return; }
+    // Batch & warranty tracking: which component batches this uses.
+    final btOn = await BatchTracking.isOn(_orgId);
+    final picks = <String, String>{};
+    final compNames = <String, String>{
+      for (final l in _components) if (l.productId != null && l.qty > 0) l.productId!: _prodLabel[l.productId] ?? l.productLabel,
+    };
+    if (!mounted) return;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Post production?'),
-      content: const Text('Components will be consumed from stock (FIFO) and the finished good added to inventory at full absorbed cost. This posts to the General Ledger and cannot be edited afterward (use a Production Inverse to reverse).'),
+      content: SizedBox(width: 460, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Components will be consumed from stock (FIFO) and the finished good added to inventory at full absorbed cost. This posts to the General Ledger and cannot be edited afterward (use a Production Inverse to reverse).'),
+        if (btOn && compNames.isNotEmpty && _orgId != null)
+          ComponentBatchPicker(orgId: _orgId!, branchId: _branchId, components: compNames, picks: picks),
+      ]))),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Post')),
@@ -451,10 +463,28 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       final res = await client.rpc('post_production_voucher', params: {'p_id': id});
       _snack(res?.toString() ?? 'Posted');
       final updated = await client.from('production_vouchers').select().eq('id', id).single();
+      Map<String, dynamic>? made;
+      if (btOn) {
+        made = await BatchTracking.afterProduction(
+          sourceType: 'production', sourceId: id,
+          sourceNumber: '${updated['voucher_number'] ?? ''}',
+          productId: _fgId, qty: _outQty, branchId: _branchId,
+          date: DateTime.tryParse('${updated['voucher_date'] ?? ''}'), picks: picks,
+          fallback: [
+            for (final l in _components)
+              if (l.productId != null && l.qty > 0) {'product_id': l.productId, 'qty': l.qty},
+          ],
+        );
+      }
       if (mounted) setState(() { _current = updated; _status = updated['status'] as String? ?? 'posted'; });
       await _loadVouchers();
       await _loadVoucher(updated);
       if (mounted) setState(() => _posting = false);
+      if (mounted && made?['tracking'] == 'serial' && ((made?['serials'] as List?)?.isNotEmpty ?? false)) {
+        await BatchTracking.printSerialLabels(context, made, productName: _fgLabel,
+            date: DateTime.tryParse('${updated['voucher_date'] ?? ''}'), batch: '${updated['voucher_number'] ?? ''}', ask: true);
+        return;
+      }
       // Offer labels for the output (Admin Settings can switch this off).
       if (mounted && await askLabelsAfterProduction(_orgId)) await _printLabels(ask: true);
       return;
@@ -465,6 +495,15 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   Future<void> _printLabels({bool ask = false}) async {
     final v = _current; if (v == null) return;
     final no = '${v['voucher_number'] ?? ''}';
+    if (v['id'] is String && await BatchTracking.isOn(_orgId)) {
+      final made = await BatchTracking.madeBy('production', v['id'] as String);
+      if (made != null && mounted) {
+        await BatchTracking.printSerialLabels(context, made, productName: _fgLabel,
+            date: DateTime.tryParse('${v['voucher_date'] ?? ''}'), batch: no, ask: ask);
+        return;
+      }
+    }
+    if (!mounted) return;
     await printProductLabels(context,
       productId: _fgId, fallbackName: _fgLabel, qty: _outQty, batch: no,
       date: DateTime.tryParse('${v['voucher_date'] ?? ''}'),

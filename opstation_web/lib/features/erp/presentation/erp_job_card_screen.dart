@@ -23,6 +23,7 @@ import 'package:go_router/go_router.dart';
 import 'running_dot.dart';
 import '../widgets/bom_specs_box.dart';
 import '../services/production_labels.dart';
+import '../services/batch_tracking.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 class _JobMat {
@@ -796,6 +797,13 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final checks = _jobCheckpoints;
     final Map<String, bool> results = {for (final c in checks) c['id'] as String: false};
     bool saving = false;
+    // Batch & warranty tracking: which component batches this batch uses.
+    final btOn = await BatchTracking.isOn(_orgId);
+    final picks = <String, String>{};
+    final compNames = <String, String>{
+      for (final m in _materials) if (m.productId != null) m.productId!: m.productLabel,
+    };
+    if (!mounted) return;
 
     await showDialog(context: context, builder: (_) => StatefulBuilder(builder: (dCtx, setS) {
       final produced = double.tryParse(producedCtrl.text) ?? 0;
@@ -827,6 +835,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           ]),
           const SizedBox(height: 6),
           Text('Accepted into stock: ${_trim(accepted.toDouble())}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          if (btOn && compNames.isNotEmpty && _orgId != null)
+            ComponentBatchPicker(key: const ValueKey('bt_picker'), orgId: _orgId!, branchId: _branchId,
+                components: compNames, picks: picks),
           if (_canViewCost) ...[
             const SizedBox(height: 12),
             TextField(controller: ohCtrl, keyboardType: TextInputType.number,
@@ -913,9 +924,32 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                 final res = await client.rpc('post_job_run', params: {'p_run_id': runId});
                 if (dCtx.mounted) Navigator.pop(dCtx);
                 _snack(res?.toString() ?? 'Batch posted');
+                // Batch tracking: record component batches, make serials / cartons.
+                Map<String, dynamic>? made;
+                if (btOn) {
+                  final jobNo = _current?['job_number'] as String? ?? '';
+                  made = await BatchTracking.afterProduction(
+                    sourceType: 'job_run', sourceId: runId,
+                    sourceNumber: jobNo.isEmpty ? 'R$nextNo' : '$jobNo-R$nextNo',
+                    productId: _fgId, qty: accepted.toDouble(), branchId: _branchId,
+                    date: DateTime.tryParse(dateStr), picks: picks,
+                    fallback: [
+                      for (final m in _materials)
+                        if (m.productId != null && m.qty > 0)
+                          {'product_id': m.productId, 'qty': planned > 0 ? m.qty * produced / planned : m.qty},
+                    ],
+                  );
+                }
                 final updated = await client.from('job_cards').select().eq('id', jobId).single();
                 await _loadJobs();
                 await _loadJob(updated);
+                // Serial products: unit + carton labels for the serials just made.
+                if (mounted && made?['tracking'] == 'serial' && ((made?['serials'] as List?)?.isNotEmpty ?? false)) {
+                  final jobNo = _current?['job_number'] as String? ?? '';
+                  await BatchTracking.printSerialLabels(context, made,
+                      productName: (_fgId != null ? _prodName[_fgId] : null) ?? _fgLabel,
+                      date: DateTime.tryParse(dateStr), batch: jobNo.isEmpty ? 'R$nextNo' : '$jobNo-R$nextNo', ask: true);
+                } else
                 // Offer labels for the good units (Admin Settings can switch this off).
                 if (mounted && accepted > 0 && await askLabelsAfterProduction(_orgId)) {
                   final run = _runs.firstWhere((r) => r['id'] == runId,
@@ -1025,6 +1059,16 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final code = pid != null ? _prodCode[pid] : null;
     final jobNo = _current?['job_number'] as String? ?? '';
     final d = DateTime.tryParse('${run['run_date'] ?? ''}');
+    // Serial products: reprint the batch's own serial + carton labels.
+    if (run['id'] is String && await BatchTracking.isOn(_orgId)) {
+      final made = await BatchTracking.madeBy('job_run', run['id'] as String);
+      if (made != null && mounted) {
+        await BatchTracking.printSerialLabels(context, made, productName: name, date: d,
+            batch: jobNo.isEmpty ? 'R${run['run_no']}' : '$jobNo-R${run['run_no']}', ask: ask);
+        return;
+      }
+    }
+    if (!mounted) return;
     final accepted = (run['accepted_qty'] as num? ?? run['produced_qty'] as num? ?? 0).toDouble();
     await showLabelPrintDialog(
       context,

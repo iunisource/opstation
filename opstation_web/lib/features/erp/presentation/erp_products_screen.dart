@@ -32,6 +32,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
   Map<String, List<Map<String, dynamic>>> _taxonomies = {};
   List<Map<String, dynamic>> _uoms = [];
   bool _loading = true;
+  bool _batchTrackingEnabled = false; // org.batch_tracking — shows the Batch & warranty section
   bool _consignmentEnabled = false;   // org.consignment_enabled — gates the is_consignment checkbox
   List<Map<String, dynamic>> _branches = [];
   final _searchCtrl = TextEditingController();
@@ -143,7 +144,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         client.from('uoms').select().eq('org_id', orgId).order('name'),
         client.from('branches').select('id, name, is_virtual').eq('org_id', orgId!).eq('is_active', true).order('name'),
         client.from('app_config').select('key, value').eq('org_id', orgId)
-            .inFilter('key', ['org.consignment_enabled', 'org.product_supervise_flow', 'org.hide_main_groups_by_branch']),
+            .inFilter('key', ['org.consignment_enabled', 'org.product_supervise_flow', 'org.hide_main_groups_by_branch', 'org.batch_tracking']),
         client.from('branch_hidden_main_groups').select('branch_id, main_group').eq('org_id', orgId),
         posFut(),
       ]);
@@ -190,6 +191,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         _taxonomies = grouped;
         _uoms = List<Map<String, dynamic>>.from(uoms);
         _consignmentEnabled = consignmentOn;
+        _batchTrackingEnabled = cfg['org.batch_tracking'] == 'true';
         _productSuperviseEnabled = superviseOn;
         _loading = false;
       });
@@ -1044,6 +1046,10 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
     bool isConsignment = product?['is_consignment'] == true;
     bool isService = product?['is_service'] == true;
     bool freeText = product?['is_free_text'] == true;
+    String tracking = '${product?['batch_tracking'] ?? 'none'}';
+    if (!const ['none', 'batch', 'serial'].contains(tracking)) tracking = 'none';
+    final warrantyCtrl = TextEditingController(text: product?['warranty_months']?.toString() ?? '');
+    final perCartonCtrl = TextEditingController(text: product?['units_per_carton']?.toString() ?? '');
     // Optional. Nullable by design — thousands of products exist with no image,
     // and every surface must render cleanly without one.
     String? imageUrl = product?['image_url'] as String?;
@@ -1385,6 +1391,44 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                       style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                 ),
                 ]),
+                if (_batchTrackingEnabled && !isService)
+                  sectionCard(Icons.qr_code_2_outlined, 'Batch & warranty', [
+                    const SizedBox(height: 4),
+                    DropdownButtonFormField<String>(
+                      value: tracking,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Tracking', isDense: true),
+                      items: const [
+                        DropdownMenuItem(value: 'none', child: Text('None — quantity only')),
+                        DropdownMenuItem(value: 'batch', child: Text('Batch / lot (e.g. chips, raw material)')),
+                        DropdownMenuItem(value: 'serial', child: Text('Serial — one number per unit')),
+                      ],
+                      onChanged: (v) => setS(() => tracking = v ?? 'none'),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      tracking == 'batch'
+                          ? 'Each GRN records a batch / lot and the supplier warranty date. Production records which batch was used.'
+                          : tracking == 'serial'
+                              ? 'Each unit made gets its own serial number and label; units are packed into numbered cartons.'
+                              : 'Stock is tracked by quantity only, as today.',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    if (tracking != 'none') ...[
+                      const SizedBox(height: 10),
+                      Row(children: [
+                        Expanded(child: TextField(controller: warrantyCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(labelText: 'Warranty (months)', isDense: true,
+                            helperText: tracking == 'batch' ? 'From the supplier, counted from GRN date' : 'Given to the customer'))),
+                        const SizedBox(width: 12),
+                        Expanded(child: tracking == 'serial'
+                          ? TextField(controller: perCartonCtrl, keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(labelText: 'Units per carton', isDense: true,
+                                helperText: 'Blank = no carton labels'))
+                          : const SizedBox()),
+                      ]),
+                    ],
+                  ]),
                 sectionCard(Icons.store_mall_directory_outlined, 'Branch Allocation', [
                 if (_branches.isEmpty)
                   const Align(alignment: Alignment.centerLeft, child: Text('No branches found.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
@@ -1470,6 +1514,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                   'is_consignment': isConsignment,
                   'is_service': isService,
                   'is_free_text': freeText,
+                  if (_batchTrackingEnabled) ...{
+                    'batch_tracking': isService ? 'none' : tracking,
+                    'warranty_months': tracking == 'none' ? null : int.tryParse(warrantyCtrl.text.trim()),
+                    'units_per_carton': tracking == 'serial' ? int.tryParse(perCartonCtrl.text.trim()) : null,
+                  },
                   'image_url': imageUrl,
                   'updated_at': DateTime.now().toUtc().toIso8601String(),
                 };

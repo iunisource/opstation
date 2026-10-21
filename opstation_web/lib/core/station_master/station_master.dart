@@ -703,6 +703,7 @@ const List<_Feature> _features = [
   _Feature('Inventory Ledger', 'Inventory', '/erp/inventory-ledger', ['inventory ledger', 'stock ledger', 'movement']),
   _Feature('Low Stock Report', 'Inventory', '/erp/low-stock-report', ['low stock', 'reorder']),
   _Feature('Inventory Integrity', 'Inventory', '/erp/inventory-integrity', ['integrity', 'reconcile']),
+  _Feature('Batch Tracking', 'Inventory', '/erp/batch-tracking', ['batch', 'serial', 'warranty', 'carton', 'lot', 'trace']),
   _Feature('Units of Measure', 'Inventory', '/erp/uoms', ['uom', 'unit of measure', 'units']),
   // POS
   _Feature('POS Terminal', 'POS', '/erp/pos', ['pos', 'terminal', 'counter', 'till']),
