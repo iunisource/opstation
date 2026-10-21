@@ -177,6 +177,32 @@ class SupabasePullService {
     }
   }
 
+  /// Refreshes this org's users on the phone (upsert only, never deletes).
+  /// The admin dashboard, live routes and leaderboard all start from the local
+  /// user list — if it is missing or stale they show zeros / nothing.
+  Future<void> refreshOrgUsers(String orgId) async {
+    try {
+      // Paged — an org with many retailer logins passes the 1000-row cap.
+      final rows = <Map<String, dynamic>>[];
+      for (var from = 0; ; from += 1000) {
+        final page = List<Map<String, dynamic>>.from(await Supabase.instance.client
+            .from('users')
+            .select()
+            .eq('org_id', orgId)
+            .order('id')
+            .range(from, from + 999) as List);
+        rows.addAll(page);
+        if (page.length < 1000) break;
+      }
+      if (rows.isEmpty) return;
+      await _db.transaction(() async {
+        await _pullUsers(rows);
+      });
+    } catch (e) {
+      print('refreshOrgUsers failed: $e');
+    }
+  }
+
   /// Fast targeted pull — refreshes only one user's route_assignments,
   /// skipping the expensive trips/visits/deliveries pull. Used by the
   /// salesperson home's realtime subscription and the "Retry now" button.
@@ -351,10 +377,13 @@ class SupabasePullService {
       try {
         await _db.into(_db.users).insertOnConflictUpdate(UsersCompanion(
           id: Value(r['id'] as String),
-          name: Value(r['name'] as String),
-          email: Value(r['email'] as String),
+          // A blank name / email used to drop the whole user (hard cast threw,
+          // catch swallowed it) — and a user missing from the phone vanishes
+          // from the admin dashboard, live routes and leaderboard.
+          name: Value(r['name'] as String? ?? ''),
+          email: Value(r['email'] as String? ?? ''),
           phone: Value(r['phone'] as String? ?? ''),
-          role: Value(r['role'] as String),
+          role: Value(r['role'] as String? ?? ''),
           isActive: Value(r['is_active'] as bool? ?? true),
           passwordHash: Value(r['password_hash'] as String? ?? ''),
           passwordSalt: Value(r['password_salt'] as String? ?? ''),
@@ -519,7 +548,7 @@ class SupabasePullService {
           capturedLng: Value((r['captured_lng'] as num?)?.toDouble()),
           accuracyMeters: Value((r['accuracy_meters'] as num?)?.toDouble()),
           distanceMeters: Value((r['distance_meters'] as num?)?.toDouble()),
-          amount: Value(r['amount'] as int? ?? 0),
+          amount: Value((r['amount'] as num?)?.round() ?? 0),
           receiptNumber: Value(r['receipt_number'] as String?),
           notes: Value(r['notes'] as String?),
           skipReason: Value(r['skip_reason'] as String?),
@@ -569,7 +598,7 @@ class SupabasePullService {
           customerName: Value(r['customer_name'] as String? ?? ''),
           sequence: Value(r['sequence'] as int),
           itemDescription: Value(r['item_description'] as String? ?? ''),
-          amount: Value(r['amount'] as int? ?? 0),
+          amount: Value((r['amount'] as num?)?.round() ?? 0),
           paymentType: Value(r['payment_type'] as String? ?? 'cash'),
           status: Value(r['status'] as String? ?? 'pending'),
           deliveredAt: Value(_parseDateNullable(r['delivered_at'])),

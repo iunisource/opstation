@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/database/app_database_provider.dart';
+import '../../../core/supabase/supabase_pull_service.dart';
 import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../customers/data/customer_repository.dart';
@@ -35,10 +36,17 @@ final adminDashboardStatsProvider =
   final orgId = ref.watch(orgIdProvider);
   final db = ref.watch(appDatabaseProvider);
 
+  // Keep the phone's user list current first — every figure below starts from
+  // it, and a missing list made the whole banner read zero.
+  if (orgId != null) {
+    await ref.read(supabasePullServiceProvider).refreshOrgUsers(orgId);
+  }
   final allUsersRaw = await db.select(db.users).get();
   final orgUsers = allUsersRaw.where((u) {
     if (!u.isActive) return false;
     if (u.role == UserRole.superAdmin.name) return false;
+    if (u.role == 'retailer') return false; // retailer-app logins aren't team
+
     if (orgId != null && u.orgId != orgId) return false;
     return true;
   }).toList();
@@ -73,20 +81,39 @@ final adminDashboardStatsProvider =
     final todayStartUtc = todayStart.toUtc().toIso8601String();
     final tomorrowStartUtc = tomorrowStart.toUtc().toIso8601String();
 
-    if (orgUserIds.isEmpty) throw StateError('no org users');
-
-    // Scoped to THIS org's users. Without inFilter this pulled every org's
-    // visits (visits has no org_id), which mixed other orgs' collections and
-    // reps into this dashboard.
-    final visitRows = await client
-        .from('visits')
-        .select('amount, customer_id')
-        .inFilter('user_id', orgUserIds)
-        .gte('timestamp', todayStartUtc)
-        .lt('timestamp', tomorrowStartUtc);
-    for (final r in (visitRows as List)) {
-      final m = Map<String, dynamic>.from(r as Map);
-      final amt = (m['amount'] as int?) ?? 0;
+    // Today's visits for THIS org. `visits` has no org_id, so they are reached
+    // through the org's trips (trips carry org_id). This replaced a filter on
+    // every org user's id: with retailer logins in the users table that id
+    // list grew past what a request URL can carry, the query failed, and the
+    // banner fell back to the phone's local data — showing zero.
+    final List<Map<String, dynamic>> visitRows = [];
+    if (orgId != null) {
+      final since = todayStart.subtract(const Duration(days: 2)).toUtc().toIso8601String();
+      final tripRows = await client.from('trips').select('id')
+          .eq('org_id', orgId)
+          .or('ended_at.is.null,started_at.gte.$since');
+      final tripIds = [for (final r in (tripRows as List)) '${(r as Map)['id']}'];
+      for (var i = 0; i < tripIds.length; i += 40) {
+        final batch = tripIds.sublist(i, i + 40 > tripIds.length ? tripIds.length : i + 40);
+        final v = await client.from('visits').select('amount, customer_id')
+            .inFilter('trip_id', batch)
+            .gte('timestamp', todayStartUtc)
+            .lt('timestamp', tomorrowStartUtc);
+        for (final r in (v as List)) { visitRows.add(Map<String, dynamic>.from(r as Map)); }
+      }
+    } else {
+      if (orgUserIds.isEmpty) throw StateError('no org users');
+      for (var i = 0; i < orgUserIds.length; i += 40) {
+        final batch = orgUserIds.sublist(i, i + 40 > orgUserIds.length ? orgUserIds.length : i + 40);
+        final v = await client.from('visits').select('amount, customer_id')
+            .inFilter('user_id', batch)
+            .gte('timestamp', todayStartUtc)
+            .lt('timestamp', tomorrowStartUtc);
+        for (final r in (v as List)) { visitRows.add(Map<String, dynamic>.from(r as Map)); }
+      }
+    }
+    for (final m in visitRows) {
+      final amt = (m['amount'] as num?)?.round() ?? 0;
       totalAmount += amt;
       if (amt > 0) {
         final cid = m['customer_id'] as String?;
@@ -94,11 +121,9 @@ final adminDashboardStatsProvider =
       }
     }
 
-    final activeRows = await client
-        .from('trips')
-        .select('id')
-        .inFilter('user_id', orgUserIds)
-        .filter('ended_at', 'is', null);
+    var activeQ = client.from('trips').select('id').filter('ended_at', 'is', null);
+    activeQ = orgId != null ? activeQ.eq('org_id', orgId) : activeQ.inFilter('user_id', orgUserIds);
+    final activeRows = await activeQ;
     activeRoutesCount = (activeRows as List).length;
   } catch (_) {
     // Offline (or Supabase unreachable): fall back to local Drift. This may lag

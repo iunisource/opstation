@@ -685,6 +685,10 @@ class _StopCardState extends State<_StopCard> {
               style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
               maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
+        if (!customer.hasLocation) ...[
+          const Icon(Icons.location_off, size: 15, color: AppColors.danger),
+          const SizedBox(width: 6),
+        ],
         if (amount > 0) ...[
           Text('Rs ${_thousands(amount)}',
               style: const TextStyle(
@@ -769,11 +773,23 @@ class _StopCardState extends State<_StopCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      customer.shopName,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700),
-                    ),
+                    Row(children: [
+                      Flexible(
+                        child: Text(
+                          customer.shopName,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (!customer.hasLocation) ...[
+                        const SizedBox(width: 6),
+                        const Tooltip(
+                          message: 'No saved location',
+                          child: Icon(Icons.location_off,
+                              size: 18, color: AppColors.danger),
+                        ),
+                      ],
+                    ]),
                     if (customer.address.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(
@@ -826,19 +842,23 @@ class _StopCardState extends State<_StopCard> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.borderLight),
-                    borderRadius: BorderRadius.circular(8),
+                // No saved location → no Directions (a name search sends the
+                // rep to the wrong shop as often as the right one).
+                if (customer.hasLocation) ...[
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: AppColors.borderLight),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.directions, size: 20),
+                      color: AppColors.primary,
+                      tooltip: 'Directions',
+                      onPressed: () => _openDirections(context),
+                    ),
                   ),
-                  child: IconButton(
-                    icon: const Icon(Icons.directions, size: 20),
-                    color: AppColors.primary,
-                    tooltip: 'Directions',
-                    onPressed: () => _openDirections(context),
-                  ),
-                ),
-                const SizedBox(width: 6),
+                  const SizedBox(width: 6),
+                ],
                 Container(
                   decoration: BoxDecoration(
                     border: Border.all(color: AppColors.borderLight),

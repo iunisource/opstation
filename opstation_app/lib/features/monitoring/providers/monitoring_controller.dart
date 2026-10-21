@@ -130,7 +130,8 @@ final liveMonitoringProvider =
   // server held a full day's work. Refresh today's trips and visits first.
   // Best-effort: offline, it falls back to whatever is already local.
   if (orgId != null) {
-    await ref.read(supabasePullServiceProvider).pullTodayTripsForOrg(orgId);
+    final pull = ref.read(supabasePullServiceProvider);
+    await Future.wait([pull.refreshOrgUsers(orgId), pull.pullTodayTripsForOrg(orgId)]);
   }
 
   // Only THIS org's salespersons. Without the org filter, users from other
@@ -182,7 +183,8 @@ final leaderboardProvider = FutureProvider.autoDispose
   // admin who stayed signed in overnight sees the new day's activity without
   // logging out. Best-effort: offline, it falls back to local data.
   if (orgId != null) {
-    await ref.read(supabasePullServiceProvider).pullTodayTripsForOrg(orgId);
+    final pull = ref.read(supabasePullServiceProvider);
+    await Future.wait([pull.refreshOrgUsers(orgId), pull.pullTodayTripsForOrg(orgId)]);
   }
 
   // Only THIS org's salespersons — otherwise other orgs' reps and their

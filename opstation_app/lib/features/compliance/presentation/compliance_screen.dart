@@ -75,6 +75,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen>
             .from('users')
             .select('id, name')
             .eq('org_id', orgId)
+            .or('role.is.null,role.neq.retailer') // retailer logins can pass the 1000-row cap
             .limit(5000),
         client
             .from('trips')

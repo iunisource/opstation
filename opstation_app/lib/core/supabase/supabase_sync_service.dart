@@ -345,7 +345,9 @@ class SupabaseSyncService {
     // parent ids (Phase 2), so every query is bounded and index-friendly.
     final parents = await Future.wait([
       _client.from('orgs').select().eq('id', orgId),                            // 0
-      _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'), // 1
+      // Paged: with retailer logins an org can pass PostgREST's 1000-row cap,
+      // which silently cut off reps (live routes / leaderboard went empty).
+      _pullPaged('users', orFilter: 'org_id.eq.$orgId,role.eq.superAdmin'), // 1
       _pullAllCustomers(orgId),                                                 // 2
       _pullAllProducts(orgId),                                                  // 3
       _pullPaged('sales_routes', eqOrg: orgId),                                 // 4
@@ -457,7 +459,9 @@ class SupabaseSyncService {
   Future<OrgPullData> pullEssentials(String orgId) async {
     final parents = await Future.wait([
       _client.from('orgs').select().eq('id', orgId),                            // 0
-      _client.from('users').select().or('org_id.eq.$orgId,role.eq.superAdmin'), // 1
+      // Paged: with retailer logins an org can pass PostgREST's 1000-row cap,
+      // which silently cut off reps (live routes / leaderboard went empty).
+      _pullPaged('users', orFilter: 'org_id.eq.$orgId,role.eq.superAdmin'), // 1
       _pullAllCustomers(orgId),                                                 // 2
       _pullAllProducts(orgId),                                                  // 3
       _pullPaged('sales_routes', eqOrg: orgId),                                 // 4
