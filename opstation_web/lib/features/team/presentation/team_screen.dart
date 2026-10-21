@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
@@ -24,11 +25,13 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
   String _search = '';
 
   bool _showArchived = false;
+  String? _roleFilter; // null = all user types
 
   List<Map<String, dynamic>> get _filteredUsers {
     final q = _search.trim().toLowerCase();
     // Archived members are hidden unless "Show archived" is on.
-    final base = _users.where((u) => isArchivedUser(u) == _showArchived).toList();
+    final base = _users.where((u) => isArchivedUser(u) == _showArchived &&
+        (_roleFilter == null || (u['role'] as String? ?? '') == _roleFilter)).toList();
     if (q.isEmpty) return base;
     return base.where((u) {
       final hay = [
@@ -82,6 +85,44 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
     } catch (_) { setState(() => _loading = false); }
   }
 
+  /// User-type filter beans: All + each type on the team, with counts.
+  Widget _roleBeans() {
+    final base = _users.where((u) => isArchivedUser(u) == _showArchived).toList();
+    final counts = <String, int>{};
+    for (final u in base) {
+      final r = u['role'] as String? ?? '';
+      if (r.isEmpty) continue;
+      counts[r] = (counts[r] ?? 0) + 1;
+    }
+    const order = ['masterAdmin', 'admin', 'erpUser', 'accountant', 'dispatchManager', 'salesperson', 'surveyor', 'driver'];
+    final roles = counts.keys.toList()
+      ..sort((a, b) {
+        final ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia).compareTo(ib < 0 ? 99 : ib);
+      });
+    if (_roleFilter != null && !counts.containsKey(_roleFilter)) _roleFilter = null;
+    Widget bean(String label, String? value, int n) {
+      final on = _roleFilter == value;
+      final c = value == null ? AppTheme.primary : _roleColor(value);
+      return ChoiceChip(
+        label: Text('$label ($n)', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600,
+            color: on ? Colors.white : c)),
+        selected: on,
+        showCheckmark: false,
+        selectedColor: c,
+        backgroundColor: c.withOpacity(0.08),
+        side: BorderSide(color: c.withOpacity(on ? 1 : 0.3)),
+        shape: const StadiumBorder(),
+        visualDensity: VisualDensity.compact,
+        onSelected: (_) => setState(() => _roleFilter = value),
+      );
+    }
+    return Wrap(spacing: 8, runSpacing: 8, children: [
+      bean('All', null, base.length),
+      for (final r in roles) bean(_roleLabel(r), r, counts[r]!),
+    ]);
+  }
+
   Color _roleColor(String role) {
     switch (role) {
       case 'masterAdmin': return AppTheme.primary;
@@ -104,6 +145,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       case 'dispatchManager': return 'Dispatch Manager';
       case 'surveyor': return 'Surveyor';
       case 'accountant': return 'Accountant';
+      case 'erpUser': return 'ERP User';
       case 'superAdmin': return 'Super Admin';
       default: return role;
     }
@@ -239,7 +281,9 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
             ),
             onChanged: (v) => setState(() => _search = v),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
+          _roleBeans(),
+          const SizedBox(height: 12),
           if (_loading)
             const Center(child: CircularProgressIndicator())
           else
@@ -339,6 +383,12 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                     icon: const Icon(Icons.history, size: 18, color: AppTheme.success),
                                     onPressed: () => _openDriverHistory(context, u),
                                     tooltip: 'Delivery History',
+                                  ),
+                                if (role == 'erpUser' && (viewerRole == 'admin' || viewerRole == 'masterAdmin'))
+                                  IconButton(
+                                    icon: const Icon(Icons.admin_panel_settings_outlined, size: 18, color: AppTheme.primary),
+                                    onPressed: () => context.go('/erp/users?edit=${Uri.encodeComponent('${u['id']}')}'),
+                                    tooltip: 'Go to permissions',
                                   ),
                                 if (canDeactivate)
                                   IconButton(

@@ -9,7 +9,10 @@ import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/users/user_status.dart';
 
 class ErpUsersScreen extends ConsumerStatefulWidget {
-  const ErpUsersScreen({super.key});
+  const ErpUsersScreen({super.key, this.editUserId});
+  /// Opens this user's editor (with Permissions) straight away — used by the
+  /// Team screen's "Go to permissions".
+  final String? editUserId;
   @override
   ConsumerState<ErpUsersScreen> createState() => _ErpUsersScreenState();
 }
@@ -62,9 +65,29 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
         }).toList();
         _loading = false;
       });
+      _openRequested();
     } catch (_) {
       setState(() => _loading = false);
     }
+  }
+
+  String? _opened;
+  void _openRequested() {
+    final id = widget.editUserId;
+    if (id == null || id.isEmpty || id == _opened) return;
+    final hit = _users.where((u) => u['id'] == id).toList();
+    if (hit.isEmpty) return;
+    _opened = id;
+    if (isArchivedUser(hit.first) && !_showArchived) setState(() => _showArchived = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showDialog(context, hit.first);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant ErpUsersScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.editUserId != old.editUserId) _openRequested();
   }
 
   void _showSnack(String msg) {

@@ -465,7 +465,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/batch-tracking', builder: (_, state) => _deferred(_s156.loadLibrary(), () => _s156.ErpBatchTrackingScreen(query: state.uri.queryParameters['q']))),
           GoRoute(path: '/erp/inventory-integrity', builder: (_, __) => _deferred(_s085.loadLibrary(), () => _s085.ErpInventoryIntegrityScreen())),
           GoRoute(path: '/erp/product-classifications', builder: (_, __) => _deferred(_s106.loadLibrary(), () => _s106.ErpProductClassificationsScreen())),
-          GoRoute(path: '/erp/users', builder: (_, __) => _deferred(_s107.loadLibrary(), () => _s107.ErpUsersScreen())),
+          GoRoute(path: '/erp/users', builder: (_, state) => _deferred(_s107.loadLibrary(), () => _s107.ErpUsersScreen(editUserId: state.uri.queryParameters['edit']))),
           GoRoute(path: '/erp/admin-settings', builder: (_, __) => _deferred(_s108.loadLibrary(), () => _s108.ErpAdminSettingsScreen())),
           GoRoute(path: '/erp/ai-connector', builder: (_, __) => _deferred(_s109.loadLibrary(), () => _s109.ErpMcpConnectorScreen())),
           GoRoute(path: '/erp/automation', builder: (_, __) => _deferred(_s147.loadLibrary(), () => _s147.ErpAutomationScreen())),
