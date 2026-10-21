@@ -616,6 +616,33 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.customer_edit_supervise_flow',
+    'Supervision for customer edits',
+    'When ON, every change to an existing customer — from the web, the app or an '
+        'import — is recorded with what changed (old → new) and waits for a '
+        'supervisor. The change applies straight away; the supervisor opens '
+        'Customer 360 (a red dot shows which customers have changes) and taps '
+        'Supervise, or Revert to put the old values back. Admins and master admins '
+        'can always supervise; add more users below. The email alert on edits '
+        'works as before.',
+    users: _UsersField('org.customer_edit_supervisor_users', 'Also allowed to supervise customer edits'),
+  ),
+  _AdminToggle(
+    'org.field_location_capture',
+    'Salesperson can add shop location',
+    'When ON, a salesperson on a route can add a shop\'s location from the stop: '
+        'the camera opens, GPS sharpens while they take a photo of the shop, and '
+        'the photo is stamped with the coordinates (it waits until the GPS is '
+        'within the accuracy limit set in the app). The location is saved to the '
+        'customer and always goes for review in Customer 360 → Overview → Location, '
+        'with the photo.',
+    choice: _ChoiceField('org.field_location_capture_scope', 'Which shops', [
+      ('missing', 'Only shops with no saved location'),
+      ('any', 'Any shop (also corrects a saved location)'),
+    ], 'missing'),
+  ),
+
+  _AdminToggle(
     'org.product_supervise_flow',
     'Supervision for new products',
     'When ON, every newly-created product must be "Supervised" by an admin or '
@@ -710,6 +737,8 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.do_supervise_flow',
     'org.sri_supervise_flow',
     'org.customer_supervise_flow',
+    'org.customer_edit_supervise_flow',
+    'org.field_location_capture',
     'org.customer_edit_alert',
     'org.quotation_custom_company',
     'org.cbr_collection_columns',

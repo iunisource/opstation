@@ -16,6 +16,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 import 'customer_history_screen.dart';
+import 'customer_edit_review.dart';
 
 /// Customer 360 — a unified view of a single shop:
 ///  • Overview     : profile, location, credit vs current outstanding
@@ -86,6 +87,31 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
   bool _loadingRoutes = true;
   List<Map<String, String>> _custRoutes = []; // {name, salesperson}
 
+  // Edits / field locations waiting for a supervisor.
+  CustomerReviews _reviews = CustomerReviews.empty;
+  final _locationKey = GlobalKey();
+
+  Future<void> _loadReviews({bool scroll = false}) async {
+    final r = await CustomerReviews.load(_customerId, ref.read(currentUserProvider));
+    if (!mounted) return;
+    setState(() => _reviews = r);
+    if (scroll && r.location.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final ctx = _locationKey.currentContext;
+        if (ctx != null) Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 400), alignment: 0.1);
+      });
+    }
+  }
+
+  /// After a Supervise / Revert: fresh customer row + reviews.
+  Future<void> _afterReview() async {
+    try {
+      final fresh = await Supabase.instance.client.from('customers').select().eq('id', _customerId).single();
+      widget.customer..clear()..addAll(Map<String, dynamic>.from(fresh));
+    } catch (_) {}
+    await _loadReviews();
+  }
+
   final _money = NumberFormat('#,##0');
   final MoneyFmt _money2 = const MoneyFmt();
 
@@ -107,6 +133,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadTarget();
     _loadRoutes();
     if (_showJobs) _loadJobs();
+    _loadReviews(scroll: true);
   }
 
   @override
@@ -125,6 +152,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _loadTarget();
     _loadRoutes();
     if (_showJobs) _loadJobs();
+    _loadReviews();
   }
 
   Future<void> _loadJobs() async {
@@ -1202,7 +1230,16 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                 labelStyle:
                     const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
                 tabs: [
-                  const Tab(text: 'Overview'),
+                  Tab(
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Text('Overview'),
+                      if (_reviews.any) ...[
+                        const SizedBox(width: 6),
+                        Container(width: 8, height: 8,
+                            decoration: const BoxDecoration(color: AppTheme.danger, shape: BoxShape.circle)),
+                      ],
+                    ]),
+                  ),
                   const Tab(text: 'Receivables'),
                   const Tab(text: 'Visits'),
                   const Tab(text: 'Intel'),
@@ -1324,6 +1361,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     return ListView(
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
       children: [
+        PendingCustomerChanges(data: _reviews, onDone: _afterReview),
         // Credit vs outstanding — the headline.
         _creditCard(creditLimit),
         if (_targetsEnabled) ...[
@@ -1381,10 +1419,18 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           ),
         ),
         const SizedBox(height: 16),
-        _card(
-          title: 'Location',
-          icon: Icons.location_on_outlined,
-          child: (lat != null && lng != null)
+        Container(
+          key: _locationKey,
+          decoration: _reviews.location.isEmpty ? null : BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.danger, width: 2),
+            boxShadow: [BoxShadow(color: AppTheme.danger.withOpacity(0.15), blurRadius: 10)],
+          ),
+          child: _card(
+          title: _reviews.location.isEmpty ? 'Location' : 'Location — review needed',
+          icon: _reviews.location.isEmpty ? Icons.location_on_outlined : Icons.location_searching,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+           (lat != null && lng != null)
               ? Row(
                   children: [
                     Expanded(
@@ -1410,6 +1456,9 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
               : const Text('No location set for this shop.',
                   style:
                       TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            PendingLocationReview(data: _reviews, onDone: _afterReview),
+          ]),
+        ),
         ),
       ],
     );

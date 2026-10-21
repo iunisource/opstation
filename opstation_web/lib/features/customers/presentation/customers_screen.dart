@@ -31,6 +31,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   bool _loading = true;
   bool _targetsEnabled = false; // org.customer_targets_enabled
   bool _customerSuperviseEnabled = false; // org.customer_supervise_flow
+  // Customers with edits / field locations waiting for review (red dot on 360).
+  Set<String> _reviewPendingIds = {};
   final _searchCtrl = TextEditingController();
   String _missingFilter = 'all'; // all | contact | phone | either
   String _routeFilter = 'all'; // all | assigned | unassigned
@@ -168,6 +170,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         superviseOn = (supRow?['value'] as String?) == 'true';
       } catch (_) {}
 
+      final reviewIds = <String>{};
+      try {
+        final rr = await client.from('customer_edit_reviews').select('customer_id')
+            .eq('org_id', orgId).eq('status', 'pending').limit(5000);
+        for (final x in rr as List) { reviewIds.add('${x['customer_id']}'); }
+      } catch (_) {}
+
       // Which customers are on a route? route_stops has no org_id, so scope by
       // this org's routes. Used by the "Route" filter (assigned/unassigned).
       final Set<String> assignedIds = {};
@@ -202,6 +211,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         _groups = grps;
         _targetsEnabled = targetsOn;
         _customerSuperviseEnabled = superviseOn;
+        _reviewPendingIds = reviewIds;
         _assignedCustomerIds = assignedIds;
         _routes = routes;
         _routesByCustomer..clear()..addAll(byCustomer);
@@ -588,11 +598,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                     ),
                                   ),
                                 IconButton(
-                                  icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
-                                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => Customer360Screen(customer: c),
-                                  )),
-                                  tooltip: 'Customer 360',
+                                  icon: _with360Dot(c, const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary)),
+                                  onPressed: () => _open360(c),
+                                  tooltip: _reviewPendingIds.contains(c['id']) ? 'Customer 360 — changes to review' : 'Customer 360',
                                 ),
                                 if (!widget.crmMode)
                                   IconButton(
@@ -667,7 +675,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           borderRadius: BorderRadius.circular(12),
           child: InkWell(
             borderRadius: BorderRadius.circular(12),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => Customer360Screen(customer: c))),
+            onTap: () => _open360(c),
             child: Container(
               padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
@@ -692,6 +700,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     if (hasLoc) _tag('Location', AppTheme.success, icon: Icons.location_on) else _tag('No location', AppTheme.textSecondary, icon: Icons.location_off),
                     if (!active) _tag('Deactivated', AppTheme.danger),
                     if (pending) _tag('Supervision pending', Colors.amber.shade800),
+                    if (_reviewPendingIds.contains(c['id'])) _tag('Changes to review', AppTheme.danger, icon: Icons.circle),
                   ]),
                 ])),
                 PopupMenuButton<String>(
@@ -939,6 +948,29 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   /// Logs a customer edit into the shared voucher_audit_log (voucher_type
   /// 'CUSTOMER'), recording which fields changed. Best-effort; never blocks
   /// the save.
+  Widget _with360Dot(Map<String, dynamic> c, Widget icon) {
+    if (!_reviewPendingIds.contains(c['id'])) return icon;
+    return Stack(clipBehavior: Clip.none, children: [
+      icon,
+      Positioned(right: -2, top: -2, child: Container(width: 8, height: 8,
+          decoration: BoxDecoration(color: AppTheme.danger, shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 1.2)))),
+    ]);
+  }
+
+  Future<void> _open360(Map<String, dynamic> c) async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => Customer360Screen(customer: c)));
+    // Supervised inside? Refresh the dots + menu badge.
+    try {
+      final orgId = ref.read(currentUserProvider)?.orgId;
+      if (orgId == null) return;
+      final rr = await Supabase.instance.client.from('customer_edit_reviews').select('customer_id')
+          .eq('org_id', orgId).eq('status', 'pending').limit(5000);
+      if (mounted) setState(() => _reviewPendingIds = {for (final x in rr as List) '${x['customer_id']}'});
+      ref.invalidate(customerSupervisePendingProvider);
+    } catch (_) {}
+  }
+
   Future<void> _logCustomerEdit(
       Map<String, dynamic> oldC, Map<String, dynamic> newC) async {
     const labels = {

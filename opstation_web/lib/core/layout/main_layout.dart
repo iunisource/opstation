@@ -576,15 +576,28 @@ final customerSupervisePendingProvider = FutureProvider<int>((ref) async {
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
   try {
-    final cfg = await client.from('app_config').select('value')
-        .eq('org_id', user.orgId!).eq('key', 'org.customer_supervise_flow').maybeSingle();
-    if ((cfg?['value'] as String?) != 'true') return 0;
-    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
-    if (!isAdmin) return 0;
-    final res = await client.from('customers').select('id')
+    final cfgRows = await client.from('app_config').select('key, value')
         .eq('org_id', user.orgId!)
-        .filter('supervised_at', 'is', null);
-    return (res as List).length;
+        .inFilter('key', ['org.customer_supervise_flow', 'org.customer_edit_supervisor_users']);
+    final cfg = {for (final r in cfgRows as List) '${r['key']}': '${r['value'] ?? ''}'};
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin;
+    int n = 0;
+    if (cfg['org.customer_supervise_flow'] == 'true' && isAdmin) {
+      final res = await client.from('customers').select('id')
+          .eq('org_id', user.orgId!)
+          .filter('supervised_at', 'is', null);
+      n += (res as List).length;
+    }
+    // Customers with edits / field locations waiting for review.
+    final editUsers = (cfg['org.customer_edit_supervisor_users'] ?? '').split(',').map((e) => e.trim()).toSet();
+    if (isAdmin || editUsers.contains(user.id)) {
+      try {
+        final r = await client.from('customer_edit_reviews').select('customer_id')
+            .eq('org_id', user.orgId!).eq('status', 'pending').limit(5000);
+        n += {for (final x in r as List) x['customer_id']}.length;
+      } catch (_) {}
+    }
+    return n;
   } catch (_) { return 0; }
 });
 
