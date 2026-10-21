@@ -3352,20 +3352,35 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   Future<void> _loadTransactions() async {
     setState(() => _loadingTxns = true);
     try {
-      // Load ALL sale transactions for this org that haven't been returned
-      final txns = await Supabase.instance.client
-          .from('pos_transactions')
-          .select('*, customers(shop_name), pos_customers(name, phone)')
-          .eq('org_id', widget.orgId)
-          .or('transaction_type.eq.sale,transaction_type.is.null')
-          .order('transacted_at', ascending: false)
-          .limit(500);
+      // Sales for this org. Without dates: the latest 500 (fast). With a From /
+      // To date: every sale in that range, fetched in pages — so older months
+      // (e.g. July) can always be found by picking their dates.
+      final ranged = _dateFrom != null || _dateTo != null;
+      final txns = <Map<String, dynamic>>[];
+      for (var from = 0;; from += 1000) {
+        var q = Supabase.instance.client
+            .from('pos_transactions')
+            .select('*, customers(shop_name), pos_customers(name, phone)')
+            .eq('org_id', widget.orgId)
+            .or('transaction_type.eq.sale,transaction_type.is.null');
+        if (_dateFrom != null) {
+          q = q.gte('transacted_at', DateTime(_dateFrom!.year, _dateFrom!.month, _dateFrom!.day).toUtc().toIso8601String());
+        }
+        if (_dateTo != null) {
+          q = q.lt('transacted_at', DateTime(_dateTo!.year, _dateTo!.month, _dateTo!.day + 1).toUtc().toIso8601String());
+        }
+        final page = List<Map<String, dynamic>>.from(await q
+            .order('transacted_at', ascending: false)
+            .range(from, from + (ranged ? 999 : 499)));
+        txns.addAll(page);
+        if (!ranged || page.length < 1000 || from > 20000) break;
+      }
       // Show all sales. Per-line REMAINING quantity (sold minus already-returned)
       // is enforced when an invoice is opened (see _loadItems), so a partially
       // returned invoice stays returnable for its un-returned lines instead of
       // disappearing from the list after a single partial return.
       setState(() {
-        _transactions = (txns as List).map((t) => Map<String, dynamic>.from(t)).toList();
+        _transactions = txns;
         _loadingTxns = false;
       });
     } catch (e) { setState(() => _loadingTxns = false); }
@@ -3452,20 +3467,20 @@ class _ReturnDialogState extends State<_ReturnDialog> {
         Expanded(child: TextField(decoration: const InputDecoration(hintText: 'Search by customer name, phone, transaction ID…', prefixIcon: Icon(Icons.search, size: 18), isDense: true), onChanged: (v) => setState(() => _q = v))),
         const SizedBox(width: 8),
         OutlinedButton.icon(icon: const Icon(Icons.date_range, size: 16), label: Text(_dateFrom != null ? DateFormat('d MMM').format(_dateFrom!) : 'From', style: const TextStyle(fontSize: 12)),
-          onPressed: () async { final d = await showDatePicker(context: context, initialDate: _dateFrom ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) setState(() => _dateFrom = d); }),
+          onPressed: () async { final d = await showDatePicker(context: context, initialDate: _dateFrom ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) { setState(() => _dateFrom = d); _loadTransactions(); } }),
         const SizedBox(width: 4),
         OutlinedButton.icon(icon: const Icon(Icons.date_range, size: 16), label: Text(_dateTo != null ? DateFormat('d MMM').format(_dateTo!) : 'To', style: const TextStyle(fontSize: 12)),
-          onPressed: () async { final d = await showDatePicker(context: context, initialDate: _dateTo ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) setState(() => _dateTo = d); }),
+          onPressed: () async { final d = await showDatePicker(context: context, initialDate: _dateTo ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now()); if (d != null) { setState(() => _dateTo = d); _loadTransactions(); } }),
         if (_dateFrom != null || _dateTo != null) ...[
           const SizedBox(width: 4),
-          IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () => setState(() { _dateFrom = null; _dateTo = null; })),
+          IconButton(icon: const Icon(Icons.clear, size: 16), onPressed: () { setState(() { _dateFrom = null; _dateTo = null; }); _loadTransactions(); }),
         ],
       ]),
       const SizedBox(height: 12),
       Expanded(child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Left: transaction list
         Expanded(child: _loadingTxns ? const Center(child: CircularProgressIndicator())
-          : filtered.isEmpty ? Center(child: Text(_transactions.isEmpty ? 'No returnable orders found.' : 'No orders match your search.', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
+          : filtered.isEmpty ? Center(child: Text(_transactions.isEmpty ? 'No returnable orders found.' : (_dateFrom == null && _dateTo == null ? 'No match in the latest 500 bills — pick From / To dates to search older ones.' : 'No orders match your search.'), textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
           : ListView.separated(itemCount: filtered.length, separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final t = filtered[i]; final sel = _selectedTxn?['id'] == t['id'];
