@@ -128,6 +128,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
       case 'grn': return 'GRN';
       case 'job_run': return 'Job batch';
       case 'production': return 'Production';
+      case 'inverse': return 'Disassembly';
       default: return '${r['source_type'] ?? ''}';
     }
   }
@@ -272,7 +273,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
     );
   }
 
-  String _status(String? s) => switch (s) { 'in_stock' => 'In stock', 'dispatched' => 'Dispatched', 'void' => 'Cancelled', _ => s ?? '-' };
+  String _status(String? s) => switch (s) { 'in_stock' => 'In stock', 'dispatched' => 'Dispatched', 'void' => 'Cancelled', 'broken' => 'Taken apart', _ => s ?? '-' };
 
   Future<Widget> _serialCard(Map<String, dynamic> s) async {
     await _names([s['product_id']]);
@@ -293,12 +294,13 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
       _kv('Made in', '${_src(s)} ${s['source_number'] ?? ''}', onTap: s['source_type'] == 'production' ? () => _openSource(s) : null),
       _kv('Made on', BatchTracking.date(s['produced_on'])),
       if (s['branch_id'] != null) _kv('Branch', _branchName[s['branch_id']] ?? '-'),
+      if (s['broken_number'] != null) _kv('Taken apart in', '${s['broken_number']}', color: AppTheme.danger),
       if (carton != null) _kv('Carton', '$carton', onTap: () => _trace('$carton')),
       _kv('Warranty', months <= 0 ? 'None' : until != null
           ? '$months months · till ${BatchTracking.date(until.toIso8601String())}'
           : '$months months · starts when sold', color: until != null ? _warrantyColor(until.toIso8601String()) : null),
       _componentsBox(comps),
-    ], color: s['status'] == 'void' ? AppTheme.danger : null);
+    ], color: (s['status'] == 'void' || s['status'] == 'broken') ? AppTheme.danger : null);
   }
 
   Future<Widget> _cartonCard(Map<String, dynamic> c) async {
@@ -342,7 +344,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
       const SizedBox(height: 8),
       Text(uses.isEmpty ? 'Not used in production yet.' : 'Used in', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
       for (final u in uses) Padding(padding: const EdgeInsets.only(top: 3), child: Row(children: [
-        Expanded(child: Text('${_src({'source_type': u['consumer_type']})} ${u['consumer_number'] ?? ''}${u['manual'] == true ? '  (picked by hand)' : ''}',
+        Expanded(child: Text('${_src({'source_type': u['consumer_type']})} ${u['consumer_number'] ?? ''}${u['manual'] == true ? '  (picked by hand)' : ''}${((u['qty'] as num?) ?? 0) < 0 ? '  (returned)' : ''}',
             style: const TextStyle(fontSize: 12))),
         Text(BatchTracking.qty(u['qty'] as num?), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
         const SizedBox(width: 8),

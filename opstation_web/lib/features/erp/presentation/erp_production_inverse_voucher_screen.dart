@@ -9,6 +9,7 @@ import '../../../core/utils/friendly_error.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
+import '../services/batch_tracking.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 
@@ -62,6 +63,13 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   String? _srcVoucherId; String _srcVoucherLabel = '';
   double _srcOutputQty = 0; // max qty that can be broken (the produced qty)
 
+  // Batch & warranty tracking: serial numbers of the units being taken apart.
+  bool _btOn = false;
+  String _fgTrack = 'none';
+  List<String> _btSerials = [];
+  final _serialCtrl = TextEditingController();
+  bool _serialBusy = false;
+
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
   bool get _isDraft => _status != 'posted';
@@ -72,12 +80,13 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadProducts(); _loadBoms(); _loadVouchers(); _loadProdVouchers();
+      BatchTracking.isOn(_orgId).then((v) { if (mounted) setState(() => _btOn = v); if (v) _refreshFgTrack(); });
     });
   }
 
   @override
   void dispose() {
-    _inputQtyCtrl.dispose(); _notesCtrl.dispose();
+    _inputQtyCtrl.dispose(); _notesCtrl.dispose(); _serialCtrl.dispose();
     for (final l in _components) l.dispose();
     super.dispose();
   }
@@ -189,6 +198,8 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       });
       _rescale();
       _loadFgLayers();
+      setState(() => _btSerials = []);
+      _refreshFgTrack();
     } catch (e) { _snack(friendlyError('Could not load the production voucher', e)); }
   }
 
@@ -224,6 +235,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _srcVoucherId = null; _srcVoucherLabel = ''; _srcOutputQty = 0;
       _inputQtyCtrl.text = '1'; _notesCtrl.clear();
       _components = []; _fgLayers = []; _baseComps = [];
+      _btSerials = []; _fgTrack = 'none';
     });
   }
 
@@ -259,9 +271,14 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         _inputQtyCtrl.text = _trim((v['input_qty'] as num? ?? 1).toDouble());
         _notesCtrl.text = v['notes'] as String? ?? '';
         _components = newComps;
+        _btSerials = [
+          for (final x in ((v['bt_serials'] as List?) ?? const [])) '$x',
+        ];
       });
       _fetchBase();
       _loadFgLayers();
+      _refreshFgTrack();
+      if ((v['status'] as String?) == 'posted' && _btOn) _loadBrokenSerials(v['id'] as String);
     } catch (e) { _snack('Load error: $e'); }
   }
 
@@ -277,6 +294,8 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     });
     _loadBomBase();
     _loadFgLayers();
+    setState(() => _btSerials = []);
+    _refreshFgTrack();
   }
 
   Future<void> _fetchBase() async {
@@ -401,6 +420,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         if (_sourceMode == 'voucher' && comps[i].unitCostSnap > 0) row['unit_cost'] = comps[i].unitCostSnap;
         await client.from('production_inverse_components').insert(row);
       }
+      if (_btOn && _fgTrack == 'serial') {
+        try { await client.from('production_inverse_vouchers').update({'bt_serials': _btSerials}).eq('id', vId); } catch (_) {}
+      }
       resultId = vId;
       final updated = await client.from('production_inverse_vouchers').select().eq('id', vId).single();
       if (mounted) setState(() => _current = updated);
@@ -413,11 +435,25 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
 
   Future<void> _post() async {
     if (!_isDraft) return;
+    final serialMode = _btOn && _fgTrack == 'serial';
+    final units = _inQty.floor();
+    if (serialMode && _btSerials.length > units) {
+      _snack('You picked ${_btSerials.length} serial numbers but are taking apart only $units. Remove the extra ones.');
+      return;
+    }
     final id = await _save(silent: true);
     if (id == null) return;
+    String serialNote = '';
+    if (serialMode && _btSerials.length < units) {
+      final rest = units - _btSerials.length;
+      serialNote = _sourceMode == 'voucher'
+          ? '\n\n$rest unit${rest == 1 ? '' : 's'} without a picked serial number will be taken from the newest units of $_srcVoucherLabel.'
+          : '\n\n$rest unit${rest == 1 ? '' : 's'} have no serial number picked, so no serial will be marked as taken apart for them.';
+    }
+    if (!mounted) return;
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Post disassembly?'),
-      content: const Text('The finished good will be removed from stock (FIFO) and the recovered components returned to stock at standard cost. Any absorbed labor/overhead that cannot be recovered is written off to Inventory Adjustment. This posts to the General Ledger and cannot be edited afterward.'),
+      content: Text('The finished good will be removed from stock (FIFO) and the recovered components returned to stock at standard cost. Any absorbed labor/overhead that cannot be recovered is written off to Inventory Adjustment. This posts to the General Ledger and cannot be edited afterward.$serialNote'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary), child: const Text('Post')),
@@ -559,6 +595,10 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
               Expanded(flex: 2, child: _labeled('Notes', TextField(controller: _notesCtrl, enabled: _isDraft,
                 decoration: const InputDecoration(hintText: 'Optional', isDense: true, border: OutlineInputBorder(), enabledBorder: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12))))),
             ]),
+            if (_btOn && _fgTrack == 'serial') ...[
+              const SizedBox(height: 14),
+              _serialBox(),
+            ],
             const SizedBox(height: 20),
             _summaryCard(),
             const SizedBox(height: 20),
@@ -567,6 +607,112 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
           ]))),
       ])),
     ]));
+  }
+
+  // ── Serial numbers of the units being taken apart ──────────────────────
+  Future<void> _refreshFgTrack() async {
+    final fg = _fgId;
+    if (!_btOn || fg == null) { if (mounted) setState(() => _fgTrack = 'none'); return; }
+    final t = await BatchTracking.trackedProducts([fg]);
+    if (mounted && _fgId == fg) setState(() => _fgTrack = '${t[fg]?['batch_tracking'] ?? 'none'}');
+  }
+
+  Future<void> _loadBrokenSerials(String id) async {
+    try {
+      final r = await Supabase.instance.client.from('product_serials').select('serial')
+          .eq('broken_by', id).order('serial');
+      if (mounted) setState(() => _btSerials = [for (final x in r as List) '${x['serial']}']);
+    } catch (_) {}
+  }
+
+  Future<void> _addSerials(String raw) async {
+    final wanted = raw.split(RegExp(r'[\s,;]+')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (wanted.isEmpty || _fgId == null) return;
+    setState(() => _serialBusy = true);
+    final problems = <String>[];
+    try {
+      for (final w in wanted) {
+        if (_btSerials.any((x) => x.toLowerCase() == w.toLowerCase())) continue;
+        if (_btSerials.length >= _inQty.floor()) { problems.add('Already ${_btSerials.length} picked for ${_inQty.floor()} units'); break; }
+        final r = await Supabase.instance.client.from('product_serials').select('serial, product_id, status, source_id')
+            .eq('org_id', _orgId ?? '').ilike('serial', w).limit(1).maybeSingle();
+        if (r == null) { problems.add('$w not found'); continue; }
+        if (r['product_id'] != _fgId) { problems.add('$w is a different product'); continue; }
+        if (r['status'] != 'in_stock') { problems.add('$w is not in stock'); continue; }
+        if (_sourceMode == 'voucher' && _srcVoucherId != null && r['source_id'] != _srcVoucherId) {
+          problems.add('$w was not made in $_srcVoucherLabel'); continue;
+        }
+        _btSerials.add('${r['serial']}');
+      }
+    } catch (e) {
+      problems.add(friendlyError('Could not check the serial', e));
+    }
+    if (!mounted) return;
+    setState(() { _serialBusy = false; _serialCtrl.clear(); });
+    if (problems.isNotEmpty) _snack(problems.join(' · '));
+  }
+
+  Future<void> _fillFromVoucher() async {
+    if (_srcVoucherId == null) return;
+    final units = _inQty.floor();
+    if (units <= 0) return;
+    try {
+      final r = await Supabase.instance.client.from('product_serials').select('serial')
+          .eq('source_type', 'production').eq('source_id', _srcVoucherId!).eq('status', 'in_stock')
+          .order('serial', ascending: false).limit(units);
+      final list = [for (final x in r as List) '${x['serial']}'];
+      if (!mounted) return;
+      if (list.isEmpty) { _snack('No units of $_srcVoucherLabel are left in stock with a serial number.'); return; }
+      setState(() => _btSerials = list.reversed.toList());
+    } catch (e) { _snack(friendlyError('Could not load the serials', e)); }
+  }
+
+  Widget _serialBox() {
+    final units = _inQty.floor();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.04), borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.primary.withOpacity(0.2))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.qr_code_2_outlined, size: 16, color: AppTheme.primary),
+          const SizedBox(width: 6),
+          Expanded(child: Text(_isDraft
+              ? 'Units being taken apart  ·  ${_btSerials.length} of $units picked'
+              : 'Units taken apart  ·  ${_btSerials.length}',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700))),
+          if (_isDraft && _sourceMode == 'voucher' && _srcVoucherId != null)
+            TextButton.icon(onPressed: _fillFromVoucher, icon: const Icon(Icons.playlist_add, size: 16),
+                label: const Text('Fill newest from voucher', style: TextStyle(fontSize: 12))),
+        ]),
+        if (_isDraft) ...[
+          const SizedBox(height: 2),
+          Text(_sourceMode == 'voucher'
+              ? 'Scan or type the serials of the units you are opening. Any not picked are taken from the newest units of the voucher.'
+              : 'Scan or type the serials of the units you are opening.',
+              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: TextField(controller: _serialCtrl, enabled: !_serialBusy,
+              textInputAction: TextInputAction.done,
+              onSubmitted: _addSerials,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), filled: true, fillColor: Colors.white,
+                  prefixIcon: Icon(Icons.qr_code_scanner, size: 18), hintText: 'Scan or type a serial, then Enter'))),
+            const SizedBox(width: 8),
+            ElevatedButton(onPressed: _serialBusy ? null : () => _addSerials(_serialCtrl.text), child: const Text('Add')),
+          ]),
+        ],
+        if (_btSerials.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final x in _btSerials) InputChip(
+              visualDensity: VisualDensity.compact,
+              label: Text(x, style: const TextStyle(fontSize: 11.5)),
+              onDeleted: _isDraft ? () => setState(() => _btSerials.remove(x)) : null),
+          ]),
+        ],
+      ]),
+    );
   }
 
   Widget _sourceToggle() {

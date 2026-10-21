@@ -1400,7 +1400,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                       decoration: const InputDecoration(labelText: 'Tracking', isDense: true),
                       items: const [
                         DropdownMenuItem(value: 'none', child: Text('None — quantity only')),
-                        DropdownMenuItem(value: 'batch', child: Text('Batch / lot (e.g. chips, raw material)')),
+                        DropdownMenuItem(value: 'batch', child: Text('Batch / lot — tracked by purchase lot')),
                         DropdownMenuItem(value: 'serial', child: Text('Serial — one number per unit')),
                       ],
                       onChanged: (v) => setS(() => tracking = v ?? 'none'),
