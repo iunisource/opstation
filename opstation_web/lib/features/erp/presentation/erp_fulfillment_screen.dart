@@ -295,7 +295,24 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     if (_labelRequired(o['store_id'] as String?) && o['label_verified_at'] == null) return 'the courier label on the box';
     return null;
   }
-  String _normNo(Object? v) => '${v ?? ''}'.replaceAll('#', '').trim().toLowerCase();
+  /// Order / slip number for comparing: case, spaces, "#", dashes ignored, so
+  /// a typed "16741", "#16741" or "# 16741" all match the slip of #16741.
+  String _normNo(Object? v) => '${v ?? ''}'.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  /// True when [typed] is this order's slip number — exact, or just its digits
+  /// (e.g. "16741" for "UL-16741") when those digits belong to no other open order.
+  bool _slipNoMatches(Map<String, dynamic> o, String typed) {
+    final c = _normNo(typed);
+    if (c.isEmpty) return false;
+    final mine = _normNo(o['order_no']);
+    if (mine == c) return true;
+    final digits = c.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length < 3 || digits != c) return false;
+    if (mine.replaceAll(RegExp(r'[^0-9]'), '') != digits) return false;
+    return !_orders.any((x) => x['id'] != o['id']
+        && _normNo(x['order_no']).replaceAll(RegExp(r'[^0-9]'), '') == digits
+        && ['new', 'picking', 'packed'].contains(x['status']));
+  }
 
   /// Someone else is picking this order right now (lock lapses after 60 min idle).
   bool _lockedByOther(Map<String, dynamic> o) {
@@ -390,8 +407,37 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           label: Text(mobile ? 'Open camera' : 'Scan'),
           onPressed: () => _startNextScan(mobile),
         ),
+        TextButton.icon(
+          icon: const Icon(Icons.keyboard_outlined, size: 18),
+          label: const Text('Type'),
+          onPressed: () => _typeCheckCode(o, what),
+        ),
       ]),
     );
+  }
+
+  /// Barcode won't read? Type the slip / label number instead. It goes
+  /// through the same check as a scan, so a wrong number is still stopped.
+  Future<void> _typeCheckCode(Map<String, dynamic> o, String what) async {
+    final ctrl = TextEditingController();
+    final code = await showDialog<String>(context: context, builder: (d) => AlertDialog(
+      title: Text('Type the ${what.isEmpty ? 'number' : what} number'),
+      content: SizedBox(width: 380, child: TextField(
+        controller: ctrl, autofocus: true,
+        decoration: InputDecoration(
+          hintText: what.contains('label') ? 'Tracking number on the courier label' : 'Order number on the slip, e.g. ${o['order_no'] ?? '#1234'}',
+          isDense: true, border: const OutlineInputBorder()),
+        onSubmitted: (v) => Navigator.of(d, rootNavigator: true).pop(v),
+      )),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.of(d, rootNavigator: true).pop(ctrl.text), child: const Text('Check')),
+      ],
+    ));
+    if (code == null || code.trim().isEmpty || !mounted) return;
+    final r = await _onScan(code.trim(), 1);
+    if (r.ok) { ScanFeedback.ok(); } else { ScanFeedback.wrong(context); }
+    _snack(r.message);
   }
 
   /// A scan that is a packing slip (order number) or a courier label
@@ -421,8 +467,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         return ScanOutcome(false, 'WRONG LABEL — this courier label is for ${x['order_no']} (${x['customer_name'] ?? ''})');
       }
     }
-    // Packing slip (order number)
-    if (_normNo(o['order_no']) == c) {
+    // Packing slip (order number) — scanned, or typed by hand.
+    if (_slipNoMatches(o, code)) {
       if (!allPicked) return const ScanOutcome(false, 'Pick every item first, then scan the packing slip');
       if (o['slip_verified_at'] != null) return const ScanOutcome(true, '✓ Slip already checked for this order');
       try {
