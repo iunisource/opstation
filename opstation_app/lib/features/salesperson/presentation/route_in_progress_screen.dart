@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../orders/presentation/order_create_modal.dart';
+import '../../customers/services/field_location_capture.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/sound_controller.dart';
@@ -518,6 +519,15 @@ class _StopsList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final locCfg = ref.watch(fieldLocationConfigProvider).valueOrNull ?? FieldLocationConfig.off;
+    Future<void> capture(Customer c) async {
+      final limit = ref.read(tripControllerProvider).valueOrNull?.accuracyWarnThresholdMeters ?? 50;
+      final r = await FieldLocationCapture.run(context, ref,
+          customerId: c.id, shopName: c.shopName, shopCode: c.code, accuracyLimitMeters: limit);
+      if (r != null) {
+        ref.read(tripControllerProvider.notifier).updateStopLocation(c.id, r.$1, r.$2);
+      }
+    }
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       children: [
@@ -546,6 +556,9 @@ class _StopsList extends ConsumerWidget {
             readOnly: readOnly,
             onMarkVisit: () => onMarkVisit(filtered[i]),
             onSkip: () => onSkip(filtered[i]),
+            onAddLocation: !readOnly && locCfg.allows(hasLocation: filtered[i].hasLocation)
+                ? () => capture(filtered[i])
+                : null,
           ),
           const SizedBox(height: 10),
         ],
@@ -570,6 +583,8 @@ class _StopCard extends StatefulWidget {
   final bool readOnly;
   final VoidCallback onMarkVisit;
   final VoidCallback onSkip;
+  /// Add / update the shop location from here (null = not allowed).
+  final VoidCallback? onAddLocation;
 
   const _StopCard({
     required this.index,
@@ -580,6 +595,7 @@ class _StopCard extends StatefulWidget {
     required this.readOnly,
     required this.onMarkVisit,
     required this.onSkip,
+    this.onAddLocation,
   });
 
   @override
@@ -783,10 +799,14 @@ class _StopCardState extends State<_StopCard> {
                       ),
                       if (!customer.hasLocation) ...[
                         const SizedBox(width: 6),
-                        const Tooltip(
-                          message: 'No saved location',
-                          child: Icon(Icons.location_off,
-                              size: 18, color: AppColors.danger),
+                        InkWell(
+                          onTap: widget.onAddLocation,
+                          borderRadius: BorderRadius.circular(12),
+                          child: const Tooltip(
+                            message: 'No saved location',
+                            child: Icon(Icons.location_off,
+                                size: 18, color: AppColors.danger),
+                          ),
                         ),
                       ],
                     ]),
@@ -871,6 +891,22 @@ class _StopCardState extends State<_StopCard> {
                     onPressed: () => _callCustomer(context),
                   ),
                 ),
+                if (widget.onAddLocation != null) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                          color: customer.hasLocation ? AppColors.borderLight : AppColors.danger),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.add_location_alt_outlined, size: 20),
+                      color: customer.hasLocation ? AppColors.textSecondaryLight : AppColors.danger,
+                      tooltip: customer.hasLocation ? 'Update shop location' : 'Add shop location',
+                      onPressed: widget.onAddLocation,
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(

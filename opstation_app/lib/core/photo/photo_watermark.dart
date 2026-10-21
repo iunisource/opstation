@@ -66,6 +66,38 @@ class PhotoWatermark {
     return Uint8List.fromList(img.encodeJpg(image, quality: 85));
   }
 
+  /// Full-width dark strip across the bottom with one line per entry —
+  /// used for shop-location proof photos (coordinates, accuracy, time, shop,
+  /// salesperson). Returns the input unchanged if it cannot be decoded.
+  static Uint8List addStampStrip({
+    required Uint8List jpegBytes,
+    required List<String> lines,
+  }) {
+    final image = img.decodeJpg(jpegBytes);
+    if (image == null || lines.isEmpty) return jpegBytes;
+    final big = image.width >= 1200;
+    final font = big ? img.arial48 : img.arial24;
+    final lineHeight = big ? 54 : 28;
+    const padding = 14;
+    final panelH = lineHeight * lines.length + padding * 2;
+    final y1 = (image.height - panelH).clamp(0, image.height).toInt();
+    img.fillRect(image,
+        x1: 0, y1: y1, x2: image.width, y2: image.height,
+        color: img.ColorRgba8(0, 0, 0, 190));
+    for (var i = 0; i < lines.length; i++) {
+      img.drawString(image, _ascii(lines[i]),
+          font: font, x: padding, y: y1 + padding + i * lineHeight,
+          color: img.ColorRgba8(255, 255, 255, 255));
+    }
+    return Uint8List.fromList(img.encodeJpg(image, quality: 85));
+  }
+
+  // The bitmap fonts only carry ASCII.
+  static String _ascii(String s) =>
+      String.fromCharCodes(s.runes.map((c) => c < 128 ? c : 0x3F));
+
+  static String formatTs(DateTime t) => _formatTs(t);
+
   static String _formatTs(DateTime t) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${t.year}-${two(t.month)}-${two(t.day)} '

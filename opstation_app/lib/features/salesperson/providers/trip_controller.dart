@@ -189,6 +189,19 @@ class TripController extends AsyncNotifier<TripState> {
     state = AsyncData(s.copyWith(active: updated));
   }
 
+  /// A shop location added from the field: update this route's copy of the
+  /// customer so the card and the next visit use it straight away.
+  void updateStopLocation(String customerId, double lat, double lng) {
+    final s = state.valueOrNull;
+    final active = s?.active;
+    if (s == null || active == null) return;
+    final stops = [
+      for (final c in active.stopSnapshot)
+        c.id == customerId ? c.copyWith(latitude: lat, longitude: lng) : c,
+    ];
+    state = AsyncData(s.copyWith(active: active.copyWith(stopSnapshot: stops)));
+  }
+
   Future<void> completeTrip() async {
     final s = state.valueOrNull;
     final active = s?.active;

@@ -134,14 +134,14 @@ final liveMonitoringProvider =
     await Future.wait([pull.refreshOrgUsers(orgId), pull.pullTodayTripsForOrg(orgId)]);
   }
 
-  // Only THIS org's salespersons. Without the org filter, users from other
-  // orgs (whose data happens to be in the shared table) appear in this org's
-  // live list — a cross-org leak.
-  final users = (await teamRepo.all(includeInactive: false))
-      .where((u) =>
-          u.role == UserRole.salesperson &&
-          (orgId == null || u.orgId == orgId))
-      .toList();
+  // Only THIS org's salespersons — from the server first (so a missing or
+  // stale list on the phone can't empty this tab), else the phone's copy.
+  final users = (orgId != null ? await _serverSalespersons(orgId) : null) ??
+      (await teamRepo.all(includeInactive: false))
+          .where((u) =>
+              u.role == UserRole.salesperson &&
+              (orgId == null || u.orgId == orgId))
+          .toList();
   final today = DateTime.now();
   final result = <LiveSalespersonSummary>[];
   for (final u in users) {
@@ -187,14 +187,6 @@ final leaderboardProvider = FutureProvider.autoDispose
     await Future.wait([pull.refreshOrgUsers(orgId), pull.pullTodayTripsForOrg(orgId)]);
   }
 
-  // Only THIS org's salespersons — otherwise other orgs' reps and their
-  // collections appear on this leaderboard (cross-org leak).
-  final users = (await teamRepo.all(includeInactive: false))
-      .where((u) =>
-          u.role == UserRole.salesperson &&
-          (orgId == null || u.orgId == orgId))
-      .toList();
-
   final now = DateTime.now();
   late DateTime rangeStart;
   switch (period) {
@@ -212,6 +204,21 @@ final leaderboardProvider = FutureProvider.autoDispose
       rangeStart = DateTime(now.year, now.month, 1);
       break;
   }
+
+  // Server first: the whole leaderboard computed on the server for this org,
+  // so it never depends on the users / trips stored on this phone.
+  if (orgId != null) {
+    final server = await _serverLeaderboard(orgId, rangeStart, now);
+    if (server != null) return server;
+  }
+
+  // Only THIS org's salespersons — otherwise other orgs' reps and their
+  // collections appear on this leaderboard (cross-org leak).
+  final users = (await teamRepo.all(includeInactive: false))
+      .where((u) =>
+          u.role == UserRole.salesperson &&
+          (orgId == null || u.orgId == orgId))
+      .toList();
 
   // Per-rep collection, read LIVE from Supabase — the same source the web and
   // admin dashboards use — so the leaderboard total tracks them instead of
@@ -233,7 +240,7 @@ final leaderboardProvider = FutureProvider.autoDispose
       final rec = Map<String, dynamic>.from(r as Map);
       final uid = rec['user_id'] as String?;
       if (uid == null) continue;
-      m[uid] = (m[uid] ?? 0) + ((rec['amount'] as int?) ?? 0);
+      m[uid] = (m[uid] ?? 0) + ((rec['amount'] as num?)?.round() ?? 0);
     }
     liveCollected = m;
   } catch (_) {
@@ -298,8 +305,13 @@ final leaderboardProvider = FutureProvider.autoDispose
     ));
   }
 
-  // Sort by visit score desc, then by verified count desc, then by
-  // collected desc — so a verified-tied row goes to whoever collected more.
+  _sortLeaderboard(result);
+  return result;
+});
+
+// Sort by visit score desc, then by verified count desc, then by collected
+// desc — so a verified-tied row goes to whoever collected more.
+void _sortLeaderboard(List<LeaderboardEntry> result) {
   result.sort((a, b) {
     final cmp = b.visitScore.compareTo(a.visitScore);
     if (cmp != 0) return cmp;
@@ -307,6 +319,58 @@ final leaderboardProvider = FutureProvider.autoDispose
     if (v != 0) return v;
     return b.collected.compareTo(a.collected);
   });
+}
 
-  return result;
-});
+TeamUser _teamUserFromRow(Map<String, dynamic> r, String orgId) => TeamUser(
+      id: '${r['id'] ?? r['user_id']}',
+      name: '${r['name'] ?? ''}',
+      email: '${r['email'] ?? ''}',
+      phone: '${r['phone'] ?? ''}',
+      role: UserRole.salesperson,
+      isActive: true,
+      createdAt: DateTime.tryParse('${r['created_at'] ?? ''}') ?? DateTime(2024),
+      orgId: orgId,
+    );
+
+/// The org's active salespersons from the server, or null if unavailable.
+Future<List<TeamUser>?> _serverSalespersons(String orgId) async {
+  try {
+    final rows = await Supabase.instance.client.rpc('field_team', params: {'p_org': orgId});
+    if (rows is! List) return null;
+    return [for (final r in rows) _teamUserFromRow(Map<String, dynamic>.from(r as Map), orgId)];
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Leaderboard computed on the server, or null if unavailable (offline /
+/// not deployed) so the caller falls back to the phone's data.
+Future<List<LeaderboardEntry>?> _serverLeaderboard(String orgId, DateTime from, DateTime to) async {
+  try {
+    final rows = await Supabase.instance.client.rpc('field_leaderboard', params: {
+      'p_org': orgId,
+      'p_from': from.toUtc().toIso8601String(),
+      'p_to': to.toUtc().toIso8601String(),
+    });
+    if (rows is! List) return null;
+    int n(Object? v) => (v as num?)?.round() ?? 0;
+    final out = <LeaderboardEntry>[
+      for (final x in rows)
+        () {
+          final r = Map<String, dynamic>.from(x as Map);
+          return LeaderboardEntry(
+            user: _teamUserFromRow(r, orgId),
+            totalStops: n(r['total_stops']),
+            visited: n(r['visited']),
+            verifiedVisits: n(r['verified']),
+            unverifiedVisits: n(r['unverified']),
+            collected: n(r['collected']),
+          );
+        }(),
+    ];
+    _sortLeaderboard(out);
+    return out;
+  } catch (_) {
+    return null;
+  }
+}

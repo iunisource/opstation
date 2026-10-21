@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -135,14 +137,32 @@ class SupabasePullService {
       final since =
           DateTime(now.year, now.month, now.day).subtract(const Duration(days: 1));
 
+      final sinceIso = since.toUtc().toIso8601String();
       final tripRows = await client
           .from('trips')
           .select()
           .eq('org_id', orgId)
-          .gte('started_at', since.toUtc().toIso8601String());
+          .or('ended_at.is.null,started_at.gte.$sinceIso');
       final trips = [
         for (final r in (tripRows as List)) Map<String, dynamic>.from(r as Map)
       ];
+      // Older trips saved without an org: take the ones run by this org's
+      // salespersons, and file them under the org on the phone so the
+      // monitoring screens (which filter by org) can see them.
+      try {
+        final team = await client.rpc('field_team', params: {'p_org': orgId});
+        final ids = [for (final u in (team as List)) '${(u as Map)['id']}'];
+        for (var i = 0; i < ids.length; i += 40) {
+          final batch = ids.sublist(i, i + 40 > ids.length ? ids.length : i + 40);
+          final extra = await client.from('trips').select()
+              .filter('org_id', 'is', null)
+              .inFilter('user_id', batch)
+              .or('ended_at.is.null,started_at.gte.$sinceIso');
+          for (final r in (extra as List)) {
+            trips.add({...Map<String, dynamic>.from(r as Map), 'org_id': orgId});
+          }
+        }
+      } catch (_) {}
       if (trips.isEmpty) return;
 
       final tripIds = trips.map((t) => t['id'] as String).toList();
@@ -500,9 +520,10 @@ class SupabasePullService {
       try {
         await _db.into(_db.trips).insertOnConflictUpdate(TripsCompanion(
           id: Value(r['id'] as String),
-          routeId: Value(r['route_id'] as String),
-          routeName: Value(r['route_name'] as String),
-          routeKind: Value(r['route_kind'] as String),
+          // Blank route fields (e.g. free routes) used to drop the whole trip.
+          routeId: Value(r['route_id'] as String? ?? ''),
+          routeName: Value(r['route_name'] as String? ?? ''),
+          routeKind: Value(r['route_kind'] as String? ?? 'free'),
           startedAt: Value(_parseDate(r['started_at'])),
           endedAt: Value(_parseDateNullable(r['ended_at'])),
           closeReason: Value(r['close_reason'] as String?),
@@ -552,7 +573,9 @@ class SupabasePullService {
           receiptNumber: Value(r['receipt_number'] as String?),
           notes: Value(r['notes'] as String?),
           skipReason: Value(r['skip_reason'] as String?),
-          photoPathsJson: Value(r['photo_paths_json'] as String? ?? '[]'),
+          photoPathsJson: Value(r['photo_paths_json'] is String
+              ? r['photo_paths_json'] as String
+              : (r['photo_paths_json'] == null ? '[]' : jsonEncode(r['photo_paths_json']))),
           syncStatus: const Value('synced'),
           userId: Value(r['user_id'] as String? ?? ''),
           userName: Value(r['user_name'] as String? ?? ''),

@@ -17,6 +17,8 @@ class AdminDashboardStats {
   final int customerCount;
   final int totalRoutes;
   final int driverCount;
+  /// Routes run on the selected day (shown instead of "active" for past days).
+  final int routesOnDay;
 
   const AdminDashboardStats({
     required this.activeRoutesToday,
@@ -26,8 +28,16 @@ class AdminDashboardStats {
     required this.customerCount,
     required this.totalRoutes,
     required this.driverCount,
+    this.routesOnDay = 0,
   });
 }
+
+/// The day the dashboard banner shows (midnight, local). Arrows on the banner
+/// move it back and forward, like the web dashboard.
+final dashboardDayProvider = StateProvider<DateTime>((ref) {
+  final n = DateTime.now();
+  return DateTime(n.year, n.month, n.day);
+});
 
 final adminDashboardStatsProvider =
     FutureProvider<AdminDashboardStats>((ref) async {
@@ -35,6 +45,37 @@ final adminDashboardStatsProvider =
   final salesRepo = ref.watch(salespersonRepositoryProvider);
   final orgId = ref.watch(orgIdProvider);
   final db = ref.watch(appDatabaseProvider);
+  final selDay = ref.watch(dashboardDayProvider);
+
+  // Server first — the same figures the web shows, scoped to the org on the
+  // server, so nothing depends on what is stored on this phone.
+  if (orgId != null) {
+    try {
+      final from = selDay.toUtc().toIso8601String();
+      final to = selDay.add(const Duration(days: 1)).toUtc().toIso8601String();
+      final r = await Supabase.instance.client.rpc('field_dashboard_day',
+          params: {'p_org': orgId, 'p_from': from, 'p_to': to});
+      if (r is Map) {
+        int n(Object? v) => (v as num?)?.round() ?? 0;
+        final customers = await customerRepo.all(includeInactive: false);
+        final routes = await salesRepo.allRoutes();
+        // Heal the phone's user list in the background (Team, Live, etc.).
+        ref.read(supabasePullServiceProvider).refreshOrgUsers(orgId);
+        return AdminDashboardStats(
+          activeRoutesToday: n(r['active_routes']),
+          routesOnDay: n(r['routes_on_day']),
+          shopsToday: n(r['shops']),
+          amountToday: n(r['amount']),
+          teamCount: n(r['team']),
+          customerCount: customers.length,
+          totalRoutes: routes.length,
+          driverCount: n(r['drivers']),
+        );
+      }
+    } catch (_) {
+      // Not deployed yet / offline → the older path below.
+    }
+  }
 
   // Keep the phone's user list current first — every figure below starts from
   // it, and a missing list made the whole banner read zero.
@@ -54,7 +95,7 @@ final adminDashboardStatsProvider =
   final driverCount =
       orgUsers.where((u) => u.role == UserRole.driver.name).length;
 
-  final now = DateTime.now();
+  final now = selDay;
   final todayStart = DateTime(now.year, now.month, now.day);
   final tomorrowStart = todayStart.add(const Duration(days: 1));
 

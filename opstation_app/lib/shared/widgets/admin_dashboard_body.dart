@@ -40,6 +40,10 @@ class AdminDashboardBody extends ConsumerWidget {
     ref.watch(adminDashboardRealtimeProvider);
     final statsAsync = ref.watch(adminDashboardStatsProvider);
     final stats = statsAsync.valueOrNull;
+    final day = ref.watch(dashboardDayProvider);
+    final n = DateTime.now();
+    final today = DateTime(n.year, n.month, n.day);
+    final isToday = !day.isBefore(today);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
       children: [
@@ -71,32 +75,55 @@ class AdminDashboardBody extends ConsumerWidget {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  const Icon(Icons.calendar_today_outlined,
-                      color: Colors.white, size: 18),
+                  _DayStepper(
+                    day: day,
+                    isToday: isToday,
+                    onPrev: () => ref.read(dashboardDayProvider.notifier).state =
+                        day.subtract(const Duration(days: 1)),
+                    onNext: isToday
+                        ? null
+                        : () => ref.read(dashboardDayProvider.notifier).state =
+                            day.add(const Duration(days: 1)),
+                    onPick: () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        initialDate: day,
+                        firstDate: DateTime(2024),
+                        lastDate: today,
+                      );
+                      if (d != null) {
+                        ref.read(dashboardDayProvider.notifier).state =
+                            DateTime(d.year, d.month, d.day);
+                      }
+                    },
+                  ),
                   const SizedBox(width: 8),
-                  const Text(
-                    'Today',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
+                  // Scales down instead of overflowing on narrow phones.
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        _SummaryStat(
+                          value: stats == null
+                              ? '--'
+                              : '${isToday ? stats.activeRoutesToday : stats.routesOnDay}',
+                          label: isToday ? 'Active routes' : 'Routes',
+                        ),
+                        const SizedBox(width: 16),
+                        _SummaryStat(
+                          value: stats == null ? '--' : '${stats.shopsToday}',
+                          label: 'Shops',
+                        ),
+                        const SizedBox(width: 16),
+                        _SummaryStat(
+                          value: stats == null
+                              ? 'Rs --'
+                              : 'Rs ${_fmtNumber(stats.amountToday)}',
+                          label: 'Amount',
+                        ),
+                      ]),
                     ),
-                  ),
-                  const Spacer(),
-                  _SummaryStat(
-                    value: stats == null ? '--' : '${stats.activeRoutesToday}',
-                    label: 'Active routes',
-                  ),
-                  const SizedBox(width: 16),
-                  _SummaryStat(
-                    value: stats == null ? '--' : '${stats.shopsToday}',
-                    label: 'Shops',
-                  ),
-                  const SizedBox(width: 16),
-                  _SummaryStat(
-                    value:
-                        stats == null ? 'Rs --' : 'Rs ${stats.amountToday}',
-                    label: 'Amount',
                   ),
                 ],
               ),
@@ -239,6 +266,56 @@ class AdminDashboardBody extends ConsumerWidget {
         ],
       ],
     );
+  }
+}
+
+/// ‹ Today › — move the banner a day back / forward, tap the label to pick.
+class _DayStepper extends StatelessWidget {
+  final DateTime day;
+  final bool isToday;
+  final VoidCallback onPrev;
+  final VoidCallback? onNext;
+  final VoidCallback onPick;
+  const _DayStepper({
+    required this.day,
+    required this.isToday,
+    required this.onPrev,
+    required this.onNext,
+    required this.onPick,
+  });
+
+  static const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  @override
+  Widget build(BuildContext context) {
+    final n = DateTime.now();
+    final yesterday = DateTime(n.year, n.month, n.day).subtract(const Duration(days: 1));
+    final label = isToday
+        ? 'Today'
+        : day == yesterday
+            ? 'Yesterday'
+            : '${day.day} ${_months[day.month - 1]}';
+    Widget arrow(IconData i, VoidCallback? f) => InkResponse(
+          onTap: f,
+          radius: 18,
+          child: Padding(
+            padding: const EdgeInsets.all(2),
+            child: Icon(i, size: 22, color: f == null ? Colors.white38 : Colors.white),
+          ),
+        );
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      arrow(Icons.chevron_left, onPrev),
+      InkWell(
+        onTap: onPick,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Text(label,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
+        ),
+      ),
+      arrow(Icons.chevron_right, onNext),
+    ]);
   }
 }
 
