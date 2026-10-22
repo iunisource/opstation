@@ -223,6 +223,8 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     // Same receipt / transaction number already used in another CRV or CPV?
     final dupNote = orgId == null ? '' : await checkDuplicateRefs(context,
         orgId: orgId, narrations: [for (final l in validLines) l.descCtrl.text],
+        amounts: [for (final l in validLines) double.tryParse(l.amtCtrl.text) ?? 0],
+        voucherType: 'CPV', date: _voucherDate,
         excludeVoucherId: _currentVoucher?['id'] as String?);
     if (dupNote == null || !mounted) return;
     setState(() => _saving = true);

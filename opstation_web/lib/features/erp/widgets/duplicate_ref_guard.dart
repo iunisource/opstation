@@ -23,14 +23,26 @@ Future<String?> checkDuplicateRefs(
   BuildContext context, {
   required String orgId,
   required List<String> narrations,
+  List<double>? amounts,
+  String? voucherType, // 'CRV' | 'CPV' — the other half of a same-day transfer is not a duplicate
+  DateTime? date,
   String? excludeVoucherId,
 }) async {
-  final texts = narrations.map((t) => t.trim()).where((t) => RegExp(r'\d').hasMatch(t)).toList();
+  final texts = <String>[];
+  final amts = <double>[];
+  for (var i = 0; i < narrations.length; i++) {
+    final t = narrations[i].trim();
+    if (!RegExp(r'\d').hasMatch(t)) continue;
+    texts.add(t);
+    amts.add(amounts != null && i < amounts.length ? amounts[i] : 0);
+  }
   if (texts.isEmpty) return '';
   List<Map<String, dynamic>> hits;
   try {
     hits = List<Map<String, dynamic>>.from(await Supabase.instance.client.rpc('voucher_ref_duplicates', params: {
       'p_org_id': orgId, 'p_texts': texts, 'p_exclude_id': excludeVoucherId,
+      'p_type': voucherType, 'p_date': date == null ? null : DateFormat('yyyy-MM-dd').format(date),
+      'p_amounts': amounts == null ? null : amts,
     }) as List);
   } catch (_) {
     return ''; // the check is a helper; it must never stop a voucher from saving
