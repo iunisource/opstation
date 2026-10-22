@@ -165,6 +165,7 @@ import '../../features/erp/presentation/erp_pending_po_items_screen.dart' deferr
 import '../../features/erp/presentation/erp_label_printing_screen.dart' deferred as _s154;
 import '../../features/erp/presentation/erp_fulfillment_screen.dart' deferred as _s155;
 import '../../features/erp/presentation/erp_batch_tracking_screen.dart' deferred as _s156;
+import '../../features/erp/presentation/erp_investors_screen.dart' deferred as _s157;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -485,6 +486,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => _deferred(_s001.loadLibrary(), () => _s001.ErpStockAdjustmentScreen())),
           GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => _deferred(_s080.loadLibrary(), () => _s080.ErpPaymentVoucherScreen())),
           GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => _deferred(_s117.loadLibrary(), () => _s117.ErpReceiptVouchersScreen())),
+      GoRoute(path: '/financials/investors', builder: (_, __) => _deferred(_s157.loadLibrary(), () => _s157.ErpInvestorsScreen())),
       GoRoute(path: '/financials/payment-advice', builder: (_, state) => _deferred(_s141.loadLibrary(), () => _s141.ErpPaymentAdviceScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/pdc-voucher', builder: (_, __) => _deferred(_s110.loadLibrary(), () => _s110.ErpPdcVoucherScreen())),
           GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => _deferred(_s118.loadLibrary(), () => _s118.ErpSupplierLedgerScreen())),
