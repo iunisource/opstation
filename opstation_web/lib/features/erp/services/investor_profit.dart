@@ -9,7 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 ///  1. Net profit of the business (P&L), leaving out investor profit expense
 ///     itself so the share isn't calculated on a profit it has already reduced.
 ///  2. GRN lines: invoiced margin on goods from each linked GRN (FIFO cost of
-///     exactly those goods), less the line's running-expense share.
+///     exactly those goods), less returns of those goods (if the investor's
+///     "Deduct returns" is on), less the line's running-expense share.
 ///  3. Business pool = net profit − every investor's GRN-line profit (that
 ///     margin is already shared through the GRN lines).
 ///  4. Whole-business lines: pool × (investor's capital-days ÷ capital
@@ -117,20 +118,46 @@ class InvestorProfit {
         margins['${r['grn_id']}'] = {'qty': n(r['qty']), 'revenue': n(r['revenue']), 'cost': n(r['cost'])};
       }
     }
+    // 2b) Returns of goods from those GRNs (SQL 398). Always taken off for the
+    //     business pool (the P&L already carries them); taken off this
+    //     investor's own GRN profit only when their "Deduct returns" is on.
+    final returns = <String, Map<String, double>>{};
+    if (grnLines.isNotEmpty) {
+      try {
+        final res = await _db.rpc('investor_grn_returns', params: {
+          'p_org': orgId, 'p_grn_ids': [for (final l in grnLines) l['grn_id']],
+          'p_from': _d.format(from), 'p_to': _d.format(to),
+        });
+        for (final r in res as List) {
+          returns['${r['grn_id']}'] = {'qty': n(r['qty']), 'revenue': n(r['revenue']), 'cost': n(r['cost'])};
+        }
+      } catch (_) {
+        throw Exception('Returns could not be checked. Please try again.');
+      }
+    }
+    final deductMine = investor['deduct_returns'] != false;
     double grnProfitAll = 0;
     final myGrn = <Map<String, dynamic>>[];
+    double expOf(double margin, Map l) => margin > 0 ? margin * n(l['expense_share_pct']) / 100 : 0.0;
     for (final l in grnLines) {
-      final m = margins['${l['grn_id']}'] ?? const {'qty': 0.0, 'revenue': 0.0, 'cost': 0.0};
-      final margin = m['revenue']! - m['cost']!;
-      final exp = margin > 0 ? margin * n(l['expense_share_pct']) / 100 : 0.0;
-      final profit = margin - exp;
-      grnProfitAll += profit;
+      const zero = {'qty': 0.0, 'revenue': 0.0, 'cost': 0.0};
+      final m = margins['${l['grn_id']}'] ?? zero;
+      final rt = returns['${l['grn_id']}'] ?? zero;
+      final grossMargin = m['revenue']! - m['cost']!;
+      final retMargin = rt['revenue']! - rt['cost']!;
+      final netMargin = grossMargin - retMargin;
+      grnProfitAll += netMargin - expOf(netMargin, l);
       final t = trById[l['tranche_id']];
       if (t != null && t['investor_id'] == investor['id']) {
+        final margin = deductMine ? netMargin : grossMargin;
+        final exp = expOf(margin, l);
         myGrn.add({
           'grn_number': l['grn_number'], 'grn_id': l['grn_id'], 'amount': n(l['amount']),
-          'qty': m['qty'], 'revenue': m['revenue'], 'cost': m['cost'], 'margin': margin,
-          'expense_share_pct': n(l['expense_share_pct']), 'expense': exp, 'profit': profit,
+          'qty': m['qty'], 'revenue': m['revenue'], 'cost': m['cost'],
+          'return_qty': rt['qty'], 'return_revenue': rt['revenue'], 'return_cost': rt['cost'],
+          'returns_deducted': deductMine,
+          'margin': margin,
+          'expense_share_pct': n(l['expense_share_pct']), 'expense': exp, 'profit': margin - exp,
         });
       }
     }
@@ -211,7 +238,7 @@ class InvestorProfit {
       'capital_open': capOpen, 'capital_close': capClose, 'capital_avg': capAvg,
       'capital_days_total': totalCapDays, 'business_capital_days': bizCapDays, 'business_fraction': bizFraction,
       'business_lines': bizRows, 'business_profit': bizProfit,
-      'grn_lines': myGrn, 'grn_profit': grnProfitMine,
+      'grn_lines': myGrn, 'grn_profit': grnProfitMine, 'deduct_returns': deductMine,
       'share_pct': share, 'gross_share': gross,
       'invested_capital_days': allCapDays,
       'floor_pct': n(investor['floor_pct']), 'cap_pct': n(investor['cap_pct']),

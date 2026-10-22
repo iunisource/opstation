@@ -203,6 +203,7 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
     DateTime start = DateTime.tryParse('${inv?['start_date'] ?? ''}') ?? DateTime.now();
     String freq = '${inv?['payout_frequency'] ?? 'monthly'}';
     String basis = '${inv?['limit_basis'] ?? 'annual'}';
+    bool deductReturns = inv?['deduct_returns'] != false;
     final acc = <String, Map<String, dynamic>?>{
       'investment_account_id': inv == null ? null : _accounts[inv['investment_account_id']],
       'payable_account_id': inv == null ? null : _accounts[inv['payable_account_id']],
@@ -270,6 +271,14 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
                 ],
                 onChanged: (v) => setS(() => basis = v ?? basis))),
           ]),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero, dense: true,
+            value: deductReturns,
+            onChanged: (v) => setS(() => deductReturns = v),
+            title: const Text('Deduct returns from GRN profit', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            subtitle: const Text('When goods from a linked GRN come back, their profit is taken off in the month of the return.',
+                style: TextStyle(fontSize: 11.5)),
+          ),
           const SizedBox(height: 6),
           const Align(alignment: Alignment.centerLeft, child: Text(
               'Loss months: nothing is posted and the result is kept on record — the policy can be set later.',
@@ -297,6 +306,7 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
                 'floor_pct': double.tryParse(floor.text) ?? 0,
                 'cap_pct': double.tryParse(cap.text) ?? 0,
                 'limit_basis': basis, 'payout_frequency': freq,
+                'deduct_returns': deductReturns,
                 for (final k in acc.keys) k: acc[k]?['id'],
               };
               String id;
@@ -719,10 +729,20 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
       if (grn.isNotEmpty) ...[
         const SizedBox(height: 10),
         const Text('GRN lines', style: TextStyle(fontWeight: FontWeight.w800)),
-        for (final g in grn)
-          kv('${g['grn_number']}: sold ${_money.format(InvestorProfit.n(g['qty']))} · sale ${m(g['revenue'])} − cost ${m(g['cost'])}'
-              '${InvestorProfit.n(g['expense_share_pct']) > 0 ? ' − expense ${InvestorProfit.n(g['expense_share_pct']).toStringAsFixed(0)}%' : ''}',
-              m(g['profit'])),
+        for (final g in grn) ...[
+          kv('${g['grn_number']}: sold ${_money.format(InvestorProfit.n(g['qty']))} · sale ${m(g['revenue'])} − cost ${m(g['cost'])}',
+              m(InvestorProfit.n(g['revenue']) - InvestorProfit.n(g['cost']))),
+          if (InvestorProfit.n(g['return_qty']) > 0)
+            kv(g['returns_deducted'] == false
+                  ? '   Returned ${_money.format(InvestorProfit.n(g['return_qty']))} (not deducted for this investor)'
+                  : '   Less returns: ${_money.format(InvestorProfit.n(g['return_qty']))} back · ${m(g['return_revenue'])} − cost ${m(g['return_cost'])}',
+                g['returns_deducted'] == false
+                    ? '-'
+                    : m(-(InvestorProfit.n(g['return_revenue']) - InvestorProfit.n(g['return_cost'])))),
+          if (InvestorProfit.n(g['expense_share_pct']) > 0)
+            kv('   Less expense share ${InvestorProfit.n(g['expense_share_pct']).toStringAsFixed(0)}%', m(-InvestorProfit.n(g['expense']))),
+          kv('   ${g['grn_number']} profit', m(g['profit'])),
+        ],
         kv('GRN part', m(c['grn_profit']), bold: true),
       ],
       const Divider(height: 20),
@@ -833,6 +853,7 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
                 _fact('Cap', InvestorProfit.n(inv['cap_pct']) > 0 ? '${inv['cap_pct']}%' : 'None'),
                 _fact('Floor / cap is', inv['limit_basis'] == 'annual' ? '% a year (scaled)' : '% per period'),
                 _fact('Loss months', 'Decide later'),
+                _fact('Returns', inv['deduct_returns'] == false ? 'Not deducted' : 'Deducted from GRN profit'),
                 _fact('Since', _df.format(DateTime.parse('${inv['start_date']}'))),
               ]),
               const SizedBox(height: 10),
