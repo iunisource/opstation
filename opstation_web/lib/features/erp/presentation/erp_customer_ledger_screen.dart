@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -45,9 +46,17 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
 
   static const _types = ['All', 'Sales Invoice', 'Sale Return', 'POS Sale', 'POS Payment', 'POS Return', 'POS Refund (Cash)', 'Receipt (CRV)', 'Payment (CPV)', 'Journal (JV)'];
 
+  // Opened from the Customer Balance Report (?from=cbr): show a way back to it.
+  bool _fromCbr = false;
+
   @override
   void initState() {
     super.initState();
+    try {
+      final href = html.window.location.href;
+      final qIdx = href.indexOf('?');
+      _fromCbr = qIdx != -1 && Uri.splitQueryString(href.substring(qIdx + 1))['from'] == 'cbr';
+    } catch (_) {}
     _earlyRestore();
     _loadCustomers();
     _loadFooterMsg();
@@ -711,6 +720,16 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       child: Container(
         color: AppTheme.background, padding: context.pagePadding,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (_fromCbr)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: TextButton.icon(
+                onPressed: () => context.go('/erp/customer-balance-report'),
+                icon: const Icon(Icons.arrow_back, size: 16),
+                label: const Text('Back to Customer Balance Report', style: TextStyle(fontSize: 12.5)),
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+              ),
+            ),
           // Desktop: title left, actions pinned hard right (a Wrap with
           // spaceBetween collapses to "buttons hugging the title" once the title
           // is narrow). Mobile: title on its own line, actions wrapping beneath.

@@ -1,7 +1,9 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import 'dart:convert';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
@@ -52,14 +54,60 @@ class _ErpCustomerBalanceReportScreenState
   bool _sortAsc = true;
   bool _showZero = true; // master filter: include customers whose current balance is 0
   String _search = ''; // live client-side filter on customer name / code
+  final _searchCtrl = TextEditingController();
+  // Coming back from a customer's ledger: restore the filters and re-run.
+  static const _kBack = 'cbr_back_state';
+  bool _restoreRun = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 
   @override
   void initState() {
     super.initState();
+    _restoreFilters();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadMeta());
   }
+
+  @override
+  void dispose() { _searchCtrl.dispose(); _scroll.dispose(); super.dispose(); }
+
+  /// Remember the report as it is, then open the customer's ledger.
+  void _openLedger(String customerId) {
+    try {
+      html.window.sessionStorage[_kBack] = jsonEncode({
+        'asOf': _asOf.toIso8601String(), 'span': _span, 'route': _routeFilter, 'group': _groupFilter,
+        'sp': _salespersonFilter, 'branch': _branchFilter, 'status': _statusFilter,
+        'sortKey': _sortKey, 'sortAsc': _sortAsc, 'showZero': _showZero, 'search': _search,
+        'loaded': _loaded, 'scroll': _scroll.hasClients ? _scroll.offset : 0.0,
+      });
+    } catch (_) {}
+    context.go('/erp/customer-ledger?focus=$customerId&from=cbr');
+  }
+
+  void _restoreFilters() {
+    try {
+      final raw = html.window.sessionStorage[_kBack];
+      if (raw == null || raw.isEmpty) return;
+      html.window.sessionStorage.remove(_kBack);
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      _asOf = DateTime.tryParse('${m['asOf']}') ?? _asOf;
+      _span = (m['span'] as String?) ?? _span;
+      _routeFilter = m['route'] as String?;
+      _groupFilter = m['group'] as String?;
+      _salespersonFilter = m['sp'] as String?;
+      _branchFilter = m['branch'] as String?;
+      _statusFilter = (m['status'] as String?) ?? _statusFilter;
+      _sortKey = (m['sortKey'] as String?) ?? _sortKey;
+      _sortAsc = m['sortAsc'] != false;
+      _showZero = m['showZero'] != false;
+      _search = (m['search'] as String?) ?? '';
+      _searchCtrl.text = _search;
+      _restoreRun = m['loaded'] == true;
+      _restoreScroll = (m['scroll'] as num?)?.toDouble() ?? 0;
+    } catch (_) {}
+  }
+  double _restoreScroll = 0;
+  final _scroll = ScrollController();
 
   Future<void> _loadMeta() async {
     final orgId = _orgId;
@@ -142,6 +190,15 @@ class _ErpCustomerBalanceReportScreenState
           _collectionCols = coll;
           _loadingMeta = false;
         });
+        if (_restoreRun) {
+          _restoreRun = false;
+          await _loadReport();
+          if (_restoreScroll > 0) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) _scroll.jumpTo(_restoreScroll.clamp(0, _scroll.position.maxScrollExtent));
+            });
+          }
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _loadingMeta = false);
@@ -623,6 +680,7 @@ class _ErpCustomerBalanceReportScreenState
                     _field('Search', SizedBox(
                       width: 190,
                       child: TextField(
+                        controller: _searchCtrl,
                         decoration: const InputDecoration(
                             hintText: 'Name or code…',
                             prefixIcon: Icon(Icons.search, size: 16),
@@ -687,6 +745,7 @@ class _ErpCustomerBalanceReportScreenState
                         const Divider(height: 1),
                         Expanded(
                           child: ListView.builder(
+                            controller: _scroll,
                             itemCount: _items.length,
                             itemBuilder: (_, i) => _buildItem(_items[i]),
                           ),
@@ -896,9 +955,22 @@ class _ErpCustomerBalanceReportScreenState
       child: Row(children: [
         Expanded(
             flex: 3,
-            child: Text(disp,
-                style: const TextStyle(fontSize: 12.5),
-                overflow: TextOverflow.ellipsis)),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: (it['customer_id'] as String?) == null
+                  ? Text(disp, style: const TextStyle(fontSize: 12.5), overflow: TextOverflow.ellipsis)
+                  : InkWell(
+                      onTap: () => _openLedger(it['customer_id'] as String),
+                      child: Tooltip(
+                        message: 'Open ledger',
+                        waitDuration: const Duration(milliseconds: 600),
+                        child: Text(disp,
+                            style: const TextStyle(fontSize: 12.5, color: AppTheme.primary,
+                                decoration: TextDecoration.underline, decorationColor: Color(0x553B5BDB)),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+            )),
         _amt((it['credit_limit'] as num?) ?? 0, 110, muted: true),
         _amt((it['bal1'] as num?) ?? 0, 110),
         _amt((it['bal2'] as num?) ?? 0, 110),
