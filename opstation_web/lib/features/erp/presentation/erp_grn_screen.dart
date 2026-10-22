@@ -41,6 +41,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
   bool _adjustBusy = false;
   List<Map<String, dynamic>> _items = [];
   final _remarksCtrl = TextEditingController();
+  // Optional Vehicle Details (SQL 399) — shown on screen/print only when filled.
+  final _drvNameCtrl = TextEditingController();
+  final _drvContactCtrl = TextEditingController();
+  final _vehicleNoCtrl = TextEditingController();
+  bool _vehicleOpen = false;
   Map<String, TextEditingController> _receivedCtrl = {};
   // Autosave for draft received-qty edits — previously the value only saved on
   // Enter, so a typed 0 was silently lost on blur/navigation and the line
@@ -78,6 +83,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     for (final t in _qtySaveDebounce.values) t.cancel();
     for (final c in _receivedCtrl.values) c.dispose();
     _remarksCtrl.dispose();
+    _drvNameCtrl.dispose(); _drvContactCtrl.dispose(); _vehicleNoCtrl.dispose();
     super.dispose();
   }
 
@@ -185,9 +191,74 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _linkedPis = pis;
         _btProducts = bt;
         _remarksCtrl.text = (grn['remarks'] as String?) ?? '';
+        _drvNameCtrl.text = (grn['vehicle_driver_name'] as String?) ?? '';
+        _drvContactCtrl.text = (grn['vehicle_driver_contact'] as String?) ?? '';
+        _vehicleNoCtrl.text = (grn['vehicle_number'] as String?) ?? '';
+        _vehicleOpen = _hasVehicle(grn);
         _initReceivedCtrls();
       });
     } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+  }
+
+  static String? _t(Object? v) { final x = '${v ?? ''}'.trim(); return x.isEmpty ? null : x; }
+  bool _hasVehicle(Map m) =>
+      _t(m['vehicle_driver_name']) != null || _t(m['vehicle_driver_contact']) != null || _t(m['vehicle_number']) != null;
+
+  Future<void> _saveVehicle() async {
+    final id = _selectedId;
+    if (id == null) return;
+    final data = {
+      'vehicle_driver_name': _t(_drvNameCtrl.text),
+      'vehicle_driver_contact': _t(_drvContactCtrl.text),
+      'vehicle_number': _t(_vehicleNoCtrl.text),
+    };
+    try {
+      await Supabase.instance.client.from('purchase_grns').update(data).eq('id', id);
+      setState(() { _detail.addAll(data); });
+      _showSnack('Vehicle details saved');
+    } catch (e) { _showSnack(friendlyError('Could not save vehicle details', e)); }
+  }
+
+  Widget _vehicleSection() {
+    if (!_vehicleOpen) {
+      return Align(alignment: Alignment.centerLeft, child: TextButton.icon(
+        onPressed: () => setState(() => _vehicleOpen = true),
+        icon: const Icon(Icons.local_shipping_outlined, size: 16),
+        label: const Text('Add vehicle details', style: TextStyle(fontSize: 12.5))));
+    }
+    InputDecoration dec(String l) => InputDecoration(isDense: true, border: const OutlineInputBorder(), labelText: l);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.local_shipping_outlined, size: 16, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          const Text('Vehicle Details', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          const SizedBox(width: 6),
+          const Text('(optional)', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          const Spacer(),
+          TextButton.icon(onPressed: _saveVehicle, icon: const Icon(Icons.save_outlined, size: 15), label: const Text('Save', style: TextStyle(fontSize: 12))),
+        ]),
+        const SizedBox(height: 6),
+        LayoutBuilder(builder: (_, c) {
+          final fields = [
+            TextField(controller: _drvNameCtrl, decoration: dec('Driver name')),
+            TextField(controller: _drvContactCtrl, keyboardType: TextInputType.phone, decoration: dec('Contact')),
+            TextField(controller: _vehicleNoCtrl, textCapitalization: TextCapitalization.characters, decoration: dec('Vehicle #')),
+          ];
+          if (c.maxWidth < 560) {
+            return Column(children: [for (final f in fields) Padding(padding: const EdgeInsets.only(bottom: 8), child: f)]);
+          }
+          return Row(children: [
+            for (var i = 0; i < fields.length; i++) ...[
+              if (i > 0) const SizedBox(width: 10),
+              Expanded(child: fields[i]),
+            ],
+          ]);
+        }),
+      ]),
+    );
   }
 
   Future<void> _saveRemarks() async {
@@ -700,7 +771,13 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         qty: (it['qty_received'] as num?)?.toDouble() ?? 0,
       )).toList(),
       preparedBy: _meta.preparedBy, footerNote: _meta.purchaseFooterNote ?? _meta.footerNote,
-      relatedRefs: _detail['purchase_orders']?['voucher_number'] != null ? {'PO #': _detail['purchase_orders']['voucher_number'] as String} : null,
+      relatedRefs: {
+        if (_detail['purchase_orders']?['voucher_number'] != null) 'PO #': _detail['purchase_orders']['voucher_number'] as String,
+        // Vehicle Details — only the ones filled in.
+        if (_t(_detail['vehicle_driver_name']) != null) 'Driver': _t(_detail['vehicle_driver_name'])!,
+        if (_t(_detail['vehicle_driver_contact']) != null) 'Driver contact': _t(_detail['vehicle_driver_contact'])!,
+        if (_t(_detail['vehicle_number']) != null) 'Vehicle #': _t(_detail['vehicle_number'])!,
+      },
       // Middle sign-off becomes "Supervised By" when the GRN supervise flow is on.
       checkedByLabel: _superviseEnabled ? 'Supervised By' : null,
       checkedByName: _detail['supervised_by_name'] as String?,
@@ -914,6 +991,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
             ),
           ]),
         ),
+        const SizedBox(height: 10),
+        _vehicleSection(),
         const SizedBox(height: 16),
         // Items table
         Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
