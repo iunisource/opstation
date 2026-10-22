@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -240,7 +241,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
       setState(() => rule
         ..clear()
         ..addAll(old));
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -250,7 +251,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
       await _db.from('notification_rules').delete().eq('id', rule['id']);
     } catch (e) {
       setState(() => _rules.add(rule));
-      _snack('Could not remove: $e');
+      _snack(friendlyError('Could not remove', e));
     }
   }
 
@@ -260,7 +261,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
       await _db.from('notification_event_state')
           .upsert({'org_id': widget.orgId, 'event_key': event, 'enabled': on}, onConflict: 'org_id,event_key');
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -361,7 +362,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
       final ins = await _db.from('notification_rules').insert(rows).select();
       setState(() => _rules.addAll(List<Map<String, dynamic>>.from(ins as List)));
     } catch (e) {
-      _snack('Could not add: $e');
+      _snack(friendlyError('Could not add', e));
     }
   }
 
@@ -523,7 +524,7 @@ class _NotificationRulesScreenState extends State<NotificationRulesScreen> {
         _snack('${m['message'] ?? 'Test could not be sent.'}');
       }
     } catch (e) {
-      _snack('Test failed: $e');
+      _snack(friendlyError('Test failed', e));
     } finally {
       if (mounted) setState(() => _testing.remove(ev.key));
     }

@@ -309,7 +309,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
           'products-${DateTime.now().toIso8601String().split('T').first}.xlsx');
       _showSnack('Exported ${source.length} product${source.length == 1 ? '' : 's'} (Excel)');
     } catch (e) {
-      _showSnack('Export failed: $e');
+      _showSnack(friendlyError('Export failed', e));
     }
   }
 
@@ -1555,7 +1555,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                       }
                     }
                   } catch (e) {
-                    _showSnack('Product saved, but branch allocation failed: $e');
+                    _showSnack(friendlyError('Product saved, but branch allocation failed', e));
                   }
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack(product == null ? 'Product added' : 'Product updated');

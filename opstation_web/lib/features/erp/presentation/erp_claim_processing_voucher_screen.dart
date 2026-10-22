@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -108,7 +109,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         _prodLabel = {for (final p in items) p['id'] as String: p['label'] as String};
         _loadingProducts = false;
       });
-    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
   Future<void> _loadCustomers() async {
@@ -203,7 +204,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _lines = newLines.isEmpty ? [_CLine()] : newLines;
       });
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   // ---------- reasons: quick add + manage ----------
@@ -221,7 +222,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
       });
       await _loadReasons();
       return id;
-    } catch (e) { _snack('Could not add reason: $e'); return null; }
+    } catch (e) { _snack(friendlyError('Could not add reason', e)); return null; }
   }
 
   Future<String?> _showAddReasonDialog() async {
@@ -268,7 +269,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
                     return ListTile(dense: true,
                       title: Text(r['name'] as String? ?? '', style: TextStyle(fontSize: 13, color: active ? AppTheme.textPrimary : AppTheme.textSecondary, decoration: active ? null : TextDecoration.lineThrough)),
                       trailing: Switch(value: active, onChanged: (v) async {
-                        try { await Supabase.instance.client.from('claim_reasons').update({'is_active': v}).eq('id', r['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); }
+                        try { await Supabase.instance.client.from('claim_reasons').update({'is_active': v}).eq('id', r['id'] as String); await refresh(); } catch (e) { _snack(friendlyError('Update failed', e)); }
                       }));
                   })),
           ])),
@@ -388,7 +389,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
       _snack('Claim deleted');
       _newVoucher();
       await _loadVouchers();
-    } catch (e) { _snack('Delete failed: $e'); }
+    } catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   void _addLine() => setState(() => _lines.add(_CLine()));
@@ -449,7 +450,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         _insClaims = vSet.length; _insQty = totalQty; _insProducts = prods.length; _insCustomers = custs.length;
         _insByReason = byReason; _insByProduct = byProduct; _insByCustomer = byCustomer; _insLoading = false;
       });
-    } catch (e) { if (mounted) { _snack('Insights load error: $e'); setState(() => _insLoading = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Insights load error', e)); setState(() => _insLoading = false); } }
   }
 
   // ---------- UI ----------

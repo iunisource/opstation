@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -111,7 +112,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
       }
     } catch (e) {
       if (mounted) {
-        _snack('Load error: $e');
+        _snack(friendlyError('Could not load', e));
         setState(() => _loadingMaster = false);
       }
     }
@@ -189,7 +190,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
         _deletedLineIds.clear();
       });
     } catch (e) {
-      _snack('Failed to load: $e');
+      _snack(friendlyError('Could not load', e));
     }
   }
 
@@ -308,6 +309,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
 
   // ── Save (NO GL — memo only) ─────────────────────────────────────────────────
   Future<void> _save() async {
+    if (_saving) return; // guard: block double-submit
     if (_cashAccountId == null) {
       _snack('Select the cheques-in-hand account first');
       return;
@@ -383,7 +385,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
           continue; // skip incomplete pending rows
         }
         final lineId = l.id.startsWith('pdcl_new_')
-            ? 'pdcl_${DateTime.now().microsecondsSinceEpoch}_$i'
+            ? uniqueId('pdcl')
             : l.id;
         l.id = lineId;
         await client.from('pdc_voucher_lines').upsert({
@@ -606,7 +608,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
       _snack('Cheque cleared • $vNum posted ✓');
       await _loadVouchers();
     } catch (e) {
-      _snack('Clearance failed: $e');
+      _snack(friendlyError('Clearance failed', e));
     }
     if (mounted) setState(() => _saving = false);
   }
@@ -1214,7 +1216,7 @@ class _ChequeLine {
   DateTime? clearedAt;
 
   _ChequeLine({String? id, this.status = 'pending'})
-      : id = id ?? 'pdcl_new_${DateTime.now().microsecondsSinceEpoch}';
+      : id = id ?? uniqueId('pdcl_new');
 
   void dispose() {
     bankCtrl.dispose();

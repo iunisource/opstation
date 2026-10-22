@@ -61,7 +61,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       }
       _normalize(all);
       setState(() { _accounts = all; _loading = false; });
-    } catch (e) { _snack('Error: $e'); setState(() => _loading = false); }
+    } catch (e) { _snack(friendlyError('Something went wrong', e)); setState(() => _loading = false); }
   }
 
   /// Accounts loaded straight via SQL can carry other spellings of the group
@@ -424,7 +424,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
           return false;
         }
       }
-    } catch (e) { _snack('Delete check failed: $e'); return false; }
+    } catch (e) { _snack(friendlyError('Delete check failed', e)); return false; }
     final yes = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
       title: const Text('Delete account?'),
       content: Text('Permanently delete "${acc['name']}"? This cannot be undone.'),
@@ -443,7 +443,7 @@ class _ErpChartOfAccountsScreenState extends ConsumerState<ErpChartOfAccountsScr
       await _load();
       _snack('Account deleted');
       return true;
-    } catch (e) { _snack('Delete failed: $e'); return false; }
+    } catch (e) { _snack(friendlyError('Delete failed', e)); return false; }
   }
 
   Color _groupColor(String group) {

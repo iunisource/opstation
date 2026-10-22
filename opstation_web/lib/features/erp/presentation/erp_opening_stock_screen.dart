@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -104,7 +105,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
         _prodBaseUom = {for (final p in all) p['id'] as String: p['base_uom_id'] as String?};
         _loadingProducts = false;
       });
-    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
   Future<void> _loadUoms() async {
@@ -183,7 +184,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
         _lines = newLines.isEmpty ? [_OsLine()] : newLines;
         _lineSearch = '';
       });
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   void _onPickProduct(int i, Map<String, dynamic> p) {
@@ -328,7 +329,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
       _snack('Draft deleted');
       _newVoucher();
       await _loadVouchers();
-    } catch (e) { _snack('Delete failed: $e'); }
+    } catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   void _addLine() => setState(() => _lines.add(_OsLine()));

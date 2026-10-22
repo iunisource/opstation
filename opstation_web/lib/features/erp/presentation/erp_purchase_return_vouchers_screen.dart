@@ -127,7 +127,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       setState(() { _invoices = List<Map<String, dynamic>>.from(r); _listLoading = false; });
     } catch (e) {
       print('[PRI] loadList: $e');
-      _showSnack('Failed to load list: $e');
+      _showSnack(friendlyError('Failed to load list', e));
       setState(() => _listLoading = false);
     }
   }
@@ -156,7 +156,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       });
     } catch (e) {
       print('[PRI] loadDetail: $e');
-      _showSnack('Failed to load: $e');
+      _showSnack(friendlyError('Could not load', e));
       setState(() => _detailLoading = false);
     }
   }
@@ -300,7 +300,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
         }
       });
       await _recalcTotals();
-    } catch (e) { _showSnack('Failed to save price: $e'); }
+    } catch (e) { _showSnack(friendlyError('Failed to save price', e)); }
   }
 
   Future<void> _recalcTotals() async {

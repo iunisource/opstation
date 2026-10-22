@@ -175,7 +175,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
       setState(() { _invoices = List<Map<String, dynamic>>.from(r); _listLoading = false; });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
@@ -189,7 +189,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           .select('*,products(name,sku),uoms(abbreviation)').eq('invoice_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: inv['customer_id'] as String?, createdById: inv['created_by'] as String?);
       setState(() { _detail = Map<String, dynamic>.from(inv); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; _initCtrls(); });
-    } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -419,7 +419,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       await Supabase.instance.client.from('sales_return_invoice_items').update({'unit_price': price, 'discount': disc, 'line_total': lt}).eq('id', itemId);
       setState(() { final idx = _items.indexWhere((i) => i['id'] == itemId); if (idx >= 0) { _items[idx]['unit_price'] = price; _items[idx]['discount'] = disc; _items[idx]['line_total'] = lt; } });
       await _recalcTotals();
-    } catch (e) { _showSnack('Save error: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _recalcTotals() async {

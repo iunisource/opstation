@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -249,7 +250,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
       await _loadWeek();
       _snack(v ? 'Auto-carry on — weeks without changes follow the last plan.' : 'Auto-carry off — each week starts empty.');
     } catch (e) {
-      _snack('Could not change the setting: $e');
+      _snack(friendlyError('Could not change the setting', e));
     }
   }
 
@@ -455,7 +456,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
         }
       });
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -509,7 +510,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
       await _loadWeek();
       _snack('Copied ${rows.length} cell${rows.length == 1 ? '' : 's'} from last week.');
     } catch (e) {
-      _snack('Could not copy: $e');
+      _snack(friendlyError('Could not copy', e));
     }
   }
 

@@ -853,7 +853,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _posConfig = posCfg;
         _loading = false;
       });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _loading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _loading = false); }
   }
 
   // ── Stage a product for editing before adding to bill ─────

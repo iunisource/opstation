@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -45,7 +46,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
       if (branchId != null) q = q.eq('branch_id', branchId);
       final rows = await q.order('created_at', ascending: false).limit(2000);
       setState(() { _expenses = List<Map<String, dynamic>>.from(rows); _loading = false; _selected.clear(); _selectAll = false; });
-    } catch (e) { _snack('Error: $e'); setState(() => _loading = false); }
+    } catch (e) { _snack(friendlyError('Something went wrong', e)); setState(() => _loading = false); }
   }
 
   List<Map<String, dynamic>> get _filtered {

@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:typed_data';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -85,7 +86,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
         'label': "${a['code'] != null ? '${a['code']} — ' : ''}${a['name']}",
       }).toList();
       if (mounted) setState(() { _accounts = items; _loadingMaster = false; });
-    } catch (e) { if (mounted) { _snack('Account load error: $e'); setState(() => _loadingMaster = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Account load error', e)); setState(() => _loadingMaster = false); } }
   }
 
   List<Map<String, dynamic>> _filterAccounts(String q) {
@@ -140,7 +141,7 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       await _appendPartyNames(orgId, accId, from, to, entries);
       if (mounted) setState(() { _opening = opening; _entries = entries; _loaded = true; _loading = false; });
     } catch (e) {
-      if (mounted) { _snack('Report error: $e'); setState(() => _loading = false); }
+      if (mounted) { _snack(friendlyError('Report error', e)); setState(() => _loading = false); }
     }
   }
 

@@ -1,6 +1,8 @@
 import 'dart:async';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -691,7 +693,7 @@ class _ErpPaymentAdviceScreenState
       _snack(wasAdminEdit ? 'Approved advice updated (logged in audit trail).' : 'Payment advice saved.');
     } catch (e) {
       setState(() => _saving = false);
-      _snack('Save failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 
@@ -720,7 +722,7 @@ class _ErpPaymentAdviceScreenState
       _snack('Payment advice approved.');
     } catch (e) {
       setState(() => _saving = false);
-      _snack('Approve failed: $e');
+      _snack(friendlyError('Approve failed', e));
     }
   }
 
@@ -755,7 +757,7 @@ class _ErpPaymentAdviceScreenState
       _snack('Payment advice rejected.');
     } catch (e) {
       setState(() => _saving = false);
-      _snack('Reject failed: $e');
+      _snack(friendlyError('Reject failed', e));
     }
   }
 
@@ -764,7 +766,7 @@ class _ErpPaymentAdviceScreenState
     final me = ref.read(currentUserProvider);
     try {
       await _db.from('voucher_audit_log').insert({
-        'id': 'val_${DateTime.now().microsecondsSinceEpoch}',
+        'id': uniqueId('val'),
         'org_id': me?.orgId,
         'voucher_id': adviceId,
         'voucher_type': 'PA',
@@ -1015,7 +1017,7 @@ class _ErpPaymentAdviceScreenState
       _snack('Paid mark removed.');
     } catch (e) {
       if (mounted) setState(() => _saving = false);
-      _snack('Could not remove: $e');
+      _snack(friendlyError('Could not remove', e));
     }
   }
 
@@ -2039,7 +2041,7 @@ class _ErpPaymentAdviceScreenState
           'Payment Advice ${a['advice_number'] ?? ''}${accountsCopy ? ' Accounts copy' : ''}',
           date: DateTime.tryParse(a['advice_date'] as String? ?? ''));
     } catch (e) {
-      _snack('Print failed: $e');
+      _snack(friendlyError('Print failed', e));
     }
   }
 

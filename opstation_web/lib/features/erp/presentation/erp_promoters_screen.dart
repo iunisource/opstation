@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -65,7 +66,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Load error: $e');
+        _snack(friendlyError('Could not load', e));
       }
     }
   }
@@ -96,7 +97,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
         _categoryFloors = List<Map<String, dynamic>>.from(res[1] as List);
       });
     } catch (e) {
-      _snack('Floor load error: $e');
+      _snack(friendlyError('Floor load error', e));
     }
   }
 
@@ -218,7 +219,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
       }
       _snack(existing == null ? 'Promoter added' : 'Promoter updated');
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 
@@ -355,7 +356,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
       await _recompute();
       _snack('Product floor saved');
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 
@@ -509,7 +510,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
       await _recompute();
       _snack('Category floor saved');
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(friendlyError('That did not save', e));
     }
   }
 
@@ -535,7 +536,7 @@ class _ErpPromotersScreenState extends ConsumerState<ErpPromotersScreen> {
       await _recompute();
       _snack('Floor deleted');
     } catch (e) {
-      _snack('Delete failed: $e');
+      _snack(friendlyError('Delete failed', e));
     }
   }
 

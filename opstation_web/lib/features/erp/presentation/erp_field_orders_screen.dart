@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -252,7 +253,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
         for (final u in us as List) { _spNames[u['id'] as String] = (u['name'] as String?) ?? '—'; }
       }
       setState(() { _orders = orders; _loading = false; });
-    } catch (e) { _snack('Load error: $e'); setState(() => _loading = false); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); setState(() => _loading = false); }
   }
 
 
@@ -296,7 +297,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
           };
         }).toList();
       });
-    } catch (e) { _snack('Could not load lines: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load lines', e)); }
   }
 
   double get _total => _lines.fold(0.0, (s, l) => s + ((l['quantity'] as double) * (l['price'] as double)));
@@ -371,7 +372,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       _snack('Approved — draft ${soNum?['voucher_number'] ?? 'Sales Order'} created');
       ref.invalidate(fieldOrderPendingCountProvider);
       _loadOrders();
-    } catch (e) { _snack('Approve failed: $e'); setState(() => _saving = false); }
+    } catch (e) { _snack(friendlyError('Approve failed', e)); setState(() => _saving = false); }
   }
 
   Future<void> _reject() async {
@@ -396,7 +397,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       _snack('Order rejected');
       ref.invalidate(fieldOrderPendingCountProvider);
       _loadOrders();
-    } catch (e) { _snack('Reject failed: $e'); setState(() => _saving = false); }
+    } catch (e) { _snack(friendlyError('Reject failed', e)); setState(() => _saving = false); }
   }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }

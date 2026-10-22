@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter/services.dart';
@@ -253,7 +254,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         }),
       ];
       if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
-    } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Could not load', e)); setState(() => _loadingMaster = false); } }
   }
 
   List<Map<String,dynamic>> _filterAccounts(String q) {
@@ -368,7 +369,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         _narCtrl.text = v['description'] as String? ?? ''; });
       _loadAudit(v['id'] as String);
       if (!_jvSuperviseFlow && !_jvApproveFlow) _loadJvFlag(); // ensure flags are set when a voucher opens
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   Future<void> _save({bool post = false, bool submitForApproval = false}) async {
@@ -716,7 +717,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         'notes': notes,
       });
       await _loadAudit(_current!['id'] as String);
-    } catch (e) { _snack('Audit log error: $e'); }
+    } catch (_) { /* the history note is best-effort; never interrupt the user */ }
   }
 
   void _showAuditTrail() {

@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -182,7 +183,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       final list = List<Map<String, dynamic>>.from((res as List?) ?? const []);
       if (mounted) setState(() { _rows = list; _hasRun = true; _running = false; });
     } catch (e) {
-      if (mounted) { _snack('Report failed: $e'); setState(() => _running = false); }
+      if (mounted) { _snack(friendlyError('Report failed', e)); setState(() => _running = false); }
     }
   }
 

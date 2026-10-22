@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:typed_data';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -74,7 +75,7 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
         _loading = false;
       });
     } catch (e) {
-      _snack('Load error: $e');
+      _snack(friendlyError('Could not load', e));
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -143,7 +144,7 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
         });
       } catch (e) {
         setS(() => searching = false);
-        _snack('Search error: $e');
+        _snack(friendlyError('Search error', e));
       }
     }
 

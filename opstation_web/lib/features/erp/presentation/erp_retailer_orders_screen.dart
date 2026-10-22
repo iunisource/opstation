@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -306,7 +307,7 @@ class _ErpRetailerOrdersScreenState
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed: $e');
+      _snack(friendlyError('Could not load', e));
     }
   }
 
@@ -355,7 +356,7 @@ class _ErpRetailerOrdersScreenState
       if (!mounted) return;
       setState(() => _lines = rows);
     } catch (e) {
-      _snack('Could not load lines: $e');
+      _snack(friendlyError('Could not load lines', e));
     }
   }
 
@@ -492,7 +493,7 @@ class _ErpRetailerOrdersScreenState
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _snack('Approve failed: $e');
+      _snack(friendlyError('Approve failed', e));
     }
   }
 
@@ -553,7 +554,7 @@ class _ErpRetailerOrdersScreenState
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      _snack('Reject failed: $e');
+      _snack(friendlyError('Reject failed', e));
     }
   }
 

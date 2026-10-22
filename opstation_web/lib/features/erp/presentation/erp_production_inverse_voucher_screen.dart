@@ -119,7 +119,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       final labelMap = {for (final p in items) p['id'] as String: p['label'] as String};
       final costMap = {for (final p in all) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
       if (mounted) setState(() { _products = items; _prodLabel = labelMap; _prodCost = costMap; _loadingProducts = false; });
-    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
   List<Map<String, dynamic>> _filterProducts(String q) {
@@ -279,7 +279,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       _loadFgLayers();
       _refreshFgTrack();
       if ((v['status'] as String?) == 'posted' && _btOn) _loadBrokenSerials(v['id'] as String);
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   void _pickBom(String bomId) {
@@ -303,7 +303,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     try {
       final comps = await Supabase.instance.client.from('bom_components').select().eq('bom_id', _bomId!).order('line_order');
       _baseComps = List<Map<String, dynamic>>.from(comps as List);
-    } catch (e) { _snack('BOM load error: $e'); }
+    } catch (e) { _snack(friendlyError('BOM load error', e)); }
   }
 
   Future<void> _loadBomBase() async { await _fetchBase(); _rescale(); }

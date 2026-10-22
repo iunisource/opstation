@@ -1,5 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -121,7 +123,7 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
         }),
       ];
       if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
-    } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Could not load', e)); setState(() => _loadingMaster = false); } }
   }
 
   List<Map<String,dynamic>> _filterAccounts(String q) {
@@ -240,7 +242,7 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
         _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d);
         _narCtrl.text = v['description'] as String? ?? ''; });
       _loadAudit(v['id'] as String);
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   Future<void> _save({bool post = false}) async {
@@ -399,7 +401,7 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
         'notes': notes,
       });
       await _loadAudit(_current!['id'] as String);
-    } catch (e) { _snack('Audit log error: $e'); }
+    } catch (_) { /* the history note is best-effort; never interrupt the user */ }
   }
 
   void _showAuditTrail() {

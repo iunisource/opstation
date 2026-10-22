@@ -149,7 +149,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         }
       } catch (_) {}
       setState(() { _invoices = List<Map<String, dynamic>>.from(r); _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _listLoading = false; });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
@@ -179,7 +179,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         _remarksCtrl.text = (inv['remarks'] as String?) ?? '';
         _meta = meta; _detailLoading = false; _datesEditable = datesEd; _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _initCtrls();
       });
-    } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -311,7 +311,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         final pname = (row['products']?['name'] as String?) ?? 'item';
         await _logAudit(_detail['id'] as String, 'edited', '$pname cost: ${oldCost.toStringAsFixed(2)} -> ${cost.toStringAsFixed(2)}, disc: ${oldDisc.toStringAsFixed(0)}% -> ${disc.toStringAsFixed(0)}%');
       }
-    } catch (e) { _showSnack('Save error: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   /// Batched equivalent of looping [_saveItemCost] over every line. Instead of
@@ -378,7 +378,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         } catch (_) {}
       }
     } catch (e) {
-      _showSnack('Save error: $e');
+      _showSnack(friendlyError('That did not save', e));
     }
   }
 

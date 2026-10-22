@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import '../widgets/duplicate_ref_guard.dart';
 import '../../../core/widgets/saving_overlay.dart';
@@ -105,7 +106,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         ...prom.map((p) => {'id': p['id'], 'label': '${p['name']}${(p['phone'] as String?)?.isNotEmpty == true ? ' (${p['phone']})' : ''}', 'sub': 'Promoter', 'type': 'promoter'}),
       ];
       if (mounted) setState(() { _coaList = coa; _supplierList = sup; _customerList = cus; _allAccounts = all; _loadingMaster = false; });
-    } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loadingMaster = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Could not load', e)); setState(() => _loadingMaster = false); } }
   }
 
   Future<void> _loadVouchers() async {
@@ -208,10 +209,11 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
       for (final l in _lines) l.dispose();
       final newLines = (rows as List).map((r) { final l = _VLine(); l.accountId = r['account_id'] as String?; l.accountName = r['account_name'] as String? ?? ''; l.accountType = r['account_type'] as String? ?? 'coa'; l.descCtrl.text = r['description'] as String? ?? ''; l.amtCtrl.text = (r['amount'] as num?)?.toStringAsFixed(2) ?? ''; return l; }).toList();
       if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDate = (() { final s = (v['voucher_date'] as String?) ?? ''; final iso = DateTime.tryParse(s); if (iso != null) return iso; try { return DateFormat('dd MMM yyyy').parse(s); } catch (_) {} return DateTime.now(); })(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); }); _refreshTotal(); _loadAudit(v['id'] as String); }
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   Future<void> _save({bool post = false}) async {
+    if (_saving) return; // guard: block double-submit
     if (_cashAccountId == null) { _snack('Select a cash account first'); return; }
     final validLines = _lines.where((l) => l.accountId != null).toList();
     if (validLines.isEmpty) { _snack('Add at least one line item'); return; }
@@ -257,7 +259,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         vNum = 'CPV-${DateTime.now().year}-${(maxSeq + 1).toString().padLeft(4, '0')}';
         vid = 'cpv_${DateTime.now().millisecondsSinceEpoch}';
         await client.from('cpv_vouchers').insert({'id': vid, 'org_id': orgId, 'branch_id': bid, 'voucher_number': vNum, 'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': 'draft', 'total_amount': total, 'created_by': userId});
-        for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
+        for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': uniqueId('cpvl'), 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         final created = await client.from('cpv_vouchers').select().eq('id', vid).single();
         setState(() { _currentVoucher = created; _status = 'draft'; }); _logAudit('created', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines  •  \$_cashAccountName');
       } else {
@@ -265,7 +267,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         vNum = _currentVoucher!['voucher_number'] as String?;
         await client.from('cpv_vouchers').update({'voucher_date': dateStr, 'cash_account_id': _cashAccountId, 'cash_account_name': _cashAccountName, 'status': 'draft', 'total_amount': total}).eq('id', vid);
         await client.from('cpv_voucher_lines').delete().eq('voucher_id', vid);
-        for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
+        for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': uniqueId('cpvl'), 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; });
       }
       if (dupNote.isNotEmpty) {
@@ -349,7 +351,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final userName = ref.read(currentUserProvider)?.name ?? '';
     try {
       await Supabase.instance.client.from('cpv_audit_trail').insert({
-        'id': 'aud_${DateTime.now().microsecondsSinceEpoch}',
+        'id': uniqueId('aud'),
         'voucher_id': _currentVoucher!['id'] as String,
         'action': action,
         'performed_by': userId,
@@ -358,7 +360,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         'notes': notes,
       });
       await _loadAudit(_currentVoucher!['id'] as String);
-    } catch (e) { _snack('Audit log error: $e'); }
+    } catch (_) { /* the history note is best-effort; never interrupt the user */ }
   }
 
   void _showAuditTrail() {
@@ -625,7 +627,7 @@ class Explained extends StatelessWidget {
 
 // ── Line model ───────────────────────────────────────────────────────────────
 class _VLine {
-  final String id = 'vl_${DateTime.now().microsecondsSinceEpoch}';
+  final String id = uniqueId('vl');
   String? accountId; String accountName = ''; String accountType = 'coa';
   final TextEditingController descCtrl = TextEditingController();
   final TextEditingController amtCtrl = TextEditingController();

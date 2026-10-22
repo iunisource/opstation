@@ -1,3 +1,5 @@
+import 'package:opstation_web/core/utils/unique_id.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,7 +62,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
     try {
       await Future.wait([_loadEmployees(), _loadTypes()]);
       await _loadRequests();
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
     if (mounted) setState(() => _loading = false);
     _openFocus();
   }
@@ -199,7 +201,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
       if (mounted) setState(() => _current = updated);
       await _loadRequests();
       _snack(_isAdmin ? 'Leave request saved' : 'Leave request saved \u2014 awaiting admin approval');
-    } catch (e) { _snack('Save failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _saving = false);
   }
 
@@ -223,14 +225,14 @@ class _State extends ConsumerState<HrLeaveScreen> {
           'remarks': 'Leave: $typeName', 'updated_at': DateTime.now().toUtc().toIso8601String(),
         }, onConflict: 'org_id,employee_id,att_date');
         await client.from('hr_attendance_audit').insert({
-          'id': 'aud_${DateTime.now().microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': id,
+          'id': '${uniqueId('aud')}_$empId', 'org_id': orgId, 'attendance_id': id,
           'employee_id': empId, 'att_date': ds, 'action': 'updated', 'changes': 'Leave approved ($typeName)',
           'changed_by': _userId, 'changed_by_name': _userName,
         });
       } else {
         await client.from('hr_attendance').delete().eq('org_id', orgId).eq('employee_id', empId).eq('att_date', ds).eq('status', 'leave');
         await client.from('hr_attendance_audit').insert({
-          'id': 'aud_${DateTime.now().microsecondsSinceEpoch}_$empId', 'org_id': orgId, 'attendance_id': '',
+          'id': '${uniqueId('aud')}_$empId', 'org_id': orgId, 'attendance_id': '',
           'employee_id': empId, 'att_date': ds, 'action': 'updated', 'changes': 'Leave cancelled ($typeName)',
           'changed_by': _userId, 'changed_by_name': _userName,
         });
@@ -250,7 +252,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
       if (mounted) setState(() => _current = updated);
       await _loadRequests();
       _snack('Leave approved \u2014 marked on attendance');
-    } catch (e) { _snack('Approve failed: $e'); }
+    } catch (e) { _snack(friendlyError('Approve failed', e)); }
     if (mounted) setState(() => _saving = false);
   }
 
@@ -266,7 +268,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
       if (mounted) setState(() => _current = updated);
       await _loadRequests();
       _snack('Leave rejected');
-    } catch (e) { _snack('Reject failed: $e'); }
+    } catch (e) { _snack(friendlyError('Reject failed', e)); }
     if (mounted) setState(() => _saving = false);
   }
 
@@ -283,7 +285,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
       if (r['status'] == 'approved') await _writeAttendanceForLeave(r, add: false);
       await Supabase.instance.client.from('hr_leave_requests').delete().eq('id', r['id'] as String);
       _snack('Leave request deleted'); _newRequest(); await _loadRequests();
-    } catch (e) { _snack('Delete failed: $e'); }
+    } catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   // ---- leave type management ----
@@ -316,7 +318,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
                       'annual_quota': double.tryParse(quotaCtrl.text) ?? 0, 'is_paid': paid, 'is_active': true,
                     });
                     nameCtrl.clear(); quotaCtrl.clear(); await refresh();
-                  } catch (e) { _snack('Add failed: $e'); }
+                  } catch (e) { _snack(friendlyError('Add failed', e)); }
                 }, child: const Text('Add')),
             ]),
             const SizedBox(height: 12),
@@ -327,7 +329,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
                   return ListTile(dense: true,
                     title: Text(t['name'] as String? ?? '', style: TextStyle(fontSize: 13, color: active ? AppTheme.textPrimary : AppTheme.textSecondary, decoration: active ? null : TextDecoration.lineThrough)),
                     subtitle: Text('${_dStr((t['annual_quota'] as num?)?.toDouble() ?? 0)} days/yr \u00b7 ${(t['is_paid'] == false) ? 'Unpaid' : 'Paid'}', style: const TextStyle(fontSize: 11)),
-                    trailing: Switch(value: active, onChanged: (val) async { try { await Supabase.instance.client.from('hr_leave_types').update({'is_active': val}).eq('id', t['id'] as String); await refresh(); } catch (e) { _snack('Update failed: $e'); } }));
+                    trailing: Switch(value: active, onChanged: (val) async { try { await Supabase.instance.client.from('hr_leave_types').update({'is_active': val}).eq('id', t['id'] as String); await refresh(); } catch (e) { _snack(friendlyError('Update failed', e)); } }));
                 })),
           ])),
           actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],

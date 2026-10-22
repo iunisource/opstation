@@ -187,7 +187,7 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
           .eq('org_id', orgId)
           .order('name'));
     } catch (e) {
-      _showSnack('Failed to load categories: $e');
+      _showSnack(friendlyError('Failed to load categories', e));
       return;
     }
     final addCtrl = TextEditingController();

@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -206,7 +207,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed: $e');
+      _snack(friendlyError('Could not load', e));
     }
   }
 
@@ -536,7 +537,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _running = false);
-      _snack('Report failed: $e');
+      _snack(friendlyError('Report failed', e));
     }
   }
 

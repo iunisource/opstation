@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/printing/label_printer.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/camera_capture.dart';
 import '../../../core/storage/image_compress.dart';
@@ -1324,7 +1325,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           [for (final c in r) (c?.toString() ?? '').trim()]
       ].where((r) => r.any((c) => c.isNotEmpty)).toList();
     } catch (e) {
-      _snack('Could not read the file: $e');
+      _snack(friendlyError('Could not read the file', e));
       return;
     }
     if (rows.length < 2) {

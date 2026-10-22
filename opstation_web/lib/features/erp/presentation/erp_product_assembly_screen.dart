@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -121,7 +122,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       }).toList();
       final labelMap = {for (final p in items) p['id'] as String: p['label'] as String};
       if (mounted) setState(() { _products = items; _prodLabel = labelMap; _loadingProducts = false; });
-    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
   Future<void> _loadRates() async {
@@ -138,7 +139,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       for (final r in labor) { rateMap[r['id'] as String] = (r['rate'] as num? ?? 0).toDouble(); nameMap[r['id'] as String] = r['name'] as String? ?? ''; }
       for (final r in over)  { rateMap[r['id'] as String] = (r['rate'] as num? ?? 0).toDouble(); nameMap[r['id'] as String] = r['name'] as String? ?? ''; }
       if (mounted) setState(() { _laborTypes = labor; _overheadTypes = over; _rateById = rateMap; _nameById = nameMap; });
-    } catch (e) { if (mounted) _snack('Rates load error: $e'); }
+    } catch (e) { if (mounted) _snack(friendlyError('Rates load error', e)); }
   }
 
   List<Map<String, dynamic>> _filterProducts(String q) {
@@ -361,7 +362,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         _waste = newWaste;
         _overheads = newOh;
       });
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   static String _trim(double v) {
@@ -1371,7 +1372,7 @@ class _ManageRatesDialogState extends State<_ManageRatesDialog> {
       await persist('labor_types', 'lt_', _labor);
       await persist('overhead_types', 'ot_', _overhead);
       if (mounted) Navigator.pop(context);
-    } catch (e) { _snack('Save failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     if (mounted) setState(() => _saving = false);
   }
 

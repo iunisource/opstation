@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
@@ -159,7 +160,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
       widget.onAudit?.call('document_added', fname);
       _snack('Document uploaded');
     } catch (e) {
-      _snack('Upload failed: $e');
+      _snack(friendlyError('Upload failed', e));
     }
     if (mounted) setState(() => _uploading = false);
   }
@@ -181,7 +182,7 @@ class _VoucherDocsPanelState extends State<VoucherDocsPanel> {
       await client.from('voucher_documents').delete().eq('id', d['id'] as String);
       await _load();
       widget.onAudit?.call('document_removed', (d['name'] as String?) ?? 'document');
-    } catch (e) { _snack('Remove failed: $e'); }
+    } catch (e) { _snack(friendlyError('Remove failed', e)); }
   }
 
   void _openNewTab(String? url) { if (url != null) html.window.open(url, '_blank'); }

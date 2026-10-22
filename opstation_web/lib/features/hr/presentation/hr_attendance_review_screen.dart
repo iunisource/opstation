@@ -1,3 +1,5 @@
+import 'package:opstation_web/core/utils/unique_id.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -261,7 +263,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
   Future<void> _audit(String attId, String empId, String ds, String note) async {
     try {
       await Supabase.instance.client.from('hr_attendance_audit').insert({
-        'id': 'aud_${DateTime.now().microsecondsSinceEpoch}_$empId', 'org_id': _orgId,
+        'id': '${uniqueId('aud')}_$empId', 'org_id': _orgId,
         'attendance_id': attId, 'employee_id': empId, 'att_date': ds, 'action': 'updated',
         'changes': note, 'changed_by': _userId, 'changed_by_name': _userName,
       });
@@ -365,7 +367,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       await _afterWrites();
       _snack('${p.emp['full_name']} — ${DateFormat('d MMM').format(p.date)} excused as approved leave.');
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('Failed', e));
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -382,7 +384,7 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
           : '${p.emp['full_name']} — unapproved. Penalty absent added on ${placed.join(', ')}.';
       _snack(msg);
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(friendlyError('Failed', e));
     } finally {
       if (mounted) setState(() => _working = false);
     }

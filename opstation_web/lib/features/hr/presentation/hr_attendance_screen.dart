@@ -1,5 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -111,7 +113,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       _empName = {for (final e in _employees) e['id'] as String: e['full_name'] as String? ?? ''};
       await _loadForDate();
       await _loadAudit();
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
     if (mounted) setState(() => _loading = false);
   }
 
@@ -231,7 +233,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       };
       await client.from('hr_attendance').upsert(payload, onConflict: 'org_id,employee_id,att_date');
       await client.from('hr_attendance_audit').insert({
-        'id': 'aud_${DateTime.now().microsecondsSinceEpoch}_${r.empId}', 'org_id': orgId, 'attendance_id': id,
+        'id': '${uniqueId('aud')}_${r.empId}', 'org_id': orgId, 'attendance_id': id,
         'employee_id': r.empId, 'att_date': dateStr, 'action': isNew ? 'created' : 'updated', 'changes': changes,
         'changed_by': _userId, 'changed_by_name': _userName,
       });
@@ -314,7 +316,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
           } else {
             _snack('Nothing sent — make sure a recipient email is saved for this org.');
           }
-        } catch (e) { _snack('Test failed: $e'); }
+        } catch (e) { _snack(friendlyError('Test failed', e)); }
         if (ctx.mounted) setLocal(() => testing = false);
       }
 
@@ -364,7 +366,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
                   onConflict: 'key,org_id,branch_id');
               if (ctx.mounted) Navigator.pop(ctx);
               _snack('Saved attendance summary settings');
-            } catch (e) { _snack('Save failed: $e'); }
+            } catch (e) { _snack(friendlyError('That did not save', e)); }
           }, child: const Text('Save')),
         ],
       ));

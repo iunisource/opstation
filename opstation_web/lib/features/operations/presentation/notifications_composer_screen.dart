@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'dart:typed_data';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -91,7 +92,7 @@ class _NotificationsComposerScreenState
         _loading = false;
       });
     } catch (e) {
-      _snack('Load error: $e');
+      _snack(friendlyError('Could not load', e));
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -135,7 +136,7 @@ class _NotificationsComposerScreenState
         });
       } catch (e) {
         setS(() => searching = false);
-        _snack('Search error: $e');
+        _snack(friendlyError('Search error', e));
       }
     }
 

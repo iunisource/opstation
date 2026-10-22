@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -84,7 +85,7 @@ class _State extends ConsumerState<ErpProductionWasteReportScreen> {
 
       _recompute();
       if (mounted) setState(() => _loading = false);
-    } catch (e) { if (mounted) { _snack('Load error: $e'); setState(() => _loading = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Could not load', e)); setState(() => _loading = false); } }
   }
 
   void _recompute() {

@@ -58,7 +58,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
         'updated_at': DateTime.now().toUtc().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
       }, onConflict: 'org_id');
       _showSnack(v ? 'Selling without stock is now ALLOWED' : 'Selling without stock is now LOCKED');
-    } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowNoStock = !v); }
+    } catch (e) { _showSnack(friendlyError('Failed to save setting', e)); if (mounted) setState(() => _allowNoStock = !v); }
     if (mounted) setState(() => _savingSetting = false);
   }
 
@@ -71,7 +71,7 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
         'updated_at': DateTime.now().toUtc().toIso8601String(), 'updated_by': ref.read(currentUserProvider)?.id,
       }, onConflict: 'org_id');
       _showSnack(v ? 'Price editing is now ALLOWED at POS' : 'Price editing is now LOCKED (system price)');
-    } catch (e) { _showSnack('Failed to save setting: $e'); if (mounted) setState(() => _allowPriceEdit = !v); }
+    } catch (e) { _showSnack(friendlyError('Failed to save setting', e)); if (mounted) setState(() => _allowPriceEdit = !v); }
     if (mounted) setState(() => _savingSetting = false);
   }
 

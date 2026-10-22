@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -212,7 +213,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       }
       _snack('Copied ${out.length} assignment${out.length == 1 ? '' : 's'} from last week');
       await _loadRange();
-    } catch (e) { _snack('Could not copy: $e'); }
+    } catch (e) { _snack(friendlyError('Could not copy', e)); }
   }
 
   // ── Stations dialog ──────────────────────────────────────────────────────
@@ -239,7 +240,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
           await _c.from('duty_stations').update(patch).eq('id', s['id'] as String);
           setState(() => s.addAll(patch));
           setD(() {});
-        } catch (e) { _snack('Could not update: $e'); }
+        } catch (e) { _snack(friendlyError('Could not update', e)); }
       }
       Future<void> move(int i, int dir) async {
         final j = i + dir;

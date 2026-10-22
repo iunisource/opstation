@@ -5,6 +5,7 @@ import 'dart:typed_data';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -333,7 +334,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       setState(() { o['picking_by'] = me?.id; o['picking_by_name'] = me?.name; o['picking_at'] = now; });
       _snack('You are now picking ${o['order_no'] ?? 'this order'}');
     } catch (e) {
-      _snack('Could not take over: $e');
+      _snack(friendlyError('Could not take over', e));
     }
   }
 
@@ -595,7 +596,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (mounted) setState(() {});
       _snack('Scan settings saved');
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -726,7 +727,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           : 'Auto-fulfil OFF — press Packed / Fulfil yourself');
     } catch (e) {
       setState(() { for (final s in scope) { s['auto_fulfil'] = !on; } });
-      _snack('Could not change it: $e');
+      _snack(friendlyError('Could not change it', e));
     }
   }
 
@@ -825,7 +826,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       await _saveLines(o, lines);
       _snack('Matched to ${p['name']} — remembered for future orders');
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -850,7 +851,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       }).eq('id', o['id']);
       await _load(quiet: true);
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -931,7 +932,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
           weightKg: double.tryParse(weight.text.trim()), pieces: int.tryParse(pieces.text.trim()) ?? 1);
       return true;
     } catch (e) {
-      _snack('Courier not booked: $e');
+      _snack(friendlyError('Courier not booked', e));
       return false;
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -954,7 +955,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
         storeName: _storeName(o['store_id'] as String?), cod: _collect(o), weightKg: weightKg, pieces: pieces);
       await showPdf(bytes, 'Shipping label ${o['order_no'] ?? ''}');
     } catch (e) {
-      _snack('Could not make the label: $e');
+      _snack(friendlyError('Could not make the label', e));
     }
   }
 
@@ -1050,7 +1051,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       if (mounted) setState(() {});
       _snack('Courier settings saved');
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 
@@ -1205,7 +1206,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       _snack(r['already'] == true ? 'It was already fulfilled in the store — marked fulfilled here.' : 'Fulfilled in the store');
       ok2 = true;
     } catch (e) {
-      _snack('Not fulfilled: $e');
+      _snack(friendlyError('Not fulfilled', e));
     } finally {
       if (mounted) setState(() => _busy = false);
       await _load(quiet: true);
@@ -1285,7 +1286,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       );
       await showPdf(bytes, orders.length == 1 ? 'Packing slip ${orders.first['order_no'] ?? ''}' : 'Packing slips');
     } catch (e) {
-      _snack('Could not make the slip: $e');
+      _snack(friendlyError('Could not make the slip', e));
     }
   }
 
@@ -2388,7 +2389,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
       await _load(quiet: true);
       _openNext(o['id'] as String);
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
     }
   }
 

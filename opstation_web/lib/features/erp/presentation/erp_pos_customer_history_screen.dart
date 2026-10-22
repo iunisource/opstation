@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -43,7 +44,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
           .select('id, shop_name, phone, cnic, code, source')
           .eq('org_id', orgId).eq('is_active', true).order('shop_name');
       setState(() { _customers = List<Map<String, dynamic>>.from(rows); _loadingCustomers = false; });
-    } catch (e) { _showSnack('Error: $e'); setState(() => _loadingCustomers = false); }
+    } catch (e) { _showSnack(friendlyError('Something went wrong', e)); setState(() => _loadingCustomers = false); }
   }
 
   Future<void> _loadTransactions(Map<String, dynamic> customer) async {
@@ -72,7 +73,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
       } else {
         setState(() { _transactions = txns; _loadingTxns = false; });
       }
-    } catch (e) { _showSnack('Error: $e'); setState(() => _loadingTxns = false); }
+    } catch (e) { _showSnack(friendlyError('Something went wrong', e)); setState(() => _loadingTxns = false); }
   }
 
   List<Map<String, dynamic>> get _filteredCustomers {

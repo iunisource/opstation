@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -229,7 +230,7 @@ window.__qcbt = window.__qcbt || {
       _applyFilter();
     } catch (e) {
       setState(() => _loadingJobs = false);
-      _snack('Jobs load error: $e');
+      _snack(friendlyError('Jobs load error', e));
     }
   }
 
@@ -260,7 +261,7 @@ window.__qcbt = window.__qcbt || {
       await _loadRecent();
     } catch (e) {
       setState(() => _loadingChecklist = false);
-      _snack('Checklist error: $e');
+      _snack(friendlyError('Checklist error', e));
     }
   }
 
@@ -300,7 +301,7 @@ window.__qcbt = window.__qcbt || {
       }
       _setOperator(emp['id'] as String, (emp['full_name'] as String?) ?? 'Operator');
     } catch (e) {
-      _snack('Card lookup failed: $e');
+      _snack(friendlyError('Card lookup failed', e));
     }
     _refocus();
   }
@@ -384,7 +385,7 @@ window.__qcbt = window.__qcbt || {
       await _loadRecent();
       _refocus();
     } catch (e) {
-      _snack('Could not record QC: $e');
+      _snack(friendlyError('Could not record QC', e));
     }
   }
 

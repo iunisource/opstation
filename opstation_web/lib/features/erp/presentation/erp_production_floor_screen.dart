@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -65,7 +66,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       _custLabel = {for (final c in (custs as List)) c['id'] as String: "${(c['code'] != null && (c['code'] as String).isNotEmpty) ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}"};
       if (mounted) setState(() { _jobs = List<Map<String, dynamic>>.from(jobs); _loading = false; });
       _subscribe(orgId);
-    } catch (e) { if (mounted) { _snack('Load failed: $e'); setState(() => _loading = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Could not load', e)); setState(() => _loading = false); } }
   }
 
   // ── Realtime: keep the board live when job_cards change anywhere ──────────

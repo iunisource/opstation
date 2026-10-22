@@ -121,7 +121,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) {
       // ignore: avoid_print
       print('[PRN] loadList error: $e');
-      _showSnack('Failed to load list: $e');
+      _showSnack(friendlyError('Failed to load list', e));
       setState(() => _listLoading = false);
     }
   }
@@ -150,7 +150,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     } catch (e) {
       // ignore: avoid_print
       print('[PRN] loadDetail error: $e');
-      _showSnack('Failed to load detail: $e');
+      _showSnack(friendlyError('Failed to load detail', e));
       setState(() => _detailLoading = false);
     }
   }
@@ -494,7 +494,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         _showSnack('Cannot delete: voucher ${vchs.first['voucher_number']} exists. Delete the voucher first.');
         return;
       }
-    } catch (e) { _showSnack('Failed to check: $e'); return; }
+    } catch (e) { _showSnack(friendlyError('Could not check', e)); return; }
 
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete draft Purchase Return Note?'),

@@ -2,6 +2,7 @@
 import 'dart:html' as html;
 import 'dart:typed_data';
 
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -151,7 +152,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed: $e');
+      _snack(friendlyError('Could not load', e));
     }
   }
 
@@ -572,7 +573,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       await _load();
       return true;
     } catch (e) {
-      _snack('Could not save: $e');
+      _snack(friendlyError('Could not save', e));
       return false;
     }
   }
@@ -820,7 +821,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
                         if (ctx.mounted) Navigator.pop(ctx);
                       } catch (e) {
                         setLocal(() => saving = false);
-                        _snack('Save failed: $e');
+                        _snack(friendlyError('That did not save', e));
                       }
                     },
               child: Text(saving ? 'Saving…' : 'Save'),
@@ -851,7 +852,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
           );
       return path;
     } catch (e) {
-      _snack('Upload failed: $e');
+      _snack(friendlyError('Upload failed', e));
       return null;
     }
   }
@@ -941,7 +942,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
           .update({'is_active': active}).eq('id', s['id']);
       await _load();
     } catch (e) {
-      _snack('Update failed: $e');
+      _snack(friendlyError('Update failed', e));
     }
   }
 
@@ -1167,7 +1168,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
       await _load();
       return true;
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(friendlyError('That did not save', e));
       return false;
     }
   }
@@ -1375,7 +1376,7 @@ class _ErpFacilityScreenState extends ConsumerState<ErpFacilityScreen>
                         if (ctx.mounted) Navigator.pop(ctx);
                       } catch (e) {
                         setLocal(() => saving = false);
-                        _snack('Save failed: $e');
+                        _snack(friendlyError('That did not save', e));
                       }
                     },
               child: Text(saving ? 'Saving…' : 'Save'),

@@ -1,4 +1,5 @@
 import '../../../core/printing/label_printer.dart';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -267,7 +268,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _loadingProducts = false;
       });
       _loadStock();
-    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
   /// Stock in hand per product at the selected branch — used to show
@@ -559,7 +560,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       });
       _loadSpecs();
       if (promptAck && mounted) _maybeShowAckDialog(j);
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   /// Fetch the BOM's production specs fresh (they may change after the list
@@ -629,7 +630,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       _baseComps = List<Map<String, dynamic>>.from(comps as List);
       _baseOh = List<Map<String, dynamic>>.from(ohs as List);
       _rescale();
-    } catch (e) { _snack('BOM load error: $e'); }
+    } catch (e) { _snack(friendlyError('BOM load error', e)); }
   }
 
   void _rescale() {
@@ -1000,7 +1001,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       await _loadJobs();
       await _loadJob(updated);
     } catch (e) {
-      _snack('Could not close: $e');
+      _snack(friendlyError('Could not close', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1101,7 +1102,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final updated = await Supabase.instance.client.from('job_cards').select().eq('id', _current!['id'] as String).single();
       await _loadJobs();
       await _loadJob(updated);
-    } catch (e) { _snack('Void failed: $e'); }
+    } catch (e) { _snack(friendlyError('Void failed', e)); }
     if (mounted) setState(() => _busy = false);
   }
 
@@ -1402,7 +1403,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
           .order('inspected_at', ascending: false)
           .limit(2000);
       rows = List<Map<String, dynamic>>.from(res as List);
-    } catch (e) { _snack('QC history error: $e'); return; }
+    } catch (e) { _snack(friendlyError('QC history error', e)); return; }
 
     final counts = <String, int>{};
     for (final r in rows) {
@@ -1610,7 +1611,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     ));
     if (ok != true) return;
     try { await Supabase.instance.client.from('job_cards').delete().eq('id', _current!['id'] as String); _snack('Job deleted'); _newJob(); await _loadJobs(); }
-    catch (e) { _snack('Delete failed: $e'); }
+    catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   Future<void> _toggleRunning() async {
@@ -1633,7 +1634,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         if (idx >= 0) _jobs[idx]['is_running'] = next;
       });
       await _logJobAudit(next ? 'started' : 'paused');
-    } catch (e) { _snack('Could not update status: $e'); }
+    } catch (e) { _snack(friendlyError('Could not update status', e)); }
     if (mounted) setState(() => _busy = false);
   }
 
@@ -1662,7 +1663,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       });
       await _logJobAudit(on ? 'floor_started' : 'floor_removed',
           notes: on ? 'Put on the floor' : 'Taken off the floor');
-    } catch (e) { _snack('Could not update: $e'); }
+    } catch (e) { _snack(friendlyError('Could not update', e)); }
     if (mounted) setState(() => _busy = false);
   }
 
@@ -1684,7 +1685,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       });
       await _logJobAudit('released', notes: 'Draft released to production');
       _snack('Released — the job is now queued');
-    } catch (e) { _snack('Could not release: $e'); }
+    } catch (e) { _snack(friendlyError('Could not release', e)); }
     if (mounted) setState(() => _busy = false);
   }
 
@@ -1857,7 +1858,7 @@ $runSection
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.window.open(url, '_blank');
       Future.delayed(const Duration(seconds: 60), () { try { html.Url.revokeObjectUrl(url); } catch (_) {} });
-    } catch (e) { _snack('Print failed: $e'); }
+    } catch (e) { _snack(friendlyError('Print failed', e)); }
   }
 
   Future<void> _manageWorkCenters() async {
@@ -1879,7 +1880,7 @@ $runSection
                     'id': 'wc_${DateTime.now().millisecondsSinceEpoch}', 'org_id': orgId, 'name': name, 'is_active': true,
                     'created_at': DateTime.now().toUtc().toIso8601String()});
                   addCtrl.clear(); await reload();
-                } catch (e) { _snack('Add failed: $e'); }
+                } catch (e) { _snack(friendlyError('Add failed', e)); }
               }, child: const Text('Add')),
           ]),
           const SizedBox(height: 12),
@@ -1889,7 +1890,7 @@ $runSection
                 Expanded(child: Text(w['name'] as String? ?? '', style: const TextStyle(fontSize: 13))),
                 Switch(value: w['is_active'] != false, onChanged: (v) async {
                   try { await Supabase.instance.client.from('work_centers').update({'is_active': v}).eq('id', w['id'] as String); await reload(); }
-                  catch (e) { _snack('Update failed: $e'); }
+                  catch (e) { _snack(friendlyError('Update failed', e)); }
                 }),
               ])).toList())),
         ])),
@@ -1918,7 +1919,7 @@ $runSection
                     'id': 'wkr_${DateTime.now().millisecondsSinceEpoch}', 'org_id': orgId, 'name': name, 'is_active': true,
                     'created_at': DateTime.now().toUtc().toIso8601String()});
                   addCtrl.clear(); await reload();
-                } catch (e) { _snack('Add failed: $e'); }
+                } catch (e) { _snack(friendlyError('Add failed', e)); }
               }, child: const Text('Add')),
           ]),
           const SizedBox(height: 12),
@@ -1928,7 +1929,7 @@ $runSection
                 Expanded(child: Text(w['name'] as String? ?? '', style: const TextStyle(fontSize: 13))),
                 Switch(value: w['is_active'] != false, onChanged: (v) async {
                   try { await Supabase.instance.client.from('workers').update({'is_active': v}).eq('id', w['id'] as String); await reload(); }
-                  catch (e) { _snack('Update failed: $e'); }
+                  catch (e) { _snack(friendlyError('Update failed', e)); }
                 }),
               ])).toList())),
         ])),

@@ -157,7 +157,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
       setState(() { _grns = List<Map<String, dynamic>>.from(r); _listLoading = false; });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
@@ -197,7 +197,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         _vehicleOpen = _hasVehicle(grn);
         _initReceivedCtrls();
       });
-    } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
   }
 
   static String? _t(Object? v) { final x = '${v ?? ''}'.trim(); return x.isEmpty ? null : x; }
@@ -391,7 +391,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         if (idx >= 0) _items[idx]['qty_received'] = qty;
       });
       await _logAudit(_detail['id'] as String, 'edited', '$pname received qty: ${old.toStringAsFixed(2)} -> ${qty.toStringAsFixed(2)}');
-    } catch (e) { _showSnack('Failed to save: $e'); }
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   /// Batched equivalent of looping [_saveReceivedQty] over every line: one
@@ -433,7 +433,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         } catch (_) {}
       }
     } catch (e) {
-      _showSnack('Failed to save: $e');
+      _showSnack(friendlyError('That did not save', e));
     } finally {
       SavingOverlay.hide();
     }
@@ -712,7 +712,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     try {
       final pis = await Supabase.instance.client.from('purchase_invoices').select('id,voucher_number').eq('grn_id', _detail['id'] as String);
       if ((pis as List).isNotEmpty) { _showSnack('Cannot delete: PI ${pis.first['voucher_number']} exists. Delete PI first.'); return; }
-    } catch (e) { _showSnack('Check error: $e'); return; }
+    } catch (e) { _showSnack(friendlyError('Could not check', e)); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete draft GRN?'),
       content: Text('Delete draft ${_detail['voucher_number']}? No stock has moved yet, so nothing needs reversing.'),

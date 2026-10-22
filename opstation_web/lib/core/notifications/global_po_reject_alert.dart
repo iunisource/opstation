@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -124,7 +125,7 @@ class _GlobalPoRejectAlertState extends ConsumerState<GlobalPoRejectAlert> {
         'reject_ack_at': now, 'reject_ack_by': u?.id, 'updated_at': now,
       }).eq('id', r['id']);
       await client.from('voucher_audit_log').insert({
-        'id': 'val_${DateTime.now().microsecondsSinceEpoch}',
+        'id': uniqueId('val'),
         'org_id': _orgId, 'voucher_id': r['id'], 'voucher_type': 'PO',
         'action': 'rejection_acknowledged',
         'details': 'Rejection acknowledged by ${u?.name ?? ''}',

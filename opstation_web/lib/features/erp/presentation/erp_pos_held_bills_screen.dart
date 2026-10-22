@@ -39,7 +39,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
       if (branchId != null) q = q.eq('branch_id', branchId);
       final rows = await q.order('held_at', ascending: false).limit(200);
       setState(() { _bills = List<Map<String, dynamic>>.from(rows); _loading = false; });
-    } catch (e) { _snack('Error: $e'); setState(() => _loading = false); }
+    } catch (e) { _snack(friendlyError('Something went wrong', e)); setState(() => _loading = false); }
   }
 
   Future<void> _cancelBill(Map<String, dynamic> bill) async {

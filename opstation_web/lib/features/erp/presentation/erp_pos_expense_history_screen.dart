@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -39,7 +40,7 @@ class _ErpPosExpenseHistoryScreenState extends ConsumerState<ErpPosExpenseHistor
       if (branchId != null) q = q.eq('branch_id', branchId);
       final rows = await q.order('created_at', ascending: false).limit(1000);
       setState(() { _expenses = List<Map<String, dynamic>>.from(rows); _loading = false; });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _loading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _loading = false); }
   }
 
   List<Map<String, dynamic>> get _filtered {

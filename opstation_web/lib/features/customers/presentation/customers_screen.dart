@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -961,7 +962,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       }
       return code;
     } catch (e) {
-      _showSnack('Could not generate code: $e');
+      _showSnack(friendlyError('Could not generate code', e));
       return null;
     }
   }

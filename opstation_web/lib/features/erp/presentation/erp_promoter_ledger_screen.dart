@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -57,7 +58,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _snack('Load error: $e');
+        _snack(friendlyError('Could not load', e));
       }
     }
   }
@@ -141,7 +142,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
     } catch (e) {
       if (mounted) {
         setState(() => _loadingLedger = false);
-        _snack('Ledger error: $e');
+        _snack(friendlyError('Ledger error', e));
       }
     }
   }

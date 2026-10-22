@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -170,7 +171,7 @@ class _OrgAccessScreenState extends ConsumerState<OrgAccessScreen> {
       await Supabase.instance.client.rpc('unlink_account', params: {'p_email': email});
       await _load();
       _snack('Unlinked $email');
-    } catch (e) { _snack('Unlink failed: $e'); }
+    } catch (e) { _snack(friendlyError('Unlink failed', e)); }
   }
 
   Future<void> _linkFlow() async {

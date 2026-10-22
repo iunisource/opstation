@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -173,7 +174,7 @@ class _ReportsCenterScreenState extends ConsumerState<ReportsCenterScreen> {
       setState(() => _saved.removeWhere((x) => x['id'] == t['id']));
       _snack('Report deleted');
     } catch (e) {
-      _snack('Delete failed: $e');
+      _snack(friendlyError('Delete failed', e));
     }
   }
 

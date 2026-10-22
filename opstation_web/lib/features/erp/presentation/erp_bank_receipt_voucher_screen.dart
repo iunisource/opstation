@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -118,7 +119,7 @@ class _ErpBankReceiptVoucherScreenState
       }
     } catch (e) {
       if (mounted) {
-        _snack('Load error: $e');
+        _snack(friendlyError('Could not load', e));
         setState(() => _loadingMaster = false);
       }
     }
@@ -194,7 +195,7 @@ class _ErpBankReceiptVoucherScreenState
         _deletedLineIds.clear();
       });
     } catch (e) {
-      _snack('Failed to load: $e');
+      _snack(friendlyError('Could not load', e));
     }
   }
 
@@ -238,6 +239,7 @@ class _ErpBankReceiptVoucherScreenState
 
   // ── Save (NO GL — memo only) ─────────────────────────────────────────────────
   Future<void> _save() async {
+    if (_saving) return; // guard: block double-submit
     if (_customerId == null) {
       _snack('Select a customer first');
       return;
@@ -312,7 +314,7 @@ class _ErpBankReceiptVoucherScreenState
         final amt = double.tryParse(l.amtCtrl.text) ?? 0;
         if (amt <= 0 && l.status == 'pending') continue; // skip empty pending
         final lineId = l.id.startsWith('brvl_new_')
-            ? 'brvl_${DateTime.now().microsecondsSinceEpoch}_$i'
+            ? uniqueId('brvl')
             : l.id;
         l.id = lineId;
         await client.from('bank_receipt_voucher_lines').upsert({
@@ -531,7 +533,7 @@ class _ErpBankReceiptVoucherScreenState
       _snack('Cheque cleared • $vNum posted ✓');
       await _loadVouchers();
     } catch (e) {
-      _snack('Clearance failed: $e');
+      _snack(friendlyError('Clearance failed', e));
     }
     if (mounted) setState(() => _saving = false);
   }
@@ -1078,7 +1080,7 @@ class _ChequeLine {
   DateTime? clearedAt;
 
   _ChequeLine({String? id, this.status = 'pending'})
-      : id = id ?? 'brvl_new_${DateTime.now().microsecondsSinceEpoch}';
+      : id = id ?? uniqueId('brvl_new');
 
   void dispose() {
     descCtrl.dispose();

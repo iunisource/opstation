@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -255,7 +256,7 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
       );
     } catch (e) {
       setState(() => _creatingPo = false);
-      _showSnack('Failed to create PO: $e');
+      _showSnack(friendlyError('Failed to create PO', e));
     }
   }
 
@@ -667,7 +668,7 @@ class _ErpDemandPlanScreenState extends ConsumerState<ErpDemandPlanScreen> {
       }
       excel.save(fileName: 'demand-plan-${_ymd(DateTime.now())}.xlsx');
     } catch (e) {
-      _showSnack('Excel export failed: $e');
+      _showSnack(friendlyError('Excel export failed', e));
     }
   }
 }

@@ -125,7 +125,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
       setState(() { _returns = List<Map<String, dynamic>>.from(r); _listLoading = false; });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
@@ -139,7 +139,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           .select('*,products(name,sku),uoms(abbreviation)').eq('return_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: ret['customer_id'] as String?, createdById: ret['created_by'] as String?);
       setState(() { _detail = Map<String, dynamic>.from(ret); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; });
-    } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -372,7 +372,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
           .select('id,voucher_number,is_voided').eq('srn_id', _detail['id'] as String);
       final active = (invs as List).where((e) => e['is_voided'] != true).toList();
       if (active.isNotEmpty) { _showSnack('Cannot void: SRI ${active.first['voucher_number']} exists. Void the invoice first.'); return; }
-    } catch (e) { _showSnack('Check error: $e'); return; }
+    } catch (e) { _showSnack(friendlyError('Could not check', e)); return; }
     final wasSaved = (_detail['status'] as String? ?? 'draft') != 'draft';
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Void Sales Return Note?'),

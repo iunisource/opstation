@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -90,7 +91,7 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
       final labelMap = {for (final p in items) p['id'] as String: p['label'] as String};
       final costMap = {for (final p in all) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
       if (mounted) setState(() { _products = items; _prodLabel = labelMap; _prodCost = costMap; _loadingProducts = false; });
-    } catch (e) { if (mounted) { _snack('Products load error: $e'); setState(() => _loadingProducts = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
   List<Map<String, dynamic>> _filterProducts(String q) {
@@ -142,7 +143,7 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _lines = newLines.isEmpty ? [_DLine()] : newLines;
       });
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
   double get _estTotal => _lines.fold(0.0, (s, l) => s + l.qty * (_prodCost[l.productId] ?? 0));
@@ -247,7 +248,7 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
       _snack('Draft deleted');
       _newVoucher();
       await _loadVouchers();
-    } catch (e) { _snack('Delete failed: $e'); }
+    } catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   void _addLine() => setState(() => _lines.add(_DLine()));

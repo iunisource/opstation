@@ -2,6 +2,7 @@
 import 'dart:html' as html;
 import 'dart:typed_data';
 import 'dart:convert';
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -136,7 +137,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     try {
       await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches(), _loadShifts(), _loadAssetAccounts()]);
       await _loadEmployees();
-    } catch (e) { _snack('Load error: $e'); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); }
     if (mounted) setState(() => _loading = false);
   }
 
@@ -446,7 +447,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       await Supabase.instance.client.from(table).insert({'id': id, 'org_id': orgId, 'name': t, 'is_active': true});
       if (table == 'hr_departments') { await _loadDepts(); } else { await _loadDesignations(); }
       return id;
-    } catch (e) { _snack('Add failed: $e'); return null; }
+    } catch (e) { _snack(friendlyError('Add failed', e)); return null; }
   }
 
   Future<String?> _quickAddDialog(String table, String title) async {
@@ -586,7 +587,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     try {
       await Supabase.instance.client.from('hr_employees').delete().eq('id', id);
       _snack('Employee deleted'); _newEmployee(); await _loadEmployees();
-    } catch (e) { _snack('Delete failed: $e'); }
+    } catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   // ---- approval / void ----
@@ -600,7 +601,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       if (mounted) setState(() => _current = updated);
       await _loadEmployees();
       _snack('Profile approved \u2014 now visible in Attendance');
-    } catch (e) { _snack('Approve failed: $e'); }
+    } catch (e) { _snack(friendlyError('Approve failed', e)); }
   }
 
   // ── Leaving ───────────────────────────────────────────────────────────────
@@ -709,7 +710,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       if (mounted) setState(() => _current = updated);
       await _loadEmployees();
       _snack('Profile voided (kept for records)');
-    } catch (e) { _snack('Void failed: $e'); }
+    } catch (e) { _snack(friendlyError('Void failed', e)); }
   }
 
   Future<void> _unvoid() async {
@@ -721,7 +722,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       if (mounted) setState(() => _current = updated);
       await _loadEmployees();
       _snack('Profile restored');
-    } catch (e) { _snack('Restore failed: $e'); }
+    } catch (e) { _snack(friendlyError('Restore failed', e)); }
   }
 
   // ---- documents ----
@@ -797,7 +798,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       });
       await _loadDocs();
       _snack('Document saved');
-    } catch (e) { _snack('Upload failed: $e'); }
+    } catch (e) { _snack(friendlyError('Upload failed', e)); }
     if (mounted) setState(() => _docUploading = false);
   }
 
@@ -838,7 +839,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       });
       await _loadDocs();
       _snack('Document uploaded');
-    } catch (e) { _snack('Upload failed: $e'); }
+    } catch (e) { _snack(friendlyError('Upload failed', e)); }
     if (mounted) setState(() => _docUploading = false);
   }
 
@@ -854,7 +855,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     try {
       await Supabase.instance.client.from('hr_employee_documents').delete().eq('id', d['id'] as String);
       await _loadDocs();
-    } catch (e) { _snack('Remove failed: $e'); }
+    } catch (e) { _snack(friendlyError('Remove failed', e)); }
   }
 
   String _fmtSize(int bytes) {
@@ -1975,7 +1976,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         contentType = file.type.isNotEmpty ? file.type : 'image/jpeg';
         ext = (file.name.contains('.') ? file.name.split('.').last : 'jpg').toLowerCase();
       }
-    } catch (e) { _snack('Could not process image: $e'); setState(() => _photoUploading = false); return; }
+    } catch (e) { _snack(friendlyError('Could not process image', e)); setState(() => _photoUploading = false); return; }
     if (bytes.isEmpty) { _snack('Selected file is empty'); setState(() => _photoUploading = false); return; }
     await _storePhoto(bytes, contentType, ext);
   }
@@ -1998,7 +1999,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       final url = Supabase.instance.client.storage.from('hr-photos').getPublicUrl(path);
       if (mounted) setState(() => _photoUrl = url);
       _snack('Photo uploaded \u2014 remember to Save');
-    } catch (e) { _snack('Upload failed: $e'); }
+    } catch (e) { _snack(friendlyError('Upload failed', e)); }
     if (mounted) setState(() => _photoUploading = false);
   }
 

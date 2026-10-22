@@ -545,7 +545,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             : 'Cannot delete: Delivery Order ${refs.join(', ')} exists. Delete it first.');
         return;
       }
-    } catch (e) { _showSnack('Failed to check: $e'); return; }
+    } catch (e) { _showSnack(friendlyError('Could not check', e)); return; }
 
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Sales Order?'),
@@ -1849,7 +1849,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _showSnack('Cannot void: Sales Invoice ${active.first['voucher_number']} exists. Void it first.');
         return;
       }
-    } catch (e) { _showSnack('Failed to check: $e'); return; }
+    } catch (e) { _showSnack(friendlyError('Could not check', e)); return; }
 
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Void Delivery Order?'),
@@ -1890,7 +1890,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       _showSnack('Voided — stock and accounting reversed');
       await _loadList();
       await _loadDetail(_detail['id'] as String);
-    } catch (e) { _showSnack('Could not void: $e'); }
+    } catch (e) { _showSnack(friendlyError('Could not void', e)); }
   }
 
   // Serial numbers sent on this DO — view, and scan any not recorded yet.
@@ -1961,7 +1961,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       await _loadDetail(_detail['id'] as String);
       if (mounted) _showSnack('Marked delivered');
     } catch (e) {
-      if (mounted) _showSnack('Could not mark delivered: $e');
+      if (mounted) _showSnack(friendlyError('Could not mark delivered', e));
     }
   }
 
@@ -3508,7 +3508,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await _loadList();
       _loadDetail(_detail['id'] as String);
     } catch (e) {
-      _showSnack('Could not void: $e');
+      _showSnack(friendlyError('Could not void', e));
     }
   }
 
@@ -3520,7 +3520,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       _detail['remarks'] = _remarksCtrl.text.trim();
       if (mounted) _showSnack('Remarks saved');
     } catch (e) {
-      if (mounted) _showSnack('Could not save remarks: $e');
+      if (mounted) _showSnack(friendlyError('Could not save remarks', e));
     }
   }
 

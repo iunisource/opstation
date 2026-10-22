@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -292,7 +293,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       } catch (_) {/* feature not set up yet — no close-request markers */}
       setState(() { _pos = List<Map<String, dynamic>>.from(r); _orgApprovalRequired = orgApproval;
         _closeReqIds = closeReq; if (closeReq.isEmpty && _filter == 'closereq') _filter = 'all'; _listLoading = false; });
-    } catch (e) { _showSnack('Load error: $e'); setState(() => _listLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not load', e)); setState(() => _listLoading = false); }
   }
 
   Future<void> _loadDetail(String id) async {
@@ -343,7 +344,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
               }
             } catch (e) {
               if (mounted) {
-                _showSnack('Could not switch organization: $e');
+                _showSnack(friendlyError('Could not switch organization', e));
                 setState(() { _detailLoading = false; _selectedId = null; });
               }
             }
@@ -495,7 +496,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         _copyRemarks = po['copy_remarks'] == true;
         _syncLineCtrls();
         _detailLoading = false; });
-    } catch (e) { _showSnack('Detail error: $e'); setState(() => _detailLoading = false); }
+    } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
   }
 
   void _syncLineCtrls() {
@@ -555,7 +556,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       final idx = _items.indexWhere((i) => i['id'] == itemId);
       if (idx >= 0) _items[idx]['description'] = txt.isEmpty ? null : txt;
       await _resetApprovalIfNeeded();
-    } catch (e) { _showSnack('Failed to save description: $e'); }
+    } catch (e) { _showSnack(friendlyError('Failed to save description', e)); }
   }
 
   // Inline edit of a line's rate (unit_cost). Allowed while lines are editable.
@@ -614,7 +615,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Future<void> _logAudit(String id, String action, String? details) async {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
-        'id': 'val_${DateTime.now().microsecondsSinceEpoch}',
+        'id': uniqueId('val'),
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'PO',
         'action': action, 'details': details, 'performed_by': ref.read(currentUserProvider)?.id,
         'performed_at': DateTime.now().toUtc().toIso8601String(),
@@ -769,7 +770,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     try {
       final grns = await Supabase.instance.client.from('purchase_grns').select('id,voucher_number').eq('po_id', _detail['id'] as String);
       if ((grns as List).isNotEmpty) { _showSnack('Cannot delete: GRN ${grns.first['voucher_number']} exists. Void the PO instead.'); return; }
-    } catch (e) { _showSnack('Check error: $e'); return; }
+    } catch (e) { _showSnack(friendlyError('Could not check', e)); return; }
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Delete Purchase Order?'),
       content: Text('Delete ${_detail['voucher_number']}? Cannot be undone.'),
@@ -928,7 +929,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       setState(() { _detail['approved_by'] = null; _detail['approved_by_name'] = null; _detail['approved_at'] = null; });
       _showSnack('Line changed — approval reset, this PO must be approved again');
       ref.invalidate(poPendingApprovalCountProvider);
-    } catch (e) { _showSnack('Approval reset failed: $e'); }
+    } catch (e) { _showSnack(friendlyError('Approval reset failed', e)); }
   }
 
   // Approved POs are voided instead of hard-deleted (keeps the audit record).

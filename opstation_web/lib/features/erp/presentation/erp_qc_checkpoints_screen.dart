@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -39,7 +40,7 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
       _prodLabel = {for (final p in _products) p['id'] as String: "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} — ' : ''}${p['name'] ?? ''}"};
       _bomLabel = {for (final b in _boms) b['id'] as String: "${b['code'] ?? ''} — ${_prodLabel[b['product_id']] ?? (b['name'] ?? '')}"};
       if (mounted) setState(() { _rows = List<Map<String, dynamic>>.from(rows); _loading = false; });
-    } catch (e) { if (mounted) { _snack('Load failed: $e'); setState(() => _loading = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Could not load', e)); setState(() => _loading = false); } }
   }
 
   String _scopeLabel(Map<String, dynamic> r) {
@@ -60,7 +61,7 @@ class _State extends ConsumerState<ErpQcCheckpointsScreen> {
     ));
     if (ok != true) return;
     try { await Supabase.instance.client.from('qc_checkpoints').delete().eq('id', r['id'] as String); _snack('Deleted'); await _load(); }
-    catch (e) { _snack('Delete failed: $e'); }
+    catch (e) { _snack(friendlyError('Delete failed', e)); }
   }
 
   void _showDialog([Map<String, dynamic>? existing]) {

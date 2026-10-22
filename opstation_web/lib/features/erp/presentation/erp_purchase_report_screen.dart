@@ -1,4 +1,5 @@
 // ignore_for_file: deprecated_member_use
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -316,7 +317,7 @@ class _ErpPurchaseReportScreenState extends ConsumerState<ErpPurchaseReportScree
 
       excel.save(fileName: 'purchase-report-${_ymd(_from)}_${_ymd(_to)}.xlsx');
     } catch (e) {
-      _showSnack('Excel export failed: $e');
+      _showSnack(friendlyError('Excel export failed', e));
     }
   }
 

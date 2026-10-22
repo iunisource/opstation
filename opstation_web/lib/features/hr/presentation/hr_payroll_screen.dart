@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -447,7 +448,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
       await _selectRun(sel);
       _snack('${_periodLabel(period)} generated — ${keptEmpIds.length} employees, net ${_nf.format(totalNet)}.');
     } catch (e) {
-      _snack('Generate failed: $e');
+      _snack(friendlyError('Generate failed', e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -505,7 +506,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
         'org_id': orgId, 'key': _plKey, 'value': d == 0 ? '' : _plain(d),
       }, onConflict: 'key,org_id,branch_id');
       _snack(d == 0 ? 'Paid leave bonus switched off.' : 'Paid leave: ${_plain(d)} days a month. Regenerate draft runs to apply.');
-    } catch (e) { _snack('Could not save: $e'); }
+    } catch (e) { _snack(friendlyError('Could not save', e)); }
   }
 
   // ── exclusions ──────────────────────────────────────────────────────────────
@@ -569,7 +570,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
     try {
       await _saveExcluded(_excluded..remove(empId));
     } catch (e) {
-      _snack('Include failed: $e');
+      _snack(friendlyError('Include failed', e));
       if (mounted) setState(() => _busy = false);
       return;
     }
@@ -624,7 +625,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
       final runs = await Supabase.instance.client.from('hr_payroll_runs').select().eq('org_id', orgId).order('period', ascending: false);
       _runs = List<Map<String, dynamic>>.from(runs);
       _snack('Marked ${_periodLabel(run['period'] as String)} as $status.');
-    } catch (e) { _snack('Failed: $e'); }
+    } catch (e) { _snack(friendlyError('Failed', e)); }
     finally { if (mounted) setState(() => _busy = false); }
   }
 
@@ -833,7 +834,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
       await Supabase.instance.client.from('hr_payroll_runs').update({'total_net': _r2(totalNet), 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _run!['id'] as String);
       _run!['total_net'] = _r2(totalNet);
       if (mounted) setState(() {});
-    } catch (e) { _snack('Save failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _busy = false); }
   }
 

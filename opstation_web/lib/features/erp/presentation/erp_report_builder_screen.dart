@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -80,7 +81,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     try {
       final rows = await Supabase.instance.client.from('report_field_meta').select().order('ord');
       if (mounted) setState(() { _allMeta = List<Map<String, dynamic>>.from(rows); _loadingMeta = false; });
-    } catch (e) { if (mounted) { _snack('Field catalog load failed: $e'); setState(() => _loadingMeta = false); } }
+    } catch (e) { if (mounted) { _snack(friendlyError('Field catalog load failed', e)); setState(() => _loadingMeta = false); } }
   }
 
   Future<void> _loadTemplates() async {
@@ -435,7 +436,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       }
       _snack('Report saved');
       await _loadTemplates();
-    } catch (e) { _snack('Save failed: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   void _loadTemplate(Map<String, dynamic> t) {

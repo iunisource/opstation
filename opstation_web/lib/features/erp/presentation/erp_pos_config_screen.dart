@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -50,7 +51,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         _logoDataUri      = (map['pos.logo']?.isNotEmpty == true) ? map['pos.logo'] : null;
         _loading = false;
       });
-    } catch (e) { _snack('Load error: $e'); setState(() => _loading = false); }
+    } catch (e) { _snack(friendlyError('Could not load', e)); setState(() => _loading = false); }
   }
 
   Future<void> _save() async {
@@ -67,7 +68,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         await Supabase.instance.client.from('app_config').upsert({'key': e.key, 'value': e.value, 'org_id': orgId, 'branch_id': branchId ?? ''}, onConflict: 'key,org_id,branch_id');
       }
       _snack('POS configuration saved');
-    } catch (e) { _snack('Save error: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
     setState(() => _saving = false);
   }
 
@@ -101,7 +102,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         _coa = List<Map<String, dynamic>>.from(coa);
         _methodsLoading = false;
       });
-    } catch (e) { _snack('Methods load error: $e'); setState(() => _methodsLoading = false); }
+    } catch (e) { _snack(friendlyError('Methods load error', e)); setState(() => _methodsLoading = false); }
   }
 
   String _accountName(String? id) {
@@ -119,7 +120,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         'is_active': m['is_active'] ?? true, 'sort_order': m['sort_order'] ?? 0,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'org_id,code');
-    } catch (e) { _snack('Save error: $e'); }
+    } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _toggleActive(Map<String, dynamic> m, bool v) async {

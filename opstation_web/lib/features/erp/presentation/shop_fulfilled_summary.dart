@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:typed_data';
 
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
@@ -394,7 +395,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
     try {
       custs = await _customers();
     } catch (e) {
-      _snack('Could not load customers: $e');
+      _snack(friendlyError('Could not load customers', e));
       return;
     }
     final remembered = store['so_customer_id'];
@@ -520,7 +521,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
       _snack('Draft SO ${vnum ?? ''} created from ${orders.length} order${orders.length == 1 ? '' : 's'} — open it in Sales Orders');
     } catch (e) {
       if (mounted) setState(() => _working = false);
-      _snack('Could not create the SO: $e');
+      _snack(friendlyError('Could not create the SO', e));
     }
   }
 

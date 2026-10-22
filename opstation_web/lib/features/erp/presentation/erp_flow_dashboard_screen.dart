@@ -1,3 +1,4 @@
+import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -262,7 +263,7 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack('Load failed: $e');
+      _snack(friendlyError('Could not load', e));
     }
   }
 
