@@ -19,6 +19,22 @@ import '../../../core/theme/app_theme.dart';
 /// same voucher doesn't ask twice).
 final Set<String> _acceptedRefs = {};
 
+/// The Duplicate References log entry for the warning the user last saved
+/// through — the voucher screen links it to the voucher once it is saved.
+String? _pendingEventId;
+
+/// Call after the voucher is saved (only when checkDuplicateRefs returned a note).
+Future<void> linkDuplicateRefEvent(String voucherId, String? voucherNumber) async {
+  final id = _pendingEventId;
+  _pendingEventId = null;
+  if (id == null) return;
+  try {
+    await Supabase.instance.client.rpc('dup_ref_event_set', params: {
+      'p_id': id, 'p_voucher_id': voucherId, 'p_voucher_number': voucherNumber,
+    });
+  } catch (_) {}
+}
+
 Future<String?> checkDuplicateRefs(
   BuildContext context, {
   required String orgId,
@@ -27,6 +43,8 @@ Future<String?> checkDuplicateRefs(
   String? voucherType, // 'CRV' | 'CPV' — the other half of a same-day transfer is not a duplicate
   DateTime? date,
   String? excludeVoucherId,
+  String? excludeVoucherNumber,
+  String? branchId,
 }) async {
   final texts = <String>[];
   final amts = <double>[];
@@ -51,6 +69,24 @@ Future<String?> checkDuplicateRefs(
 
   final refs = {for (final h in hits) '${h['ref']}'}.toList();
   if (refs.every(_acceptedRefs.contains)) return '';
+  // Record it in Financials → Duplicate References (never blocks the voucher).
+  String? eventId;
+  try {
+    eventId = await Supabase.instance.client.rpc('dup_ref_event_log', params: {
+      'p_org_id': orgId, 'p_branch_id': branchId, 'p_type': voucherType ?? '',
+      'p_voucher_id': excludeVoucherId, 'p_voucher_number': excludeVoucherNumber,
+      'p_refs': refs,
+      'p_matches': [
+        for (final h in hits)
+          {
+            'ref': h['ref'], 'type': h['voucher_type'], 'id': h['voucher_id'], 'number': h['voucher_number'],
+            'date': h['voucher_date'], 'status': h['status'], 'account': h['account_name'],
+            'description': h['description'], 'amount': h['amount'],
+          },
+      ],
+    }) as String?;
+  } catch (_) {}
+  if (!context.mounted) return '';
   final df = DateFormat('d MMM yyyy');
   final ok = await showDialog<bool>(
     context: context,
@@ -120,8 +156,16 @@ Future<String?> checkDuplicateRefs(
       ],
     ),
   );
+  if (eventId != null) {
+    try {
+      await Supabase.instance.client.rpc('dup_ref_event_set', params: {
+        'p_id': eventId, 'p_outcome': ok == true ? 'saved_anyway' : 'went_back',
+      });
+    } catch (_) {}
+  }
   if (ok != true) return null;
   _acceptedRefs.addAll(refs);
+  _pendingEventId = eventId;
   final where = {for (final h in hits) '${h['voucher_number'] ?? h['voucher_type']}'}.join(', ');
   return 'Saved with a reference already used — ${refs.join(', ')} also in $where';
 }

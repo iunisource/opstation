@@ -724,6 +724,7 @@ const List<_Feature> _features = [
   // Financials
   _Feature('Chart of Accounts', 'Financials', '/erp/chart-of-accounts', ['chart of accounts', 'coa', 'accounts']),
   _Feature('Journal Vouchers', 'Financials', '/financials/journal-vouchers', ['journal', 'journal voucher', 'jv']),
+  _Feature('Duplicate References', 'Financials', '/financials/duplicate-references', ['duplicate reference', 'duplicate receipt', 'duplicate slip', 'repeated receipt']),
   _Feature('Payment Vouchers (CPV)', 'Financials', '/erp/payment-vouchers', ['payment voucher', 'cpv', 'payment']),
   _Feature('Receipt Vouchers (CRV)', 'Financials', '/erp/receipt-vouchers', ['receipt voucher', 'crv', 'receipt']),
   _Feature('Trial Balance', 'Financials', '/financials/trial-balance', ['trial balance']),

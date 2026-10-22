@@ -530,6 +530,18 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.dupref_supervise_flow',
+    'Supervision for duplicate references',
+    'Every time a Receipt or Payment Voucher warns that a receipt, slip or '
+        'transaction number is already used, it is listed in Financials → Duplicate '
+        'References with what matched and what the user chose. When ON, only admins '
+        'and the users picked below can supervise them, and a counter shows the ones '
+        'still to review. When OFF, the list is still kept and anyone who can open '
+        'the page can supervise; there is no counter.',
+    users: _UsersField('org.dupref_supervisor_users', 'Also allowed to supervise duplicate references'),
+  ),
+
+  _AdminToggle(
     'org.jv_void_flow',
     'Void Journal Vouchers instead of deleting',
     'When ON, a POSTED Journal Voucher can no longer be deleted — it is "Voided" '
@@ -777,6 +789,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.jv_supervise_flow',
     'org.jv_approve_flow',
     'org.jv_void_flow',
+    'org.dupref_supervise_flow',
     'org.pa_approval_enabled',
     'org.pa_signatures',
     'org.pa_approval_watermark',

@@ -222,8 +222,9 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     final dupNote = orgId == null ? '' : await checkDuplicateRefs(context,
         orgId: orgId, narrations: [for (final l in validLines) l.descCtrl.text],
         amounts: [for (final l in validLines) double.tryParse(l.amtCtrl.text) ?? 0],
-        voucherType: 'CRV', date: _voucherDate,
-        excludeVoucherId: _currentVoucher?['id'] as String?);
+        voucherType: 'CRV', date: _voucherDate, branchId: bid,
+        excludeVoucherId: _currentVoucher?['id'] as String?,
+        excludeVoucherNumber: _currentVoucher?['voucher_number'] as String?);
     if (dupNote == null || !mounted) return;
     setState(() => _saving = true);
     SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
@@ -252,7 +253,12 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
         if (!post) _snack('Saved');
       }
-      if (dupNote.isNotEmpty) _logAudit('duplicate_reference', notes: dupNote);
+      if (dupNote.isNotEmpty) {
+        _logAudit('duplicate_reference', notes: dupNote);
+        if (_currentVoucher != null) {
+          linkDuplicateRefEvent(_currentVoucher!['id'] as String, _currentVoucher!['voucher_number'] as String?);
+        }
+      }
       if (post && orgId != null) {
         // Post the GL through the ATOMIC, balance-guarded server function
         // post_crv (single transaction: deletes any prior GL, writes the entry

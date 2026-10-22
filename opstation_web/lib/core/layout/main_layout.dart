@@ -442,6 +442,30 @@ final poCloseRequestCountProvider = FutureProvider<int>((ref) async {
 });
 
 // Count of Payment Advices awaiting approval for the current org (nav badge).
+// Duplicate references still to supervise — only when org.dupref_supervise_flow
+// is ON and this user may supervise (admins + org.dupref_supervisor_users).
+final dupRefPendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  final client = Supabase.instance.client;
+  try {
+    final cfg = await client.from('app_config').select('key, value').eq('org_id', user.orgId!)
+        .inFilter('key', ['org.dupref_supervise_flow', 'org.dupref_supervisor_users']);
+    final m = {for (final r in cfg as List) '${r['key']}': '${r['value'] ?? ''}'};
+    if (m['org.dupref_supervise_flow'] != 'true') return 0;
+    final isAdmin = user.role == WebUserRole.admin || user.role == WebUserRole.masterAdmin ||
+        user.role == WebUserRole.superAdmin;
+    final list = (m['org.dupref_supervisor_users'] ?? '').split(',').map((e) => e.trim()).toSet();
+    if (!isAdmin && !list.contains(user.id)) return 0;
+    final res = await client.from('duplicate_ref_events').select('id')
+        .eq('org_id', user.orgId!).filter('supervised_at', 'is', null).limit(1000);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 final paPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
@@ -1266,6 +1290,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       (ref.watch(poCloseRequestCountProvider).valueOrNull ?? 0));
   final paPending = gate('/financials/payment-advice', ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0);
   final jvPending = gate('/financials/journal-vouchers', ref.watch(jvPendingCountProvider).valueOrNull ?? 0);
+  final dupRefPending = gate('/financials/duplicate-references', ref.watch(dupRefPendingProvider).valueOrNull ?? 0);
   final piReviewPending = gate('/erp/purchase-invoices', ref.watch(piReviewPendingProvider).valueOrNull ?? 0);
   final grnPendingInvoice = gate('/erp/purchase-invoices', ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0);
   final priReviewPending = gate('/erp/purchase-return-vouchers', ref.watch(priReviewPendingProvider).valueOrNull ?? 0);
@@ -1498,6 +1523,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/pdc-voucher')) _menuItem(context, 'PDC Voucher', Icons.account_balance_wallet_outlined, '/erp/pdc-voucher', location),
       if (show('/financials/payment-advice')) _menuItem(context, 'Payment Advice', Icons.request_quote_outlined, '/financials/payment-advice', location, badge: paPending),
       if (show('/financials/investors')) _menuItem(context, 'Investors', Icons.handshake_outlined, '/financials/investors', location),
+      if (show('/financials/duplicate-references')) _menuItem(context, 'Duplicate References', Icons.content_copy_outlined, '/financials/duplicate-references', location, badge: dupRefPending),
     ];
     final finReports = <Widget>[
       if (show('/financials/trial-balance')) _menuItem(context, 'Trial Balance',    Icons.account_balance_outlined, '/financials/trial-balance',  location),
@@ -1574,8 +1600,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(manufacturingItems), badge: jobAckPending + bomSupervisePending),
       if (_hasItems(financialItems))
         _navMenu(context, 'Financials', Icons.account_balance_outlined, location,
-          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/payment-advice', '/financials/investors', '/financials/cash-book'],
-          _trimDividers(financialItems), badge: paPending + jvPending),
+          ['/erp/chart-of-accounts', '/erp/payment-vouchers', '/erp/receipt-vouchers', '/erp/pdc-voucher', '/financials/payment-advice', '/financials/investors', '/financials/duplicate-references', '/financials/cash-book'],
+          _trimDividers(financialItems), badge: paPending + jvPending + dupRefPending),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
           ['/hr/employees', '/hr/setup', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending + leavePending),

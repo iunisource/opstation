@@ -224,8 +224,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final dupNote = orgId == null ? '' : await checkDuplicateRefs(context,
         orgId: orgId, narrations: [for (final l in validLines) l.descCtrl.text],
         amounts: [for (final l in validLines) double.tryParse(l.amtCtrl.text) ?? 0],
-        voucherType: 'CPV', date: _voucherDate,
-        excludeVoucherId: _currentVoucher?['id'] as String?);
+        voucherType: 'CPV', date: _voucherDate, branchId: bid,
+        excludeVoucherId: _currentVoucher?['id'] as String?,
+        excludeVoucherNumber: _currentVoucher?['voucher_number'] as String?);
     if (dupNote == null || !mounted) return;
     setState(() => _saving = true);
     SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
@@ -267,7 +268,12 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; });
       }
-      if (dupNote.isNotEmpty) _logAudit('duplicate_reference', notes: dupNote);
+      if (dupNote.isNotEmpty) {
+        _logAudit('duplicate_reference', notes: dupNote);
+        if (_currentVoucher != null) {
+          linkDuplicateRefEvent(_currentVoucher!['id'] as String, _currentVoucher!['voucher_number'] as String?);
+        }
+      }
       if (post && orgId != null) {
         // Mark posted, then post the GL through the ATOMIC, balance-guarded
         // server function post_cpv. It runs in one transaction: deletes any
