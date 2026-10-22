@@ -103,39 +103,8 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
   Future<Map<String, dynamic>?> _pickAccount(String title, {String? type}) async {
     final org = _orgId;
     if (org == null) return null;
-    List<Map<String, dynamic>> all = [];
-    try {
-      for (var f = 0; ; f += 1000) {
-        var q = _db.from('chart_of_accounts').select('id, code, name, account_type, level').eq('org_id', org);
-        if (type != null) q = q.eq('account_type', type);
-        final r = List<Map<String, dynamic>>.from(await q.order('code').range(f, f + 999) as List);
-        all.addAll(r);
-        if (r.length < 1000) break;
-      }
-    } catch (e) { _snack(friendlyError('Could not load accounts', e)); return null; }
-    if (!mounted) return null;
-    final ctrl = TextEditingController();
-    return showDialog<Map<String, dynamic>>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setS) {
-      final q = ctrl.text.trim().toLowerCase();
-      final list = all.where((a) => q.isEmpty || '${a['code']} ${a['name']}'.toLowerCase().contains(q)).take(300).toList();
-      return AlertDialog(
-        title: Text(title),
-        content: SizedBox(width: 480, height: 440, child: Column(children: [
-          TextField(controller: ctrl, autofocus: true, onChanged: (_) => setS(() {}),
-              decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.search, size: 18),
-                  hintText: 'Search code or name', border: OutlineInputBorder())),
-          const SizedBox(height: 8),
-          Expanded(child: ListView.builder(itemCount: list.length, itemBuilder: (_, i) {
-            final a = list[i];
-            return ListTile(dense: true,
-              title: Text('${a['code']}  ${a['name']}', style: const TextStyle(fontSize: 13)),
-              subtitle: Text('${a['account_type'] ?? ''} · level ${a['level'] ?? ''}', style: const TextStyle(fontSize: 11)),
-              onTap: () => Navigator.pop(ctx, a));
-          })),
-        ])),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
-      );
-    }));
+    return showDialog<Map<String, dynamic>>(context: context,
+        builder: (_) => _AccountPicker(orgId: org, title: title, type: type));
   }
 
   Future<void> _settings() async {
@@ -204,6 +173,9 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
     String freq = '${inv?['payout_frequency'] ?? 'monthly'}';
     String basis = '${inv?['limit_basis'] ?? 'annual'}';
     bool deductReturns = inv?['deduct_returns'] != false;
+    final firstAmt = TextEditingController();
+    DateTime? firstOn;
+    String firstBasis = 'business';
     final acc = <String, Map<String, dynamic>?>{
       'investment_account_id': inv == null ? null : _accounts[inv['investment_account_id']],
       'payable_account_id': inv == null ? null : _accounts[inv['payable_account_id']],
@@ -230,13 +202,15 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
       return AlertDialog(
         title: Text(inv == null ? 'Add investor' : 'Edit investor'),
         content: SizedBox(width: 560, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 8),
           TextField(controller: name, decoration: const InputDecoration(labelText: 'Name *')),
+          const SizedBox(height: 14),
           Row(children: [
             Expanded(child: TextField(controller: phone, decoration: const InputDecoration(labelText: 'Phone'))),
             const SizedBox(width: 12),
             Expanded(child: TextField(controller: cnic, decoration: const InputDecoration(labelText: 'CNIC'))),
           ]),
-          const SizedBox(height: 10),
+          const SizedBox(height: 14),
           InkWell(
             onTap: () async {
               final d = await showDatePicker(context: ctx, initialDate: start, firstDate: DateTime(2020), lastDate: DateTime(2100));
@@ -245,23 +219,30 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
             child: InputDecorator(decoration: const InputDecoration(labelText: 'Agreement start', isDense: true),
                 child: Text(_df.format(start))),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 18),
           const Align(alignment: Alignment.centerLeft, child: Text('Agreement', style: TextStyle(fontWeight: FontWeight.w800))),
+          const SizedBox(height: 4),
+          const Align(alignment: Alignment.centerLeft, child: Text(
+              'Whole business or goods-specific is chosen for each amount invested: below for the first amount, '
+              'and later from the investor\'s page (Add investment → Whole business / Link GRN). One investor can have both.',
+              style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
+          const SizedBox(height: 16),
           Row(children: [
             Expanded(child: TextField(controller: share, inputFormatters: num,
-                decoration: const InputDecoration(labelText: 'Investor share %', helperText: 'Of the profit their money earned'))),
+                decoration: const InputDecoration(labelText: 'Investor share % of profit earned'))),
             const SizedBox(width: 12),
             Expanded(child: DropdownButtonFormField<String>(value: freq, isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Payout'),
                 items: [for (final e in InvestorProfit.frequencies.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
                 onChanged: (v) => setS(() => freq = v ?? freq))),
           ]),
+          const SizedBox(height: 16),
           Row(children: [
             Expanded(child: TextField(controller: floor, inputFormatters: num,
-                decoration: const InputDecoration(labelText: 'Floor %', helperText: '0 = no floor'))),
+                decoration: const InputDecoration(labelText: 'Floor % (0 = none)'))),
             const SizedBox(width: 12),
             Expanded(child: TextField(controller: cap, inputFormatters: num,
-                decoration: const InputDecoration(labelText: 'Cap %', helperText: '0 = no cap'))),
+                decoration: const InputDecoration(labelText: 'Cap % (0 = none)'))),
             const SizedBox(width: 12),
             Expanded(child: DropdownButtonFormField<String>(value: basis, isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Floor / cap is'),
@@ -271,23 +252,52 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
                 ],
                 onChanged: (v) => setS(() => basis = v ?? basis))),
           ]),
+          const SizedBox(height: 10),
           SwitchListTile(
             contentPadding: EdgeInsets.zero, dense: true,
             value: deductReturns,
             onChanged: (v) => setS(() => deductReturns = v),
-            title: const Text('Deduct returns from GRN profit', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            subtitle: const Text('When goods from a linked GRN come back, their profit is taken off in the month of the return.',
+            title: const Text('Goods-specific (GRN) parts: deduct returns', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            subtitle: const Text('When goods from a linked GRN come back, their profit is taken off in the month of the return. Whole-business parts already include returns.',
                 style: TextStyle(fontSize: 11.5)),
           ),
           const SizedBox(height: 6),
           const Align(alignment: Alignment.centerLeft, child: Text(
               'Loss months: nothing is posted and the result is kept on record — the policy can be set later.',
               style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary))),
-          const SizedBox(height: 14),
+          if (inv == null) ...[
+            const SizedBox(height: 18),
+            const Align(alignment: Alignment.centerLeft, child: Text('First investment (optional)', style: TextStyle(fontWeight: FontWeight.w800))),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: TextField(controller: firstAmt, inputFormatters: num,
+                  decoration: const InputDecoration(labelText: 'Amount (Rs)'))),
+              const SizedBox(width: 12),
+              Expanded(child: InkWell(
+                onTap: () async {
+                  final d = await showDatePicker(context: ctx, initialDate: firstOn ?? start, firstDate: DateTime(2020), lastDate: DateTime(2100));
+                  if (d != null) setS(() => firstOn = d);
+                },
+                child: InputDecorator(decoration: const InputDecoration(labelText: 'Invested on', isDense: true),
+                    child: Text(_df.format(firstOn ?? start))),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: DropdownButtonFormField<String>(value: firstBasis, isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Basis'),
+                  items: const [
+                    DropdownMenuItem(value: 'business', child: Text('Whole business')),
+                    DropdownMenuItem(value: 'grn', child: Text('Goods-specific (link GRNs next)')),
+                  ],
+                  onChanged: (v) => setS(() => firstBasis = v ?? firstBasis))),
+            ]),
+          ],
+          const SizedBox(height: 18),
           const Align(alignment: Alignment.centerLeft, child: Text('Accounts', style: TextStyle(fontWeight: FontWeight.w800))),
+          const SizedBox(height: 4),
           accRow('investment_account_id', 'Investment account', null),
           accRow('payable_account_id', 'Profit payable account', null),
           accRow('expense_account_id', 'Profit expense account', 'expense'),
+          const SizedBox(height: 12),
           TextField(controller: notes, maxLines: 2, decoration: const InputDecoration(labelText: 'Notes')),
         ]))),
         actions: [
@@ -321,6 +331,23 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
                 await _db.rpc('investor_ensure_accounts', params: {'p_investor': id});
               } catch (e) {
                 _snack(friendlyError('Saved, but the accounts could not be created', e));
+              }
+              final fa = double.tryParse(firstAmt.text) ?? 0;
+              if (inv == null && fa > 0) {
+                try {
+                  final t = await _db.from('investor_tranches').insert({
+                    'org_id': _orgId, 'investor_id': id, 'amount': fa,
+                    'invested_on': DateFormat('yyyy-MM-dd').format(firstOn ?? start),
+                  }).select('id').single();
+                  if (firstBasis == 'business') {
+                    await _db.from('investor_tranche_lines').insert(
+                        {'org_id': _orgId, 'tranche_id': t['id'], 'kind': 'business', 'amount': fa});
+                  } else {
+                    _snack('Investor saved — now link the GRNs for this amount on their page');
+                  }
+                } catch (e) {
+                  _snack(friendlyError('Investor saved, but the first investment did not', e));
+                }
               }
               if (ctx.mounted) Navigator.pop(ctx);
               await _load(keep: id);
@@ -950,6 +977,95 @@ class _State extends ConsumerState<ErpInvestorsScreen> {
           if (_isAdmin) TextButton(onPressed: () => _voidRun(r), child: const Text('Void', style: TextStyle(color: AppTheme.danger))),
         ],
       ]),
+    );
+  }
+}
+
+
+/// Chart-of-accounts picker: searches on the server by code or name, so every
+/// account is reachable however large the chart is.
+class _AccountPicker extends StatefulWidget {
+  const _AccountPicker({required this.orgId, required this.title, this.type});
+  final String orgId;
+  final String title;
+  final String? type;
+  @override
+  State<_AccountPicker> createState() => _AccountPickerState();
+}
+
+class _AccountPickerState extends State<_AccountPicker> {
+  final _ctrl = TextEditingController();
+  List<Map<String, dynamic>> _rows = [];
+  bool _loading = true;
+  String? _error;
+  int _seq = 0;
+
+  @override
+  void initState() { super.initState(); _fetch(); }
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  Future<void> _fetch() async {
+    final my = ++_seq;
+    setState(() { _loading = true; _error = null; });
+    try {
+      final q = _ctrl.text.trim().replaceAll(RegExp(r'[,()%*]'), ' ').trim();
+      var b = Supabase.instance.client.from('chart_of_accounts')
+          .select('id, code, name, account_type, level').eq('org_id', widget.orgId);
+      if (widget.type != null) b = b.eq('account_type', widget.type!);
+      if (q.isNotEmpty) b = b.or('code.ilike.%$q%,name.ilike.%$q%');
+      final r = List<Map<String, dynamic>>.from(await b.order('code').limit(300) as List);
+      if (!mounted || my != _seq) return;
+      setState(() { _rows = r; _loading = false; });
+    } catch (_) {
+      if (!mounted || my != _seq) return;
+      setState(() { _rows = []; _loading = false; _error = 'Accounts could not be loaded. Please try again.'; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            TextField(controller: _ctrl, autofocus: true, onChanged: (_) => _fetch(),
+                decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.search, size: 18),
+                    hintText: 'Search code or name', border: OutlineInputBorder())),
+            const SizedBox(height: 8),
+            Flexible(child: _loading
+                ? const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
+                : _error != null
+                    ? Padding(padding: const EdgeInsets.all(24), child: Text(_error!, style: const TextStyle(color: AppTheme.danger)))
+                    : _rows.isEmpty
+                        ? const Padding(padding: EdgeInsets.all(24),
+                            child: Text('No accounts match.', style: TextStyle(color: AppTheme.textSecondary)))
+                        : ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: _rows.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (_, i) {
+                              final a = _rows[i];
+                              return InkWell(
+                                onTap: () => Navigator.pop(context, a),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text('${a['code'] ?? ''}  ${a['name'] ?? ''}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                    Text('${a['account_type'] ?? ''}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                                  ]),
+                                ),
+                              );
+                            })),
+            Align(alignment: Alignment.centerRight,
+                child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))),
+          ]),
+        ),
+      ),
     );
   }
 }
