@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import '../widgets/duplicate_ref_guard.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -217,6 +218,11 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
     // Posting a receipt dated before the opening balance date: warn first.
     if (post && !await confirmPreOpeningDate(context, orgId: orgId, date: _voucherDate, doc: 'receipt')) return;
     if (!mounted) return;
+    // Same receipt / transaction number already used in another CRV or CPV?
+    final dupNote = orgId == null ? '' : await checkDuplicateRefs(context,
+        orgId: orgId, narrations: [for (final l in validLines) l.descCtrl.text],
+        excludeVoucherId: _currentVoucher?['id'] as String?);
+    if (dupNote == null || !mounted) return;
     setState(() => _saving = true);
     SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
     try {
@@ -244,6 +250,7 @@ class _ErpReceiptVouchersScreenState extends ConsumerState<ErpReceiptVouchersScr
         setState(() { _status = newStatus; _currentVoucher = {..._currentVoucher!, 'status': newStatus}; }); if (post) _logAudit('posted', notes: 'Total: Rs. \${_total.toStringAsFixed(2)}  •  \${_lines.where((l) => l.accountId != null).length} lines');
         if (!post) _snack('Saved');
       }
+      if (dupNote.isNotEmpty) _logAudit('duplicate_reference', notes: dupNote);
       if (post && orgId != null) {
         // Post the GL through the ATOMIC, balance-guarded server function
         // post_crv (single transaction: deletes any prior GL, writes the entry

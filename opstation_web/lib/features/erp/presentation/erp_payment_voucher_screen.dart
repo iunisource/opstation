@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import '../widgets/duplicate_ref_guard.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -219,6 +220,11 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     if (post && validLines.fold<double>(0, (s, l) => s + (double.tryParse(l.amtCtrl.text) ?? 0)) <= 0) { _snack('Voucher total must be greater than zero to post'); return; }
     final orgId = _orgId; final bid = _branchId ?? ''; final userId = ref.read(currentUserProvider)?.id;
         final userName = ref.read(currentUserProvider)?.name ?? '';
+    // Same receipt / transaction number already used in another CRV or CPV?
+    final dupNote = orgId == null ? '' : await checkDuplicateRefs(context,
+        orgId: orgId, narrations: [for (final l in validLines) l.descCtrl.text],
+        excludeVoucherId: _currentVoucher?['id'] as String?);
+    if (dupNote == null || !mounted) return;
     setState(() => _saving = true);
     SavingOverlay.show(context, label: post ? 'Posting…' : 'Saving…');
     try {
@@ -259,6 +265,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
         for (var i = 0; i < validLines.length; i++) { final l = validLines[i]; await client.from('cpv_voucher_lines').insert({'id': 'cpvl_${DateTime.now().microsecondsSinceEpoch}_$i', 'voucher_id': vid, 'account_type': l.accountType, 'account_id': l.accountId, 'account_name': l.accountName, 'description': l.descCtrl.text.trim(), 'amount': double.tryParse(l.amtCtrl.text) ?? 0, 'line_order': i}); }
         setState(() { _status = 'draft'; _currentVoucher = {..._currentVoucher!, 'status': 'draft'}; });
       }
+      if (dupNote.isNotEmpty) _logAudit('duplicate_reference', notes: dupNote);
       if (post && orgId != null) {
         // Mark posted, then post the GL through the ATOMIC, balance-guarded
         // server function post_cpv. It runs in one transaction: deletes any
