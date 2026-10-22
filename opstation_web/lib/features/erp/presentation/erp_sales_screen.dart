@@ -1580,6 +1580,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   // Batch & warranty tracking: serials scanned before saving this DO.
   bool _btOn = false;
   Map<String, List<String>>? _pendingSerials;
+  // Optional Vehicle Details (SQL 401) — shown on screen/print only when filled.
+  final _drvNameCtrl = TextEditingController();
+  final _drvContactCtrl = TextEditingController();
+  final _vehicleNoCtrl = TextEditingController();
+  bool _vehicleOpen = false;
 
   @override
   void initState() {
@@ -1592,6 +1597,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   void dispose() {
     _searchDebounce?.cancel();
     for (final c in _deliverQtyCtrl.values) c.dispose();
+    _drvNameCtrl.dispose(); _drvContactCtrl.dispose(); _vehicleNoCtrl.dispose();
     super.dispose();
   }
 
@@ -1719,6 +1725,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _collectAmount = (do_['collect_amount'] as num?);
         _collectEnabled = _collectAmount != null;
         _linkedSiId = linkedSiId;
+        _drvNameCtrl.text = (do_['vehicle_driver_name'] as String?) ?? '';
+        _drvContactCtrl.text = (do_['vehicle_driver_contact'] as String?) ?? '';
+        _vehicleNoCtrl.text = (do_['vehicle_number'] as String?) ?? '';
+        _vehicleOpen = _vt(do_['vehicle_driver_name']) != null || _vt(do_['vehicle_driver_contact']) != null || _vt(do_['vehicle_number']) != null;
         _detailLoading = false;
       });
       // Read the delivery-flow + voucher-date org settings.
@@ -1743,6 +1753,65 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         if (mounted) setState(() { _deliveryFlow = flow; _datesEditable = datesEd; _doSuperviseFlow = supFlow; _canSupervise = canSup; _btOn = btOn; });
       } catch (_) {}
     } catch (_) { setState(() => _detailLoading = false); }
+  }
+
+  static String? _vt(Object? v) { final x = '${v ?? ''}'.trim(); return x.isEmpty ? null : x; }
+
+  Future<void> _saveVehicle() async {
+    final id = _detail['id'] as String?;
+    if (id == null) return;
+    final data = {
+      'vehicle_driver_name': _vt(_drvNameCtrl.text),
+      'vehicle_driver_contact': _vt(_drvContactCtrl.text),
+      'vehicle_number': _vt(_vehicleNoCtrl.text),
+    };
+    try {
+      await Supabase.instance.client.from('delivery_orders').update(data).eq('id', id);
+      setState(() => _detail.addAll(data));
+      _showSnack('Vehicle details saved');
+    } catch (e) { _showSnack(friendlyError('Could not save vehicle details', e)); }
+  }
+
+  Widget _vehicleSection() {
+    if (!_vehicleOpen) {
+      return Align(alignment: Alignment.centerLeft, child: TextButton.icon(
+        onPressed: () => setState(() => _vehicleOpen = true),
+        icon: const Icon(Icons.local_shipping_outlined, size: 16),
+        label: const Text('Add vehicle details', style: TextStyle(fontSize: 12.5))));
+    }
+    InputDecoration dec(String l) => InputDecoration(isDense: true, border: const OutlineInputBorder(), labelText: l);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.local_shipping_outlined, size: 16, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          const Text('Vehicle Details', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          const SizedBox(width: 6),
+          const Text('(optional)', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          const Spacer(),
+          TextButton.icon(onPressed: _saveVehicle, icon: const Icon(Icons.save_outlined, size: 15), label: const Text('Save', style: TextStyle(fontSize: 12))),
+        ]),
+        const SizedBox(height: 6),
+        LayoutBuilder(builder: (_, c) {
+          final fields = [
+            TextField(controller: _drvNameCtrl, decoration: dec('Driver name')),
+            TextField(controller: _drvContactCtrl, keyboardType: TextInputType.phone, decoration: dec('Contact')),
+            TextField(controller: _vehicleNoCtrl, textCapitalization: TextCapitalization.characters, decoration: dec('Vehicle #')),
+          ];
+          if (c.maxWidth < 560) {
+            return Column(children: [for (final f in fields) Padding(padding: const EdgeInsets.only(bottom: 8), child: f)]);
+          }
+          return Row(children: [
+            for (var i = 0; i < fields.length; i++) ...[
+              if (i > 0) const SizedBox(width: 10),
+              Expanded(child: fields[i]),
+            ],
+          ]);
+        }),
+      ]),
+    );
   }
 
   void _showSnack(String msg) {
@@ -1916,6 +1985,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       if (soVoucher != null) 'SO #': soVoucher,
       if ((_detail['collect_amount'] as num?) != null)
         'Collect': 'Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
+      // Vehicle Details — only the ones filled in.
+      if (_vt(_detail['vehicle_driver_name']) != null) 'Driver': _vt(_detail['vehicle_driver_name'])!,
+      if (_vt(_detail['vehicle_driver_contact']) != null) 'Driver contact': _vt(_detail['vehicle_driver_contact'])!,
+      if (_vt(_detail['vehicle_number']) != null) 'Vehicle #': _vt(_detail['vehicle_number'])!,
     };
     await VoucherPdf.printVoucher(
       watermark: VoucherPdf.voidMark(_detail),
@@ -2958,6 +3031,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               ]),
             ),
 
+            if (_detail['id'] != null) ...[
+              const SizedBox(height: 10),
+              _vehicleSection(),
+            ],
             const SizedBox(height: 16),
 
             // Delivered items
