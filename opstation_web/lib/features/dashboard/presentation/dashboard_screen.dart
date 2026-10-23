@@ -847,9 +847,9 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
             ? DateTime.parse(m['timestamp'] as String).toLocal()
             : DateTime.now();
         final status = (m['status'] as String?) ?? '';
-        if (amount > 0 || status == 'verified') {
-          // Collected, or a verified visit with nothing collected — both are
-          // real visits and show in the main list with their tick.
+        if (status == 'verified' || amount > 0) {
+          // Upper list: verified visits (with or without money) and visits
+          // outside the geofence where money was collected.
           collectedByUser.putIfAbsent(uid, () => []).add(_VisitRow(
                 customerName: customerName,
                 amount: amount,
@@ -859,10 +859,13 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
               ));
           grand += amount;
         } else {
-          // Not verified with nothing collected (or an old skip).
+          // Section below: not verified with no money, or an old skip.
           otherByUser.putIfAbsent(uid, () => []).add(_OtherStop(
                 customerName: customerName,
-                status: status.isEmpty ? 'no_collection' : status,
+                status: status == 'skipped'
+                    ? 'skipped'
+                    : (amount > 0 ? 'outside_collected' : 'no_collection'),
+                amount: amount,
               ));
         }
       }
@@ -906,7 +909,8 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         other.sort((a, b) => a.customerName
             .toLowerCase()
             .compareTo(b.customerName.toLowerCase()));
-        final total = collected.fold<int>(0, (s, v) => s + v.amount);
+        final total = collected.fold<int>(0, (s, v) => s + v.amount) +
+            other.fold<int>(0, (s, o) => s + o.amount);
         return _SalespersonCollection(
           userId: uid,
           userName: userNames[uid] ?? 'Unknown',
@@ -1057,16 +1061,16 @@ class _SalespersonExpansion extends StatelessWidget {
   const _SalespersonExpansion({required this.sp});
 
   String _subtitle(_SalespersonCollection sp) {
-    final collected = sp.visits.where((v) => v.amount > 0).length;
-    final visitedOnly = sp.visits.where((v) => v.amount <= 0).length;
+    final visited = sp.visits.where((v) => v.status == 'verified').length;
+    final outside = sp.visits.where((v) => v.status != 'verified').length;
     final skipped =
         sp.otherStops.where((o) => o.status == 'skipped').length;
     final notVisited =
         sp.otherStops.where((o) => o.status == 'not_visited').length;
-    final notVerified = sp.otherStops.length - skipped - notVisited;
+    final notVerified = sp.otherStops.where((o) => o.status == 'no_collection').length;
     final parts = <String>[
-      '$collected collected',
-      if (visitedOnly > 0) '$visitedOnly visited, no collection',
+      '$visited visited',
+      if (outside > 0) '$outside outside geofence',
       if (notVerified > 0) '$notVerified not verified',
       if (skipped > 0) '$skipped skipped',
       if (notVisited > 0) '$notVisited not visited',
@@ -1286,14 +1290,19 @@ class _OtherStopRowState extends State<_OtherStopRow> {
     final o = widget.o;
     final isSkip = o.status == 'skipped';
     final isNotVisited = o.status == 'not_visited';
+    final isOutside = o.status == 'outside_collected';
     final icon = isSkip
         ? Icons.skip_next
-        : (isNotVisited
-            ? Icons.radio_button_unchecked
-            : Icons.remove_circle_outline);
+        : isOutside
+            ? Icons.warning_amber_rounded
+            : (isNotVisited
+                ? Icons.radio_button_unchecked
+                : Icons.remove_circle_outline);
     final label = isSkip
         ? 'Skipped'
-        : (isNotVisited ? 'Not visited' : 'Not verified');
+        : isOutside
+            ? 'Outside geofence · Rs ${_fmtNumber(o.amount)}'
+            : (isNotVisited ? 'Not visited' : 'Not verified');
     return InkWell(
       onTap: () => setState(() => _expanded = !_expanded),
       borderRadius: BorderRadius.circular(6),
@@ -1367,8 +1376,9 @@ class _VisitRow {
 
 class _OtherStop {
   final String customerName;
-  final String status; // 'skipped' | 'not_visited' | 'no_collection'
-  const _OtherStop({required this.customerName, required this.status});
+  final String status; // 'skipped' | 'not_visited' | 'no_collection' (not verified) | 'outside_collected'
+  final int amount;
+  const _OtherStop({required this.customerName, required this.status, this.amount = 0});
 }
 
 String _fmtNumber(int n) {
