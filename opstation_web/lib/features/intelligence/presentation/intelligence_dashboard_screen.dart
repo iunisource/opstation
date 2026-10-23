@@ -180,6 +180,7 @@ class _IntelligenceDashboardScreenState
   Map<String, String> _custCode = {};
   Map<String, List<String>> _custMissing = {};
   Map<String, int> _custChecks = {};
+  Map<String, int> _custOnShelf = {}; // per shop: SKUs found on shelf (latest check)
 
   // Section-wide market/route filter. null = All routes.
   String? _filterRouteId;
@@ -742,6 +743,7 @@ class _IntelligenceDashboardScreenState
         _custCode = custCode;
         _custMissing = custMissing;
         _custChecks = custTotal;
+        _custOnShelf = custPresent;
         _skuStats = skuStats;
         _leadBrand = leadBrand;
         _leadBrandShops = leadBrandShops;
@@ -1814,11 +1816,9 @@ class _IntelligenceDashboardScreenState
 
   Widget _meterRow(int rank, _GroupScore g, String panelKey) {
     final c = _scoreColor(g.score);
-    // The catch-all buckets are the only expandable rows: tapping the shop count
-    // reveals exactly which shops fell into "Unassigned" / "No route".
-    final isUnassigned = g.name == 'Unassigned' || g.name == 'No route / Unassigned';
+    // Every row's shop count opens the list of shops behind it.
     final rowKey = '$panelKey:${g.name}';
-    final expanded = isUnassigned && _expandedGroups.contains(rowKey);
+    final expanded = _expandedGroups.contains(rowKey);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         SizedBox(
@@ -1868,7 +1868,7 @@ class _IntelligenceDashboardScreenState
       ),
       Padding(
         padding: const EdgeInsets.only(left: 22, top: 4),
-        child: isUnassigned
+        child: g.customers.isNotEmpty
             ? InkWell(
                 onTap: () => setState(() {
                   if (expanded) {
@@ -1898,15 +1898,27 @@ class _IntelligenceDashboardScreenState
     ]);
   }
 
-  // The list of shops inside an expanded "Unassigned" bucket, sorted by name.
+  // The shops behind a row (salesman / market / unassigned), weakest first,
+  // each with its own on-shelf count from its latest checks.
   Widget _unassignedShops(_GroupScore g) {
     // Only active customers carry a resolved name; skip any without one so a
     // deactivated shop never shows up here as "Unnamed shop".
-    final names = g.customers
-        .where((cid) => _custName[cid] != null)
-        .map((cid) => _custName[cid]!)
-        .toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final ids = g.customers.where((cid) => _custName[cid] != null).toList();
+    double rate(String cid) {
+      final t = _custChecks[cid] ?? 0;
+      return t == 0 ? 0 : (_custOnShelf[cid] ?? 0) / t;
+    }
+    ids.sort((a, b) {
+      final r = rate(a).compareTo(rate(b));
+      return r != 0 ? r : _custName[a]!.toLowerCase().compareTo(_custName[b]!.toLowerCase());
+    });
+    final names = [
+      for (final cid in ids)
+        '${(_custCode[cid] ?? '').isNotEmpty ? '${_custCode[cid]} · ' : ''}${_custName[cid]}'
+    ];
+    final counts = [
+      for (final cid in ids) '${_custOnShelf[cid] ?? 0}/${_custChecks[cid] ?? 0}'
+    ];
     return Container(
       margin: const EdgeInsets.only(left: 22, top: 6),
       constraints: const BoxConstraints(maxHeight: 220),
@@ -1933,6 +1945,9 @@ class _IntelligenceDashboardScreenState
                     style: const TextStyle(fontSize: 12),
                     overflow: TextOverflow.ellipsis),
               ),
+              const SizedBox(width: 8),
+              Text(counts[i],
+                  style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
             ]),
           ),
         ),
