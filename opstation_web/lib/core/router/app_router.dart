@@ -312,7 +312,12 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // and lives outside /erp/ — the menu showed it, but this check used
             // to bounce the click straight back home.
             final permScopedMgmt = loc == '/assets' || loc == '/assets/report' || loc == '/facility';
-            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps && !permScopedMgmt) return false;
+            // Intelligence screens (surveys) are registry-gated too.
+            final permScopedIntel = const {
+              '/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement',
+              '/intelligence/competitors', '/products', '/competitor-categories', '/competitor-brand-aliases',
+            }.contains(loc);
+            if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps && !permScopedMgmt && !permScopedIntel) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
             if (loc == '/erp/ai-connector') return false; // admin-tier only
             // Always-available to every ERP user regardless of grants: their

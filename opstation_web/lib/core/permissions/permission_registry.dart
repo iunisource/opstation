@@ -218,6 +218,16 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('ops_files', 'Files', PermKind.doc, '/operations/files'),
     PermItem('ops_notifications', 'Notifications', PermKind.doc, '/operations/notifications'),
   ]),
+  // Intelligence — shelf placement & competitor surveys (org module 'intelligence').
+  PermModule('intelligence', 'Intelligence', Icons.insights_outlined, [
+    PermItem('intel_dashboard', 'Dashboard', PermKind.report, '/intelligence/dashboard'),
+    PermItem('intel_performance', 'Performance', PermKind.report, '/intelligence/performance'),
+    PermItem('intel_placement', 'Placement Audit', PermKind.report, '/intelligence/placement'),
+    PermItem('intel_competitors', 'Competitor Spotting', PermKind.report, '/intelligence/competitors'),
+    PermItem('intel_products', 'Survey Products', PermKind.doc, '/products'),
+    PermItem('competitor_categories', 'Competitor Categories', PermKind.doc, '/competitor-categories'),
+    PermItem('competitor_brand_aliases', 'Competitor Brand Aliases', PermKind.doc, '/competitor-brand-aliases'),
+  ]),
   PermModule('crm', 'CRM', Icons.contacts_outlined, [
     PermItem('crm_customers', 'CRM Customers', PermKind.doc, '/crm/customers'),
     PermItem('crm_pipeline', 'Pipeline', PermKind.doc, '/crm/pipeline'),

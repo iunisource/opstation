@@ -1650,6 +1650,17 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         ]),
     ];
 
+  // ERP users: Intelligence menu with just the screens granted to them.
+  final intelErpItems = <Widget>[
+    if (show('/intelligence/dashboard')) _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/intelligence/dashboard', location),
+    if (targetsOn && show('/intelligence/performance')) _menuItem(context, 'Performance', Icons.leaderboard_outlined, '/intelligence/performance', location),
+    if (show('/intelligence/placement')) _menuItem(context, 'Placement Audit', Icons.checklist_outlined, '/intelligence/placement', location),
+    if (show('/intelligence/competitors')) _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
+    if (show('/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
+    if (show('/competitor-categories')) _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
+    if (show('/competitor-brand-aliases')) _menuItem(context, 'Competitor Brand Aliases', Icons.spellcheck_outlined, '/competitor-brand-aliases', location),
+  ];
+
   final opsErpItems = <Widget>[
     if (show('/dashboard')) _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
     if (show('/team')) _menuItem(context, 'Team', Icons.people_outline, '/team', location),
@@ -1736,6 +1747,12 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ),
           ...splitErpMenus(),
         ],
+
+        if (isErpUser && intelErpItems.isNotEmpty && modules.contains('intelligence'))
+          _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
+            const ['/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement', '/intelligence/competitors',
+             '/products', '/competitor-categories', '/competitor-brand-aliases'],
+            intelErpItems),
 
         // ERP users get an Operations menu with just the screens granted to them.
         if (isErpUser && opsErpItems.isNotEmpty && modules.contains('operations'))
