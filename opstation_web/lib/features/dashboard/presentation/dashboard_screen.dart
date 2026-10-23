@@ -4,6 +4,7 @@ import 'dart:html' as html;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:opstation_web/core/utils/visit_outcome.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -1145,7 +1146,7 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${DateFormat('HH:mm').format(v.timestamp)} \u00b7 ${_statusLabel(v.status)}',
+                    '${DateFormat('HH:mm').format(v.timestamp)} \u00b7 ${visitOutcomeLabel(v.status, v.amount)}',
                     style: const TextStyle(
                         fontSize: 11, color: AppTheme.textSecondary),
                   ),

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:opstation_web/core/utils/visit_outcome.dart';
 
 import '../../../core/format/money.dart';
 
@@ -539,6 +540,8 @@ class ReportPdfBuilder {
       vs.sort((a, b) => DateTime.parse(a['timestamp'] as String)
           .compareTo(DateTime.parse(b['timestamp'] as String)));
       final latest = vs.last;
+      // Once the shop was verified on this trip it counts as Visited.
+      final verified = vs.where((v) => v['status'] == 'verified').toList();
       final byReceipt = <String, int>{};
       var noReceiptSeq = 0;
       for (final v in vs) {
@@ -554,6 +557,8 @@ class ReportPdfBuilder {
       out.add({
         'cid': cid,
         'latest': latest,
+        'shown': verified.isNotEmpty ? verified.first : latest,
+        'first_at': DateTime.parse(vs.first['timestamp'] as String),
         'collected': byReceipt.values.fold<int>(0, (s, a) => s + a),
         'receipts':
             byReceipt.keys.where((k) => !k.startsWith('__nr')).toList(),
@@ -566,7 +571,7 @@ class ReportPdfBuilder {
     final lines = _custLines(ctx.visits);
     final totalStops = lines.length;
     final verifiedCount = lines
-        .where((l) => (l['latest'] as Map)['status'] == 'verified')
+        .where((l) => (l['shown'] as Map)['status'] == 'verified')
         .length;
     final totalCollected =
         lines.fold<int>(0, (s, l) => s + (l['collected'] as int));
@@ -575,7 +580,7 @@ class ReportPdfBuilder {
 
     return pw.Row(children: [
       _summaryCell('$totalStops', 'CUSTOMERS'),
-      _summaryCell('$verifiedCount', 'VERIFIED'),
+      _summaryCell('$verifiedCount', 'VISITED'),
       _summaryCell('${completion.toStringAsFixed(1)}%', 'COMPLETION'),
       _summaryCell('Rs. ${_fmtNum(totalCollected)}', 'COLLECTED'),
     ]);
@@ -619,7 +624,9 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _visitDetailsTable(TripReportContext ctx) {
-    final lines = _custLines(ctx.visits);
+    // In the order the shops were visited (time of the first mark at each).
+    final lines = _custLines(ctx.visits)
+      ..sort((a, b) => (a['first_at'] as DateTime).compareTo(b['first_at'] as DateTime));
 
     final headers = [
       '#', 'CODE', 'CUSTOMER', 'STATUS', 'COLLECTED', 'CR#', 'TIME', 'NOTES'
@@ -627,7 +634,7 @@ class ReportPdfBuilder {
     final rows = <List<String>>[];
     for (var i = 0; i < lines.length; i++) {
       final cid = lines[i]['cid'] as String;
-      final v = lines[i]['latest'] as Map<String, dynamic>;
+      final v = lines[i]['shown'] as Map<String, dynamic>;
       final cust = ctx.customersById[cid];
       final status = v['status'] as String? ?? 'pending';
       final collected = lines[i]['collected'] as int;
@@ -636,11 +643,10 @@ class ReportPdfBuilder {
         '${i + 1}',
         (cust?['code'] as String?) ?? '-',
         (cust?['shop_name'] as String?) ?? '-',
-        _statusTagWithDistance(status, v),
+        _outcomeTag(status, collected, v),
         status == 'pending' ? '-' : '$collected',
         receipts.isEmpty ? '-' : receipts.join(', '),
-        DateFormat('hh:mm a')
-            .format(DateTime.parse(v['timestamp'] as String).toLocal()),
+        DateFormat('hh:mm a').format((lines[i]['first_at'] as DateTime).toLocal()),
         _notesFor(status, v),
       ]);
     }
@@ -938,6 +944,19 @@ class ReportPdfBuilder {
             ? '${(dist / 1000).toStringAsFixed(1)} km away'
             : '${dist.round()} m away';
         return '$base\n$km';
+      }
+    }
+    return base;
+  }
+
+  /// Visit Report status under the rules without "Skip".
+  static String _outcomeTag(String s, int collected, Map<String, dynamic>? v) {
+    final base = visitOutcomeLabel(s, collected).toUpperCase();
+    if (s == 'outside' || s == 'noLocation' || s == 'no_location') {
+      final d = (v?['distance_meters'] as num?)?.toDouble();
+      if (d != null && d > 0) {
+        final away = d >= 1000 ? '${(d / 1000).toStringAsFixed(1)} km away' : '${d.round()} m away';
+        return '$base\n$away';
       }
     }
     return base;

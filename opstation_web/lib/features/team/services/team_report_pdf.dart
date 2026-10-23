@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:opstation_web/core/utils/visit_outcome.dart';
 import 'package:printing/printing.dart';
 
 /// Team report PDFs — same design language as IntelligencePdfService:
@@ -258,13 +259,7 @@ class TeamReportPdf {
                   final name = cust?['shop_name'] as String? ?? '(unknown)';
                   final code = cust?['code'] as String? ?? '';
                   final st = v['status'] as String? ?? '';
-                  final stLabel = switch (st) {
-                    'verified' => 'Verified',
-                    'outside' => 'Outside',
-                    'noLocation' => 'No location',
-                    'skipped' => 'Skipped',
-                    _ => st,
-                  };
+                  final stLabel = visitOutcomeLabel(st, v['amount'] as num?);
                   final stColor = switch (st) {
                     'verified' => PdfColors.green700,
                     'outside' => PdfColors.orange700,

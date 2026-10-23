@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:opstation_web/core/utils/visit_outcome.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -327,16 +328,15 @@ class _VisitCard extends StatelessWidget {
       } catch (_) {}
     }
 
-    final (icon, color, label) = switch (status) {
-      'verified' => (Icons.check_circle, AppTheme.success, 'Verified'),
-      'outside' => (Icons.warning_amber_rounded, AppTheme.warning, 'Outside'),
-      'noLocation' => (
-        Icons.location_off_outlined,
-        AppTheme.danger,
-        'No location'
-      ),
-      'skipped' => (Icons.skip_next, AppTheme.textSecondary, 'Skipped'),
-      _ => (Icons.circle_outlined, AppTheme.textSecondary, status),
+    // Rules without "Skip": Visited / Outside geofence (money, not at the
+    // shop) / Not verified (no money, not at the shop). Old skips keep theirs.
+    final outcome = visitOutcomeLabel(status, visit['amount'] as num?);
+    final (icon, color, label) = switch (outcome) {
+      'Visited' => (Icons.check_circle, AppTheme.success, outcome),
+      'Outside geofence' => (Icons.warning_amber_rounded, AppTheme.warning, outcome),
+      'Not verified' => (Icons.gps_off_outlined, AppTheme.danger, outcome),
+      'Skipped' => (Icons.skip_next, AppTheme.textSecondary, outcome),
+      _ => (Icons.circle_outlined, AppTheme.textSecondary, outcome),
     };
 
     return Container(

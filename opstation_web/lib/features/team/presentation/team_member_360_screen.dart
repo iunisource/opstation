@@ -1289,14 +1289,20 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   // ── Visit-type buckets (verified / outside / no-location / skipped /
   // recorded). Used by the Visits & Reports tabs to show every visit type
   // and to power the filter pills.
-  static String _visitTypeKey(String status) {
-    switch (status) {
+  static String _visitTypeKey(String status) => _visitTypeKeyOf({'status': status});
+
+  /// Visit type under the rules without "Skip": verified → Visited; outside /
+  /// no location with money → Outside geofence; without money → Not verified.
+  /// Old "skipped" records keep their own type.
+  static String _visitTypeKeyOf(Map v) {
+    final st = (v['status'] as String?) ?? '';
+    final amt = (v['amount'] as num?) ?? 0;
+    switch (st) {
       case 'verified':
-        return 'verified';
+        return 'visited';
       case 'outside':
-        return 'outside';
       case 'noLocation':
-        return 'noLocation';
+        return amt > 0 ? 'outside_geofence' : 'not_verified';
       case 'skipped':
         return 'skipped';
       default:
@@ -1305,24 +1311,23 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   }
 
   static const List<String> _visitTypeOrder = [
-    'verified',
-    'outside',
-    'noLocation',
+    'visited',
+    'outside_geofence',
+    'not_verified',
     'skipped',
     'recorded',
   ];
 
   (String, Color, IconData) _visitTypeMeta(String key) {
     switch (key) {
-      case 'verified':
-        return ('Verified', AppTheme.success, Icons.verified_outlined);
-      case 'outside':
-        return ('Outside geofence', Colors.amber.shade800,
-            Icons.location_searching);
-      case 'noLocation':
-        return ('No location', AppTheme.danger, Icons.location_off_outlined);
+      case 'visited':
+        return ('Visited', AppTheme.success, Icons.verified_outlined);
+      case 'outside_geofence':
+        return ('Outside geofence', Colors.amber.shade800, Icons.location_searching);
+      case 'not_verified':
+        return ('Not verified', AppTheme.danger, Icons.gps_off_outlined);
       case 'skipped':
-        return ('Skipped', Colors.orange, Icons.skip_next_outlined);
+        return ('Skipped (old)', Colors.orange, Icons.skip_next_outlined);
       default:
         return ('Recorded', AppTheme.textSecondary, Icons.store_outlined);
     }
@@ -1350,14 +1355,14 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     if (_visitTypeFilter == 'all') return records;
     return records
         .where((v) =>
-            _visitTypeKey((v['status'] as String?) ?? '') == _visitTypeFilter)
+            _visitTypeKeyOf(v) == _visitTypeFilter)
         .toList();
   }
 
   Map<String, int> _visitTypeCounts(List<Map<String, dynamic>> records) {
     final m = <String, int>{};
     for (final v in records) {
-      final k = _visitTypeKey((v['status'] as String?) ?? '');
+      final k = _visitTypeKeyOf(v);
       m[k] = (m[k] ?? 0) + 1;
     }
     return m;
@@ -1408,7 +1413,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   /// so an admin can see exactly where the entry was actually made.
   Widget _visitRecordCard(Map<String, dynamic> v) {
     final cid = v['cid'] as String?;
-    final key = _visitTypeKey((v['status'] as String?) ?? '');
+    final key = _visitTypeKeyOf(v);
     final (label, color, icon) = _visitTypeMeta(key);
     final t = v['t'] as DateTime;
     final amount = (v['amount'] as int?) ?? 0;
@@ -1791,7 +1796,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                 final v = sorted[i];
                 final cid = v['cid'] as String?;
                 final (label, color, _) =
-                    _visitTypeMeta(_visitTypeKey((v['status'] as String?) ?? ''));
+                    _visitTypeMeta(_visitTypeKeyOf(v));
                 final amount = (v['amount'] as int?) ?? 0;
                 return Padding(
                   padding:
