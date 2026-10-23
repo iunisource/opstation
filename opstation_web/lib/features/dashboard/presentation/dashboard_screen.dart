@@ -847,16 +847,19 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
             ? DateTime.parse(m['timestamp'] as String).toLocal()
             : DateTime.now();
         final status = (m['status'] as String?) ?? '';
-        if (amount > 0) {
+        if (amount > 0 || status == 'verified') {
+          // Collected, or a verified visit with nothing collected — both are
+          // real visits and show in the main list with their tick.
           collectedByUser.putIfAbsent(uid, () => []).add(_VisitRow(
                 customerName: customerName,
                 amount: amount,
                 timestamp: ts,
                 status: status,
+                customerId: cid,
               ));
           grand += amount;
         } else {
-          // Visited but nothing collected, or explicitly skipped.
+          // Not verified with nothing collected (or an old skip).
           otherByUser.putIfAbsent(uid, () => []).add(_OtherStop(
                 customerName: customerName,
                 status: status.isEmpty ? 'no_collection' : status,
@@ -867,8 +870,18 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
       // Any user who did something today (collected or otherwise).
       final activeUsers = <String>{...collectedByUser.keys, ...otherByUser.keys};
       final out = activeUsers.map((uid) {
-        final collected = (collectedByUser[uid] ?? [])
+        // One line per shop for a verified visit with no money: drop it when
+        // the same shop also has a collection (or an earlier zero line).
+        final raw = (collectedByUser[uid] ?? [])
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+        final paidShops = {for (final v in raw) if (v.amount > 0 && v.customerId != null) v.customerId};
+        final seenZero = <String>{};
+        final collected = <_VisitRow>[
+          for (final v in raw)
+            if (v.amount > 0 || v.customerId == null ||
+                (!paidShops.contains(v.customerId) && seenZero.add(v.customerId!)))
+              v,
+        ];
         final other = List<_OtherStop>.from(otherByUser[uid] ?? const []);
         // "Not visited" = the other stops on the route(s) this rep actually
         // WORKED today (a route holding at least one shop they visited), minus
@@ -1044,13 +1057,17 @@ class _SalespersonExpansion extends StatelessWidget {
   const _SalespersonExpansion({required this.sp});
 
   String _subtitle(_SalespersonCollection sp) {
-    final collected = sp.visits.length;
+    final collected = sp.visits.where((v) => v.amount > 0).length;
+    final visitedOnly = sp.visits.where((v) => v.amount <= 0).length;
     final skipped =
         sp.otherStops.where((o) => o.status == 'skipped').length;
     final notVisited =
         sp.otherStops.where((o) => o.status == 'not_visited').length;
+    final notVerified = sp.otherStops.length - skipped - notVisited;
     final parts = <String>[
       '$collected collected',
+      if (visitedOnly > 0) '$visitedOnly visited, no collection',
+      if (notVerified > 0) '$notVerified not verified',
       if (skipped > 0) '$skipped skipped',
       if (notVisited > 0) '$notVisited not visited',
     ];
@@ -1156,7 +1173,7 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
             if (widget.showAmount) ...[
               const SizedBox(width: 8),
               Text(
-                'Rs ${_fmtNumber(v.amount)}',
+                v.amount > 0 ? 'Rs ${_fmtNumber(v.amount)}' : 'No collection',
                 style: const TextStyle(
                     fontSize: 13, fontWeight: FontWeight.w700),
               ),
@@ -1234,7 +1251,7 @@ class _CollapsibleOtherStopsState extends State<_CollapsibleOtherStops> {
                 Icon(_open ? Icons.expand_less : Icons.expand_more,
                     size: 15, color: AppTheme.textSecondary),
                 const SizedBox(width: 2),
-                Text('Skipped / not visited (${widget.stops.length})',
+                Text('Not verified / not visited (${widget.stops.length})',
                     style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
@@ -1276,7 +1293,7 @@ class _OtherStopRowState extends State<_OtherStopRow> {
             : Icons.remove_circle_outline);
     final label = isSkip
         ? 'Skipped'
-        : (isNotVisited ? 'Not visited' : 'No collection');
+        : (isNotVisited ? 'Not visited' : 'Not verified');
     return InkWell(
       onTap: () => setState(() => _expanded = !_expanded),
       borderRadius: BorderRadius.circular(6),
@@ -1338,11 +1355,13 @@ class _VisitRow {
   final int amount;
   final DateTime timestamp;
   final String status;
+  final String? customerId;
   const _VisitRow({
     required this.customerName,
     required this.amount,
     required this.timestamp,
     required this.status,
+    this.customerId,
   });
 }
 
