@@ -17,6 +17,7 @@ import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
 import 'customer_history_screen.dart';
 import 'customer_edit_review.dart';
+import 'customer_other_locations.dart';
 
 /// Customer 360 — a unified view of a single shop:
 ///  • Overview     : profile, location, credit vs current outstanding
@@ -89,6 +90,22 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
 
   // Edits / field locations waiting for a supervisor.
   CustomerReviews _reviews = CustomerReviews.empty;
+  // Other active customers saved at this exact spot (SQL 407).
+  List<Map<String, dynamic>> _sameLoc = [];
+
+  Future<void> _loadSameLocation() async {
+    final lat = (widget.customer['latitude'] as num?)?.toDouble();
+    final lng = (widget.customer['longitude'] as num?)?.toDouble();
+    final org = ref.read(currentUserProvider)?.orgId;
+    if (lat == null || lng == null || org == null) return;
+    try {
+      final r = await Supabase.instance.client.rpc('customer_location_duplicates', params: {
+        'p_org_id': org, 'p_lat': lat, 'p_lng': lng, 'p_exclude_id': _customerId,
+      });
+      final list = List<Map<String, dynamic>>.from(r as List).where((x) => x['is_active'] != false).toList();
+      if (mounted) setState(() => _sameLoc = list);
+    } catch (_) {}
+  }
   final _locationKey = GlobalKey();
 
   Future<void> _loadReviews({bool scroll = false}) async {
@@ -132,6 +149,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     _showJobs = ref.read(accessSyncProvider)?.hasModule('production') ?? false;
     _tabs = TabController(length: _showJobs ? 8 : 7, vsync: this);
     _loadAr();
+    _loadSameLocation();
     _loadVisits();
     _loadIntel();
     _loadActivities();
@@ -1466,7 +1484,34 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                       style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
                   _locHistoryButton(null, null),
                 ]),
+            if (_sameLoc.isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.deepOrange.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.deepOrange.withOpacity(0.35)),
+                ),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.wrong_location_outlined, size: 16, color: Colors.deepOrange),
+                  const SizedBox(width: 8),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Same location as ${_sameLoc.length == 1 ? 'another customer' : '${_sameLoc.length} other customers'}',
+                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.deepOrange)),
+                    for (final o in _sameLoc)
+                      Text('${'${o['code'] ?? ''}  ${o['shop_name'] ?? ''}'.trim()}'
+                          '${'${o['address'] ?? ''}'.isNotEmpty ? ' — ${o['address']}' : ''}',
+                          style: const TextStyle(fontSize: 12)),
+                    const Text('Check that this is not the same shop entered twice or a location copied from another customer.',
+                        style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                  ])),
+                ]),
+              ),
             PendingLocationReview(data: _reviews, onDone: _afterReview),
+            CustomerOtherLocations(
+                customerId: _customerId, shopName: _shopName, shopCode: c['code'] as String?),
           ]),
         ),
         ),
@@ -1944,7 +1989,10 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     final amount = (v['amount'] as int?) ?? 0;
     final receipt = v['receipt_number'] as String?;
     final notes = v['notes'] as String?;
-    final (icon, color, label) = _statusOf(status);
+    final (icon, color, label0) = _statusOf(status);
+    // Verified at another of this customer's locations (e.g. Godown).
+    final place = '${v['location_name'] ?? ''}'.trim();
+    final label = status == 'verified' && place.isNotEmpty ? '$label0 · $place' : label0;
 
     return Container(
       decoration: BoxDecoration(

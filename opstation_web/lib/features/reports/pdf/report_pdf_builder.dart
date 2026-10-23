@@ -642,7 +642,9 @@ class ReportPdfBuilder {
       rows.add([
         '${i + 1}',
         (cust?['code'] as String?) ?? '-',
-        (cust?['shop_name'] as String?) ?? '-',
+        // "Shop (Godown)" when visited at another of the customer's locations.
+        '${(cust?['shop_name'] as String?) ?? '-'}'
+            '${'${v['location_name'] ?? ''}'.trim().isEmpty ? '' : ' (${'${v['location_name']}'.trim()})'}',
         _outcomeTag(status, collected, v),
         status == 'pending' ? '-' : '$collected',
         receipts.isEmpty ? '-' : receipts.join(', '),

@@ -793,7 +793,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         client
             .from('visits')
             .select(
-                'user_id, user_name, customer_id, amount, timestamp, status, customers(shop_name)')
+                '*, customers(shop_name)')
             .eq('org_id', orgId)
             .gte('timestamp', todayStart)
             .lt('timestamp', tomorrowStart),
@@ -839,8 +839,8 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         userNames[uid] = (m['user_name'] as String?) ?? 'Unknown';
         final amount = (m['amount'] as int?) ?? 0;
         final cust = m['customers'] as Map<String, dynamic>?;
-        final customerName =
-            (cust != null ? cust['shop_name'] as String? : null) ?? 'Unknown shop';
+        final customerName = _withPlace(
+            (cust != null ? cust['shop_name'] as String? : null) ?? 'Unknown shop', m);
         final cid = m['customer_id'] as String?;
         if (cid != null) (visitedByUser[uid] ??= <String>{}).add(cid);
         final ts = m['timestamp'] != null
@@ -1482,7 +1482,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
       final visitRows = await client
           .from('visits')
           .select(
-              'trip_id, customer_id, amount, timestamp, status, customers(shop_name)')
+              '*, customers(shop_name)')
           .inFilter('trip_id', tripIds);
 
       final byTrip = <String, List<_VisitRow>>{};
@@ -1490,9 +1490,8 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
         final m = Map<String, dynamic>.from(r as Map);
         final tid = (m['trip_id'] as String?) ?? '';
         final cust = m['customers'] as Map<String, dynamic>?;
-        final customerName =
-            (cust != null ? cust['shop_name'] as String? : null) ??
-                'Unknown shop';
+        final customerName = _withPlace(
+            (cust != null ? cust['shop_name'] as String? : null) ?? 'Unknown shop', m);
         final ts = m['timestamp'] != null
             ? DateTime.parse(m['timestamp'] as String).toLocal()
             : DateTime.now();
@@ -1751,4 +1750,11 @@ class _ActiveRoute {
     required this.collected,
     required this.visits,
   });
+}
+
+/// "Ali Traders (Godown)" when the visit was at one of the customer's other
+/// locations (SQL 409); the plain name for the main location.
+String _withPlace(String shop, Map<String, dynamic> visit) {
+  final p = '${visit['location_name'] ?? ''}'.trim();
+  return p.isEmpty ? shop : '$shop ($p)';
 }
