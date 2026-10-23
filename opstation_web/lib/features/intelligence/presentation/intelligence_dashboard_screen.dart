@@ -213,6 +213,10 @@ class _IntelligenceDashboardScreenState
   // filter-independent — drives the task sheet's coverage lines.
   Map<String, int> _routeShopCount = {};
 
+  // Active shops audited in this period (filter-independent) — drives the
+  // "Survey coverage" view of routes not surveyed yet.
+  Set<String> _auditedCustIds = {};
+
   final _pct = NumberFormat('#,##0.0');
   final _int = NumberFormat('#,##0');
 
@@ -745,6 +749,7 @@ class _IntelligenceDashboardScreenState
         _routesWithData = routesWithData;
         _orgAvgScore = orgAvgScore;
         _routeShopCount = routeShopCount;
+        _auditedCustIds = auditedCustomers;
         _salespeopleWithData = salespeopleWithData;
         _salespersonShopCount = salespersonShopCount;
         _loading = false;
@@ -1117,6 +1122,18 @@ class _IntelligenceDashboardScreenState
       ),
     );
 
+    // Survey coverage: every route, including the ones with no survey yet.
+    final coverageBtn = OutlinedButton.icon(
+      onPressed: _loading ? null : _openCoverage,
+      icon: const Icon(Icons.playlist_remove_outlined, size: 16),
+      label: const Text('Not surveyed', style: TextStyle(fontSize: 12)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.deepOrange,
+        side: const BorderSide(color: AppTheme.border),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      ),
+    );
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       if (mobile) ...[
         title,
@@ -1131,7 +1148,7 @@ class _IntelligenceDashboardScreenState
       if (mobile) ...[
         chips,
         const SizedBox(height: 10),
-        Wrap(spacing: 10, runSpacing: 10, children: [routeFilter, salespersonFilter, taskSheetBtn]),
+        Wrap(spacing: 10, runSpacing: 10, children: [routeFilter, salespersonFilter, taskSheetBtn, coverageBtn]),
       ] else
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(child: chips),
@@ -1141,6 +1158,8 @@ class _IntelligenceDashboardScreenState
           salespersonFilter,
           const SizedBox(width: 8),
           taskSheetBtn,
+          const SizedBox(width: 8),
+          coverageBtn,
         ]),
     ]);
   }
@@ -2028,6 +2047,226 @@ class _IntelligenceDashboardScreenState
     return out;
   }
 
+  // ── Survey coverage: routes with no / partial surveys in this period ────
+  Future<void> _openCoverage() async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final client = Supabase.instance.client;
+    Future<List<Map<String, dynamic>>> paged(dynamic Function(int f, int t) q) async {
+      final out = <Map<String, dynamic>>[];
+      for (int f = 0;; f += 1000) {
+        final page = List<Map<String, dynamic>>.from(await q(f, f + 999) as List);
+        out.addAll(page);
+        if (page.length < 1000 || f > 200000) break;
+      }
+      return out;
+    }
+
+    // Load everything the view needs (all routes, their shops, salespeople).
+    List<_RouteCoverage> rows;
+    try {
+      showDialog(context: context, barrierDismissible: false,
+          builder: (_) => const Center(child: CircularProgressIndicator()));
+      final routes = await paged((f, t) => client.from('sales_routes')
+          .select('id, name, is_active').eq('org_id', orgId).order('name').range(f, t));
+      final live = routes.where((r) => r['is_active'] != false).toList();
+      final ids = [for (final r in live) r['id'] as String];
+      final stops = <Map<String, dynamic>>[];
+      final assigns = <Map<String, dynamic>>[];
+      for (var k = 0; k < ids.length; k += 150) {
+        final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
+        stops.addAll(await paged((f, t) => client.from('route_stops')
+            .select('route_id, customer_id').inFilter('route_id', chunk).range(f, t)));
+        assigns.addAll(await paged((f, t) => client.from('route_assignments')
+            .select('route_id, user_id').inFilter('route_id', chunk).range(f, t)));
+      }
+      final custs = await paged((f, t) => client.from('customers')
+          .select('id, code, shop_name').eq('org_id', orgId).eq('is_active', true).range(f, t));
+      final users = await paged((f, t) => client.from('users')
+          .select('id, name').eq('org_id', orgId).range(f, t));
+
+      final custName = {for (final c in custs) c['id'] as String:
+          '${(c['code'] ?? '').toString().isNotEmpty ? '${c['code']} · ' : ''}${c['shop_name'] ?? 'Unnamed shop'}'};
+      final userName = {for (final u in users) u['id'] as String: '${u['name'] ?? ''}'};
+      final shopsBy = <String, Set<String>>{};
+      for (final st in stops) {
+        final cid = st['customer_id'] as String?;
+        if (cid == null || !custName.containsKey(cid)) continue; // active shops only
+        (shopsBy[st['route_id'] as String] ??= {}).add(cid);
+      }
+      final peopleBy = <String, Set<String>>{};
+      for (final a in assigns) {
+        final n = userName[a['user_id']];
+        if (n == null || n.isEmpty) continue;
+        (peopleBy[a['route_id'] as String] ??= {}).add(n);
+      }
+      rows = [
+        for (final r in live)
+          _RouteCoverage(
+            id: r['id'] as String,
+            name: '${r['name'] ?? '(route)'}',
+            salespeople: (peopleBy[r['id']] ?? const <String>{}).toList()..sort(),
+            shops: shopsBy[r['id']] ?? const <String>{},
+            surveyed: (shopsBy[r['id']] ?? const <String>{}).where(_auditedCustIds.contains).toSet(),
+            custName: custName,
+          ),
+      ]..removeWhere((r) => r.shops.isEmpty);
+    } catch (_) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not load route coverage. Please try again.'),
+            behavior: SnackBarBehavior.floating));
+      }
+      return;
+    }
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop(); // spinner
+
+    final periodLabel = _range == 'all'
+        ? 'All time'
+        : (_from != null && _to != null
+            ? '${DateFormat('d MMM').format(_from!)} – ${DateFormat('d MMM yyyy').format(_to!)}'
+            : 'Selected period');
+    final none = rows.where((r) => r.surveyed.isEmpty).toList()
+      ..sort((a, b) => b.shops.length.compareTo(a.shops.length));
+    final partly = rows.where((r) => r.surveyed.isNotEmpty && r.surveyed.length < r.shops.length).toList()
+      ..sort((a, b) => a.ratio.compareTo(b.ratio));
+    final full = rows.where((r) => r.surveyed.length == r.shops.length).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    String tab = 'none';
+    String query = '';
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        final mobile = MediaQuery.of(ctx).size.width < 700;
+        final base = tab == 'none' ? none : tab == 'partly' ? partly : full;
+        final q = query.trim().toLowerCase();
+        final list = q.isEmpty
+            ? base
+            : base.where((r) => matchesQuery('${r.name} ${r.salespeople.join(' ')}', q)).toList();
+        Widget tabChip(String key, String label, int n, Color c) => ChoiceChip(
+              selected: tab == key,
+              visualDensity: VisualDensity.compact,
+              selectedColor: c.withOpacity(0.14),
+              label: Text('$label ($n)',
+                  style: TextStyle(fontSize: 12, fontWeight: tab == key ? FontWeight.w700 : FontWeight.w500,
+                      color: tab == key ? c : AppTheme.textSecondary)),
+              onSelected: (_) => setLocal(() => tab = key),
+            );
+        return Dialog(
+          insetPadding: EdgeInsets.all(mobile ? 10 : 40),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760, maxHeight: 720),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Expanded(child: Text('Survey coverage by route',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
+                  IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+                ]),
+                Text('$periodLabel · active routes and active shops',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  tabChip('none', 'Not surveyed', none.length, Colors.deepOrange),
+                  tabChip('partly', 'Partly surveyed', partly.length, Colors.amber.shade800),
+                  tabChip('full', 'Fully surveyed', full.length, AppTheme.success),
+                ]),
+                const SizedBox(height: 10),
+                TextField(
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: 'Search route or salesperson…',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onChanged: (v) => setLocal(() => query = v),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: list.isEmpty
+                      ? Center(child: Text(
+                          tab == 'none' ? 'Every route has at least one surveyed shop in this period.' : 'No routes here.',
+                          style: const TextStyle(color: AppTheme.textSecondary)))
+                      : ListView.separated(
+                          itemCount: list.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (_, i) {
+                            final r = list[i];
+                            final missing = r.shops.where((c) => !r.surveyed.contains(c)).map((c) => r.custName[c] ?? c).toList()..sort();
+                            final color = r.surveyed.isEmpty ? Colors.deepOrange
+                                : r.ratio < 1 ? Colors.amber.shade800 : AppTheme.success;
+                            return Theme(
+                              data: Theme.of(ctx).copyWith(dividerColor: Colors.transparent),
+                              child: ExpansionTile(
+                                tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+                                childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+                                title: Text(r.name, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                                subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  const SizedBox(height: 3),
+                                  Text(r.salespeople.isEmpty ? 'No salesperson' : r.salespeople.join(', '),
+                                      style: TextStyle(fontSize: 12,
+                                          color: r.salespeople.isEmpty ? AppTheme.danger : AppTheme.textSecondary)),
+                                  const SizedBox(height: 5),
+                                  Row(children: [
+                                    Expanded(child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: LinearProgressIndicator(
+                                        value: r.ratio, minHeight: 6,
+                                        backgroundColor: color.withOpacity(0.12),
+                                        valueColor: AlwaysStoppedAnimation(color)),
+                                    )),
+                                    const SizedBox(width: 10),
+                                    Text('${r.surveyed.length} of ${r.shops.length} shops',
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+                                  ]),
+                                ]),
+                                children: [
+                                  if (missing.isEmpty)
+                                    const Align(alignment: Alignment.centerLeft,
+                                        child: Text('All shops on this route are surveyed.',
+                                            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+                                  else ...[
+                                    Align(alignment: Alignment.centerLeft,
+                                        child: Text('Not surveyed (${missing.length})',
+                                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+                                    const SizedBox(height: 4),
+                                    for (final m in missing)
+                                      Align(alignment: Alignment.centerLeft,
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(vertical: 2),
+                                            child: Text('• $m', style: const TextStyle(fontSize: 12)))),
+                                  ],
+                                  if (r.surveyed.isNotEmpty && _routesWithData.containsKey(r.id))
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton.icon(
+                                        onPressed: () {
+                                          Navigator.pop(ctx);
+                                          setState(() { _filterRouteId = r.id; _filterSalespersonId = null; });
+                                          _load();
+                                        },
+                                        icon: const Icon(Icons.filter_alt_outlined, size: 16),
+                                        label: const Text('Show this route on the dashboard'),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ]),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
   // ── Searchable, data-only market picker ─────────────────────────────────
   static const String _kAllMarkets = '__all_markets__';
 
@@ -2568,4 +2807,18 @@ class _IntelligenceDashboardScreenState
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppTheme.border),
       );
+}
+
+
+/// One route's survey coverage in the selected period.
+class _RouteCoverage {
+  final String id;
+  final String name;
+  final List<String> salespeople;
+  final Set<String> shops;     // active shops on the route
+  final Set<String> surveyed;  // of those, surveyed in the period
+  final Map<String, String> custName;
+  _RouteCoverage({required this.id, required this.name, required this.salespeople,
+      required this.shops, required this.surveyed, required this.custName});
+  double get ratio => shops.isEmpty ? 0 : surveyed.length / shops.length;
 }
