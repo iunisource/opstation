@@ -727,109 +727,70 @@ class ReportPdfBuilder {
     final headers = [
       '#', 'CODE', 'CUSTOMER', 'STATUS', 'COLLECTED', 'CR#', 'TIME', 'NOTES',
     ];
-    final rows = <List<String>>[];
-    for (int i = 0; i < trip.stopSnapshot.length; i++) {
-      final c = trip.stopSnapshot[i];
-
-      // Every visit for this stop, oldest → newest. A customer collected from
-      // more than once in a day (e.g. a morning payment and an evening one)
-      // gets a line PER collection — each with its own amount, receipt and
-      // time — instead of collapsing to just the latest. The stop number and
-      // shop repeat on each line so the grouping survives a page break.
-      final stopVisits = [
-        for (final v in trip.visits)
-          if (v.customerId == c.id) v,
-      ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
-      // Collapse re-submissions: the field app can re-send the SAME collection
-      // (identical receipt) on a GPS re-fire, so one 30,000 receipt sent 3×
-      // must show as ONE line, not three. Genuinely different receipts stay as
-      // separate collection lines.
-      final collections = _dedupCollections(stopVisits);
-
-      if (collections.isEmpty) {
-        // No money collected — one representative status line for the stop.
-        final rep = stopVisits.isEmpty ? null : stopVisits.last;
-        final status = rep?.status ?? byCustomer[c.id] ?? VisitStatus.pending;
-        rows.add([
-          '${i + 1}',
-          c.code,
-          c.shopName,
-          _statusTagWithDistance(status, rep),
-          status == VisitStatus.pending ? '-' : '0',
-          '-',
-          rep == null ? '-' : DateFormat('hh:mm a').format(rep.timestamp),
-          _notesFor(status, rep),
-        ]);
-        continue;
+    // Rows in the order the shops were actually visited (time of each mark,
+    // planned and off-route shops together); stops never marked follow at the
+    // end in route order. Status uses the rules without "Skip": Visited /
+    // Outside geofence / Not verified (old records may still say Skipped).
+    final timed = <_TimedRow>[];
+    final untouched = <List<String>>[];
+    void addShop(String code, String name, List<Visit> vs) {
+      vs.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      if (vs.isEmpty) {
+        untouched.add(['', code, name, 'NOT VISITED', '-', '-', '-', '-']);
+        return;
       }
-
+      final verifiedVisit = vs.where((v) => v.status == VisitStatus.verified).toList();
+      final collections = _dedupCollections(vs);
+      if (collections.isEmpty) {
+        final rep = verifiedVisit.isNotEmpty ? verifiedVisit.first : vs.last;
+        timed.add(_TimedRow(rep.timestamp, [
+          '', code, name,
+          _outcomeTag(rep.status, 0, rep),
+          '0', '-',
+          DateFormat('hh:mm a').format(rep.timestamp),
+          _notesFor(rep.status, rep),
+        ]));
+        return;
+      }
       for (final v in collections) {
-        rows.add([
-          '${i + 1}',
-          c.code,
-          c.shopName,
-          _statusTagWithDistance(v.status, v),
+        // Once the shop was verified on this trip it counts as Visited.
+        final st = verifiedVisit.isNotEmpty ? VisitStatus.verified : v.status;
+        timed.add(_TimedRow(v.timestamp, [
+          '', code, name,
+          _outcomeTag(st, v.amount, v),
           '${v.amount}',
           (v.receiptNumber ?? '').isEmpty ? '-' : v.receiptNumber!,
           DateFormat('hh:mm a').format(v.timestamp),
           _notesFor(v.status, v),
-        ]);
+        ]));
       }
     }
 
-    // Off-route / ad-hoc collections: visits whose customer was NOT a planned
-    // stop on this route (e.g. a payment recorded via "New CR"). The loop above
-    // only walks planned stops, and the sequenced table lists only GPS-verified
-    // visits — an ad-hoc receipt has no GPS — so without this they printed
-    // nowhere, leaving a blank report despite money collected. Customer name /
-    // code come from ctx.extraCustomers (resolved from the local table).
+    for (final c in trip.stopSnapshot) {
+      addShop(c.code, c.shopName, [for (final v in trip.visits) if (v.customerId == c.id) v]);
+    }
+    // Off-route / ad-hoc collections (customer not a planned stop, e.g. a "New
+    // CR" payment) — resolved from ctx.extraCustomers.
     final snapshotIds = trip.stopSnapshot.map((c) => c.id).toSet();
     final offRouteIds = <String>[];
     for (final v in trip.visits) {
-      if (!snapshotIds.contains(v.customerId) &&
-          !offRouteIds.contains(v.customerId)) {
+      if (!snapshotIds.contains(v.customerId) && !offRouteIds.contains(v.customerId)) {
         offRouteIds.add(v.customerId);
       }
     }
-    var seq = trip.stopSnapshot.length;
     for (final cid in offRouteIds) {
       final ref = ctx.extraCustomers[cid];
-      final code = ref?.code ?? '-';
-      final name = ref?.name ?? '(off-route customer)';
-      final custVisits = [
-        for (final v in trip.visits)
-          if (v.customerId == cid) v,
-      ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      final collections = _dedupCollections(custVisits);
-      seq++;
-      if (collections.isEmpty) {
-        final rep = custVisits.isEmpty ? null : custVisits.last;
-        final status = rep?.status ?? VisitStatus.pending;
-        rows.add([
-          '$seq',
-          code,
-          name,
-          _statusTagWithDistance(status, rep),
-          status == VisitStatus.pending ? '-' : '0',
-          '-',
-          rep == null ? '-' : DateFormat('hh:mm a').format(rep.timestamp),
-          _notesFor(status, rep),
-        ]);
-        continue;
-      }
-      for (final v in collections) {
-        rows.add([
-          '$seq',
-          code,
-          name,
-          _statusTagWithDistance(v.status, v),
-          '${v.amount}',
-          (v.receiptNumber ?? '').isEmpty ? '-' : v.receiptNumber!,
-          DateFormat('hh:mm a').format(v.timestamp),
-          _notesFor(v.status, v),
-        ]);
-      }
+      addShop(ref?.code ?? '-', ref?.name ?? '(off-route customer)',
+          [for (final v in trip.visits) if (v.customerId == cid) v]);
+    }
+
+    timed.sort((a, b) => a.at.compareTo(b.at));
+    final rows = <List<String>>[];
+    for (final t in timed) {
+      rows.add([...t.cells]..[0] = '${rows.length + 1}');
+    }
+    for (final u in untouched) {
+      rows.add([...u]..[0] = '${rows.length + 1}');
     }
 
     return pw.TableHelper.fromTextArray(
@@ -1217,6 +1178,20 @@ class ReportPdfBuilder {
     return base;
   }
 
+  /// Visit Report status under the rules without "Skip".
+  static String _outcomeTag(VisitStatus s, int collected, Visit? v) {
+    final o = visitOutcomeOf(s, collected);
+    final base = o.label.toUpperCase();
+    if (o == VisitOutcome.outsideGeofence || o == VisitOutcome.notVerified) {
+      final d = v?.distanceMeters;
+      if (d != null && d > 0) {
+        final away = d >= 1000 ? '${(d / 1000).toStringAsFixed(1)} km away' : '${d.round()} m away';
+        return '$base\n$away';
+      }
+    }
+    return base;
+  }
+
   static String _statusTag(VisitStatus s, Visit? v) {
     switch (s) {
       case VisitStatus.verified:
@@ -1266,4 +1241,12 @@ class ReportPdfBuilder {
     if (lat == null || lng == null) return 'No GPS';
     return '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
   }
+}
+
+
+/// A Visit Report row with the time it happened, for ordering by visit sequence.
+class _TimedRow {
+  final DateTime at;
+  final List<String> cells;
+  _TimedRow(this.at, this.cells);
 }

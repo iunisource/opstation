@@ -397,7 +397,7 @@ class _VisitRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  _subtitle(status, latest),
+                  _subtitle(status, latest, visits.fold<int>(0, (s, v) => s + v.amount)),
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textSecondaryLight,
@@ -502,27 +502,21 @@ class _VisitRow extends StatelessWidget {
     );
   }
 
-  String _subtitle(VisitStatus s, Visit? v) {
-    switch (s) {
-      case VisitStatus.pending:
+  String _subtitle(VisitStatus s, Visit? v, [int collected = 0]) {
+    final o = visitOutcomeOf(s, collected);
+    final at = v == null ? '' : ' · ${DateFormat('HH:mm').format(v.timestamp)}';
+    switch (o) {
+      case VisitOutcome.notVisited:
         return 'Not visited';
-      case VisitStatus.skipped:
-        if ((v?.skipReason ?? '').isNotEmpty) {
-          return 'Skipped · ${v!.skipReason}';
-        }
-        return 'Skipped';
-      case VisitStatus.verified:
-        if (v == null) return 'Verified';
-        return 'Verified at ${DateFormat('HH:mm').format(v.timestamp)}';
-      case VisitStatus.outside:
-        if (v == null) return 'Outside geofence';
-        final d = v.distanceMeters?.round();
-        return d != null
-            ? 'Outside · ${d}m away · ${DateFormat('HH:mm').format(v.timestamp)}'
-            : 'Outside · ${DateFormat('HH:mm').format(v.timestamp)}';
-      case VisitStatus.noLocation:
-        if (v == null) return 'No location';
-        return 'No location · ${DateFormat('HH:mm').format(v.timestamp)}';
+      case VisitOutcome.skipped:
+        final r = v?.skipReason ?? '';
+        return r.isNotEmpty ? 'Skipped · $r' : 'Skipped';
+      case VisitOutcome.visited:
+        return 'Visited$at';
+      case VisitOutcome.outsideGeofence:
+      case VisitOutcome.notVerified:
+        final d = v?.distanceMeters?.round();
+        return '${o.label}${d != null && d > 0 ? ' · ${d}m away' : ''}$at';
     }
   }
 }

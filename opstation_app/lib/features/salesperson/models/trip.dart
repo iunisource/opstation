@@ -36,6 +36,45 @@ extension VisitStatusX on VisitStatus {
   }
 }
 
+/// What a stop counts as, under the rules without "Skip":
+///   verified (inside the geofence), money or not  → Visited
+///   not verified (outside / no location) + money  → Outside geofence
+///   not verified, no money                        → Not verified
+/// Old visits recorded as "Skipped" keep that label; untouched stops are
+/// Not visited.
+enum VisitOutcome { visited, outsideGeofence, notVerified, skipped, notVisited }
+
+VisitOutcome visitOutcomeOf(VisitStatus s, int collected) {
+  switch (s) {
+    case VisitStatus.verified:
+      return VisitOutcome.visited;
+    case VisitStatus.outside:
+    case VisitStatus.noLocation:
+      return collected > 0 ? VisitOutcome.outsideGeofence : VisitOutcome.notVerified;
+    case VisitStatus.skipped:
+      return VisitOutcome.skipped;
+    case VisitStatus.pending:
+      return VisitOutcome.notVisited;
+  }
+}
+
+extension VisitOutcomeX on VisitOutcome {
+  String get label {
+    switch (this) {
+      case VisitOutcome.visited:
+        return 'Visited';
+      case VisitOutcome.outsideGeofence:
+        return 'Outside geofence';
+      case VisitOutcome.notVerified:
+        return 'Not verified';
+      case VisitOutcome.skipped:
+        return 'Skipped';
+      case VisitOutcome.notVisited:
+        return 'Not visited';
+    }
+  }
+}
+
 /// One visit record against one customer inside one trip.
 class Visit {
   final String id;

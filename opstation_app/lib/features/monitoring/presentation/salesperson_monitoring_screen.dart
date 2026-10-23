@@ -364,7 +364,7 @@ class _TimelineRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _subtitleFor(status, last),
+                  _subtitleFor(status, last, visits.fold<int>(0, (s, v) => s + v.amount)),
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textSecondaryLight,
@@ -421,27 +421,21 @@ class _TimelineRow extends StatelessWidget {
     );
   }
 
-  String _subtitleFor(VisitStatus s, Visit? last) {
-    switch (s) {
-      case VisitStatus.pending:
-        return 'Not yet visited';
-      case VisitStatus.skipped:
-        if (last?.skipReason != null && last!.skipReason!.isNotEmpty) {
-          return 'Skipped · ${last.skipReason}';
-        }
-        return 'Skipped';
-      case VisitStatus.verified:
-        if (last == null) return 'Verified';
-        return 'Verified at ${DateFormat('HH:mm').format(last.timestamp)}';
-      case VisitStatus.outside:
-        if (last == null) return 'Outside geofence';
-        final d = last.distanceMeters?.round();
-        return d != null
-            ? 'Outside geofence · ${d}m away · ${DateFormat('HH:mm').format(last.timestamp)}'
-            : 'Outside geofence · ${DateFormat('HH:mm').format(last.timestamp)}';
-      case VisitStatus.noLocation:
-        if (last == null) return 'No location';
-        return 'No location · ${DateFormat('HH:mm').format(last.timestamp)}';
+  String _subtitleFor(VisitStatus s, Visit? last, [int collected = 0]) {
+    final o = visitOutcomeOf(s, collected);
+    final at = last == null ? '' : ' · ${DateFormat('HH:mm').format(last.timestamp)}';
+    switch (o) {
+      case VisitOutcome.notVisited:
+        return 'Not visited';
+      case VisitOutcome.skipped:
+        final r = last?.skipReason ?? '';
+        return r.isNotEmpty ? 'Skipped · $r' : 'Skipped';
+      case VisitOutcome.visited:
+        return 'Visited$at';
+      case VisitOutcome.outsideGeofence:
+      case VisitOutcome.notVerified:
+        final d = last?.distanceMeters?.round();
+        return '${o.label}${d != null && d > 0 ? ' · ${d}m away' : ''}$at';
     }
   }
 }

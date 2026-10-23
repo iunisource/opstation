@@ -711,7 +711,7 @@ class _StopCardState extends State<_StopCard> {
                   fontSize: 13, fontWeight: FontWeight.w800,
                   color: AppColors.success)),
         ] else
-          Text(status.label,
+          Text(visitOutcomeOf(status, amount).label,
               style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: tone)),
         const SizedBox(width: 6),
         const Icon(Icons.expand_more, size: 17, color: AppColors.textSecondaryLight),
@@ -848,7 +848,7 @@ class _StopCardState extends State<_StopCard> {
                   ],
                 ),
               ),
-              if (status != null) _statusBadge(status),
+              if (status != null) _statusBadge(status, collections.fold<int>(0, (s, v) => s + v.amount)),
             ],
           ),
           if (collections.isNotEmpty) ...[
@@ -930,21 +930,9 @@ class _StopCardState extends State<_StopCard> {
             const SizedBox(height: 8),
             Row(
               children: [
+                // No "Skip" any more: a stop is either marked (Visited /
+                // Outside geofence / Not verified) or stays Not visited.
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: canVisit ? onSkip : null,
-                    icon: const Icon(Icons.skip_next, size: 18),
-                    label: const Text('Skip'),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 44),
-                      foregroundColor: AppColors.textPrimaryLight,
-                      side: const BorderSide(color: AppColors.borderLight),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
                   child: ElevatedButton.icon(
                     onPressed: canVisit ? onMarkVisit : null,
                     icon: const Icon(Icons.check_circle_outline, size: 18),
@@ -977,23 +965,18 @@ class _StopCardState extends State<_StopCard> {
     );
   }
 
-  Widget _statusBadge(VisitStatus s) {
-    switch (s) {
-      case VisitStatus.verified:
-        return const StatusBadge(
-            label: 'Verified', tone: StatusBadgeTone.success);
-      case VisitStatus.outside:
-        return const StatusBadge(
-            label: 'Outside', tone: StatusBadgeTone.warning);
-      case VisitStatus.noLocation:
-        return const StatusBadge(
-            label: 'No location', tone: StatusBadgeTone.danger);
-      case VisitStatus.skipped:
-        return const StatusBadge(
-            label: 'Skipped', tone: StatusBadgeTone.neutral);
-      case VisitStatus.pending:
-        return const StatusBadge(
-            label: 'Pending', tone: StatusBadgeTone.neutral);
+  Widget _statusBadge(VisitStatus s, int collected) {
+    final o = visitOutcomeOf(s, collected);
+    switch (o) {
+      case VisitOutcome.visited:
+        return StatusBadge(label: o.label, tone: StatusBadgeTone.success);
+      case VisitOutcome.outsideGeofence:
+        return StatusBadge(label: o.label, tone: StatusBadgeTone.warning);
+      case VisitOutcome.notVerified:
+        return StatusBadge(label: o.label, tone: StatusBadgeTone.danger);
+      case VisitOutcome.skipped:
+      case VisitOutcome.notVisited:
+        return StatusBadge(label: o.label, tone: StatusBadgeTone.neutral);
     }
   }
 }
