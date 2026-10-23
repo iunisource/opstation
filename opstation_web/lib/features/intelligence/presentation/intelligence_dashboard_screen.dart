@@ -403,12 +403,14 @@ class _IntelligenceDashboardScreenState
       final resB = await Future.wait<dynamic>([
         custIdList.isEmpty
             ? Future.value(const <Map<String, dynamic>>[])
-            : fetchByIds('customers', 'id', custIdList, 'id, shop_name, code'),
+            : fetchByIds('customers', 'id', custIdList, 'id, shop_name, code, is_active'),
         custIdList.isEmpty
             ? Future.value(const <Map<String, dynamic>>[])
             : fetchByIds('route_stops', 'customer_id', custIdList, 'route_id, customer_id'),
       ]);
-      final custRaw = resB[0] as List;
+      // Deactivated customers (e.g. a duplicate that was switched off) are left
+      // out of every rollup, as the note further down intends.
+      final custRaw = (resB[0] as List).where((c) => (c as Map)['is_active'] != false).toList();
       final stopsRaw = resB[1] as List;
       String canonBrand(String b) {
         final c = brandAlias[b.toLowerCase().trim()];
