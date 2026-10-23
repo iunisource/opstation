@@ -7,7 +7,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
-import '../../erp/widgets/duplicate_ref_guard.dart';
 
 /// "Other locations" of a customer (SQL 409), e.g. Godown, Shop 2. A visit at
 /// any of them counts as verified, same as at the main location. Everyone can
@@ -77,12 +76,13 @@ class _CustomerOtherLocationsState extends ConsumerState<CustomerOtherLocations>
     // Same spot as another customer? Warn first (never blocks).
     var warned = false;
     if (orgId != null) {
-      final go = await checkDuplicateLocation(context,
-          orgId: orgId, lat: lat, lng: lng,
-          excludeCustomerId: widget.customerId,
-          customerLabel: '${widget.shopCode ?? ''} ${widget.shopName} ($name)'.trim());
-      if (!go) return;
-      warned = true;
+      final hits = await _sameSpot(orgId, lat, lng);
+      if (hits.isNotEmpty) {
+        if (!mounted) return;
+        final go = await _confirmSameSpot(hits, lat, lng);
+        if (go != true) return;
+        warned = true;
+      }
     }
     setState(() => _busy = true);
     try {
@@ -90,7 +90,11 @@ class _CustomerOtherLocationsState extends ConsumerState<CustomerOtherLocations>
         await Supabase.instance.client.rpc('customer_location_add', params: {
           'p_customer_id': widget.customerId, 'p_name': name, 'p_lat': lat, 'p_lng': lng,
         });
-        if (warned) await markLocationWarned(widget.customerId);
+        if (warned) {
+          try {
+            await Supabase.instance.client.rpc('dup_loc_mark_warned', params: {'p_customer_id': widget.customerId});
+          } catch (_) {}
+        }
         _snack('Location "$name" added');
       } else {
         await Supabase.instance.client.rpc('customer_location_update', params: {
@@ -105,6 +109,53 @@ class _CustomerOtherLocationsState extends ConsumerState<CustomerOtherLocations>
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  /// Other customers already saved at this spot (never blocks on failure).
+  Future<List<Map<String, dynamic>>> _sameSpot(String orgId, double lat, double lng) async {
+    try {
+      final r = await Supabase.instance.client.rpc('customer_location_duplicates', params: {
+        'p_org_id': orgId, 'p_lat': lat, 'p_lng': lng, 'p_exclude_id': widget.customerId,
+      });
+      return List<Map<String, dynamic>>.from(r as List).where((h) => h['is_active'] != false).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<bool?> _confirmSameSpot(List<Map<String, dynamic>> hits, double lat, double lng) => showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.wrong_location_outlined, color: Colors.orange),
+          title: const Text('Another customer is at this exact location'),
+          content: SizedBox(
+            width: 480,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)} is already saved for:',
+                  style: const TextStyle(fontSize: 13)),
+              const SizedBox(height: 8),
+              for (final h in hits)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('${h['code'] ?? ''}  ${h['shop_name'] ?? ''}'.trim(),
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                ),
+              const SizedBox(height: 6),
+              const Text('Check that this is the right place. If you save anyway it will be listed in '
+                  'Financials → Duplicate References for review.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Go back and review')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, foregroundColor: Colors.white),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save anyway'),
+            ),
+          ],
+        ),
+      );
 
   Future<void> _remove(Map<String, dynamic> loc) async {
     final ok = await showDialog<bool>(
