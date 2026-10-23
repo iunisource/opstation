@@ -105,6 +105,18 @@ class SupabasePullService {
       await _pullRouteStops(data.routeStops);
       await _pullRouteAssignments(data.routeAssignments);
     });
+    // Survey categories / SKUs are small: fetch them at login too, so a
+    // surveyor never waits for the slow history pull to see new ones.
+    try {
+      final r = await Future.wait([
+        Supabase.instance.client.from('competitor_categories').select().eq('org_id', orgId),
+        Supabase.instance.client.from('intelligence_products').select().eq('org_id', orgId),
+      ]);
+      await _db.transaction(() async {
+        await _pullCompetitorCategories(_asList(r[0]));
+        await _pullProducts(_asList(r[1]));
+      });
+    } catch (_) {}
   }
 
   /// Background history pull: trips, stops, visits, deliveries + Intelligence.
@@ -639,6 +651,54 @@ class SupabasePullService {
           stopType: Value(r['stop_type'] as String? ?? 'delivery'),
         ));
       } catch (_) {}
+    }
+  }
+
+  /// Quick refresh of what the surveyor screens need — competitor categories,
+  /// survey SKUs and the org's customers (name / main group / group). Small and
+  /// fast, so the survey screens call it every time they open (and on
+  /// pull-to-refresh) instead of waiting for the slow background history pull.
+  /// Categories / SKUs removed on the server are removed here too.
+  /// Returns false when the device could not reach the server.
+  Future<bool> refreshSurveyReference(String orgId) async {
+    try {
+      final client = Supabase.instance.client;
+      Future<List<Map<String, dynamic>>> paged(String table, String cols) async {
+        final out = <Map<String, dynamic>>[];
+        for (int f = 0;; f += 1000) {
+          final page = _asList(await client.from(table).select(cols).eq('org_id', orgId).range(f, f + 999));
+          out.addAll(page);
+          if (page.length < 1000 || f > 100000) break;
+        }
+        return out;
+      }
+      final res = await Future.wait([
+        paged('competitor_categories', '*'),
+        paged('intelligence_products', '*'),
+        paged('customers', '*'),
+      ]);
+      final cats = res[0], prods = res[1], custs = res[2];
+      // Never overwrite a customer edited on this phone and not yet uploaded.
+      final pending = {
+        for (final c in await (_db.select(_db.customers)..where((c) => c.syncStatus.equals('pending'))).get()) c.id
+      };
+      await _db.transaction(() async {
+        await _pullCompetitorCategories(cats);
+        await _pullProducts(prods);
+        final catIds = {for (final c in cats) c['id'] as String};
+        final prodIds = {for (final p in prods) p['id'] as String};
+        await (_db.delete(_db.competitorCategories)
+              ..where((c) => c.orgId.equals(orgId) & c.id.isNotIn(catIds.toList())))
+            .go();
+        await (_db.delete(_db.products)
+              ..where((p) => p.orgId.equals(orgId) & p.id.isNotIn(prodIds.toList())))
+            .go();
+        await _pullCustomers(custs.where((c) => !pending.contains(c['id'])).toList());
+      });
+      return true;
+    } catch (e) {
+      print('SURVEY REFERENCE REFRESH ERROR (org=$orgId): $e');
+      return false;
     }
   }
 

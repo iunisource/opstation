@@ -5,6 +5,8 @@ import 'package:drift/drift.dart' show Value, OrderingTerm;
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../../core/supabase/supabase_pull_service.dart';
+import 'survey_customer_filter.dart';
 
 class CompetitorSpottingScreen extends ConsumerStatefulWidget {
   const CompetitorSpottingScreen({super.key});
@@ -26,11 +28,38 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
 
   bool _loading = true;
   bool _saving = false;
+  bool _refreshing = false;
+
+  /// Fetch the latest categories / SKUs / customers from the server, then
+  /// reload this screen from the phone's copy. Runs every time the screen
+  /// opens (in the background — the saved list shows straight away) and on
+  /// pull-to-refresh.
+  Future<void> _refresh({bool manual = false}) async {
+    final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
+    if (orgId == null || _refreshing) return;
+    setState(() => _refreshing = true);
+    final ok = await ref.read(supabasePullServiceProvider).refreshSurveyReference(orgId);
+    if (!mounted) return;
+    await _loadData();
+    if (!mounted) return;
+    setState(() => _refreshing = false);
+    if (manual) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok ? 'Up to date' : 'No internet — showing the data saved on this phone'),
+        duration: const Duration(seconds: 2),
+      ));
+    }
+  }
+
+  Future<void> _openFilter() async {
+    final changed = await SurveyCustomerFilter.open(context, _allCustomers);
+    if (changed && mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _loadData().then((_) { if (mounted) _refresh(); });
     _searchCtrl.addListener(_filter);
   }
 
@@ -198,6 +227,7 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
   }
 
   List<CustomersData> _applyFilter(List<CustomersData> base) {
+    base = base.where(SurveyCustomerFilter.matches).toList();
     if (_filterMode == 'audited') return base.where((c) => _auditedIds.contains(c.id)).toList();
     if (_filterMode == 'empty') return base.where((c) => !_auditedIds.contains(c.id)).toList();
     return base;
@@ -214,7 +244,17 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
     }
     if (_selectedCustomer == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Competitor Spotting')),
+        appBar: AppBar(title: const Text('Competitor Spotting'), actions: [
+          SurveyCustomerFilter.button(onPressed: _openFilter),
+          _refreshing
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14),
+                  child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+              : IconButton(
+                  tooltip: 'Refresh',
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () => _refresh(manual: true)),
+        ]),
         body: Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -241,7 +281,8 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
           Expanded(
             child: Builder(builder: (context) {
               final displayed = _applyFilter(_filteredCustomers);
-              return ListView.separated(
+              final list = ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
                 itemCount: displayed.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (_, i) {
@@ -256,6 +297,27 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
                     onTap: () => setState(() => _selectedCustomer = c),
                   );
                 },
+              );
+              return RefreshIndicator(
+                onRefresh: () => _refresh(manual: true),
+                child: Column(children: [
+                  if (SurveyCustomerFilter.count > 0)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                      child: Row(children: [
+                        Expanded(child: Text('Showing ${displayed.length} of ${_allCustomers.length} shops (filtered)',
+                            style: const TextStyle(fontSize: 12, color: Colors.grey))),
+                        TextButton(
+                          onPressed: () => setState(() {
+                            SurveyCustomerFilter.mainGroups.clear();
+                            SurveyCustomerFilter.groups.clear();
+                          }),
+                          child: const Text('Clear filter'),
+                        ),
+                      ]),
+                    ),
+                  Expanded(child: list),
+                ]),
               );
             }),
           ),
