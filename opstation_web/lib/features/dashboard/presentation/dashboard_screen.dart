@@ -1177,7 +1177,7 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
             if (widget.showAmount) ...[
               const SizedBox(width: 8),
               Text(
-                v.amount > 0 ? 'Rs ${_fmtNumber(v.amount)}' : 'No collection',
+                'Rs ${_fmtNumber(v.amount)}',
                 style: const TextStyle(
                     fontSize: 13, fontWeight: FontWeight.w700),
               ),
