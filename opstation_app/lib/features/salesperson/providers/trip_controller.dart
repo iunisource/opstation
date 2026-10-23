@@ -117,6 +117,59 @@ class TripController extends AsyncNotifier<TripState> {
 
     final today = TripState.today();
     final user = ref.read(authControllerProvider).valueOrNull;
+
+    // Same route started again today by the same person: continue today's
+    // trip instead of opening a second one — one summary per route per day,
+    // and the CR# check covers every visit of the day on this route.
+    // (Only trips the person ended themselves; a cut-off close stays closed.)
+    Trip? earlier;
+    for (final t in s.completedToday) {
+      if (t.routeId != route.id || t.isFree) continue;
+      if (t.closeReason != TripCloseReason.userEnded) continue;
+      if (user != null && t.userId.isNotEmpty && t.userId != user.id) continue;
+      if (_dateOnly(t.startedAt) != today) continue;
+      if (earlier == null || t.startedAt.isAfter(earlier.startedAt)) earlier = t;
+    }
+    if (earlier != null) {
+      // Shops added to the route since the first start join this trip too.
+      final have = {for (final c in earlier.stopSnapshot) c.id};
+      final added = [for (final c in route.stops) if (!have.contains(c.id)) c];
+      for (var i = 0; i < added.length; i++) {
+        await _repo.addTripStop(earlier.id, added[i].id, earlier.stopSnapshot.length + i);
+      }
+      final resumed = earlier.copyWith(
+        reopen: true,
+        stopSnapshot: added.isEmpty ? null : List.unmodifiable([...earlier.stopSnapshot, ...added]),
+      );
+      await _repo.updateTrip(resumed);
+      await _repo.setDayStamp(today);
+      final exhausted = Set<String>.from(s.exhaustedOneTimeRouteIds)..remove(route.id);
+      state = AsyncData(s.copyWith(
+        active: resumed,
+        completedToday: [for (final t in s.completedToday) if (t.id != earlier.id) t],
+        exhaustedOneTimeRouteIds: exhausted,
+        dayStamp: today,
+      ));
+      Future.microtask(() async {
+        try {
+          final db = ref.read(appDatabaseProvider);
+          final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
+          final admins = await (db.select(db.users)..where((u) => u.orgId.equals(orgId ?? ''))).get();
+          final notifService = ref.read(notificationServiceProvider);
+          for (final a in admins) {
+            if (a.role == 'masterAdmin' || a.role == 'admin') {
+              await notifService.sendToUser(
+                targetUserId: a.id,
+                title: 'Route Resumed',
+                body: '${user?.name ?? 'Salesperson'} resumed ${route.name} at ${_clock(DateTime.now())}',
+              );
+            }
+          }
+        } catch (_) {}
+      });
+      return resumed;
+    }
+
     final fix = await ref.read(deviceGpsServiceProvider).getFix();
 
     final trip = Trip(

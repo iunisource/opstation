@@ -210,10 +210,17 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
     }
 
     try {
-      await ref.read(tripControllerProvider.notifier).startTrip(route);
+      final t = await ref.read(tripControllerProvider.notifier).startTrip(route);
       ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
       if (!mounted) return;
       setState(() => _startingRouteId = null);
+      if (t.visits.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Continuing today\'s ${route.name} — ${t.visits.length} earlier visit${t.visits.length == 1 ? '' : 's'} kept in the same summary'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ));
+      }
       context.push('/salesperson/route');
     } on StateError catch (e) {
       if (!mounted) return;
@@ -225,7 +232,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
       if (!mounted) return;
       setState(() => _startingRouteId = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start: $e')),
+        SnackBar(content: Text('Could not start the route. Please try again.')),
       );
     }
   }

@@ -255,6 +255,7 @@ class Trip {
     List<Customer>? stopSnapshot,
     double? endLat,
     double? endLng,
+    bool reopen = false, // clears the end: the trip becomes active again
   }) {
     return Trip(
       id: id,
@@ -263,13 +264,13 @@ class Trip {
       routeKind: routeKind,
       stopSnapshot: stopSnapshot ?? this.stopSnapshot,
       startedAt: startedAt,
-      endedAt: endedAt ?? this.endedAt,
-      closeReason: closeReason ?? this.closeReason,
+      endedAt: reopen ? null : (endedAt ?? this.endedAt),
+      closeReason: reopen ? null : (closeReason ?? this.closeReason),
       visits: visits ?? this.visits,
       startLat: startLat,
       startLng: startLng,
-      endLat: endLat ?? this.endLat,
-      endLng: endLng ?? this.endLng,
+      endLat: reopen ? null : (endLat ?? this.endLat),
+      endLng: reopen ? null : (endLng ?? this.endLng),
       userId: userId,
       userName: userName,
       userRole: userRole,
