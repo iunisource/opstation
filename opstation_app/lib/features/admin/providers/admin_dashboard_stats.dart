@@ -136,7 +136,7 @@ final adminDashboardStatsProvider =
       final tripIds = [for (final r in (tripRows as List)) '${(r as Map)['id']}'];
       for (var i = 0; i < tripIds.length; i += 40) {
         final batch = tripIds.sublist(i, i + 40 > tripIds.length ? tripIds.length : i + 40);
-        final v = await client.from('visits').select('amount, customer_id')
+        final v = await client.from('visits').select('amount, customer_id, status')
             .inFilter('trip_id', batch)
             .gte('timestamp', todayStartUtc)
             .lt('timestamp', tomorrowStartUtc);
@@ -146,7 +146,7 @@ final adminDashboardStatsProvider =
       if (orgUserIds.isEmpty) throw StateError('no org users');
       for (var i = 0; i < orgUserIds.length; i += 40) {
         final batch = orgUserIds.sublist(i, i + 40 > orgUserIds.length ? orgUserIds.length : i + 40);
-        final v = await client.from('visits').select('amount, customer_id')
+        final v = await client.from('visits').select('amount, customer_id, status')
             .inFilter('user_id', batch)
             .gte('timestamp', todayStartUtc)
             .lt('timestamp', tomorrowStartUtc);
@@ -156,7 +156,9 @@ final adminDashboardStatsProvider =
     for (final m in visitRows) {
       final amt = (m['amount'] as num?)?.round() ?? 0;
       totalAmount += amt;
-      if (amt > 0) {
+      // A shop counts when it was visited and verified (even with no money)
+      // or money was collected there.
+      if (amt > 0 || m['status'] == 'verified') {
         final cid = m['customer_id'] as String?;
         if (cid != null) shops.add(cid);
       }
@@ -183,7 +185,7 @@ final adminDashboardStatsProvider =
           continue;
         }
         totalAmount += v.amount;
-        if (v.amount > 0) shops.add(v.customerId);
+        if (v.amount > 0 || v.status == VisitStatus.verified) shops.add(v.customerId);
       }
     }
     activeRoutesCount = activeTrips.length;
