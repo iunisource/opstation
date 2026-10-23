@@ -17,6 +17,7 @@ import '../../salesperson/models/trip.dart';
 import '../data/customer_repository.dart';
 import '../models/audit_entry.dart';
 import '../providers/customers_controller.dart';
+import 'widgets/other_locations_card.dart';
 
 /// Detail screen shown when a customer row is tapped.
 ///
@@ -96,6 +97,7 @@ class _DetailBody extends ConsumerWidget {
         _HeaderCard(customer: customer),
         const SizedBox(height: 16),
         _LocationCard(customer: customer, canEdit: canEdit),
+        OtherLocationsCard(customer: customer, canManage: canManage),
         const SizedBox(height: 16),
         _InfoCard(customer: customer),
         const SizedBox(height: 16),

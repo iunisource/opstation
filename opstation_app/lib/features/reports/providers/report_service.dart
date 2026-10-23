@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide AuthUser;
 import '../../../core/database/app_database_provider.dart';
+import '../../../core/utils/customer_locations.dart';
 import 'package:printing/printing.dart';
 
 import '../../admin_settings/providers/org_settings_controller.dart';
@@ -107,6 +108,10 @@ class ReportService {
           )
         : false;
 
+    // Extra customer locations (for "Shop (Godown)" in the visit report).
+    try {
+      await CustomerLocations.ensureLoaded(_ref.read(appDatabaseProvider));
+    } catch (_) {}
     final bytes = switch (kind) {
       ReportKind.visit => await ReportPdfBuilder.buildVisitReport(
           ctx: ctx,

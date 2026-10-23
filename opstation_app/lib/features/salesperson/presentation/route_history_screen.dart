@@ -1,3 +1,4 @@
+import '../../../core/utils/customer_locations.dart';
 import 'dart:io';
 import '../../../core/storage/photo_url.dart';
 import 'package:flutter/material.dart';
@@ -397,7 +398,7 @@ class _VisitRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  _subtitle(status, latest, visits.fold<int>(0, (s, v) => s + v.amount)),
+                  _subtitle(status, latest, visits.fold<int>(0, (s, v) => s + v.amount), customer),
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textSecondaryLight,
@@ -502,7 +503,7 @@ class _VisitRow extends StatelessWidget {
     );
   }
 
-  String _subtitle(VisitStatus s, Visit? v, [int collected = 0]) {
+  String _subtitle(VisitStatus s, Visit? v, [int collected = 0, Customer? cust]) {
     final o = visitOutcomeOf(s, collected);
     final at = v == null ? '' : ' · ${DateFormat('HH:mm').format(v.timestamp)}';
     switch (o) {
@@ -512,7 +513,16 @@ class _VisitRow extends StatelessWidget {
         final r = v?.skipReason ?? '';
         return r.isNotEmpty ? 'Skipped · $r' : 'Skipped';
       case VisitOutcome.visited:
-        return 'Visited$at';
+        // A customer with more than one location: say which one.
+        var place = '';
+        if (cust != null && cust.hasLocation) {
+          final vv = v;
+          if (vv != null && vv.status == VisitStatus.verified) {
+            place = CustomerLocations.visitLocationName(
+                cust.id, cust.latitude, cust.longitude, vv.capturedLat, vv.capturedLng);
+          }
+        }
+        return place.isEmpty ? 'Visited$at' : 'Visited at $place$at';
       case VisitOutcome.outsideGeofence:
       case VisitOutcome.notVerified:
         final d = v?.distanceMeters?.round();

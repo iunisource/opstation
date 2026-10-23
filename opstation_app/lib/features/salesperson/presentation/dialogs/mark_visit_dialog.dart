@@ -10,7 +10,8 @@ import 'package:image_picker/image_picker.dart';
 import '../../../../core/services/device_gps_service.dart';
 import '../../../../core/services/sound_controller.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/geo_utils.dart';
+import '../../../../core/utils/customer_locations.dart';
+import '../../../../core/database/app_database_provider.dart';
 import '../../models/customer.dart';
 import '../../models/trip.dart';
 import '../../providers/mock_gps_service.dart';
@@ -43,6 +44,9 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
   void initState() {
     super.initState();
     _prefillReceipt();
+    CustomerLocations.ensureLoaded(ref.read(appDatabaseProvider)).then((_) {
+      if (mounted) setState(() {});
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _refreshDeviceFix();
       _startGpsPolling();
@@ -142,16 +146,18 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
 
   SimulatedFix get _currentFix => _deviceFix ?? const SimulatedFix.unavailable();
 
-  double? get _distance {
+  /// Nearest of the customer's locations (Main + extra ones).
+  NearestLocation? get _nearest {
     final fix = _currentFix;
-    if (!fix.available || fix.lat == null || fix.lng == null || !widget.customer.hasLocation) {
-      return null;
-    }
-    return GeoUtils.distanceMeters(
-      widget.customer.latitude!, widget.customer.longitude!,
-      fix.lat!, fix.lng!,
-    );
+    if (!fix.available || fix.lat == null || fix.lng == null) return null;
+    final c = widget.customer;
+    return CustomerLocations.nearest(c.id, c.latitude, c.longitude, fix.lat!, fix.lng!);
   }
+
+  double? get _distance => _nearest?.distanceMeters;
+
+  bool get _hasAnyLocation => CustomerLocations.hasAny(
+      widget.customer.id, widget.customer.latitude, widget.customer.longitude);
 
   Future<void> _pickPhoto() async {
     if (_photos.length >= 5) return;
@@ -252,7 +258,8 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     final tripState = ref.watch(tripControllerProvider).valueOrNull;
     final radius = tripState?.geofenceRadiusMeters ?? 100;
     final inRange = distance != null && distance <= radius;
-    final hasLocation = widget.customer.hasLocation;
+    final hasLocation = _hasAnyLocation;
+    final atName = _nearest?.name;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -341,6 +348,7 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                           distance: distance,
                           radius: radius,
                           hasLocation: hasLocation,
+                          placeName: atName,
                           searching: _fetchingDeviceFix || (_gpsPoll?.isActive ?? false),
                           onRetry: _refreshDeviceFix,
                         ),
@@ -535,6 +543,8 @@ class _LocationHealthBar extends StatelessWidget {
   final double? distance;
   final double radius;
   final bool hasLocation;
+  /// Nearest extra location ("Godown" …); null = the shop's main location.
+  final String? placeName;
   final bool searching;
   final VoidCallback onRetry;
 
@@ -543,6 +553,7 @@ class _LocationHealthBar extends StatelessWidget {
     required this.distance,
     required this.radius,
     required this.hasLocation,
+    this.placeName,
     required this.searching,
     required this.onRetry,
   });
@@ -605,6 +616,7 @@ class _LocationHealthBar extends StatelessWidget {
     // a "fair" signal that is still inside the fence used to look orange and
     // confused the team.
     final inRange = distance != null && distance! <= radius;
+    final place = (placeName ?? '').isEmpty ? 'shop' : 'shop ($placeName)';
     final Color tone = distance == null
         ? AppColors.textSecondaryLight
         : inRange ? AppColors.success : AppColors.warningDark;
@@ -614,8 +626,8 @@ class _LocationHealthBar extends StatelessWidget {
     final String main = distance == null
         ? (searching ? 'Checking distance to the shop…' : 'Distance to the shop not known')
         : inRange
-            ? '${distance!.round()} m from the shop — inside the ${radius.round()} m fence'
-            : '${distance!.round()} m from the shop — outside the ${radius.round()} m fence';
+            ? '${distance!.round()} m from the $place — inside the ${radius.round()} m fence'
+            : '${distance!.round()} m from the $place — outside the ${radius.round()} m fence';
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 9, 12, 12),

@@ -1,3 +1,4 @@
+import '../../../core/utils/customer_locations.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -733,8 +734,20 @@ class ReportPdfBuilder {
     // Outside geofence / Not verified (old records may still say Skipped).
     final timed = <_TimedRow>[];
     final untouched = <List<String>>[];
-    void addShop(String code, String name, List<Visit> vs) {
+    void addShop(String code, String shopName, List<Visit> vs, {Customer? cust}) {
       vs.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      // A customer with more than one location: name the extra one the
+      // verified visit was at, e.g. "Ali Traders (Godown)".
+      var name = shopName;
+      if (cust != null && cust.hasLocation) {
+        for (final v in vs) {
+          if (v.status != VisitStatus.verified) continue;
+          final at = CustomerLocations.visitLocationName(
+              cust.id, cust.latitude, cust.longitude, v.capturedLat, v.capturedLng);
+          if (at.isNotEmpty) name = '$shopName ($at)';
+          break;
+        }
+      }
       if (vs.isEmpty) {
         untouched.add(['', code, name, 'NOT VISITED', '-', '-', '-', '-']);
         return;
@@ -767,7 +780,7 @@ class ReportPdfBuilder {
     }
 
     for (final c in trip.stopSnapshot) {
-      addShop(c.code, c.shopName, [for (final v in trip.visits) if (v.customerId == c.id) v]);
+      addShop(c.code, c.shopName, [for (final v in trip.visits) if (v.customerId == c.id) v], cust: c);
     }
     // Off-route / ad-hoc collections (customer not a planned stop, e.g. a "New
     // CR" payment) — resolved from ctx.extraCustomers.

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/app_database.dart';
 import '../database/app_database_provider.dart';
 import 'supabase_sync_service.dart';
+import '../utils/customer_locations.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Pulls org data from Supabase and writes it into local Drift DB.
@@ -105,6 +106,8 @@ class SupabasePullService {
       await _pullRouteStops(data.routeStops);
       await _pullRouteAssignments(data.routeAssignments);
     });
+    // Customers' extra locations (Main + e.g. Godown) — needed to verify visits.
+    await CustomerLocations.refresh(_db, orgId);
     // Survey categories / SKUs are small: fetch them at login too, so a
     // surveyor never waits for the slow history pull to see new ones.
     try {
@@ -300,6 +303,7 @@ class SupabasePullService {
         }
         await _pullRouteStops(stops);
       });
+      await CustomerLocations.refresh(_db, orgId);
     } catch (e) {
       print('pullRoutesAndStops failed: $e');
     }

@@ -1,3 +1,4 @@
+import '../../../core/utils/customer_locations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/sms_service.dart';
 import '../../../core/services/notification_service.dart';
@@ -335,16 +336,19 @@ class TripController extends AsyncNotifier<TripState> {
       }
     }
 
+    // Verified when inside the fence of ANY of the customer's locations
+    // (Main + extra ones such as a godown) — same radius for all.
+    await CustomerLocations.ensureLoaded(ref.read(appDatabaseProvider));
     VisitStatus status;
     double? distance;
-    if (!customer.hasLocation) {
-      status = VisitStatus.noLocation;
-    } else if (capturedLat == null || capturedLng == null) {
+    final nearest = (capturedLat == null || capturedLng == null)
+        ? null
+        : CustomerLocations.nearest(
+            customer.id, customer.latitude, customer.longitude, capturedLat, capturedLng);
+    if (nearest == null) {
       status = VisitStatus.noLocation;
     } else {
-      distance = GeoUtils.distanceMeters(
-        customer.latitude!, customer.longitude!, capturedLat, capturedLng,
-      );
+      distance = nearest.distanceMeters;
       status = distance <= s.geofenceRadiusMeters ? VisitStatus.verified : VisitStatus.outside;
     }
 
