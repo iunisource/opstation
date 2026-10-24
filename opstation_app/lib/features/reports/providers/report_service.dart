@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide AuthUser;
 import '../../../core/database/app_database_provider.dart';
@@ -9,6 +10,8 @@ import 'package:printing/printing.dart';
 
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../../auth/models/auth_user.dart';
+import '../../auth/models/user_role.dart';
+import '../../auth/providers/auth_controller.dart';
 import '../../salesperson/models/trip.dart';
 import '../pdf/report_pdf_builder.dart';
 import '../services/coverage_context_builder.dart';
@@ -47,6 +50,38 @@ class ReportService {
   /// has been issued. Returns true when it was already issued before — i.e.
   /// this generation is a DUPLICATE and should be watermarked. Best-effort:
   /// any failure (offline, no org) returns false so the report still prints.
+  bool get isAdminActor {
+    final role = _ref.read(authControllerProvider).valueOrNull?.role;
+    return role == UserRole.admin || role == UserRole.masterAdmin || role == UserRole.superAdmin;
+  }
+
+  /// Record this generation (SQL 413) and return the trail "Name date, …"
+  /// for a DUPLICATE copy's footer. Never throws.
+  Future<List<String>> logReportIssue({
+    required String type,
+    required String key,
+    required String? orgId,
+  }) async {
+    if (orgId == null) return const [];
+    try {
+      final r = await Supabase.instance.client.rpc('report_issue_log', params: {
+        'p_org': orgId, 'p_type': type, 'p_key': key, 'p_counted': !isAdminActor,
+      });
+      final fmt = DateFormat('d MMM yyyy, h:mm a');
+      return [
+        for (final e in (r as List? ?? const []))
+          () {
+            final at = DateTime.tryParse('${e['at'] ?? ''}')?.toLocal();
+            final role = '${e['role'] ?? ''}';
+            final admin = role == 'admin' || role == 'masterAdmin' || role == 'superAdmin';
+            return '${e['name'] ?? 'Unknown'}${admin ? ' (admin)' : ''} ${at == null ? '' : fmt.format(at)}'.trim();
+          }(),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<bool> registerReportIssue({
     required String type,
     required String key,
@@ -55,6 +90,9 @@ class ReportService {
     required bool claim,
   }) async {
     if (orgId == null) return false;
+    // Admins' copies are not counted: they only CHECK whether it was already
+    // issued (and still see DUPLICATE if so).
+    if (isAdminActor) claim = false;
     try {
       final res = await Supabase.instance.client.rpc(
         'register_report_issue',
@@ -107,6 +145,10 @@ class ReportService {
             claim: claim,
           )
         : false;
+    // A real issue (or an admin's look) is recorded for the trail.
+    final trail = kind == ReportKind.summary && (claim || isAdminActor)
+        ? await logReportIssue(type: 'trip_summary', key: trip.id, orgId: actor?.organizationId)
+        : const <String>[];
 
     // Extra customer locations (for "Shop (Godown)" in the visit report).
     try {
@@ -121,6 +163,7 @@ class ReportService {
           ctx: ctx,
           orgName: orgName,
           duplicate: duplicate,
+          trail: trail,
         ),
     };
     settings.toString(); // reserved
@@ -255,6 +298,7 @@ class ReportService {
     required String salespersonLabel,
     required AuthUser? actor,
     bool duplicate = false,
+    List<String> trail = const [],
   }) async {
     final builder = _ref.read(reportContextBuilderProvider);
     final ctxs = await Future.wait(trips.map((t) => builder.build(t)));
@@ -334,6 +378,7 @@ class ReportService {
       grandTotalKm: grand,
       usedGoogle: usedGoogle,
       duplicate: duplicate,
+      trail: trail,
     );
     return Uint8List.fromList(bytes);
   }

@@ -139,6 +139,9 @@ class _CombinedTripSummaryScreenState
         salespersonLabel: salespersonLabel,
         actor: actor,
         duplicate: duplicate,
+        trail: (action == _Action.share || svc.isAdminActor)
+            ? await svc.logReportIssue(type: 'combined_summary', key: key, orgId: actor?.organizationId)
+            : const [],
       );
       final fname = 'combined_summary_${_ymd(start)}_${_ymd(end)}.pdf';
       if (action == _Action.preview) {

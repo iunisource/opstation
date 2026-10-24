@@ -80,6 +80,7 @@ class ReportPdfBuilder {
     required TripReportContext ctx,
     required String orgName,
     bool duplicate = false,
+    List<String> trail = const [],
   }) async {
     final trip = ctx.trip;
     final doc = pw.Document();
@@ -87,11 +88,11 @@ class ReportPdfBuilder {
       pw.MultiPage(
         pageTheme: _pageTheme(duplicate),
         header: (c) => _pageHeader(orgName, 'Trip Summary'),
-        footer: (c) =>
+        footer: (c) => _withTrail(duplicate ? trail : const [],
             _pageFooter(c, orgName, 'Trip Summary',
                 distanceNote: ctx.usedGoogle
                     ? 'Distances: Google Directions API (road distance)'
-                    : 'Distances: straight-line / Haversine — add GOOGLE_MAPS_API_KEY for road distances'),
+                    : 'Distances: straight-line / Haversine — add GOOGLE_MAPS_API_KEY for road distances')),
         build: (c) => [
           _subtitleLine(trip),
           pw.SizedBox(height: 14),
@@ -129,6 +130,7 @@ class ReportPdfBuilder {
     required double grandTotalKm,
     required bool usedGoogle,
     bool duplicate = false,
+    List<String> trail = const [],
   }) async {
     final doc = pw.Document();
 
@@ -163,14 +165,14 @@ class ReportPdfBuilder {
       pw.MultiPage(
         pageTheme: _pageTheme(duplicate),
         header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
-        footer: (c) => _pageFooter(
+        footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(
           c,
           orgName,
           'Combined Trip Summary',
           distanceNote: usedGoogle
               ? 'Distances: Google Directions API (road distance)'
               : 'Distances: straight-line / Haversine — add GOOGLE_MAPS_API_KEY for road distances',
-        ),
+        )),
         build: (c) => [
           pw.Text(
             salespersonLabel,
@@ -504,6 +506,17 @@ class ReportPdfBuilder {
         ],
       ),
     );
+  }
+
+  /// On a DUPLICATE copy: who generated this report and when, above the footer.
+  static pw.Widget _withTrail(List<String> trail, pw.Widget footer) {
+    if (trail.isEmpty) return footer;
+    return pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      pw.Text('Generated: ${trail.join(';  ')}',
+          style: const pw.TextStyle(fontSize: 6.5, color: PdfColors.red800)),
+      pw.SizedBox(height: 3),
+      footer,
+    ]);
   }
 
   static pw.Widget _pageFooter(pw.Context c, String orgName, String title,
