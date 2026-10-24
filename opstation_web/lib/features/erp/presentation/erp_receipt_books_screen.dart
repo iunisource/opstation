@@ -237,16 +237,31 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           content: SizedBox(
             width: 440,
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              DropdownButtonFormField<String>(
-                value: userId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Issue to'),
-                items: [
-                  for (final u in _team)
-                    DropdownMenuItem(value: u['id'] as String, child: Text('${u['name'] ?? ''}', overflow: TextOverflow.ellipsis)),
-                ],
-                onChanged: (v) => setLocal(() => userId = v),
+              // Searchable person picker.
+              InkWell(
+                onTap: () async {
+                  final picked = await _pickPerson(ctx);
+                  if (picked != null) setLocal(() { userId = picked; err = null; });
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                      labelText: 'Issue to', suffixIcon: Icon(Icons.search, size: 18)),
+                  child: Text(
+                    userId == null
+                        ? 'Search and pick a person…'
+                        : '${_team.firstWhere((u) => u['id'] == userId, orElse: () => const {})['name'] ?? ''}',
+                    style: TextStyle(color: userId == null ? AppTheme.textSecondary : null),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ),
+              if (userId != null && _books.where((x) => x.open && x.holderId == userId).isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                      'Open now: ${_books.where((x) => x.open && x.holderId == userId).map((x) => '${x.start}–${x.end}').join(', ')}',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ),
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(child: TextField(
@@ -273,7 +288,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               const SizedBox(height: 10),
               TextField(
                 controller: labelCtrl,
-                decoration: const InputDecoration(labelText: 'Book name / number (optional)', hintText: 'e.g. Book 12'),
+                decoration: const InputDecoration(labelText: 'Book number', hintText: 'As printed on the book, e.g. 12'),
               ),
               if (err != null)
                 Padding(
@@ -290,6 +305,27 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                 if (a == null || b == null) return setLocal(() => err = 'Enter the first and last slip numbers.');
                 if (b < a) return setLocal(() => err = 'The last slip must be after the first.');
                 if (b - a >= 1000) return setLocal(() => err = 'A book can have up to 1000 slips.');
+                // Same serials can never be issued twice (any book, open or closed).
+                for (final x in _books) {
+                  if (x.start <= b && x.end >= a) {
+                    return setLocal(() => err = 'Serials ${x.start}–${x.end} are already issued to '
+                        '${x.holder}${x.open ? '' : ' (closed book)'}. Each serial can be issued only once.');
+                  }
+                }
+                // A book number belongs to one person.
+                final lbl = labelCtrl.text.trim().toLowerCase();
+                if (lbl.isEmpty) return setLocal(() => err = 'Enter the book number.');
+                {
+                  for (final x in _books) {
+                    if ('${x.row['label'] ?? ''}'.trim().toLowerCase() == lbl) {
+                      return setLocal(() => err = 'Book "${labelCtrl.text.trim()}" is already issued to '
+                          '${x.holder}${x.open ? '' : ' (closed book)'}.');
+                    }
+                  }
+                }
+                if (_books.where((x) => x.open && x.holderId == userId).length >= 2) {
+                  return setLocal(() => err = 'This person already has 2 open books. Close one first.');
+                }
                 Navigator.pop(ctx, true);
               },
               child: const Text('Issue'),
@@ -305,6 +341,65 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
         'p_end': int.parse(toCtrl.text.trim()), 'p_label': labelCtrl.text.trim(),
       });
     });
+  }
+
+  /// Search the team by name / role and pick one.
+  Future<String?> _pickPerson(BuildContext context) {
+    var q = '';
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        final qq = q.trim().toLowerCase();
+        final list = qq.isEmpty
+            ? _team
+            : _team.where((u) => matchesQuery('${u['name'] ?? ''} ${u['role'] ?? ''}', qq)).toList();
+        return AlertDialog(
+          contentPadding: const EdgeInsets.fromLTRB(0, 14, 0, 0),
+          title: const Text('Issue to', style: TextStyle(fontSize: 16)),
+          content: SizedBox(
+            width: 420,
+            height: 460,
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: TextField(
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    hintText: 'Search name…',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onChanged: (v) => setLocal(() => q = v),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: list.isEmpty
+                    ? const Center(child: Text('No one matches.', style: TextStyle(color: AppTheme.textSecondary)))
+                    : ListView.builder(
+                        itemCount: list.length,
+                        itemBuilder: (_, i) {
+                          final u = list[i];
+                          final open = _books.where((x) => x.open && x.holderId == u['id']).toList();
+                          return ListTile(
+                            dense: true,
+                            title: Text('${u['name'] ?? ''}'),
+                            subtitle: Text([
+                              if ('${u['role'] ?? ''}'.isNotEmpty) '${u['role']}',
+                              if (open.isNotEmpty) 'Open: ${open.map((x) => '${x.start}–${x.end}').join(', ')}',
+                            ].join(' · '), style: const TextStyle(fontSize: 11.5)),
+                            onTap: () => Navigator.pop(ctx, u['id'] as String),
+                          );
+                        },
+                      ),
+              ),
+            ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+        );
+      }),
+    );
   }
 
   Future<String?> _askText(String title, String label, {String? hint, bool required = false, String? body}) async {
@@ -580,7 +675,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           title: Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
             Text('${b.start}–${b.end}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
-            if (label.isNotEmpty) Text(label, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            if (label.isNotEmpty) Text(RegExp(r'^\d').hasMatch(label) ? 'Book $label' : label, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
             _tag(b.open ? 'Open' : 'Closed', b.open ? AppTheme.success : AppTheme.textSecondary),
             if (b.issues > 0) _tag('${b.issues} to check', Colors.deepOrange),
           ]),
