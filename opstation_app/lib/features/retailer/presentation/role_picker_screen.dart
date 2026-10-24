@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/i18n/retailer_i18n.dart';
+import '../../../shared/widgets/opstation_mark.dart';
 
 const _kLastRoleKey = 'opstation_last_login_role';
 
@@ -70,34 +71,7 @@ class RolePickerScreen extends ConsumerWidget {
                             // Fixed square. Previously this sat inside a
                             // stretch-aligned Column, so it was pulled to full
                             // width and read as a big blue slab, not a logo.
-                            Center(
-                              child: Container(
-                                height: 76,
-                                width: 76,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary,
-                                  borderRadius: BorderRadius.circular(20),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.primary
-                                          .withValues(alpha: 0.30),
-                                      blurRadius: 22,
-                                      offset: const Offset(0, 8),
-                                    ),
-                                  ],
-                                ),
-                                child: const Text(
-                                  'O',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 40,
-                                    fontWeight: FontWeight.w800,
-                                    height: 1.1,
-                                  ),
-                                ),
-                              ),
-                            ),
+                            const Center(child: OpstationLogoTile(size: 76)),
                             const SizedBox(height: 18),
                             const Text(
                               'Opstation',
