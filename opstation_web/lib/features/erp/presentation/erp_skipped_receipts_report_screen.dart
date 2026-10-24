@@ -184,11 +184,13 @@ class _ErpSkippedReceiptsReportScreenState
             i, i + chunk > tripIds.length ? tripIds.length : i + chunk);
         final vRes = await client
             .from('visits')
-            .select('trip_id, receipt_number')
+            .select('trip_id, receipt_number, amount')
             .inFilter('trip_id', slice);
         for (final v in vRes as List) {
           final uid = tripUser[v['trip_id'] as String?];
           if (uid == null) continue;
+          // A visit with nothing collected uses no receipt slip.
+          if (((v['amount'] as num?) ?? 0) <= 0) continue;
           final slips = _receiptSlipNumbers((v['receipt_number'] as String?) ?? '');
           if (slips.isEmpty) continue;
           (perUser[uid] ??= <int>[]).addAll(slips);
