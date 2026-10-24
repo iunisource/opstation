@@ -38,6 +38,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   VoucherMeta _meta = VoucherMeta();
 
   bool _listLoading = true;
+  // Admin Settings → "Purchase returns can exceed stock" (org.purchase_return_allow_short_stock).
+  bool _allowShortStock = false;
   bool _detailLoading = false;
   String _search = '';
   String _filter = 'all';
@@ -74,6 +76,11 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
+      try {
+        final cfg = await client.from('app_config').select('value').eq('org_id', orgId)
+            .eq('key', 'org.purchase_return_allow_short_stock').maybeSingle();
+        _allowShortStock = '${cfg?['value'] ?? ''}' == 'true';
+      } catch (_) {}
       final p = await client.from('products')
           .select('id, name, sku, base_uom_id, cost_price')
           .eq('org_id', orgId).eq('is_active', true).order('name').limit(10000);
@@ -237,6 +244,13 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
             .select('quantity').eq('org_id', chkOrg).eq('product_id', _addProductId!)
             .eq('branch_id', chkBranch).maybeSingle();
         final available = (stock?['quantity'] as num?)?.toDouble() ?? 0;
+        if (_allowShortStock) {
+          // Allowed by Admin Settings — just let the user know.
+          if (qty > available) {
+            _showSnack('Note: only ${available.toStringAsFixed(available % 1 == 0 ? 0 : 2)} in stock — '
+                'saving this return will take the stock below zero');
+          }
+        } else {
         if (available <= 0) {
           _showSnack('${prod['name'] ?? 'This product'} has no stock at this branch — cannot return');
           return;
@@ -244,6 +258,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
         if (qty > available) {
           _showSnack('Only ${available.toStringAsFixed(available % 1 == 0 ? 0 : 2)} in stock — cannot return $qty');
           return;
+        }
         }
       } catch (_) {}
     }
@@ -367,7 +382,21 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   Future<void> _saveNote() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before saving'); return; }
     final bad = await _insufficientItem();
-    if (bad != null) { _showSnack('Cannot save — "$bad" exceeds available stock at this branch'); return; }
+    if (bad != null) {
+      if (!_allowShortStock) { _showSnack('Cannot save — "$bad" exceeds available stock at this branch'); return; }
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Not enough stock'),
+          content: Text('"$bad" is more than the stock at this branch. Saving will take its stock below zero. Save anyway?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Go back')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save anyway')),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
     try {
       // Atomic + idempotent: the DB function claims the draft (status guard),
       // re-checks stock, posts movements + stock updates and the audit row in

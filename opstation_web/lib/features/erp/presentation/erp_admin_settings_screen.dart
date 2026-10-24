@@ -628,6 +628,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.purchase_return_allow_short_stock',
+    'Purchase returns can exceed available stock',
+    'When ON, a Purchase Return (Goods Return Note) can be saved even if the branch '
+        'has less stock than the quantity returned — the user is warned and the stock '
+        'goes below zero until it is corrected. When OFF, a return larger than the '
+        'available stock is blocked, as today.',
+  ),
+
+  _AdminToggle(
     'org.receipt_books_flow',
     'Receipt books (issued CR serials)',
     'When ON, each salesperson is issued the serial range of their physical receipt '

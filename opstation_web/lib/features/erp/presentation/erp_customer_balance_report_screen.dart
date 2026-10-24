@@ -504,7 +504,7 @@ class _ErpCustomerBalanceReportScreenState
         'h1 { font-size: 13px; margin: 0 0 2px 0; } '
         '.info { font-size: 8.5px; color: #444; margin-bottom: 6px; } '
         'table { width: 100%; border-collapse: collapse; table-layout: fixed; } '
-        'th, td { padding: 2px 5px; border: 1px solid #888; text-align: left; font-size: 8px; word-break: break-word; line-height: 1.2; } '
+        'th, td { padding: 5px 6px; border: 1px solid #888; text-align: left; font-size: 9px; word-break: break-word; line-height: 1.35; } '
         'td:first-child, th:first-child { width: 30%; } '
         'th { background: #f0f4ff; font-weight: 700; } '
         '.num { text-align: right; } '
