@@ -628,6 +628,19 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.receipt_books_flow',
+    'Receipt books (issued CR serials)',
+    'When ON, each salesperson is issued the serial range of their physical receipt '
+        'book (Reports → Receipt Books). In the app, a collection\'s CR# must be an '
+        'unused slip from their own open book — the next slip is filled in, a wrong or '
+        'already used number is refused, and a torn slip is marked "Cancelled" with a '
+        'reason. Receipt Books shows every book with used / cancelled / unused slips and '
+        'flags skipped, repeated and out-of-order slips. Admins can always issue books; '
+        'add more users below. When OFF, the CR# works as today.',
+    users: _UsersField('org.receipt_book_issuer_users', 'Also allowed to issue receipt books'),
+  ),
+
+  _AdminToggle(
     'org.customer_deactivate_access',
     'Customer deactivation access',
     'Admins can always deactivate and activate customers. When ON, the users '

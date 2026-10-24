@@ -738,6 +738,7 @@ const List<_Feature> _features = [
   _Feature('Collection Report', 'Reports', '/reports/collections', ['collection report', 'collections', 'market collection', 'recovery report']),
   _Feature('Reports Center', 'Reports', '/reports/center', ['reports center', 'report builder', 'reports']),
   _Feature('Skipped Receipts Report', 'Reports', '/reports/skipped-receipts', ['skipped receipt', 'skipped receipts']),
+  _Feature('Receipt Books', 'Reports', '/reports/receipt-books', ['receipt book', 'cr book', 'issue receipt book', 'receipt serial', 'slip book']),
   // HR
   _Feature('Employee Directory', 'HR', '/hr/employees', ['employee', 'staff', 'directory']),
   _Feature('Route Roster', 'Operations', '/operations/route-roster', ['roster', 'route plan', 'beat plan', 'salesperson schedule', 'weekly routes']),

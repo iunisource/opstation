@@ -167,6 +167,7 @@ import '../../features/erp/presentation/erp_fulfillment_screen.dart' deferred as
 import '../../features/erp/presentation/erp_batch_tracking_screen.dart' deferred as _s156;
 import '../../features/erp/presentation/erp_investors_screen.dart' deferred as _s157;
 import '../../features/erp/presentation/erp_duplicate_refs_screen.dart' deferred as _s158;
+import '../../features/erp/presentation/erp_receipt_books_screen.dart' deferred as _s159;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -522,6 +523,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/erp/customer-balance-report', builder: (_, __) => _deferred(_s026.loadLibrary(), () => _s026.ErpCustomerBalanceReportScreen())),
       GoRoute(path: '/erp/supplier-balance-report', builder: (_, __) => _deferred(_s027.loadLibrary(), () => _s027.ErpSupplierBalanceReportScreen())),
       GoRoute(path: '/reports/skipped-receipts', builder: (_, __) => _deferred(_s028.loadLibrary(), () => _s028.ErpSkippedReceiptsReportScreen())),
+      GoRoute(path: '/reports/receipt-books', builder: (_, __) => _deferred(_s159.loadLibrary(), () => _s159.ErpReceiptBooksScreen())),
       GoRoute(path: '/reports/collections', builder: (_, __) => _deferred(_s145.loadLibrary(), () => _s145.ErpCollectionReportScreen())),
       GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => _deferred(_s012.loadLibrary(), () => _s012.ErpProductionInverseVoucherScreen())),
       GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => _deferred(_s013.loadLibrary(), () => _s013.ErpDamageStockVoucherScreen())),

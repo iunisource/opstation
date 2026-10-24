@@ -1451,6 +1451,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/reports/collections')) _menuItem(context, 'Collection Report', Icons.payments_outlined, '/reports/collections', location),
     if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
       if (show('/reports/skipped-receipts')) _menuItem(context, 'Skipped Receipts Report', Icons.receipt_long_outlined, '/reports/skipped-receipts', location),
+      if (show('/reports/receipt-books')) _menuItem(context, 'Receipt Books', Icons.menu_book_outlined, '/reports/receipt-books', location),
     ];
     final reportItems = <Widget>[
       if (show('/reports/center')) _menuItem(context, 'Reports Center', Icons.grid_view_outlined, '/reports/center', location),
@@ -1590,7 +1591,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),
       if (_hasItems(reportItems))
         _navMenu(context, 'Reports', Icons.summarize_outlined, location,
-          ['/reports/collections', '/reports/margin', '/reports/skipped-receipts', '/reports/center'],
+          ['/reports/collections', '/reports/margin', '/reports/skipped-receipts', '/reports/receipt-books', '/reports/center'],
           reportItems),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,

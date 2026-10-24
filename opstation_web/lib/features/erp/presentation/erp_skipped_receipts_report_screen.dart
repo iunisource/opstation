@@ -47,7 +47,12 @@ class _PersonGaps {
   final String name;
   final int receiptsLogged; // distinct slip numbers found
   final List<int> skipped;
-  _PersonGaps(this.userId, this.name, this.receiptsLogged, this.skipped);
+  // Same slip on more than one collection (by this person or anyone else).
+  final List<int> repeated;
+  // Slip used after a higher one from the same run had already been used.
+  final List<int> outOfOrder;
+  _PersonGaps(this.userId, this.name, this.receiptsLogged, this.skipped,
+      [this.repeated = const [], this.outOfOrder = const []]);
 }
 
 class ErpSkippedReceiptsReportScreen extends ConsumerStatefulWidget {
@@ -178,13 +183,15 @@ class _ErpSkippedReceiptsReportScreenState
       // Visit receipts for those trips, in chunks (URL length safety).
       final tripIds = tripUser.keys.toList();
       final perUser = <String, List<int>>{};
+      final timed = <String, List<(DateTime, int)>>{}; // when each slip was used
+      final useCount = <int, int>{}; // slip → collections it appears on
       const chunk = 150;
       for (var i = 0; i < tripIds.length; i += chunk) {
         final slice = tripIds.sublist(
             i, i + chunk > tripIds.length ? tripIds.length : i + chunk);
         final vRes = await client
             .from('visits')
-            .select('trip_id, receipt_number, amount')
+            .select('trip_id, receipt_number, amount, timestamp')
             .inFilter('trip_id', slice);
         for (final v in vRes as List) {
           final uid = tripUser[v['trip_id'] as String?];
@@ -194,6 +201,11 @@ class _ErpSkippedReceiptsReportScreenState
           final slips = _receiptSlipNumbers((v['receipt_number'] as String?) ?? '');
           if (slips.isEmpty) continue;
           (perUser[uid] ??= <int>[]).addAll(slips);
+          final at = DateTime.tryParse('${v['timestamp'] ?? ''}') ?? DateTime(2000);
+          for (final n in slips) {
+            (timed[uid] ??= []).add((at, n));
+            useCount[n] = (useCount[n] ?? 0) + 1;
+          }
         }
       }
 
@@ -209,13 +221,26 @@ class _ErpSkippedReceiptsReportScreenState
             for (var n = uniq[i - 1] + 1; n < uniq[i]; n++) missing.add(n);
           }
         }
-        if (missing.isEmpty) {
+        // Repeated: the same slip on two collections.
+        final repeated = uniq.where((n) => (useCount[n] ?? 0) > 1).toList();
+        // Out of order: used after a higher slip of the same run (within 50).
+        final seq = [...(timed[uid] ?? const <(DateTime, int)>[])]..sort((a, b) => a.$1.compareTo(b.$1));
+        final late = <int>{};
+        final usedSoFar = <int>[];
+        for (final e in seq) {
+          final n = e.$2;
+          if (usedSoFar.any((m) => m > n && m - n <= 50)) late.add(n);
+          usedSoFar.add(n);
+        }
+        final outOfOrder = late.toList()..sort();
+        if (missing.isEmpty && repeated.isEmpty && outOfOrder.isEmpty) {
           if (uniq.length >= 3) clean++;
         } else {
-          rows.add(_PersonGaps(uid, names[uid] ?? 'Unknown', uniq.length, missing));
+          rows.add(_PersonGaps(uid, names[uid] ?? 'Unknown', uniq.length, missing, repeated, outOfOrder));
         }
       });
-      rows.sort((a, b) => b.skipped.length.compareTo(a.skipped.length));
+      rows.sort((a, b) => (b.skipped.length + b.repeated.length + b.outOfOrder.length)
+          .compareTo(a.skipped.length + a.repeated.length + a.outOfOrder.length));
 
       // Existing clearances for this org (which flagged serials were reviewed).
       _cleared.clear();
@@ -483,7 +508,7 @@ class _ErpSkippedReceiptsReportScreenState
           child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.check_circle_outline, color: AppTheme.success, size: 40),
         const SizedBox(height: 10),
-        const Text('No skipped receipt serials in this period.',
+        const Text('No skipped, repeated or out-of-order receipt serials in this period.',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
         if (_cleanCount > 0)
           Padding(
@@ -509,8 +534,9 @@ class _ErpSkippedReceiptsReportScreenState
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                  '${_rows.length} salespeople have skipped serials — '
-                  '$_totalSkipped in total for $_periodLabel. '
+                  '${_rows.length} salespeople have receipt issues for $_periodLabel — '
+                  '$_totalSkipped skipped, ${_rows.fold<int>(0, (s, r) => s + r.repeated.length)} repeated, '
+                  '${_rows.fold<int>(0, (s, r) => s + r.outOfOrder.length)} out of order. '
                   'A gap can mean a collection was made but not entered (or a voided/torn slip).',
                   style: const TextStyle(fontSize: 12.5)),
             ),
@@ -553,7 +579,11 @@ class _ErpSkippedReceiptsReportScreenState
             decoration: BoxDecoration(
                 color: Colors.amber.shade100,
                 borderRadius: BorderRadius.circular(20)),
-            child: Text('${r.skipped.length} skipped',
+            child: Text([
+                  if (r.skipped.isNotEmpty) '${r.skipped.length} skipped',
+                  if (r.repeated.isNotEmpty) '${r.repeated.length} repeated',
+                  if (r.outOfOrder.isNotEmpty) '${r.outOfOrder.length} out of order',
+                ].join(' · '),
                 style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
@@ -565,12 +595,46 @@ class _ErpSkippedReceiptsReportScreenState
           child: Text('${r.receiptsLogged} receipt numbers logged in this period',
               style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ),
-        Wrap(spacing: 6, runSpacing: 6, children: [
-          for (final n in r.skipped) _serialPill(r, n),
-        ]),
+        if (r.skipped.isNotEmpty)
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final n in r.skipped) _serialPill(r, n),
+          ]),
+        if (r.repeated.isNotEmpty) _flagLine(
+            Icons.content_copy_outlined, AppTheme.danger, 'Used more than once',
+            'The same slip is on two or more collections — check for a typo or a slip entered twice.',
+            r.repeated),
+        if (r.outOfOrder.isNotEmpty) _flagLine(
+            Icons.swap_vert, Colors.deepOrange, 'Out of order',
+            'Used after a higher slip from the same book — the order of the book was broken.',
+            r.outOfOrder),
       ]),
     );
   }
+
+  Widget _flagLine(IconData icon, Color color, String title, String help, List<int> nums) => Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 6),
+            Text('$title (${nums.length})', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: color)),
+          ]),
+          Text(help, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          const SizedBox(height: 4),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final n in nums)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: color.withOpacity(0.35)),
+                ),
+                child: Text('$n', style: const TextStyle(fontSize: 12)),
+              ),
+          ]),
+        ]),
+      );
 
   Widget _serialPill(_PersonGaps r, int n) {
     final cleared = _isCleared(r.userId, n);
