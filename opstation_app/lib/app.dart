@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/database/app_database_provider.dart';
 import 'core/utils/customer_locations.dart';
+import 'core/utils/receipt_books.dart';
 import 'features/uploads/services/upload_worker.dart';
 import 'core/router/app_router.dart';
 import 'features/team/data/team_repository.dart';
@@ -48,6 +49,7 @@ final seedProvider = FutureProvider<void>((ref) async {
   // Customers' extra locations saved on the phone (offline visit checks).
   try {
     await CustomerLocations.ensureLoaded(db);
+    await ReceiptBooks.ensureLoaded(db);
   } catch (_) {}
   await TeamRepository(db).seedIfEmpty();
 });

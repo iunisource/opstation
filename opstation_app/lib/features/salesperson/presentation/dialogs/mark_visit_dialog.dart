@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../../core/utils/receipt_books.dart';
+import '../widgets/receipt_book_hint.dart';
 import '../../../../core/services/device_gps_service.dart';
 import '../../../../core/services/sound_controller.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -61,6 +63,9 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
   /// blank so we never invent a starting number. This makes a skipped receipt
   /// obvious the moment the next one is auto-filled.
   void _prefillReceipt() {
+    // Receipt books ON: the next free slip of the salesperson's book is filled
+    // in by ReceiptBookHint instead.
+    if (ReceiptBooks.on) return;
     final s = ref.read(tripControllerProvider).valueOrNull;
     if (s == null) return;
     int? maxNum;
@@ -375,6 +380,7 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                           prefixIcon: Icon(Icons.receipt_long_outlined),
                         ),
                       ),
+                      ReceiptBookHint(crCtrl: _crCtrl),
                       const SizedBox(height: 10),
                       TextField(
                         controller: _notesCtrl,

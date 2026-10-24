@@ -1,4 +1,5 @@
 import '../../../core/utils/customer_locations.dart';
+import '../../../core/utils/receipt_books.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/sms_service.dart';
 import '../../../core/services/notification_service.dart';
@@ -306,6 +307,36 @@ class TripController extends AsyncNotifier<TripState> {
     });
   }
 
+  /// Slips on today's collections on this phone (a phone's not-yet-synced
+  /// collections aren't in the server's count yet).
+  Set<int> localReceiptSlips() {
+    final s = state.valueOrNull;
+    final out = <int>{};
+    if (s == null) return out;
+    void scan(Iterable<Visit> vs) {
+      for (final v in vs) {
+        if (v.amount <= 0) continue;
+        final r = v.receiptNumber;
+        if (r == null || r.trim().isEmpty) continue;
+        out.addAll(receiptSlips(r));
+      }
+    }
+    if (s.active != null) scan(s.active!.visits);
+    for (final t in s.completedToday) {
+      scan(t.visits);
+    }
+    return out;
+  }
+
+  /// Receipt books ON (Admin Settings): the CR# must be an unused slip from
+  /// this salesperson's own open book.
+  Future<void> _checkReceiptBook(int amount, String? receiptNumber) async {
+    if (amount <= 0 || receiptNumber == null) return;
+    await ReceiptBooks.ensureLoaded(ref.read(appDatabaseProvider));
+    final p = ReceiptBooks.problem(receiptNumber, localReceiptSlips());
+    if (p != null) throw ArgumentError(p);
+  }
+
   Future<Visit> markVisit({
     required Customer customer,
     required double? capturedLat,
@@ -325,6 +356,7 @@ class TripController extends AsyncNotifier<TripState> {
     if (amount > 0 && (receiptNumber == null || receiptNumber.trim().isEmpty)) {
       throw ArgumentError('Receipt number is required when amount > 0.');
     }
+    await _checkReceiptBook(amount, receiptNumber);
     // A physical CR slip number is unique, so the same number appearing twice
     // in a trip means a typo. Reject it here — otherwise the two collections
     // collapse into one in the report and COLLECTED under-reports.
@@ -516,6 +548,7 @@ class TripController extends AsyncNotifier<TripState> {
     if (amount > 0 && (receiptNumber == null || receiptNumber.trim().isEmpty)) {
       throw ArgumentError('Receipt number is required when amount > 0.');
     }
+    await _checkReceiptBook(amount, receiptNumber);
 
     final today = TripState.today();
     final user = ref.read(authControllerProvider).valueOrNull;

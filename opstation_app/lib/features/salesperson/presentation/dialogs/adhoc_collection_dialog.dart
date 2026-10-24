@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/utils/receipt_books.dart';
+import '../widgets/receipt_book_hint.dart';
 import '../../../../core/services/sound_controller.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/salesperson_repository.dart';
@@ -63,6 +65,9 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
   /// with the highest numeric receipt entered today + 1, fully editable. Left
   /// blank when nothing has been entered yet so we never invent a start number.
   void _prefillReceipt() {
+    // Receipt books ON: the next free slip of the salesperson's book is filled
+    // in by ReceiptBookHint instead.
+    if (ReceiptBooks.on) return;
     final s = ref.read(tripControllerProvider).valueOrNull;
     if (s == null) return;
     int? maxNum;
@@ -368,6 +373,7 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
                             prefixIcon: Icon(Icons.receipt_long_outlined),
                           ),
                         ),
+                      ReceiptBookHint(crCtrl: _crCtrl),
                         const SizedBox(height: 10),
                         TextField(
                           controller: _notesCtrl,
