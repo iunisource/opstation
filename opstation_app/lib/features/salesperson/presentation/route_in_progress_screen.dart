@@ -418,8 +418,6 @@ class _ProgressHeaderState extends State<_ProgressHeader> {
                       const SizedBox(width: 9),
                       _Pip(trip.outsideCount, AppColors.warningDark, Icons.warning_amber_rounded),
                       const SizedBox(width: 9),
-                      _Pip(trip.skippedCount, AppColors.textSecondaryLight, Icons.skip_next),
-                      const SizedBox(width: 9),
                       _Pip(trip.pendingCount, AppColors.primary,
                           trip.isClosed ? Icons.remove_circle_outline : Icons.schedule),
                     ]),
@@ -459,12 +457,6 @@ class _ProgressHeaderState extends State<_ProgressHeader> {
                   iconColor: AppColors.warningDark,
                   count: trip.outsideCount,
                   label: 'Outside',
-                ),
-                StatusCountCell(
-                  icon: Icons.skip_next,
-                  iconColor: AppColors.textSecondaryLight,
-                  count: trip.skippedCount,
-                  label: 'Skipped',
                 ),
                 StatusCountCell(
                   icon: trip.isClosed ? Icons.remove_circle_outline : Icons.schedule,

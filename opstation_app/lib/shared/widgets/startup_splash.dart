@@ -105,7 +105,7 @@ class _SplashView extends StatelessWidget {
                           style: TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w800,
                               letterSpacing: 0.5, decoration: TextDecoration.none)),
                       const SizedBox(height: 6),
-                      Text('Field sales  ·  Routes  ·  Collections',
+                      Text('Empowering Field Teams',
                           style: TextStyle(color: Colors.white.withOpacity(0.78), fontSize: 13.5,
                               fontWeight: FontWeight.w500, letterSpacing: 0.3, decoration: TextDecoration.none)),
                     ]),

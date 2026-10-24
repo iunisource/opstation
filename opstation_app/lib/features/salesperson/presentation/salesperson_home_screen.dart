@@ -165,6 +165,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
     with WidgetsBindingObserver {
   // Route list: 'always' (recurring) or 'once' (one-time) — the switch only
   // shows when there is at least one one-time route.
+  _Period _period = _Period.today;
   String _routeTab = 'always';
   String _routeQuery = '';
   bool _searching = false;
@@ -564,6 +565,39 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
 
     final completedTrips = tripState.completedToday;
 
+
+    final todaysTrips = [
+      if (activeTrip != null) activeTrip,
+      ...completedTrips,
+    ];
+    final totalStopsToday =
+        todaysTrips.fold<int>(0, (s, t) => s + t.totalStops);
+    // Salesperson view = permissive coverage: any non-skipped visit counts.
+    final visitedToday =
+        todaysTrips.fold<int>(0, (s, t) => s + t.visitedCount);
+    final score = totalStopsToday == 0
+        ? 0.0
+        : (visitedToday / totalStopsToday) * 100.0;
+    final totalCollected =
+        todaysTrips.fold<int>(0, (s, t) => s + t.totalCollected);
+
+    // The stat cards below follow the period selector. "Today" stays live from
+    // trip state (updates the instant a collection is recorded); "This week" /
+    // "This month" come from homePeriodStatsProvider, which folds the same
+    // permissive coverage over the wider window (via the startedAt-bucketed
+    // tripsInRangeForUser). While a wider period is still loading we show 0
+    // rather than briefly flashing today's numbers under a week/month label.
+    double displayScore = score;
+    int displayCollected = totalCollected;
+    if (_period != _Period.today) {
+      final hp = _period == _Period.week
+          ? HomeStatsPeriod.week
+          : HomeStatsPeriod.month;
+      final periodStats = ref.watch(homePeriodStatsProvider(hp)).valueOrNull;
+      displayScore = periodStats?.score ?? 0.0;
+      displayCollected = periodStats?.collected ?? 0;
+    }
+
     return RefreshIndicator(
       onRefresh: _refresh,
       child: ListView(
@@ -672,6 +706,21 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
                 child: _DoneTile(trip: t),
               ),
           ],
+
+          // ── My numbers (at the end, out of the way) ─────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 22, 16, 0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _PeriodSelector(
+                selected: _period,
+                onChanged: (p) => setState(() => _period = p),
+              ),
+              const SizedBox(height: 16),
+              _VisitScoreCard(score: displayScore),
+              const SizedBox(height: 12),
+              _CollectedCard(amount: displayCollected),
+            ]),
+          ),
         ],
       ),
     );
@@ -696,16 +745,43 @@ String _ago(DateTime? d) {
   return 'last run ${DateFormat('EEE d MMM').format(d)}';
 }
 
-class _HeroHeader extends ConsumerWidget {
+class _HeroHeader extends ConsumerStatefulWidget {
   final String firstName;
   final String dateStr;
   const _HeroHeader({required this.firstName, required this.dateStr});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_HeroHeader> createState() => _HeroHeaderState();
+}
+
+class _HeroHeaderState extends ConsumerState<_HeroHeader> {
+  // Re-draw every minute so the greeting, date and "synced x min ago" stay
+  // current while the app sits open on the home screen.
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final firstName = widget.firstName;
     final sync = ref.watch(syncControllerProvider);
-    final h = DateTime.now().hour;
-    final greet = h < 12 ? 'Good morning' : (h < 17 ? 'Good afternoon' : 'Good evening');
+    final now = DateTime.now();
+    final dateStr = DateFormat('EEEE, d MMMM').format(now);
+    final h = now.hour;
+    // Morning 4–11, afternoon 12–16, evening 17–3.
+    final greet = (h >= 4 && h < 12) ? 'Good morning' : (h >= 12 && h < 17) ? 'Good afternoon' : 'Good evening';
     String syncText;
     Color dot;
     if (sync.pendingCount > 0) {
@@ -1129,6 +1205,179 @@ class _QuickAction extends StatelessWidget {
             child: Icon(icon, color: fg, size: 22),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+enum _Period { today, week, month }
+
+class _PeriodSelector extends StatelessWidget {
+  final _Period selected;
+  final ValueChanged<_Period> onChanged;
+
+  const _PeriodSelector({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (final p in _Period.values) ...[
+          _PeriodChip(
+            label: _label(p),
+            selected: p == selected,
+            onTap: () => onChanged(p),
+          ),
+          if (p != _Period.values.last) const SizedBox(width: 8),
+        ],
+      ],
+    );
+  }
+
+  String _label(_Period p) {
+    switch (p) {
+      case _Period.today:
+        return 'Today';
+      case _Period.week:
+        return 'This week';
+      case _Period.month:
+        return 'This month';
+    }
+  }
+}
+
+class _PeriodChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PeriodChip({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? AppColors.primary : AppColors.borderLight,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VisitScoreCard extends StatelessWidget {
+  final double score;
+
+  const _VisitScoreCard({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    final below = score < 60;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 52,
+              height: 52,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    value: score / 100,
+                    strokeWidth: 4,
+                    backgroundColor: AppColors.borderLight,
+                    valueColor: AlwaysStoppedAnimation(below ? AppColors.danger : AppColors.success),
+                  ),
+                  Text(
+                    '${score.round()}%',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Visit score', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                  const SizedBox(height: 2),
+                  Text(
+                    below ? 'Below 60% threshold' : 'On target',
+                    style: TextStyle(color: below ? AppColors.danger : AppColors.success, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            if (below) const Icon(Icons.error_outline, color: AppColors.danger),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CollectedCard extends StatelessWidget {
+  final int amount;
+
+  const _CollectedCard({required this.amount});
+
+  @override
+  Widget build(BuildContext context) {
+    final formatted = NumberFormat.decimalPattern().format(amount);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.successLight,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: const Icon(Icons.payments_outlined, color: AppColors.successDark, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Total collected',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.65),
+                        ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Rs $formatted',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
