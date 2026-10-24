@@ -1,3 +1,4 @@
+import '../../../core/utils/place_name.dart';
 import 'package:flutter/material.dart';
 import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -179,10 +180,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
+      final places = await tripPlaceNames(trip); // start / end area names
       final ctx = TripReportContext.build(
         trip: trip,
         visits: visits,
         customersById: _customersById,
+        startAddress: places.$1,
+        endAddress: places.$2,
       );
       final user = ref.read(currentUserProvider);
       final orgName = user?.orgName ?? 'Opstation';
@@ -212,10 +216,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
+      final places = await tripPlaceNames(trip); // start / end area names
       final ctx = TripReportContext.build(
         trip: trip,
         visits: visits,
         customersById: _customersById,
+        startAddress: places.$1,
+        endAddress: places.$2,
       );
       final orgName =
           ref.read(currentUserProvider)?.orgName ?? 'Opstation';

@@ -1,5 +1,6 @@
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
+import '../../../core/utils/place_name.dart';
 import 'package:flutter/material.dart';
 import '../../operations/presentation/time_in_market.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -2212,10 +2213,13 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       }
       // Same builder as the Reports screen and the mobile app, so the Visit
       // Report is identical wherever it is generated.
+      final places = await tripPlaceNames(t); // start / end area names
       final ctx = TripReportContext.build(
         trip: t,
         visits: visits,
         customersById: custs,
+        startAddress: places.$1,
+        endAddress: places.$2,
       );
       final bytes = await ReportPdfBuilder.buildVisitReport(
         ctx: ctx,
