@@ -613,11 +613,6 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
           ),
           const Padding(padding: EdgeInsets.fromLTRB(16, 12, 16, 0), child: TempPasswordBanner()),
 
-          if (roster.restDay && !hasActive)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: _InfoBanner(icon: Icons.weekend_outlined, text: 'Today is your weekly day off.'),
-            ),
 
           // ── On route now ───────────────────────────────────────────────
           if (activeTrip != null) ...[
