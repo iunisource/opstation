@@ -8,6 +8,7 @@ import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../dashboard/presentation/dashboard_screen.dart' show showActiveRoutesDialog;
+import 'route_location_coverage.dart';
 
 class RoutesScreen extends ConsumerStatefulWidget {
   const RoutesScreen({super.key});
@@ -337,6 +338,11 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   String _money(num v) => money(v);
 
   @override
+  void _openLocationCoverage() {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId != null) showRouteLocationCoverage(context, orgId: orgId);
+  }
+
   Widget build(BuildContext context) {
     return Container(
       color: AppTheme.background,
@@ -372,6 +378,19 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
             ),
             const SizedBox(width: 8),
           ],
+          // Which routes have every shop's location marked, and which shops are missing.
+          if (MediaQuery.of(context).size.width < 700)
+            IconButton(
+              tooltip: 'Location coverage',
+              onPressed: _openLocationCoverage,
+              icon: const Icon(Icons.share_location_outlined, color: AppTheme.primary),
+            )
+          else
+            OutlinedButton.icon(
+                onPressed: _openLocationCoverage,
+                icon: const Icon(Icons.share_location_outlined, size: 18),
+                label: const Text('Location coverage')),
+          const SizedBox(width: 8),
           OutlinedButton.icon(
               onPressed: () => context.push('/routes/import'),
               icon: const Icon(Icons.upload_file, size: 18),
