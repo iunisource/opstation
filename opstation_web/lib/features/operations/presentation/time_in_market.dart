@@ -153,7 +153,24 @@ class TimDay {
     return _min(e) < s.earlyBefore;
   }
   int longGapCount(TimSettings s) => gaps(s).where((g) => !g.beforeFirst).length;
+
+  /// Gaps between consecutive stops that are NOT long gaps — the usual time
+  /// one stop takes (time at the shop + getting to the next one).
+  List<Duration> stopIntervals(TimSettings s) => [
+        for (var i = 1; i < sorted.length; i++)
+          if (sorted[i].at.difference(sorted[i - 1].at).inMinutes <= s.gapMin)
+            sorted[i].at.difference(sorted[i - 1].at),
+      ];
+
+  Duration? avgPerStop(TimSettings s) => timAvg(stopIntervals(s));
 }
+
+Duration? timAvg(List<Duration> l) =>
+    l.isEmpty ? null : Duration(seconds: l.fold<int>(0, (a, d) => a + d.inSeconds) ~/ l.length);
+
+/// Average time per stop across many days (long gaps left out).
+Duration? timAvgPerStop(Iterable<TimDay> days, TimSettings s) =>
+    timAvg([for (final d in days) ...d.stopIntervals(s)]);
 
 String timDur(Duration? d) {
   if (d == null) return '—';
@@ -478,6 +495,7 @@ class TimDayDetail extends StatelessWidget {
       if (day.routeOpen != null) ('Route open (start → end)', timDur(day.routeOpen), null),
       ('Time in gaps over ${s.gapMin} min', timDur(day.lostToGaps(s)), gaps.isEmpty ? null : AppTheme.danger),
       ('Stops · per hour in market', '${day.visits} · ${day.perHour.toStringAsFixed(1)}', null),
+      ('Average time per stop (shop + travel, long gaps left out)', timDur(day.avgPerStop(s)), null),
       if (day.totalStops > 0) ('Planned stops not marked', '${(day.totalStops - day.visits).clamp(0, 100000)} of ${day.totalStops}', null),
       if (day.collected > 0) ('Collected', 'Rs ${money(day.collected)}', null),
     ];
@@ -611,6 +629,7 @@ class _TimDayListState extends State<TimDayList> {
                         _kv('In market', timDur(d.inMarket)),
                         _kv('Stops', d.totalStops > 0 ? '${d.visits} / ${d.totalStops}' : '${d.visits}'),
                         if (!mobile) _kv('Per hour', d.perHour.toStringAsFixed(1)),
+                        _kv('Per stop', timDur(d.avgPerStop(s))),
                         _kv('Longest gap', timDur(d.longestGap(s)),
                             bad: (d.longestGap(s)?.inMinutes ?? 0) > s.gapMin),
                       ]),
@@ -707,6 +726,7 @@ class _TimPersonTabState extends State<TimPersonTab> {
           Wrap(spacing: 10, runSpacing: 10, children: [
             _kpi('${_days.length}', 'days out'),
             _kpi(timDur(avg), 'average time in market'),
+            _kpi(timDur(timAvgPerStop(_days, _s)), 'average time per stop'),
             _kpi('$late', 'late starts', bad: late > 0),
             _kpi('$gaps', 'long gaps', bad: gaps > 0),
             _kpi('$early', 'closed early', bad: early > 0),

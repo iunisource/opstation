@@ -194,11 +194,11 @@ class _State extends ConsumerState<TimeInMarketScreen> {
         pw.SizedBox(height: 8),
         pw.Table(
           border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
-          columnWidths: const {0: pw.FlexColumnWidth(3), 10: pw.FlexColumnWidth(3)},
+          columnWidths: const {0: pw.FlexColumnWidth(3), 11: pw.FlexColumnWidth(3)},
           children: [
             pw.TableRow(repeat: true, decoration: const pw.BoxDecoration(color: PdfColors.grey200), children: [
               for (final h in ['Name · route', 'Date', 'Start', 'First stop', 'Last stop', 'End', 'In market',
-                'Stops', 'Per hr', 'Longest gap', 'Flags'])
+                'Stops', 'Per hr', 'Per stop', 'Longest gap', 'Flags'])
                 pw.Padding(padding: const pw.EdgeInsets.all(4), child: pw.Text(h, style: head)),
             ]),
             for (final d in days)
@@ -212,6 +212,7 @@ class _State extends ConsumerState<TimeInMarketScreen> {
                 c(timDur(d.inMarket)),
                 c(d.totalStops > 0 ? '${d.visits}/${d.totalStops}' : '${d.visits}'),
                 c(d.perHour.toStringAsFixed(1)),
+                c(timDur(d.avgPerStop(s))),
                 c(timDur(d.longestGap(s))),
                 c(timFlags(d, s).map((f) => f.$1).join(', ')),
               ]),
@@ -286,6 +287,7 @@ class _State extends ConsumerState<TimeInMarketScreen> {
             _kpi('${list.length}', 'days out (people × days)'),
             _kpi(timDur(avgIn), 'average time in market'),
             _kpi(avgPh.toStringAsFixed(1), 'stops per hour (average)'),
+            _kpi(timDur(timAvgPerStop(list, s)), 'average time per stop'),
             _kpi('$late', 'late starts', bad: late > 0),
             _kpi('$gaps', 'long gaps', warn: gaps > 0),
             _kpi('$early', 'closed early', bad: early > 0),
