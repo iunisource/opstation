@@ -1,3 +1,4 @@
+import '../../../core/services/org_config_sync.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -161,6 +162,8 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
       print('routes realtime refresh failed: $e');
     }
     if (mounted) ref.invalidate(_allRoutesProvider);
+    // Settings changed in Admin Settings apply without logging out.
+    if (mounted) unawaited(ref.read(orgConfigSyncProvider).sync());
   }
 
   @override
@@ -173,6 +176,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
 
   Future<void> _startRoute(SalesRoute route) async {
     if (_startingRouteId != null) return;
+    unawaited(ref.read(orgConfigSyncProvider).sync());
     setState(() => _startingRouteId = route.id);
 
     // Same gate as marking a visit and completing a route: no route may begin

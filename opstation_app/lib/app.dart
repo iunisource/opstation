@@ -9,6 +9,7 @@ import 'core/router/app_router.dart';
 import 'features/team/data/team_repository.dart';
 import 'core/services/cutoff_service.dart';
 import 'core/sync/sync_controller.dart';
+import 'core/services/org_config_sync.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_controller.dart';
 import 'shared/widgets/startup_splash.dart';
@@ -27,6 +28,8 @@ class OpstationApp extends ConsumerWidget {
     ref.watch(cutoffServiceProvider);
     ref.watch(uploadWorkerStarterProvider);
     ref.watch(seedProvider);
+    // Admin setting changes reach the phone without logging out.
+    ref.watch(orgConfigSyncProvider);
 
     return MaterialApp.router(
       title: 'Opstation',
