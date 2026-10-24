@@ -68,6 +68,7 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
     int? maxNum;
     void scan(Iterable<Visit> visits) {
       for (final v in visits) {
+        if (v.amount <= 0) continue; // nothing collected → no slip used
         final r = v.receiptNumber;
         if (r == null) continue;
         for (final m in RegExp(r'\d+').allMatches(r)) {

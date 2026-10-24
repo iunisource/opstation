@@ -66,6 +66,8 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     int? maxNum;
     void scan(Iterable<Visit> visits) {
       for (final v in visits) {
+        // Only visits where money was collected used up a slip.
+        if (v.amount <= 0) continue;
         final r = v.receiptNumber;
         if (r == null) continue;
         // Combined entries ("32371 & 32372") carry more than one slip — take
@@ -368,7 +370,8 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                       TextField(
                         controller: _crCtrl,
                         decoration: const InputDecoration(
-                          hintText: 'CR# (required when amount > 0)',
+                          hintText: 'CR# (only when amount is collected)',
+                          helperText: 'Not saved when nothing is collected — the slip stays for the next collection.',
                           prefixIcon: Icon(Icons.receipt_long_outlined),
                         ),
                       ),

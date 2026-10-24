@@ -73,8 +73,14 @@ class DeviceGpsService {
       } catch (_) {
         // Live fix failed — almost always a timeout under weak signal. Fall
         // back to the last-known cached position before giving up.
+        // Only a RECENT last-known point (≤ 2 min) is safe to use: an older
+        // one can be from wherever the phone was before (hundreds of metres
+        // away), which put shop pins and visit checks in the wrong place.
         final last = await Geolocator.getLastKnownPosition();
-        if (last != null) {
+        final DateTime? lastAt = last?.timestamp;
+        final fresh = lastAt != null &&
+            DateTime.now().difference(lastAt.toLocal()).abs() <= const Duration(minutes: 2);
+        if (last != null && fresh) {
           return GpsFixResult(
             GpsOutcome.success,
             fix: DeviceFix(

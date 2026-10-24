@@ -193,6 +193,17 @@ class _GpsTabState extends ConsumerState<_GpsTab> {
       });
       return;
     }
+    // A shop location must come from a live GPS reading, never the phone's
+    // last-known point (it can be from somewhere else).
+    if (res.isStale) {
+      setState(() {
+        _loading = false;
+        _stale = false;
+        _error = 'Could not get a live GPS reading here. Step outside toward open sky '
+            'and tap Capture again.';
+      });
+      return;
+    }
     final fix = res.fix!;
     setState(() {
       _loading = false;

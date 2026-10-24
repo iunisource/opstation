@@ -90,11 +90,25 @@ class FieldLocationCapture {
     }
 
     // Start sharpening GPS now, while the camera is open.
+    // The first reading a phone gives is often an OLD cached point (from where
+    // it was minutes ago) with a good-looking accuracy figure — keeping it put
+    // shop pins hundreds of metres off. Only readings taken from now on count.
+    // (Judged by when readings ARRIVE, so a wrong phone clock can't break it.)
+    final watch = Stopwatch()..start();
     Position? best;
+    DateTime? bestAt;
     final sub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 0),
     ).listen((p) {
-      if (best == null || p.accuracy <= best!.accuracy) best = p;
+      if (watch.elapsedMilliseconds < 1500) return; // the instant cached reading
+      final DateTime? at = p.timestamp;
+      // A reading much newer than the kept one replaces it even if its
+      // accuracy figure is a little worse — the kept one is out of date.
+      final newer = at != null && bestAt != null && at.difference(bestAt!).inSeconds > 20;
+      if (best == null || newer || p.accuracy <= best!.accuracy) {
+        best = p;
+        bestAt = at;
+      }
     }, onError: (_) {});
 
     try {

@@ -18,6 +18,36 @@ import '../data/customer_repository.dart';
 import '../models/audit_entry.dart';
 import '../providers/customers_controller.dart';
 import 'widgets/other_locations_card.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+
+/// Admin Settings (web) → "Customer deactivation access": when ON, the users
+/// picked there may deactivate / activate customers (admins always can).
+/// Read from the server, kept on the phone for offline.
+final customerDeactivateAccessProvider = FutureProvider<bool>((ref) async {
+  final user = ref.watch(authControllerProvider).valueOrNull;
+  final orgId = user?.organizationId;
+  if (user == null || orgId == null) return false;
+  final db = ref.watch(appDatabaseProvider);
+  String on = 'false', list = '';
+  try {
+    final rows = await Supabase.instance.client
+        .from('app_config')
+        .select('key, value')
+        .eq('org_id', orgId)
+        .inFilter('key', ['org.customer_deactivate_access', 'org.customer_deactivate_users']);
+    for (final r in rows as List) {
+      if (r['key'] == 'org.customer_deactivate_access') on = '${r['value'] ?? 'false'}';
+      if (r['key'] == 'org.customer_deactivate_users') list = '${r['value'] ?? ''}';
+    }
+    await db.setConfig('org.customer_deactivate_access', on);
+    await db.setConfig('org.customer_deactivate_users', list);
+  } catch (_) {
+    on = await db.getConfig('org.customer_deactivate_access') ?? 'false';
+    list = await db.getConfig('org.customer_deactivate_users') ?? '';
+  }
+  if (on != 'true') return false;
+  return list.split(',').map((e) => e.trim()).contains(user.id);
+});
 
 /// Detail screen shown when a customer row is tapped.
 ///
@@ -104,7 +134,7 @@ class _DetailBody extends ConsumerWidget {
         _VisitHistoryCard(customerId: customer.id),
         const SizedBox(height: 16),
         _RecentChangesCard(customerId: customer.id),
-        if (canManage) ...[
+        if (canManage || (ref.watch(customerDeactivateAccessProvider).valueOrNull ?? false)) ...[
           const SizedBox(height: 16),
           _DangerZone(customer: customer),
         ],

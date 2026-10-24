@@ -319,6 +319,9 @@ class TripController extends AsyncNotifier<TripState> {
     final s = state.valueOrNull;
     final active = s?.active;
     if (s == null || active == null) throw StateError('No active trip.');
+    // Nothing collected → no receipt slip is used. Don't keep a CR#, so the
+    // slip stays free for the next visit where money is collected.
+    if (amount <= 0) receiptNumber = null;
     if (amount > 0 && (receiptNumber == null || receiptNumber.trim().isEmpty)) {
       throw ArgumentError('Receipt number is required when amount > 0.');
     }
@@ -509,6 +512,7 @@ class TripController extends AsyncNotifier<TripState> {
   }) async {
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
+    if (amount <= 0) receiptNumber = null; // nothing collected → no slip used
     if (amount > 0 && (receiptNumber == null || receiptNumber.trim().isEmpty)) {
       throw ArgumentError('Receipt number is required when amount > 0.');
     }
