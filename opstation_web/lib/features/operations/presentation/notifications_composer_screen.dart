@@ -332,7 +332,7 @@ class _NotificationsComposerScreenState
               _load();
             } catch (e) {
               setS(() => sending = false);
-              _snack('Send failed: ${e.toString().split('\n').first}');
+              _snack(friendlyError('Could not send', e));
             }
           }
 
