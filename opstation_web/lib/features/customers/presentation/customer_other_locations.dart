@@ -51,8 +51,10 @@ class _CustomerOtherLocationsState extends ConsumerState<CustomerOtherLocations>
         _ready = true;
         _loading = false;
       });
-    } catch (_) {
-      if (mounted) setState(() { _ready = false; _loading = false; });
+    } catch (e) {
+      final missing = e is PostgrestException &&
+          (e.code == 'PGRST205' || e.code == '42P01' || e.message.contains('customer_locations'));
+      if (mounted) setState(() { _ready = !missing; _loading = false; });
     }
   }
 
@@ -189,7 +191,16 @@ class _CustomerOtherLocationsState extends ConsumerState<CustomerOtherLocations>
   @override
   Widget build(BuildContext context) {
     final canManage = _canManage;
-    if (!_ready || (!canManage && _list.isEmpty && !_loading)) return const SizedBox.shrink();
+    if (!_ready) {
+      // The database update for other locations hasn't been applied yet.
+      if (!canManage) return const SizedBox.shrink();
+      return const Padding(
+        padding: EdgeInsets.only(top: 12),
+        child: Text('Other locations will be available once the latest update is applied.',
+            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      );
+    }
+    if (!canManage && _list.isEmpty && !_loading) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(top: 12),

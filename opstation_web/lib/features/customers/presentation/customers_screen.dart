@@ -16,6 +16,8 @@ import '../../../core/widgets/responsive.dart';
 import 'customer_history_screen.dart';
 import 'erp_customer_360_screen.dart';
 import 'customer_edit_review.dart';
+import 'customer_other_locations.dart';
+import '../../erp/widgets/duplicate_ref_guard.dart';
 
 class CustomersScreen extends ConsumerStatefulWidget {
   final bool crmMode;
@@ -33,8 +35,15 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   bool _loading = true;
   bool _targetsEnabled = false; // org.customer_targets_enabled
   bool _customerSuperviseEnabled = false; // org.customer_supervise_flow
+  // org.customer_deactivate_access ON → these users (besides admins) can
+  // deactivate / activate customers (org.customer_deactivate_users).
+  bool _deactivateAccessOn = false;
+  Set<String> _deactivateUsers = {};
   // Customers with edits / field locations waiting for review (red dot on 360).
   Set<String> _reviewPendingIds = {};
+  // Customers whose location is the same as another active customer's (SQL 407):
+  // id → names of the others.
+  Map<String, String> _sharedLoc = {};
   final _searchCtrl = TextEditingController();
   String _missingFilter = 'all'; // all | contact | phone | either
   String _routeFilter = 'all'; // all | assigned | unassigned
@@ -54,6 +63,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     if (!widget.crmMode && _customerSuperviseEnabled) 'supervise_pending': 'Supervision pending',
     if (!widget.crmMode && (_reviewPendingIds.isNotEmpty || _missingFilter == 'review_pending'))
       'review_pending': 'Changes to review (${_reviewPendingIds.length})',
+    if (!widget.crmMode && (_sharedLoc.isNotEmpty || _missingFilter == 'shared_location'))
+      'shared_location': 'Same location as another customer (${_sharedLoc.length})',
     'all': 'All customers',
     'contact': 'Missing: Contact Person',
     'phone': 'Missing: Phone',
@@ -174,6 +185,25 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         superviseOn = (supRow?['value'] as String?) == 'true';
       } catch (_) {}
 
+      bool deactOn = false;
+      var deactUsers = <String>{};
+      try {
+        final dr = await client.from('app_config').select('key, value').eq('org_id', orgId)
+            .inFilter('key', ['org.customer_deactivate_access', 'org.customer_deactivate_users']);
+        for (final x in dr as List) {
+          if (x['key'] == 'org.customer_deactivate_access') deactOn = '${x['value']}' == 'true';
+          if (x['key'] == 'org.customer_deactivate_users') {
+            deactUsers = '${x['value'] ?? ''}'.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+          }
+        }
+      } catch (_) {}
+
+      final sharedLoc = <String, String>{};
+      try {
+        final sl = await client.rpc('customer_location_shared', params: {'p_org_id': orgId});
+        for (final x in sl as List) { sharedLoc['${x['customer_id']}'] = '${x['others'] ?? ''}'; }
+      } catch (_) {}
+
       final reviewIds = <String>{};
       try {
         final rr = await client.from('customer_edit_reviews').select('customer_id')
@@ -215,7 +245,10 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         _groups = grps;
         _targetsEnabled = targetsOn;
         _customerSuperviseEnabled = superviseOn;
+        _deactivateAccessOn = deactOn;
+        _deactivateUsers = deactUsers;
         _reviewPendingIds = reviewIds;
+        _sharedLoc = sharedLoc;
         _assignedCustomerIds = assignedIds;
         _routes = routes;
         _routesByCustomer..clear()..addAll(byCustomer);
@@ -264,6 +297,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
             return c['supervised_at'] == null; // not yet supervised
           case 'review_pending':
             return _reviewPendingIds.contains(c['id']); // edits / field locations to review
+          case 'shared_location':
+            return _sharedLoc.containsKey(c['id']); // same spot as another customer
           default:
             return true;
         }
@@ -600,10 +635,24 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                     child: Text('Deactivated', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: AppTheme.danger)),
                                   ),
                                 if (c['latitude'] != null && c['longitude'] != null)
-                                  const Padding(
-                                    padding: EdgeInsets.only(left: 6),
-                                    child: Icon(Icons.location_on, size: 14, color: AppTheme.success),
-                                  ),
+                                  _sharedLoc.containsKey(c['id'])
+                                      ? Tooltip(
+                                          message: 'Same location as: ${_sharedLoc[c['id']]}',
+                                          child: Container(
+                                            margin: const EdgeInsets.only(left: 6),
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                            decoration: BoxDecoration(color: Colors.deepOrange.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+                                            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                              Icon(Icons.wrong_location_outlined, size: 12, color: Colors.deepOrange),
+                                              SizedBox(width: 3),
+                                              Text('Same location', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.deepOrange)),
+                                            ]),
+                                          ),
+                                        )
+                                      : const Padding(
+                                          padding: EdgeInsets.only(left: 6),
+                                          child: Icon(Icons.location_on, size: 14, color: AppTheme.success),
+                                        ),
                                 if (!widget.crmMode && _customerSuperviseEnabled && c['supervised_at'] == null)
                                   Container(
                                     margin: const EdgeInsets.only(left: 6),
@@ -650,7 +699,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                                   ),
                                 if (!widget.crmMode)
                                   IconButton(icon: const Icon(Icons.edit_outlined, size: 18), onPressed: () => _showDialog(context, c)),
-                                if (!widget.crmMode && _canDeactivateCustomer(ref.watch(currentUserProvider)?.role))
+                                if (!widget.crmMode && _canToggleActive())
                                   IconButton(
                                     icon: Icon(
                                       (c['is_active'] as bool? ?? true)
@@ -729,6 +778,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     if (!active) _tag('Deactivated', AppTheme.danger),
                     if (pending) _tag('Supervision pending', Colors.amber.shade800),
                     if (_reviewPendingIds.contains(c['id'])) _tag('Changes to review', AppTheme.danger, icon: Icons.circle),
+                    if (_sharedLoc.containsKey(c['id']))
+                      Tooltip(message: 'Same location as: ${_sharedLoc[c['id']]}',
+                          child: _tag('Same location', Colors.deepOrange, icon: Icons.wrong_location_outlined)),
                   ]),
                 ])),
                 PopupMenuButton<String>(
@@ -748,7 +800,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     if (!widget.crmMode) const PopupMenuItem(value: 'history', child: Text('View history')),
                     if (!widget.crmMode) const PopupMenuItem(value: 'edit', child: Text('Edit')),
                     if (pending && _canDeactivateCustomer(role)) const PopupMenuItem(value: 'supervise', child: Text('Supervise')),
-                    if (!widget.crmMode && _canDeactivateCustomer(role)) PopupMenuItem(value: 'toggle', child: Text(active ? 'Deactivate' : 'Activate')),
+                    if (!widget.crmMode && _canToggleActive()) PopupMenuItem(value: 'toggle', child: Text(active ? 'Deactivate' : 'Activate')),
                     if (!widget.crmMode && _canDeleteCustomer(role)) const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: AppTheme.danger))),
                   ],
                 ),
@@ -775,6 +827,15 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   bool _canDeactivateCustomer(WebUserRole? role) =>
       role == WebUserRole.masterAdmin || role == WebUserRole.admin;
 
+  /// Deactivate / activate: admins always; when "Customer deactivation access"
+  /// is ON in Admin Settings, also the users picked there.
+  bool _canToggleActive() {
+    final u = ref.read(currentUserProvider);
+    if (u == null) return false;
+    if (u.role == WebUserRole.masterAdmin || u.role == WebUserRole.admin || u.role == WebUserRole.superAdmin) return true;
+    return _deactivateAccessOn && _deactivateUsers.contains(u.id);
+  }
+
   Future<void> _toggleCustomerActive(Map<String, dynamic> c) async {
     final newVal = !(c['is_active'] as bool? ?? true);
     try {
@@ -784,7 +845,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       _showSnack(newVal ? 'Customer activated' : 'Customer deactivated');
       _load();
     } catch (e) {
-      _showSnack('Failed: ${e.toString().split('\n').first}');
+      _showSnack(friendlyError(newVal ? 'Could not activate' : 'Could not deactivate', e));
     }
   }
 
@@ -1303,6 +1364,14 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     },
                   ),
                 ),
+                // Extra locations (Godown, Shop 2 …) — saved straight away,
+                // separate from this form's Save.
+                if (customer != null)
+                  CustomerOtherLocations(
+                    customerId: customer['id'] as String,
+                    shopName: '${customer['shop_name'] ?? ''}',
+                    shopCode: customer['code'] as String?,
+                  ),
               ]),
             ),
           ),
@@ -1318,6 +1387,22 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 final orgId = ref.read(currentUserProvider)?.orgId;
                 final lat = double.tryParse(latCtrl.text.trim());
                 final lng = double.tryParse(lngCtrl.text.trim());
+                // Same coordinates as another customer? Warn (only when the location is new or changed).
+                bool locWarned = false;
+                if (orgId != null && lat != null && lng != null) {
+                  final oldLat = (customer?['latitude'] as num?)?.toDouble();
+                  final oldLng = (customer?['longitude'] as num?)?.toDouble();
+                  final changed = oldLat == null || oldLng == null ||
+                      (oldLat - lat).abs() > 0.0000001 || (oldLng - lng).abs() > 0.0000001;
+                  if (changed) {
+                    final go = await checkDuplicateLocation(ctx,
+                        orgId: orgId, lat: lat, lng: lng,
+                        excludeCustomerId: customer?['id'] as String?,
+                        customerLabel: '${codeCtrl.text.trim()} ${shopCtrl.text.trim()}'.trim());
+                    if (!go) return;
+                    locWarned = true;
+                  }
+                }
                 final data = {
                   'shop_name': shopCtrl.text.trim(),
                   'code': codeCtrl.text.trim(),
@@ -1335,6 +1420,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   'is_active': true,
                 };
                 final isNew = customer == null;
+                String? savedId = customer?['id'] as String?;
                 try {
                   if (isNew) {
                     // Insert; if the auto code lost a race (unique violation),
@@ -1345,6 +1431,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                       try {
                         await Supabase.instance.client.from('customers')
                             .insert({...data, 'id': id, 'updated_at': DateTime.now().toUtc().toIso8601String()});
+                        savedId = id;
                         break;
                       } catch (e) {
                         final msg = e.toString().toLowerCase();
@@ -1362,6 +1449,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     await Supabase.instance.client.from('customers').update(data).eq('id', customer['id']);
                     await _logCustomerEdit(customer, data);
                   }
+                  if (locWarned && savedId != null) await markLocationWarned(savedId);
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack(isNew ? 'Customer added' : 'Customer updated');
                   _load();

@@ -628,6 +628,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.customer_deactivate_access',
+    'Customer deactivation access',
+    'Admins can always deactivate and activate customers. When ON, the users '
+        'picked below can do it too — on the web Customers page and in the app. '
+        'When OFF, only admins can.',
+    users: _UsersField('org.customer_deactivate_users', 'Also allowed to deactivate / activate customers'),
+  ),
+
+  _AdminToggle(
     'org.customer_edit_supervise_flow',
     'Supervision for customer edits',
     'When ON, every change to an existing customer — from the web, the app or an '
