@@ -340,7 +340,9 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   @override
   void _openLocationCoverage() {
     final orgId = ref.read(currentUserProvider)?.orgId;
-    if (orgId != null) showRouteLocationCoverage(context, orgId: orgId);
+    if (orgId != null) {
+      showRouteLocationCoverage(context, orgId: orgId, orgName: ref.read(currentUserProvider)?.orgName);
+    }
   }
 
   Widget build(BuildContext context) {

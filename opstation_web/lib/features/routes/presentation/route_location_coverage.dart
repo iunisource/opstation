@@ -1,9 +1,16 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../../core/pdf/pdf_output.dart';
 
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
@@ -13,7 +20,7 @@ import '../../customers/presentation/erp_customer_360_screen.dart';
 /// active shops have a saved location, and exactly which ones are missing.
 /// A shop counts as located when it has its main location or at least one
 /// other location (SQL 409) — visits there can be verified.
-Future<void> showRouteLocationCoverage(BuildContext context, {required String orgId}) async {
+Future<void> showRouteLocationCoverage(BuildContext context, {required String orgId, String? orgName}) async {
   final client = Supabase.instance.client;
   Future<List<Map<String, dynamic>>> paged(dynamic Function(int f, int t) q) async {
     final out = <Map<String, dynamic>>[];
@@ -262,6 +269,22 @@ Future<void> showRouteLocationCoverage(BuildContext context, {required String or
                                 ]),
                               ]),
                               children: [
+                                // Share the list with the team.
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Wrap(spacing: 4, children: [
+                                    TextButton.icon(
+                                      onPressed: () => _routePdf(ctx, r, orgName, share: false),
+                                      icon: const Icon(Icons.print_outlined, size: 16),
+                                      label: const Text('PDF / Print'),
+                                    ),
+                                    TextButton.icon(
+                                      onPressed: () => _routePdf(ctx, r, orgName, share: true),
+                                      icon: const Icon(Icons.share_outlined, size: 16),
+                                      label: const Text('Share'),
+                                    ),
+                                  ]),
+                                ),
                                 if (r.missing.isEmpty)
                                   const Align(alignment: Alignment.centerLeft,
                                       child: Text('Every shop on this route has a location.',
@@ -315,4 +338,106 @@ class _RouteLoc {
       required this.total, required this.missing});
   int get located => total - missing.length;
   double get ratio => total == 0 ? 0 : located / total;
+}
+
+
+/// One route's location sheet for the team: coverage, then every shop with no
+/// location (route order) with space to note the location once captured.
+Future<void> _routePdf(BuildContext context, _RouteLoc r, String? orgName, {required bool share}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    pw.ThemeData? theme;
+    try {
+      theme = pw.ThemeData.withFont(
+          base: await PdfGoogleFonts.notoSansRegular(), bold: await PdfGoogleFonts.notoSansBold());
+    } catch (_) {}
+    final now = DateTime.now();
+    final pct = (r.ratio * 100).round();
+    final doc = pw.Document(title: 'Missing locations - ${r.name}', creator: 'Opstation', theme: theme);
+    final head = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800);
+    pw.Widget hc(String t) => pw.Padding(padding: const pw.EdgeInsets.all(4), child: pw.Text(t, style: head));
+    pw.Widget c(String t, {bool bold = false}) => pw.Padding(
+        padding: const pw.EdgeInsets.all(4),
+        child: pw.Text(t, style: pw.TextStyle(fontSize: 8.5, fontWeight: bold ? pw.FontWeight.bold : null)));
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 32),
+      header: (ctx) => ctx.pageNumber == 1
+          ? pw.SizedBox()
+          : pw.Padding(
+              padding: const pw.EdgeInsets.only(bottom: 6),
+              child: pw.Text('${r.name} — shops without location (continued)',
+                  style: pw.TextStyle(fontSize: 8, color: PdfColors.grey600))),
+      footer: (ctx) => pw.Row(children: [
+        pw.Text('Printed ${DateFormat('d MMM yyyy, h:mm a').format(now)}',
+            style: pw.TextStyle(fontSize: 7.5, color: PdfColors.grey600)),
+        pw.Spacer(),
+        pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',
+            style: pw.TextStyle(fontSize: 7.5, color: PdfColors.grey600)),
+      ]),
+      build: (ctx) => [
+        if ((orgName ?? '').isNotEmpty)
+          pw.Text(orgName!, style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
+        pw.Text('Shop locations to capture', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 4),
+        pw.Text('Route: ${r.name}', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        pw.Text('Salesperson: ${r.salespeople.isEmpty ? '—' : r.salespeople.join(', ')}',
+            style: const pw.TextStyle(fontSize: 10)),
+        pw.SizedBox(height: 8),
+        pw.Container(
+          padding: const pw.EdgeInsets.all(8),
+          decoration: pw.BoxDecoration(
+              color: PdfColors.grey100, borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4))),
+          child: pw.Row(children: [
+            pw.Expanded(child: pw.Text('Location marked: ${r.located} of ${r.total} shops ($pct%)',
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold))),
+            pw.Text('Missing: ${r.missing.length}',
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.deepOrange)),
+          ]),
+        ),
+        pw.SizedBox(height: 10),
+        if (r.missing.isEmpty)
+          pw.Text('Every shop on this route has a location.', style: const pw.TextStyle(fontSize: 10))
+        else
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+            columnWidths: const {
+              0: pw.FixedColumnWidth(22),
+              1: pw.FixedColumnWidth(58),
+              2: pw.FlexColumnWidth(3),
+              3: pw.FlexColumnWidth(3),
+              4: pw.FixedColumnWidth(70),
+              5: pw.FixedColumnWidth(52),
+            },
+            children: [
+              pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  repeat: true,
+                  children: [hc('#'), hc('Code'), hc('Shop'), hc('Address'), hc('Phone'), hc('Done')]),
+              for (var i = 0; i < r.missing.length; i++)
+                pw.TableRow(children: [
+                  c('${i + 1}'),
+                  c('${r.missing[i]['code'] ?? ''}'),
+                  c('${r.missing[i]['shop_name'] ?? ''}', bold: true),
+                  c('${r.missing[i]['address'] ?? ''}'),
+                  c('${r.missing[i]['phone'] ?? ''}'),
+                  c(''),
+                ]),
+            ],
+          ),
+        pw.SizedBox(height: 10),
+        pw.Text('Capture each shop\'s location standing at the shop front, then tick Done.',
+            style: pw.TextStyle(fontSize: 8.5, color: PdfColors.grey700)),
+      ],
+    ));
+    final Uint8List bytes = await doc.save();
+    final name = 'Missing locations - ${r.name}';
+    if (share) {
+      await sharePdf(bytes, '$name.pdf');
+    } else {
+      await outputPdf(bytes, name);
+    }
+  } catch (_) {
+    messenger.showSnackBar(const SnackBar(content: Text('Could not create the PDF. Please try again.')));
+  }
 }
