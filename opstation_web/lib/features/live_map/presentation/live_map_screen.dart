@@ -22,6 +22,70 @@ class LiveMapScreen extends ConsumerStatefulWidget {
 }
 
 class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
+  // Replay of the opened route run: the icon moves start → visits → end,
+  // keeping the real timing (a long stop or gap takes longer to play).
+  Timer? _playTimer;
+  bool _playing = false;
+  double _playT = 0; // 0 … 1
+  double _speed = 1;
+  static const _playSeconds = 30.0; // whole day at 1×
+
+  /// (point, time) in time order; entries without a time are spaced evenly.
+  List<(LatLng, DateTime)> _playPts(_FocusTrip t) {
+    final out = <(LatLng, DateTime)>[];
+    if (t.start != null && t.startedAt != null) out.add((t.start!, t.startedAt!));
+    for (final v in t.visits) {
+      if (v.point != null && v.at != null) out.add((v.point!, v.at!));
+    }
+    if (t.end != null && t.endedAt != null) out.add((t.end!, t.endedAt!));
+    out.sort((a, b) => a.$2.compareTo(b.$2));
+    return out;
+  }
+
+  /// Where the icon is and the clock time at progress [p].
+  (LatLng, DateTime)? _playAt(List<(LatLng, DateTime)> pts, double p) {
+    if (pts.isEmpty) return null;
+    if (pts.length == 1) return pts.first;
+    final t0 = pts.first.$2, t1 = pts.last.$2;
+    final total = t1.difference(t0).inMilliseconds;
+    if (total <= 0) return pts.last;
+    final now = t0.add(Duration(milliseconds: (total * p).round()));
+    for (var i = 1; i < pts.length; i++) {
+      if (!pts[i].$2.isBefore(now)) {
+        final a = pts[i - 1], b = pts[i];
+        final seg = b.$2.difference(a.$2).inMilliseconds;
+        final f = seg <= 0 ? 1.0 : now.difference(a.$2).inMilliseconds / seg;
+        return (LatLng(a.$1.latitude + (b.$1.latitude - a.$1.latitude) * f,
+            a.$1.longitude + (b.$1.longitude - a.$1.longitude) * f), now);
+      }
+    }
+    return pts.last;
+  }
+
+  void _togglePlay() {
+    if (_playing) {
+      _playTimer?.cancel();
+      setState(() => _playing = false);
+      return;
+    }
+    if (_playT >= 1) _playT = 0;
+    setState(() => _playing = true);
+    _playTimer?.cancel();
+    _playTimer = Timer.periodic(const Duration(milliseconds: 50), (tm) {
+      if (!mounted || _focusTrip == null) { tm.cancel(); return; }
+      setState(() {
+        _playT = (_playT + 0.05 * _speed / _playSeconds).clamp(0.0, 1.0);
+        if (_playT >= 1) { _playing = false; tm.cancel(); }
+      });
+    });
+  }
+
+  void _stopPlay() {
+    _playTimer?.cancel();
+    _playing = false;
+    _playT = 0;
+  }
+
   bool _loading = true;
   List<_UserLoc> _users = [];
   final _mapController = MapController();
@@ -246,6 +310,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       );
       if (!mounted || _focusRequested != tripId) return;
       setState(() {
+        _stopPlay();
         _focusTrip = ft;
         _focusLoading = false;
       });
@@ -270,6 +335,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   void _closeTrip() {
     setState(() {
+      _stopPlay();
       _focusTrip = null;
       _focusRequested = null;
     });
@@ -373,6 +439,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             Text('${t.visitCount} visit${t.visitCount == 1 ? '' : 's'} · Sales ${NumberFormat('#,##0').format(t.sales)}',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ]),
+          if (_playPts(t).length >= 2) _playControls(t),
           if (t.visits.any((v) => v.point == null))
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -430,6 +497,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   @override
   void dispose() {
+    _playTimer?.cancel();
     _debounce?.cancel();
     _custSearchCtrl.dispose();
     if (_channel != null) Supabase.instance.client.removeChannel(_channel!);
@@ -859,6 +927,61 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
       );
 
+  Widget _playControls(_FocusTrip t) {
+    final at = _playAt(_playPts(t), _playT);
+    // The next visit not reached yet.
+    _FocusVisit? next;
+    if (at != null) {
+      for (final v in t.visits) {
+        if (v.at != null && v.point != null && v.at!.isAfter(at.$2)) { next = v; break; }
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(children: [
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: _playing ? 'Pause' : 'Replay the day',
+          icon: Icon(_playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
+              color: _userColor(t.userId), size: 30),
+          onPressed: _togglePlay,
+        ),
+        PopupMenuButton<double>(
+          tooltip: 'Speed',
+          initialValue: _speed,
+          onSelected: (v) => setState(() => _speed = v),
+          itemBuilder: (_) => [
+            for (final v in const [0.5, 1.0, 2.0, 4.0])
+              PopupMenuItem(value: v, child: Text('${v == v.roundToDouble() ? v.toInt() : v}×')),
+          ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Text('${_speed == _speed.roundToDouble() ? _speed.toInt() : _speed}×',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+          ),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6)),
+            child: Slider(
+              value: _playT,
+              activeColor: _userColor(t.userId),
+              onChanged: (v) => setState(() => _playT = v),
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 118,
+          child: Text(
+            at == null ? '' : '${DateFormat('h:mm a').format(at.$2)}${next == null ? '' : ' → #${next.no}'}',
+            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ]),
+    );
+  }
+
   Widget _visitPin(String label, Color c) => Container(
         height: 24,
         constraints: const BoxConstraints(minWidth: 24),
@@ -869,9 +992,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
           border: Border.all(color: Colors.white, width: 2),
           boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
         ),
-        alignment: Alignment.center,
-        child: Text(label, maxLines: 1,
-            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+        // widthFactor 1 keeps the pin just as wide as its number.
+        child: Center(widthFactor: 1, child: Text(label, maxLines: 1,
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800))),
       );
 
   void _showVisitSheet(List<_FocusVisit> all, {_FocusVisit? first}) {
@@ -1120,6 +1243,24 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                         ),
                       ),
                     ),
+              ]),
+            // The replaying salesperson (only while a replay is under way).
+            if (_focusTrip != null && (_playing || _playT > 0))
+              MarkerLayer(markers: [
+                if (_playAt(_playPts(_focusTrip!), _playT) case final at?)
+                  Marker(
+                    point: at.$1,
+                    width: 40, height: 40, alignment: Alignment.center,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: _userColor(_focusTrip!.userId), width: 3),
+                        boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
+                      ),
+                      child: Icon(Icons.directions_walk, color: _userColor(_focusTrip!.userId), size: 22),
+                    ),
+                  ),
               ]),
           ],
         ),
