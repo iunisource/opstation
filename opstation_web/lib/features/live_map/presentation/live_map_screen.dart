@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/visit_outcome.dart';
 import '../../auth/auth_controller.dart';
 
 class LiveMapScreen extends ConsumerStatefulWidget {
@@ -201,16 +202,32 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       }
       final visits = List<Map<String, dynamic>>.from(await client
           .from('visits')
-          .select('captured_lat, captured_lng, timestamp, amount, customer_id')
+          .select('*, customers(shop_name, code)')
           .eq('trip_id', tripId)
           .order('timestamp', ascending: true));
-      final stops = <LatLng>[];
+      // Every visit keeps its number in visiting order (1, 2, 3 …), even when
+      // it has no GPS point and so can't be drawn.
+      final visitList = <_FocusVisit>[];
       num sales = 0;
-      for (final v in visits) {
+      for (var i = 0; i < visits.length; i++) {
+        final v = visits[i];
         sales += (v['amount'] as num?) ?? 0;
-        final p = _pt(v, 'captured_lat', 'captured_lng');
-        if (p != null) stops.add(p);
+        final cust = v['customers'] as Map?;
+        visitList.add(_FocusVisit(
+          no: i + 1,
+          point: _pt(v, 'captured_lat', 'captured_lng'),
+          at: _ts(v['timestamp']),
+          shop: '${cust?['shop_name'] ?? 'Shop'}',
+          code: '${cust?['code'] ?? ''}',
+          status: '${v['status'] ?? ''}',
+          amount: (v['amount'] as num?) ?? 0,
+          receipt: '${v['receipt_number'] ?? ''}',
+          notes: '${v['notes'] ?? ''}',
+          distance: (v['distance_meters'] as num?)?.toDouble(),
+          place: '${v['location_name'] ?? ''}',
+        ));
       }
+      final stops = [for (final v in visitList) if (v.point != null) v.point!];
       final ft = _FocusTrip(
         tripId: tripId,
         userId: '${t['user_id'] ?? ''}',
@@ -221,8 +238,10 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         startedAt: _ts(t['started_at']),
         endedAt: _ts(t['ended_at']),
         stops: stops,
+        visits: visitList,
         visitCount: visits.length,
         sales: sales,
+        cutoff: '${t['close_reason'] ?? ''}' == 'cutoff',
       );
       if (!mounted || _focusRequested != tripId) return;
       setState(() {
@@ -347,13 +366,26 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             Row(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(width: 16, height: 16, child: _endPin(start: false)),
               const SizedBox(width: 4),
-              Text(t.endedAt == null ? 'Still running' : '${fmt.format(t.endedAt!)}$dur',
+              Text(t.endedAt == null ? 'Still running' : '${t.cutoff ? 'Cut-off ' : ''}${fmt.format(t.endedAt!)}$dur',
                   style: const TextStyle(fontSize: 12)),
             ]),
             Text('${t.visitCount} visit${t.visitCount == 1 ? '' : 's'} · Sales ${NumberFormat('#,##0').format(t.sales)}',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ]),
-          if (missing.isNotEmpty)
+          if (t.visits.any((v) => v.point == null))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                  'Not on the map (no GPS): ${t.visits.where((v) => v.point == null).map((v) => '#${v.no} ${v.shop}').join(', ')}',
+                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ),
+          if (t.cutoff)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('Not ended by the salesperson — the system auto-closed it at the cut-off time, so there is no end location.',
+                  style: TextStyle(fontSize: 11, color: AppTheme.warning)),
+            )
+          else if (missing.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text('No GPS was recorded for the ${missing.join(' and ')} location of this route.',
@@ -826,6 +858,85 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
       );
 
+  String _pinLabel(List<_FocusVisit> g) {
+    if (g.length == 1) return '${g.first.no}';
+    if (g.length <= 3) return g.map((v) => v.no).join(',');
+    return '${g.first.no}–${g.last.no}';
+  }
+
+  Widget _visitPin(String label, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5),
+        decoration: BoxDecoration(
+          color: c,
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
+        ),
+        alignment: Alignment.center,
+        child: Text(label, maxLines: 1,
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+      );
+
+  void _showVisitSheet(List<_FocusVisit> g) {
+    final fmt = DateFormat('h:mm a');
+    final nf = NumberFormat('#,##0');
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.7),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          children: [
+            if (g.length > 1)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text('${g.length} visits at this spot',
+                    style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+              ),
+            for (final v in g) ...[
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: 38, height: 38, alignment: Alignment.center,
+                  decoration: BoxDecoration(color: _userColor(_focusTrip?.userId ?? '').withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Text('${v.no}', style: TextStyle(fontWeight: FontWeight.w800,
+                      color: _userColor(_focusTrip?.userId ?? ''))),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${v.shop}${v.place.isEmpty ? '' : ' (${v.place})'}',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                  if (v.code.isNotEmpty) Text(v.code, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 14, runSpacing: 4, children: [
+                    _kv('Visit', '#${v.no}${v.at == null ? '' : ' · ${fmt.format(v.at!)}'}'),
+                    _kv('Result', visitOutcomeLabel(v.status, v.amount)),
+                    _kv('Collected', 'Rs ${nf.format(v.amount)}'),
+                    if (v.receipt.isNotEmpty) _kv('CR#', v.receipt),
+                    if (v.distance != null && v.distance! > 0) _kv('From shop', '${v.distance!.round()} m'),
+                  ]),
+                  if (v.notes.trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(v.notes.trim(), style: const TextStyle(fontSize: 12.5)),
+                  ],
+                ])),
+              ]),
+              if (v != g.last) const Divider(height: 24),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _kv(String k, String v) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(k, style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+        Text(v, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+      ]);
+
   void _focusCust(_Cust c, {int? stopNo}) {
     _mapController.move(LatLng(c.lat, c.lng), 16);
     _showCustSheet(c, stopNo: stopNo);
@@ -907,15 +1018,6 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                   strokeWidth: 4.5,
                 ),
               ]),
-            if (_focusTrip != null)
-              MarkerLayer(markers: [
-                for (var i = 0; i < _focusTrip!.stops.length; i++)
-                  Marker(
-                    point: _focusTrip!.stops[i],
-                    width: 24, height: 24, alignment: Alignment.center,
-                    child: _routeStopPin(i + 1, _userColor(_focusTrip!.userId)),
-                  ),
-              ]),
             // Where each route run started (green) and ended (red) today.
             MarkerLayer(markers: [
               for (final t in _focusTrip != null
@@ -992,6 +1094,25 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                   ),
               ],
             ),
+            // The opened route run's visits, numbered in visiting order — drawn
+            // last so no person or start / end pin covers a number. Tap = details.
+            if (_focusTrip != null)
+              MarkerLayer(markers: [
+                for (final g in _groupFocusVisits(_focusTrip!.visits))
+                  Marker(
+                    point: g.first.point!,
+                    width: g.length == 1 ? 26.0 : (16.0 + 9 * _pinLabel(g).length).clamp(26.0, 90.0),
+                    height: 26,
+                    alignment: Alignment.center,
+                    child: GestureDetector(
+                      onTap: () => _showVisitSheet(g),
+                      child: Tooltip(
+                        message: g.map((v) => '#${v.no} ${v.shop}').join('\n'),
+                        child: _visitPin(_pinLabel(g), _userColor(_focusTrip!.userId)),
+                      ),
+                    ),
+                  ),
+              ]),
           ],
         ),
         // Status card on the left
@@ -1620,9 +1741,11 @@ class _FocusTrip {
   final LatLng? start, end;
   final DateTime? startedAt, endedAt;
   final List<LatLng> stops;
+  final List<_FocusVisit> visits;
   final int visitCount;
   final num sales;
   _FocusTrip({
+    this.visits = const [],
     required this.tripId,
     required this.userId,
     required this.userName,
@@ -1634,8 +1757,46 @@ class _FocusTrip {
     required this.stops,
     required this.visitCount,
     required this.sales,
+    this.cutoff = false,
   });
+  final bool cutoff; // auto-closed at the cut-off time (salesperson never pressed End)
 
   /// Start → visits in order → end.
   List<LatLng> get path => [if (start != null) start!, ...stops, if (end != null) end!];
+}
+
+/// One visit of the opened route run (Live Map), numbered in visiting order.
+class _FocusVisit {
+  final int no;
+  final LatLng? point;
+  final DateTime? at;
+  final String shop, code, status, receipt, notes, place;
+  final num amount;
+  final double? distance;
+  const _FocusVisit({required this.no, this.point, this.at, required this.shop, required this.code,
+      required this.status, required this.amount, required this.receipt, required this.notes,
+      this.distance, required this.place});
+}
+
+/// Visits at (almost) the same spot share one pin, so no number hides
+/// under another.
+List<List<_FocusVisit>> _groupFocusVisits(List<_FocusVisit> vs) {
+  final groups = <List<_FocusVisit>>[];
+  for (final v in vs) {
+    if (v.point == null) continue;
+    List<_FocusVisit>? hit;
+    for (final g in groups) {
+      final p = g.first.point!;
+      if ((p.latitude - v.point!.latitude).abs() < 0.00012 && (p.longitude - v.point!.longitude).abs() < 0.00012) {
+        hit = g;
+        break;
+      }
+    }
+    if (hit != null) {
+      hit.add(v);
+    } else {
+      groups.add([v]);
+    }
+  }
+  return groups;
 }
