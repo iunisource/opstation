@@ -523,21 +523,28 @@ class _ErpCustomerBalanceReportScreenState
         '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},350);};</script>'
         '</body></html>';
 
-    // Print via a hidden iframe (Safari prints blob: URLs as blank pages).
+    // Firefox: its print preview of a hidden frame can sit on "Preparing
+    // Preview" — open the report in its own tab instead (it prints at once
+    // there and can be saved as PDF from the dialog).
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    if (ua.contains('firefox')) {
+      final blob = html.Blob([doc], 'text/html;charset=utf-8');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final w = html.window.open(url, '_blank');
+      Future.delayed(const Duration(minutes: 2), () => html.Url.revokeObjectUrl(url));
+      if (w != null) return; // a blocked tab falls through to the frame below
+    }
+    // Others: print via a hidden frame (Safari prints blob: URLs as blank pages).
+    html.document.getElementById('cbr-print-frame')?.remove();
     final iframe = html.IFrameElement()
+      ..id = 'cbr-print-frame'
       ..style.position = 'fixed'
-      ..style.right = '0'
-      ..style.bottom = '0'
+      ..style.left = '-9999px'
       ..style.width = '0'
       ..style.height = '0'
       ..style.border = '0';
-    html.document.body!.append(iframe);
     iframe.srcdoc = doc;
-    Future.delayed(const Duration(minutes: 2), () {
-      try {
-        iframe.remove();
-      } catch (_) {}
-    });
+    html.document.body!.append(iframe);
   }
 
   // ── UI ──────────────────────────────────────────────────────────────────────
