@@ -168,6 +168,7 @@ import '../../features/erp/presentation/erp_batch_tracking_screen.dart' deferred
 import '../../features/erp/presentation/erp_investors_screen.dart' deferred as _s157;
 import '../../features/erp/presentation/erp_duplicate_refs_screen.dart' deferred as _s158;
 import '../../features/erp/presentation/erp_receipt_books_screen.dart' deferred as _s159;
+import '../../features/operations/presentation/time_in_market_screen.dart' deferred as _s160;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -305,7 +306,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc == '/dispatch-orders';
             // Route Roster (Operations) is registry-gated too.
             final permScopedOps = const {
-              '/dashboard', '/team', '/routes', '/operations/route-roster', '/live-map',
+              '/dashboard', '/team', '/routes', '/operations/route-roster', '/operations/time-in-market', '/live-map',
               '/operations/retailers', '/reports', '/compliance', '/operations/files',
               '/operations/notifications',
             }.contains(loc);
@@ -442,6 +443,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/intelligence/performance', builder: (_, __) => _deferred(_s054.loadLibrary(), () => _s054.IntelligencePerformanceScreen())),
           GoRoute(path: '/routes', builder: (_, __) => _deferred(_s055.loadLibrary(), () => _s055.RoutesScreen())),
           GoRoute(path: '/operations/route-roster', builder: (_, __) => _deferred(_s151.loadLibrary(), () => _s151.RouteRosterScreen())),
+          GoRoute(path: '/operations/time-in-market', builder: (_, __) => _deferred(_s160.loadLibrary(), () => _s160.TimeInMarketScreen())),
           GoRoute(path: '/routes/import', builder: (_, __) => _deferred(_s057.loadLibrary(), () => _s057.BulkImportRoutesScreen())),
           GoRoute(path: '/deliveries', builder: (_, __) => _deferred(_s059.loadLibrary(), () => _s059.DeliveriesScreen())),
           GoRoute(

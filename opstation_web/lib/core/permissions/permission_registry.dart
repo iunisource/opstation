@@ -216,6 +216,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('field_reports', 'Reports', PermKind.report, '/reports'),
     PermItem('combined_trip_summary', 'Combined Trip Summary', PermKind.report, '/reports/combined-summary'),
     PermItem('compliance', 'Compliance', PermKind.report, '/compliance'),
+    PermItem('time_in_market', 'Time in Market', PermKind.report, '/operations/time-in-market'),
     PermItem('ops_files', 'Files', PermKind.doc, '/operations/files'),
     PermItem('ops_notifications', 'Notifications', PermKind.doc, '/operations/notifications'),
   ]),

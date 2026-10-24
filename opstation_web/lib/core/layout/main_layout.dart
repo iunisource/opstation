@@ -1691,6 +1691,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     if (show('/reports')) _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
     if (show('/reports/combined-summary')) _menuItem(context, 'Combined Trip Summary', Icons.route_outlined, '/reports/combined-summary', location),
     if (show('/compliance')) _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
+    if (show('/operations/time-in-market')) _menuItem(context, 'Time in Market', Icons.timelapse_outlined, '/operations/time-in-market', location),
     if (show('/operations/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
     if (show('/operations/notifications')) _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
   ];
@@ -1713,7 +1714,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isAdminTier) ...[
           if (modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
+            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
               _menuItem(context, 'Team', Icons.people_outline, '/team', location),
@@ -1727,6 +1728,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
               _menuItem(context, 'Combined Trip Summary', Icons.route_outlined, '/reports/combined-summary', location),
               _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
+              _menuItem(context, 'Time in Market', Icons.timelapse_outlined, '/operations/time-in-market', location),
               _menuLabel('Setup'),
               _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
               _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
@@ -1775,7 +1777,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isErpUser && opsErpItems.isNotEmpty && modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
             const ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/operations/route-roster', '/live-map', '/operations/retailers',
-             '/reports', '/reports/combined-summary', '/compliance', '/operations/files', '/operations/notifications'],
+             '/reports', '/reports/combined-summary', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications'],
             opsErpItems),
 
         // Assets/Facility grants live outside erpMenuItems (their menu is built

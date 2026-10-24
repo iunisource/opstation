@@ -1,6 +1,7 @@
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import '../../operations/presentation/time_in_market.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
@@ -532,8 +533,12 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   @override
   Widget build(BuildContext context) {
     final isMobile = context.isMobile;
+    // Time in Market — salespeople and drivers only.
+    final role = (widget.user['role'] as String?) ?? '';
+    final showTim = role == 'salesperson' || role == 'driver';
+    final orgId = ref.read(currentUserProvider)?.orgId ?? (widget.user['org_id'] as String?);
     return DefaultTabController(
-      length: 7,
+      length: showTim && orgId != null ? 8 : 7,
       child: Scaffold(
         backgroundColor: AppTheme.background,
         appBar: AppBar(
@@ -557,14 +562,15 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
             unselectedLabelColor: AppTheme.textSecondary,
             indicatorColor: AppTheme.primary,
             tabAlignment: TabAlignment.start,
-            tabs: const [
-              Tab(text: 'Overview'),
-              Tab(text: 'Placement'),
-              Tab(text: 'Spotting'),
-              Tab(text: 'Visits'),
-              Tab(text: 'Routes'),
-              Tab(text: 'Tasks'),
-              Tab(text: 'Reports'),
+            tabs: [
+              const Tab(text: 'Overview'),
+              const Tab(text: 'Placement'),
+              const Tab(text: 'Spotting'),
+              const Tab(text: 'Visits'),
+              if (showTim && orgId != null) const Tab(text: 'Time in Market'),
+              const Tab(text: 'Routes'),
+              const Tab(text: 'Tasks'),
+              const Tab(text: 'Reports'),
             ],
           ),
         ),
@@ -579,6 +585,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                     _placementTab(),
                     _spottingTab(),
                     _visitsTab(),
+                    if (showTim && orgId != null) TimPersonTab(orgId: orgId, userId: _uid),
                     _routesTab(),
                     _tasksTab(),
                     _reportsTab(),

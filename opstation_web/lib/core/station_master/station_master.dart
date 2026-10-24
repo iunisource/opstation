@@ -742,6 +742,7 @@ const List<_Feature> _features = [
   // HR
   _Feature('Employee Directory', 'HR', '/hr/employees', ['employee', 'staff', 'directory']),
   _Feature('Route Roster', 'Operations', '/operations/route-roster', ['roster', 'route plan', 'beat plan', 'salesperson schedule', 'weekly routes']),
+  _Feature('Time in Market', 'Operations', '/operations/time-in-market', ['time in market', 'late start', 'idle time', 'working hours', 'field time', 'salesman time', 'gap']),
   _Feature('HR Setup', 'HR', '/hr/setup', ['department', 'designation', 'shift', 'rest day', 'hr setup']),
   _Feature('Attendance', 'HR', '/hr/attendance', ['attendance']),
   _Feature('Attendance Kiosk', 'HR', '/hr/attendance-kiosk', ['kiosk', 'check in']),
