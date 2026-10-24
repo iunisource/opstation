@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../orders/presentation/order_create_modal.dart';
+import '../../orders/data/field_order_repository.dart';
+import '../../auth/providers/auth_controller.dart';
 import '../../customers/services/field_location_capture.dart';
 
 import '../../../core/theme/app_colors.dart';
@@ -900,23 +902,7 @@ class _StopCardState extends State<_StopCard> {
                   ),
                 ],
                 const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => OrderCreateModal.show(
-                      context,
-                      customerId: customer.id,
-                      customerName: customer.shopName,
-                      customerCode: customer.code,
-                    ),
-                    icon: const Icon(Icons.add_shopping_cart, size: 18),
-                    label: const Text('Order'),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 42),
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
-                    ),
-                  ),
-                ),
+                Expanded(child: _OrderButton(customer: customer)),
               ],
             ),
             const SizedBox(height: 8),
@@ -1355,6 +1341,59 @@ class _FreeCustomerPickerSheetState
           const SizedBox(height: 8),
         ]),
       ),
+    );
+  }
+}
+
+/// "Order" button on a stop. Once an order has been placed for this shop
+/// during the current route it turns green with a tick and the count
+/// (✓ 1, ✓ 2 …) — tapping it still opens a new order.
+class _OrderButton extends ConsumerWidget {
+  final Customer customer;
+  const _OrderButton({required this.customer});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final uid = ref.watch(authControllerProvider).valueOrNull?.id ?? '';
+    final trip = ref.watch(tripControllerProvider).valueOrNull?.active;
+    final now = DateTime.now();
+    final since = trip?.startedAt ?? DateTime(now.year, now.month, now.day);
+    final count = uid.isEmpty
+        ? 0
+        : (ref.watch(fieldOrderCountProvider('${customer.id}|$uid|${since.millisecondsSinceEpoch}')).valueOrNull ?? 0);
+    final done = count > 0;
+    final color = done ? AppColors.success : AppColors.primary;
+    return OutlinedButton(
+      onPressed: () => OrderCreateModal.show(
+        context,
+        customerId: customer.id,
+        customerName: customer.shopName,
+        customerCode: customer.code,
+      ),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(0, 42),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        foregroundColor: color,
+        backgroundColor: done ? AppColors.successLight : null,
+        side: BorderSide(color: color),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.add_shopping_cart, size: 18),
+        const SizedBox(width: 6),
+        const Flexible(child: Text('Order', overflow: TextOverflow.ellipsis)),
+        if (done) ...[
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(color: AppColors.success, borderRadius: BorderRadius.circular(10)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.check, size: 12, color: Colors.white),
+              const SizedBox(width: 2),
+              Text('$count', style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+        ],
+      ]),
     );
   }
 }

@@ -92,7 +92,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
 
       final orderRows = await client
           .from('field_orders')
-          .select('id, customer_id, status, notes, submitted_at, created_at')
+          .select('*')
           .eq('org_id', orgId)
           .eq('salesperson_id', userId)
           .gte('created_at', fromIso)
@@ -177,6 +177,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
           date: dateStr != null ? DateTime.tryParse(dateStr)?.toLocal() : null,
           notes: (o['notes'] as String?)?.trim(),
           status: (o['status'] as String?) ?? 'submitted',
+          rejectReason: (o['reject_reason'] as String?)?.trim(),
           total: total,
           lines: lines,
         ));
@@ -381,6 +382,10 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis),
                 ],
+                if (o.status.toLowerCase() == 'rejected') ...[
+                  const SizedBox(height: 6),
+                  _RejectReason(o.rejectReason),
+                ],
               ],
             ),
           ),
@@ -459,6 +464,11 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                         color: AppColors.textSecondaryLight,
                         fontStyle: FontStyle.italic)),
               ),
+            ),
+          if (o.status.toLowerCase() == 'rejected')
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: _RejectReason(o.rejectReason),
             ),
           const SizedBox(height: 8),
           const Divider(height: 1),
@@ -599,6 +609,7 @@ class _OrderVM {
   final DateTime? date;
   final String? notes;
   final String status;
+  final String? rejectReason;
   final double total;
   final List<_LineVM> lines;
   _OrderVM({
@@ -608,6 +619,7 @@ class _OrderVM {
     required this.date,
     required this.notes,
     required this.status,
+    this.rejectReason,
     required this.total,
     required this.lines,
   });
@@ -623,4 +635,34 @@ class _LineVM {
       required this.sku,
       required this.qty,
       required this.price});
+}
+
+/// Why the order was rejected, as typed by the reviewer.
+class _RejectReason extends StatelessWidget {
+  final String? reason;
+  const _RejectReason(this.reason);
+
+  @override
+  Widget build(BuildContext context) {
+    final r = (reason ?? '').trim();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.danger.withOpacity(0.25)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.info_outline, size: 15, color: AppColors.danger),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            r.isEmpty ? 'Rejected · no reason given' : 'Reason: $r',
+            style: const TextStyle(fontSize: 12.5, color: AppColors.danger, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ]),
+    );
+  }
 }

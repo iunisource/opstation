@@ -139,3 +139,23 @@ final fieldOrderRepositoryProvider = Provider<FieldOrderRepository>((ref) {
   final orgId = ref.watch(orgIdProvider);
   return FieldOrderRepository(db, orgId: orgId);
 });
+
+/// How many orders this salesperson has placed for a customer since [since]
+/// (e.g. the start of the current route). Reads the phone's own copy, so it
+/// updates the moment an order is saved — online or offline.
+Stream<int> _ordersSince(AppDatabase db, String customerId, String salespersonId, DateTime since) {
+  final q = db.select(db.fieldOrders)
+    ..where((o) =>
+        o.customerId.equals(customerId) &
+        o.salespersonId.equals(salespersonId) &
+        o.createdAt.isBiggerOrEqualValue(since));
+  return q.watch().map((rows) => rows.length);
+}
+
+/// Key: "customerId|salespersonId|sinceMillis".
+final fieldOrderCountProvider = StreamProvider.autoDispose.family<int, String>((ref, key) {
+  final parts = key.split('|');
+  if (parts.length != 3) return Stream.value(0);
+  final since = DateTime.fromMillisecondsSinceEpoch(int.tryParse(parts[2]) ?? 0);
+  return _ordersSince(ref.watch(appDatabaseProvider), parts[0], parts[1], since);
+});
