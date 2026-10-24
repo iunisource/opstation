@@ -188,16 +188,17 @@ class ReportPdfBuilder {
     required TripReportContext ctx,
     required String orgName,
     bool duplicate = false,
+    List<String> trail = const [],
   }) async {
     final trip = ctx.trip;
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
       pageTheme: _pageTheme(duplicate),
       header: (c) => _pageHeader(orgName, 'Trip Summary'),
-      footer: (c) => _pageFooter(c, orgName, 'Trip Summary',
+      footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Trip Summary',
           distanceNote: ctx.usedGoogle
               ? 'Distances: Google Directions API (road distance)'
-              : 'Distances: straight-line / Haversine'),
+              : 'Distances: straight-line / Haversine')),
       build: (c) => [
         _subtitleLine(trip),
         pw.SizedBox(height: 14),
@@ -230,6 +231,7 @@ class ReportPdfBuilder {
     required double grandTotalKm,
     double? lastWeekTotalKm,
     bool duplicate = false,
+    List<String> trail = const [],
   }) async {
     final doc = pw.Document();
     final lastWeekTotal = lastWeekTotalKm ??
@@ -264,8 +266,8 @@ class ReportPdfBuilder {
     doc.addPage(pw.MultiPage(
       pageTheme: _pageTheme(duplicate),
       header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
-      footer: (c) => _pageFooter(c, orgName, 'Combined Trip Summary',
-          distanceNote: 'Distances: straight-line / Haversine'),
+      footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Combined Trip Summary',
+          distanceNote: 'Distances: straight-line / Haversine')),
       build: (c) => [
         pw.Text(salespersonLabel,
             style: pw.TextStyle(
@@ -392,6 +394,17 @@ class ReportPdfBuilder {
         ],
       ),
     );
+  }
+
+  /// On a DUPLICATE copy: who generated this report and when, above the footer.
+  static pw.Widget _withTrail(List<String> trail, pw.Widget footer) {
+    if (trail.isEmpty) return footer;
+    return pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+      pw.Text('Generated: ${trail.join(';  ')}',
+          style: const pw.TextStyle(fontSize: 6.5, color: PdfColors.red800)),
+      pw.SizedBox(height: 3),
+      footer,
+    ]);
   }
 
   static pw.Widget _pageFooter(pw.Context c, String orgName, String title,

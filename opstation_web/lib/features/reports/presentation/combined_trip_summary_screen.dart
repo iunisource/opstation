@@ -1,3 +1,4 @@
+import '../../../core/utils/report_trail.dart';
 import 'package:flutter/material.dart';
 import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -223,6 +224,9 @@ class _CombinedTripSummaryScreenState
       final key =
           '${_selectedUserId ?? 'all'}|${ymd(_range!.start)}|${ymd(_range!.end)}';
       bool duplicate = false;
+      // Admins' copies are not counted (they still see DUPLICATE if issued before).
+      final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin ||
+          user?.role == WebUserRole.superAdmin;
       if (user?.orgId != null) {
         try {
           final res = await Supabase.instance.client
@@ -231,7 +235,7 @@ class _CombinedTripSummaryScreenState
             'p_type': 'combined_summary',
             'p_key': key,
             'p_by': user.id,
-            'p_increment': true,
+            'p_increment': !isAdmin, // admins only check, never count
           });
           duplicate = res == true;
         } catch (_) {}
@@ -259,6 +263,7 @@ class _CombinedTripSummaryScreenState
         grandTotalKm: _grandKm,
         lastWeekTotalKm: _grandLastWeekKm,
         duplicate: duplicate,
+        trail: await logReportIssue(user?.orgId, 'combined_summary', key, counted: !isAdmin),
       );
       await outputPdf(bytes, 'Combined Trip Summary');
     } catch (e) {

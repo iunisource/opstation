@@ -1,4 +1,5 @@
 import '../../../core/utils/place_name.dart';
+import '../../../core/utils/report_trail.dart';
 import 'package:flutter/material.dart';
 import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -157,6 +158,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   Future<bool> _registerReportIssue(
       String type, String key, String? orgId, String? by) async {
     if (orgId == null) return false;
+    // Admins' copies are not counted: they only check whether it was already
+    // issued (and still see DUPLICATE if so).
+    final role = ref.read(currentUserProvider)?.role;
+    final isAdmin = role == WebUserRole.admin || role == WebUserRole.masterAdmin || role == WebUserRole.superAdmin;
     try {
       final res =
           await Supabase.instance.client.rpc('register_report_issue', params: {
@@ -164,7 +169,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         'p_type': type,
         'p_key': key,
         'p_by': by,
-        'p_increment': true,
+        'p_increment': !isAdmin,
       });
       return res == true;
     } catch (_) {
@@ -193,10 +198,14 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       // Reimbursement doc: flag re-issues with a DUPLICATE watermark.
       final duplicate = await _registerReportIssue(
           'trip_summary', trip['id'] as String, user?.orgId, user?.id);
+      final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin ||
+          user?.role == WebUserRole.superAdmin;
+      final trail = await logReportIssue(user?.orgId, 'trip_summary', trip['id'] as String, counted: !isAdmin);
       final bytes = await ReportPdfBuilder.buildTripSummary(
         ctx: ctx,
         orgName: orgName,
         duplicate: duplicate,
+        trail: trail,
       );
       await outputPdf(bytes, 'Trip Summary',
           date: DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal());
