@@ -42,11 +42,13 @@ class SoundController extends Notifier<bool> {
         return 'sounds/visit_marked.wav';
       case AppSound.routeEnd:
         return 'sounds/route_complete.wav';
+      case AppSound.orderSent:
+        return 'sounds/order_sent.wav';
     }
   }
 }
 
-enum AppSound { routeStart, visitMarked, routeEnd }
+enum AppSound { routeStart, visitMarked, routeEnd, orderSent }
 
 final soundControllerProvider =
     NotifierProvider<SoundController, bool>(SoundController.new);

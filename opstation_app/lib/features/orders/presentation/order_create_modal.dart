@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../../core/sync/sync_controller.dart';
+import '../../../core/services/sound_controller.dart';
 import '../data/field_order_repository.dart';
 
 /// Salesperson order entry. Opened two ways (both already wired in the app):
@@ -171,6 +172,7 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
       // Kick the sync: online it pushes within milliseconds; offline it stays
       // pending and drains on reconnect. The order is saved locally either way.
       ref.read(syncControllerProvider.notifier).flushPending();
+      ref.read(soundControllerProvider.notifier).play(AppSound.orderSent);
       if (!mounted) return;
       _snack('Order submitted for review');
       Navigator.of(context).pop();
