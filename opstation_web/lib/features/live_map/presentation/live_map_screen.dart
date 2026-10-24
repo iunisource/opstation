@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -858,14 +859,10 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         child: Text('$n', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
       );
 
-  String _pinLabel(List<_FocusVisit> g) {
-    if (g.length == 1) return '${g.first.no}';
-    if (g.length <= 3) return g.map((v) => v.no).join(',');
-    return '${g.first.no}–${g.last.no}';
-  }
-
   Widget _visitPin(String label, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5),
+        height: 24,
+        constraints: const BoxConstraints(minWidth: 24),
+        padding: const EdgeInsets.symmetric(horizontal: 4),
         decoration: BoxDecoration(
           color: c,
           borderRadius: BorderRadius.circular(13),
@@ -877,7 +874,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
       );
 
-  void _showVisitSheet(List<_FocusVisit> g) {
+  void _showVisitSheet(List<_FocusVisit> all, {_FocusVisit? first}) {
+    // The tapped visit first, then any others at the same spot.
+    final g = first == null ? all : [first, ...all.where((v) => v != first)];
     final fmt = DateFormat('h:mm a');
     final nf = NumberFormat('#,##0');
     showModalBottomSheet(
@@ -893,7 +892,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             if (g.length > 1)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Text('${g.length} visits at this spot',
+                child: Text('${g.length} visits at this same spot',
                     style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
               ),
             for (final v in g) ...[
@@ -1098,20 +1097,29 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             // last so no person or start / end pin covers a number. Tap = details.
             if (_focusTrip != null)
               MarkerLayer(markers: [
+                // One pin per visit. Visits at the same spot fan out in a small
+                // circle around it (fixed on screen), so every number shows.
                 for (final g in _groupFocusVisits(_focusTrip!.visits))
-                  Marker(
-                    point: g.first.point!,
-                    width: g.length == 1 ? 26.0 : (16.0 + 9 * _pinLabel(g).length).clamp(26.0, 90.0),
-                    height: 26,
-                    alignment: Alignment.center,
-                    child: GestureDetector(
-                      onTap: () => _showVisitSheet(g),
-                      child: Tooltip(
-                        message: g.map((v) => '#${v.no} ${v.shop}').join('\n'),
-                        child: _visitPin(_pinLabel(g), _userColor(_focusTrip!.userId)),
+                  for (var k = 0; k < g.length; k++)
+                    Marker(
+                      point: g[k].point!,
+                      width: 120, height: 120, alignment: Alignment.center,
+                      child: Center(
+                        child: Transform.translate(
+                          offset: g.length == 1
+                              ? Offset.zero
+                              : Offset((14.0 + 3 * g.length) * math.cos(-math.pi / 2 + 2 * math.pi * k / g.length),
+                                  (14.0 + 3 * g.length) * math.sin(-math.pi / 2 + 2 * math.pi * k / g.length)),
+                          child: GestureDetector(
+                            onTap: () => _showVisitSheet(g, first: g[k]),
+                            child: Tooltip(
+                              message: '#${g[k].no} ${g[k].shop}',
+                              child: _visitPin('${g[k].no}', _userColor(_focusTrip!.userId)),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
               ]),
           ],
         ),
