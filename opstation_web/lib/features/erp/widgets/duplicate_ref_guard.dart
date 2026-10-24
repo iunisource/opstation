@@ -169,3 +169,110 @@ Future<String?> checkDuplicateRefs(
   final where = {for (final h in hits) '${h['voucher_number'] ?? h['voucher_type']}'}.join(', ');
   return 'Saved with a reference already used — ${refs.join(', ')} also in $where';
 }
+
+/// Same-location guard for customers (SQL 407). Before a location is saved,
+/// looks for other active customers at the same coordinates (within ~1 m).
+/// Returns true to go ahead (nothing found, or the user chose "Save anyway"),
+/// false when the user went back. A failed check never blocks saving.
+/// When the user saves anyway, call [markLocationWarned] with the customer id
+/// after the save so the Duplicate References entry shows it.
+Future<bool> checkDuplicateLocation(
+  BuildContext context, {
+  required String orgId,
+  required double lat,
+  required double lng,
+  String? excludeCustomerId,
+  String? customerLabel,
+}) async {
+  List<Map<String, dynamic>> hits;
+  try {
+    hits = List<Map<String, dynamic>>.from(await Supabase.instance.client.rpc('customer_location_duplicates', params: {
+      'p_org_id': orgId, 'p_lat': lat, 'p_lng': lng, 'p_exclude_id': excludeCustomerId,
+    }) as List);
+  } catch (_) {
+    return true;
+  }
+  hits = hits.where((h) => h['is_active'] != false).toList();
+  if (hits.isEmpty || !context.mounted) return true;
+  final ok = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      icon: const Icon(Icons.wrong_location_outlined, color: Colors.orange),
+      title: const Text('Another customer is at this exact location'),
+      content: SizedBox(
+        width: 520,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)} is already saved for:',
+              style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: SingleChildScrollView(
+              child: Column(children: [
+                for (final h in hits)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('${h['code'] ?? ''}  ${h['shop_name'] ?? ''}'.trim(),
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                      if ('${h['address'] ?? ''}'.isNotEmpty)
+                        Text('${h['address']}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    ]),
+                  ),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Two shops rarely share the exact same point. Check that this is not the same shop entered twice, '
+            'or a location copied from another customer. If you know the case, you can save anyway — it will be '
+            'listed in Financials → Duplicate References for review.',
+            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Go back and review')),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.orange.shade700, foregroundColor: Colors.white),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Save anyway'),
+        ),
+      ],
+    ),
+  );
+  if (ok == true) return true;
+  // Went back: still record that the warning came up.
+  try {
+    final id = await Supabase.instance.client.rpc('dup_ref_event_log', params: {
+      'p_org_id': orgId, 'p_branch_id': null, 'p_type': 'LOC',
+      'p_voucher_id': excludeCustomerId, 'p_voucher_number': customerLabel,
+      'p_refs': ['${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}'],
+      'p_matches': [
+        for (final h in hits)
+          {'type': 'CUSTOMER', 'id': h['id'], 'number': h['code'], 'account': h['shop_name'],
+           'description': h['address'] ?? '', 'status': h['is_active'] == false ? 'inactive' : 'active'},
+      ],
+    }) as String?;
+    if (id != null) {
+      await Supabase.instance.client.rpc('dup_ref_event_set', params: {'p_id': id, 'p_outcome': 'went_back'});
+    }
+  } catch (_) {}
+  return false;
+}
+
+/// After a "Save anyway" on a customer location: the server already recorded
+/// the match; mark it as knowingly saved.
+Future<void> markLocationWarned(String customerId) async {
+  try {
+    await Supabase.instance.client.rpc('dup_loc_mark_warned', params: {'p_customer_id': customerId});
+  } catch (_) {}
+}
