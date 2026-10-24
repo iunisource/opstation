@@ -466,6 +466,21 @@ final dupRefPendingProvider = FutureProvider<int>((ref) async {
   }
 });
 
+// Cancelled receipt slips still to review (SQL 411c). Shown to whoever can
+// open Reports → Receipt Books (gated by the menu's access check).
+final receiptSlipPendingProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client.from('receipt_slip_cancels').select('id')
+        .eq('org_id', user.orgId!).filter('reviewed_at', 'is', null).limit(1000);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 final paPendingApprovalCountProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
@@ -1291,6 +1306,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final paPending = gate('/financials/payment-advice', ref.watch(paPendingApprovalCountProvider).valueOrNull ?? 0);
   final jvPending = gate('/financials/journal-vouchers', ref.watch(jvPendingCountProvider).valueOrNull ?? 0);
   final dupRefPending = gate('/financials/duplicate-references', ref.watch(dupRefPendingProvider).valueOrNull ?? 0);
+  final receiptSlipPending = gate('/reports/receipt-books', ref.watch(receiptSlipPendingProvider).valueOrNull ?? 0);
   final piReviewPending = gate('/erp/purchase-invoices', ref.watch(piReviewPendingProvider).valueOrNull ?? 0);
   final grnPendingInvoice = gate('/erp/purchase-invoices', ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0);
   final priReviewPending = gate('/erp/purchase-return-vouchers', ref.watch(priReviewPendingProvider).valueOrNull ?? 0);
@@ -1451,7 +1467,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/reports/collections')) _menuItem(context, 'Collection Report', Icons.payments_outlined, '/reports/collections', location),
     if (show('/reports/margin')) _menuItem(context, 'Margin Report', Icons.trending_up, '/reports/margin', location),
       if (show('/reports/skipped-receipts')) _menuItem(context, 'Skipped Receipts Report', Icons.receipt_long_outlined, '/reports/skipped-receipts', location),
-      if (show('/reports/receipt-books')) _menuItem(context, 'Receipt Books', Icons.menu_book_outlined, '/reports/receipt-books', location),
+      if (show('/reports/receipt-books')) _menuItem(context, 'Receipt Books', Icons.menu_book_outlined, '/reports/receipt-books', location, badge: receiptSlipPending),
     ];
     final reportItems = <Widget>[
       if (show('/reports/center')) _menuItem(context, 'Reports Center', Icons.grid_view_outlined, '/reports/center', location),
@@ -1592,7 +1608,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(reportItems))
         _navMenu(context, 'Reports', Icons.summarize_outlined, location,
           ['/reports/collections', '/reports/margin', '/reports/skipped-receipts', '/reports/receipt-books', '/reports/center'],
-          reportItems),
+          reportItems, badge: receiptSlipPending),
       if (_hasItems(manufacturingItems))
         _navMenu(context, 'Manufacturing', Icons.precision_manufacturing_outlined, location,
           ['/manufacturing/production-floor', '/manufacturing/production-plan', '/manufacturing/product-assembly', '/manufacturing/production-voucher', '/manufacturing/job-card', '/manufacturing/qc-checkpoints', '/manufacturing/qc-station', '/manufacturing/job-kiosk', '/manufacturing/duty-roster', '/manufacturing/label-printing',

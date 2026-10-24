@@ -9,6 +9,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart' show receiptSlipPendingProvider;
 
 /// Reports → Receipt Books (SQL 411).
 ///
@@ -193,6 +194,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
         _outside = outside;
         _loading = false;
       });
+      ref.invalidate(receiptSlipPendingProvider); // keep the menu counter in step
     } catch (e) {
       if (mounted) setState(() { _error = friendlyError('Could not load receipt books', e); _loading = false; });
     }
@@ -206,6 +208,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
       await f();
       _snack(done);
       await _load();
+      ref.invalidate(receiptSlipPendingProvider); // menu counter
     } catch (e) {
       _snack(friendlyError('Could not save', e));
     } finally {
@@ -502,6 +505,12 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               const Text('Cancelled', style: TextStyle(fontWeight: FontWeight.w800)),
               Text('${c['reason'] ?? ''}'),
               Text('By ${c['by'] ?? '—'} · ${_fmt(c['at'])}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const SizedBox(height: 6),
+              Text(c['reviewed_at'] == null
+                      ? 'Not reviewed yet'
+                      : 'Reviewed by ${c['reviewed_by'] ?? '—'} · ${_fmt(c['reviewed_at'])}'
+                          '${'${c['review_note'] ?? ''}'.isEmpty ? '' : ' — ${c['review_note']}'}',
+                  style: TextStyle(fontSize: 12, color: c['reviewed_at'] == null ? Colors.orange.shade800 : AppTheme.success)),
             ] else if (uses.isEmpty)
               const Text('Not used yet.')
             else
@@ -608,6 +617,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               : _error != null
                   ? Center(child: Text(_error!, style: const TextStyle(color: AppTheme.danger)))
                   : ListView(children: [
+                      if (_pendingCancels.isNotEmpty) _reviewCard(),
                       if (_outside.isNotEmpty) _outsideCard(),
                       if (list.isEmpty)
                         Padding(
@@ -619,6 +629,75 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                       for (final b in list) _bookCard(b),
                     ]),
         ),
+      ]),
+    );
+  }
+
+  /// Cancelled slips not reviewed yet: (book, cancel row), newest first.
+  List<(_Book, Map<String, dynamic>)> get _pendingCancels {
+    final out = <(_Book, Map<String, dynamic>)>[];
+    for (final b in _books) {
+      for (final c in b.cancelled) {
+        if (c['reviewed_at'] == null) out.add((b, c));
+      }
+    }
+    out.sort((a, b) => '${b.$2['at']}'.compareTo('${a.$2['at']}'));
+    return out;
+  }
+
+  Future<void> _review(List<String> ids) async {
+    final note = await _askText(
+        ids.length == 1 ? 'Review cancelled slip' : 'Review ${ids.length} cancelled slips',
+        'Note (optional)', hint: 'e.g. torn slip seen');
+    if (note == null) return;
+    await _run(ids.length == 1 ? 'Reviewed' : '${ids.length} reviewed', () async {
+      await _db.rpc('receipt_slip_review', params: {'p_ids': ids, 'p_note': note});
+    });
+  }
+
+  Widget _reviewCard() {
+    final list = _pendingCancels;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.withOpacity(0.6)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 10, runSpacing: 6, children: [
+          const Icon(Icons.rate_review_outlined, color: Colors.orange, size: 20),
+          Text('Cancelled slips to review (${list.length})',
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5)),
+          if (list.length > 1)
+            TextButton.icon(
+              onPressed: _busy ? null : () => _review([for (final e in list) '${e.$2['id']}']),
+              icon: const Icon(Icons.done_all, size: 16),
+              label: const Text('Review all'),
+            ),
+        ]),
+        const SizedBox(height: 4),
+        for (final e in list.take(50))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Slip ${e.$2['serial']} · ${e.$1.holder} · book ${e.$1.start}–${e.$1.end}',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  Text('${e.$2['reason'] ?? ''} — by ${e.$2['by'] ?? '—'}, ${_fmt(e.$2['at'])}',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ]),
+              ),
+              OutlinedButton(
+                onPressed: _busy ? null : () => _review(['${e.$2['id']}']),
+                child: const Text('Review'),
+              ),
+            ]),
+          ),
+        if (list.length > 50)
+          Text('…and ${list.length - 50} more', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       ]),
     );
   }
