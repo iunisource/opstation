@@ -95,6 +95,41 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     super.dispose();
   }
 
+  /// Route stops, read in pages — a single read stops at 1,000 rows, which
+  /// would quietly hide some customers on larger organisations.
+  Future<List<Map<String, dynamic>>> _fetchStops({String? orgId, String? routeId}) async {
+    final client = Supabase.instance.client;
+    const page = 1000;
+    final out = <Map<String, dynamic>>[];
+    for (var from = 0; ; from += page) {
+      var q = client.from('route_stops').select('route_id, customer_id, position');
+      if (orgId != null) q = q.eq('org_id', orgId);
+      if (routeId != null) q = q.eq('route_id', routeId);
+      final rows = await q
+          .order('route_id', ascending: true)
+          .order('position', ascending: true)
+          .order('customer_id', ascending: true)
+          .range(from, from + page - 1);
+      for (final r in rows as List) {
+        out.add(Map<String, dynamic>.from(r as Map));
+      }
+      if ((rows).length < page) break;
+    }
+    return out;
+  }
+
+  /// This route's customers as they are right now (not as the page last
+  /// loaded them), in stop order. Falls back to the loaded copy when offline.
+  Future<List<Map<String, dynamic>>> _currentStops(_RouteRow row) async {
+    try {
+      final fresh = await _fetchStops(routeId: row.data['id'] as String);
+      fresh.sort((a, b) => ((a['position'] as int?) ?? 0).compareTo((b['position'] as int?) ?? 0));
+      return fresh;
+    } catch (_) {
+      return List<Map<String, dynamic>>.from(row.stops);
+    }
+  }
+
   Future<void> _load() async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
@@ -106,7 +141,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
       // full customer list lazily when a route editor or the stop picker opens.
       final res = await Future.wait([
         client.from('sales_routes').select().eq('org_id', orgId).order('name'),
-        client.from('route_stops').select('route_id, customer_id, position').eq('org_id', orgId),
+        _fetchStops(orgId: orgId),
         client.from('route_assignments').select('route_id, user_id'),
         client.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer'),
       ]);
@@ -922,6 +957,18 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     _load();
   }
 
+  /// Save a route's customers. Uses the newer "apply only my changes" call
+  /// (update 415); if that isn't on the database yet, the older one.
+  Future<void> _saveRouteCustomers(Map<String, dynamic> params) async {
+    final client = Supabase.instance.client;
+    try {
+      await client.rpc('save_route_customers', params: params);
+    } catch (e) {
+      if (!_rpcMissing(e) || !params.containsKey('p_base')) rethrow;
+      await client.rpc('save_route_customers', params: Map<String, dynamic>.from(params)..remove('p_base'));
+    }
+  }
+
   bool _rpcMissing(Object e) {
     final m = e.toString();
     return m.contains('PGRST202') || m.contains('Could not find the function');
@@ -1106,12 +1153,11 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
 
   Future<void> _showReorderDialog(BuildContext context, _RouteRow row) async {
     await _ensureCustomers(); // resolve stop names in the editor
+    // The route as it is now; on save only the order changes — customers
+    // added or removed elsewhere meanwhile are kept that way.
+    final stops = await _currentStops(row);
+    final baseIds = [for (final s in stops) s['customer_id'] as String];
     if (!mounted) return;
-    // Snapshot the current stops sorted by position; user reorders this list
-    // and on save we delete + re-insert with new positions (same pattern as edit).
-    final stops = List<Map<String, dynamic>>.from(row.stops)
-      ..sort((a, b) => ((a['position'] as int?) ?? 0)
-          .compareTo((b['position'] as int?) ?? 0));
 
     await showDialog(
       context: context,
@@ -1216,15 +1262,25 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                           final routeId = row.data['id'] as String;
                           final client = Supabase.instance.client;
                           try {
-                            await client.from('route_stops').delete().eq('route_id', routeId);
-                            await client.from('route_stops').insert([
-                              for (var i = 0; i < stops.length; i++)
-                                {
-                                  'route_id': routeId,
-                                  'customer_id': stops[i]['customer_id'],
-                                  'position': i,
-                                },
-                            ]);
+                            try {
+                              await _saveRouteCustomers({
+                                'p_route': routeId,
+                                'p_customer_ids': [for (final s in stops) s['customer_id'] as String],
+                                'p_moves': const [],
+                                'p_base': baseIds,
+                              });
+                            } catch (e) {
+                              if (!_rpcMissing(e)) rethrow;
+                              await client.from('route_stops').delete().eq('route_id', routeId);
+                              await client.from('route_stops').insert([
+                                for (var i = 0; i < stops.length; i++)
+                                  {
+                                    'route_id': routeId,
+                                    'customer_id': stops[i]['customer_id'],
+                                    'position': i,
+                                  },
+                              ]);
+                            }
                             if (dialogCtx.mounted) {
                               Navigator.of(dialogCtx, rootNavigator: true).pop();
                             }
@@ -1258,14 +1314,19 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
   /// simpler than diffing, fine for our scale.
   Future<void> _showDialog(BuildContext context, _RouteRow? route) async {
     await _ensureCustomers(); // the picker needs the full customer list
+    // Start from the route as it is now, not the page's last copy.
+    final startStops = route == null ? const <Map<String, dynamic>>[] : await _currentStops(route);
     if (!mounted) return;
     final nameCtrl = TextEditingController(text: route?.data['name'] ?? '');
     String kind = route?.data['kind'] ?? 'recurring';
     // Selected customer ids in stop order. For new routes, empty.
     // For edits, populated from the loaded stops.
     final selectedIds = <String>[
-      for (final s in route?.stops ?? const []) s['customer_id'] as String,
+      for (final s in startStops) s['customer_id'] as String,
     ];
+    // What the editor started with: on Save only the ticks / unticks made
+    // here are applied, so a customer moved off elsewhere never comes back.
+    final baseIds = List<String>.from(selectedIds);
     final customerSearchCtrl = TextEditingController();
     var selectedOnly = false;
 
@@ -1391,7 +1452,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
 
                   // Flow on: customers taken off this route and on no other
                   // route need a next route before the editor can close.
-                  final oldIds = [for (final st in route?.stops ?? const []) st['customer_id'] as String];
+                  final oldIds = List<String>.from(baseIds);
                   final removed = oldIds.where((c) => !selectedIds.contains(c)).toList();
                   Map<String, String> moves = {};
                   if (_unassignedFlow && route != null && removed.isNotEmpty) {
@@ -1431,10 +1492,11 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                     // the next-route moves, keeps "Unassigned customers" in
                     // sync and sends the route-change notification.
                     try {
-                      await client.rpc('save_route_customers', params: {
+                      await _saveRouteCustomers({
                         'p_route': routeId,
                         'p_customer_ids': selectedIds,
                         'p_moves': [for (final e in moves.entries) {'customer_id': e.key, 'route_id': e.value}],
+                        if (route != null) 'p_base': baseIds,
                       });
                     } catch (e) {
                       if (!_rpcMissing(e)) rethrow;
