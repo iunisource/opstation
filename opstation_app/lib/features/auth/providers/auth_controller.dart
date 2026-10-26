@@ -11,6 +11,7 @@ import '../../../core/supabase/supabase_pull_service.dart';
 import '../../../core/sync/sync_controller.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/services/device_guard.dart';
+import '../../../core/services/device_gps_service.dart';
 import '../data/mock_auth_repository.dart' hide AuthException;
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../models/auth_user.dart' as app;
@@ -367,7 +368,15 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
 
       // This phone now runs this login's routes (any other phone is told).
       try {
-        await DeviceGuard.claim();
+        // Where the sign-in happened (best effort, a few seconds at most).
+        double? lat, lng;
+        try {
+          final fix = await ref.read(deviceGpsServiceProvider).getFix()
+              .timeout(const Duration(seconds: 8));
+          lat = fix?.lat;
+          lng = fix?.lng;
+        } catch (_) {}
+        await DeviceGuard.claim(lat: lat, lng: lng);
       } catch (_) {}
 
       Future.microtask(() async {

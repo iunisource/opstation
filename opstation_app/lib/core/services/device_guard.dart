@@ -1,4 +1,8 @@
+import 'dart:io' show Platform;
 import 'dart:math';
+
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -44,11 +48,49 @@ class DeviceGuard {
     return v;
   }
 
-  /// Make this phone the login's route phone (call right after signing in).
-  static Future<void> claim() async {
-    final d = await id();
+  /// Phone model ("Samsung SM-A155F"), Android version and app version.
+  static Future<(String?, String?, String?)> _about() async {
+    String? model, os, app;
     try {
-      await Supabase.instance.client.rpc('claim_trip_device', params: {'p_device': d});
+      if (Platform.isAndroid) {
+        final a = await DeviceInfoPlugin().androidInfo;
+        final brand = a.manufacturer.trim();
+        final m = a.model.trim();
+        model = m.toLowerCase().startsWith(brand.toLowerCase()) ? m : '$brand $m'.trim();
+        os = 'Android ${a.version.release}';
+      } else if (Platform.isIOS) {
+        final i = await DeviceInfoPlugin().iosInfo;
+        model = i.utsname.machine;
+        os = 'iOS ${i.systemVersion}';
+      }
+    } catch (_) {}
+    try {
+      final p = await PackageInfo.fromPlatform();
+      app = '${p.version}+${p.buildNumber}';
+    } catch (_) {}
+    return (model, os, app);
+  }
+
+  /// Make this phone the login's route phone (call right after signing in).
+  /// Also records the sign-in (time, phone model, and [lat]/[lng] if known)
+  /// in the person's phone history.
+  static Future<void> claim({double? lat, double? lng}) async {
+    final d = await id();
+    final about = await _about();
+    try {
+      try {
+        await Supabase.instance.client.rpc('claim_trip_device', params: {
+          'p_device': d,
+          'p_model': about.$1,
+          'p_os': about.$2,
+          'p_app': about.$3,
+          'p_lat': lat,
+          'p_lng': lng,
+        });
+      } catch (_) {
+        // Server without update 423: the older call.
+        await Supabase.instance.client.rpc('claim_trip_device', params: {'p_device': d});
+      }
       blocked = false;
       _blockAlerted = false;
     } catch (_) {
