@@ -659,6 +659,16 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.intel_delete_access',
+    'Users can delete Intelligence items',
+    'Master admins can always remove a shop\'s Placement Audit survey or Competitor '
+        'Spottings (the bin next to the shop on those screens). When ON, the users '
+        'picked below can do it too. When OFF, only master admins can. The phones '
+        'drop removed surveys on their next refresh.',
+    users: _UsersField('org.intel_delete_users', 'Also allowed to delete Intelligence items'),
+  ),
+
+  _AdminToggle(
     'org.customer_edit_supervise_flow',
     'Supervision for customer edits',
     'When ON, every change to an existing customer — from the web, the app or an '

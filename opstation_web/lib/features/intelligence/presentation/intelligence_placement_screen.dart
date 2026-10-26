@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../services/intelligence_excel_service.dart';
+import '../services/intel_delete_access.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 
@@ -40,6 +41,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
   @override
   void initState() {
     super.initState();
+    _loadDeleteAccess();
     _load();
     _loadFilters();
   }
@@ -232,9 +234,10 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     ).toList();
   }
 
-  bool get _canRemoveSurvey {
-    final r = ref.read(currentUserProvider)?.role;
-    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  bool _canRemoveSurvey = false;
+  Future<void> _loadDeleteAccess() async {
+    final ok = await canDeleteIntel(ref.read(currentUserProvider));
+    if (mounted && ok != _canRemoveSurvey) setState(() => _canRemoveSurvey = ok);
   }
 
   /// Delete every survey row for one shop, after a confirm.
@@ -271,13 +274,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       await _load();
     } catch (e) {
       if (!mounted) return;
-      final m = e.toString();
-      final msg = m.contains('PGRST202') || m.contains('Could not find the function')
-          ? 'This option isn\'t set up yet — run update 416 first.'
-          : m.contains('Only admins')
-              ? 'Only admins can remove a survey.'
-              : 'Could not remove the survey. Please try again.';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(intelDeleteError(e))));
     }
   }
 

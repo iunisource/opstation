@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../services/intelligence_excel_service.dart';
+import '../services/intel_delete_access.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 
@@ -30,6 +31,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
   String? _selectedBrand; // only shops where this competitor brand was spotted
   List<Map<String, dynamic>> _salespeople = [];
   List<Map<String, dynamic>> _routes = [];
+  final Set<String> _expandedShops = {};
   final Map<String, String> _userNames = {};
   final Map<String, Set<String>> _customerToRoutes = {};
   final Map<String, Set<String>> _salespersonToRoutes = {};
@@ -40,6 +42,52 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
     super.initState();
     _load();
     _loadFilters();
+    _loadDeleteAccess();
+  }
+
+  bool _canDelete = false;
+  Future<void> _loadDeleteAccess() async {
+    final ok = await canDeleteIntel(ref.read(currentUserProvider));
+    if (mounted && ok != _canDelete) setState(() => _canDelete = ok);
+  }
+
+  /// Delete every competitor spotting of one shop, after a confirm.
+  Future<void> _removeShopSpottings(Map<String, dynamic> c) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove spottings?'),
+        content: SizedBox(
+          width: 400,
+          child: Text('This deletes all competitor spottings of ${c['shop_name']} '
+              '(${c['code'] ?? ''}), including their history. The shop will leave this '
+              'report until it is surveyed again. This can\'t be undone.'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
+            onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await Supabase.instance.client.rpc('competitor_spotting_remove_shop',
+          params: {'p_org': orgId, 'p_customer': c['id']});
+      if (!mounted) return;
+      _selectedIds.remove(c['id']);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Spottings removed for ${c['shop_name']}')));
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(intelDeleteError(e))));
+    }
   }
 
   @override
@@ -552,7 +600,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                     horizontalMargin: isMobile ? 8 : 24,
                     headingRowHeight: 60,
                     dataRowMinHeight: 48,
-                    dataRowMaxHeight: 48,
+                    dataRowMaxHeight: 100,
                     columns: [
                       DataColumn(label: SizedBox(width: 40, child: Checkbox(
                         value: _filteredCustomers.isNotEmpty &&
@@ -565,7 +613,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                           }
                         }),
                       ))),
-                      DataColumn(label: SizedBox(width: isMobile ? 130 : 200, child: const Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
+                      DataColumn(label: SizedBox(width: isMobile ? 170 : 280, child: const Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
                       ..._categories.map((cat) => DataColumn(
                         label: SizedBox(
                           width: isMobile ? 110 : 140,
@@ -588,15 +636,38 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                           }),
                         ))),
                         DataCell(SizedBox(
-                          width: isMobile ? 130 : 200,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(c['shop_name'] as String, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
-                              Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                            ],
-                          ),
+                          width: isMobile ? 170 : 280,
+                          child: Row(children: [
+                            Expanded(
+                              child: InkWell(
+                                onTap: () => setState(() {
+                                  if (!_expandedShops.remove(cid)) _expandedShops.add(cid);
+                                }),
+                                child: Tooltip(
+                                  message: c['shop_name'] as String,
+                                  waitDuration: const Duration(milliseconds: 400),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(c['shop_name'] as String,
+                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                          maxLines: _expandedShops.contains(cid) ? 4 : 1,
+                                          overflow: TextOverflow.ellipsis),
+                                      Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_canDelete)
+                              IconButton(
+                                tooltip: 'Remove this shop\'s spottings',
+                                visualDensity: VisualDensity.compact,
+                                icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                                onPressed: () => _removeShopSpottings(c),
+                              ),
+                          ]),
                         )),
                         ..._categories.map((cat) {
                           final catId = cat['id'] as String;
