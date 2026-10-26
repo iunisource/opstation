@@ -2393,12 +2393,7 @@ class _TopNav extends ConsumerWidget {
         ],
         Container(width: 1, height: 28, color: Colors.white12),
         const SizedBox(width: 4),
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(children: navItems),
-          ),
-        ),
+        Expanded(child: _NavStrip(children: navItems)),
         _searchButton(context, user, show),
         _navLayoutToggle(ref, NavLayout.top),
         const SizedBox(width: 4),
@@ -2407,6 +2402,109 @@ class _TopNav extends ConsumerWidget {
         const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 52)),
       ]),
     );
+  }
+}
+
+/// The top bar's menu row. When the menus are wider than the screen, ‹ ›
+/// arrows appear at the ends (each hides at its end), and the mouse wheel or
+/// a trackpad swipe over the row slides it sideways. Also stops the browser
+/// from turning a sideways trackpad swipe into Back / Forward.
+class _NavStrip extends StatefulWidget {
+  final List<Widget> children;
+  const _NavStrip({required this.children});
+  @override
+  State<_NavStrip> createState() => _NavStripState();
+}
+
+class _NavStripState extends State<_NavStrip> {
+  final _ctrl = ScrollController();
+  bool _left = false, _right = false;
+  static bool _swipeGuardSet = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addListener(_update);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _update());
+    if (!_swipeGuardSet) {
+      _swipeGuardSet = true;
+      try {
+        html.document.documentElement?.style.setProperty('overscroll-behavior-x', 'none');
+        html.document.body?.style.setProperty('overscroll-behavior-x', 'none');
+      } catch (_) {}
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _update() {
+    if (!mounted || !_ctrl.hasClients) return;
+    final p = _ctrl.position;
+    final l = p.pixels > 2;
+    final r = p.pixels < p.maxScrollExtent - 2;
+    if (l != _left || r != _right) setState(() { _left = l; _right = r; });
+  }
+
+  void _by(double dx) {
+    if (!_ctrl.hasClients) return;
+    final p = _ctrl.position;
+    final to = (p.pixels + dx).clamp(0.0, p.maxScrollExtent);
+    _ctrl.animateTo(to, duration: const Duration(milliseconds: 250), curve: Curves.easeOutCubic);
+  }
+
+  Widget _arrow(IconData icon, VoidCallback onTap, bool leftSide) => Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: leftSide ? Alignment.centerLeft : Alignment.centerRight,
+            end: leftSide ? Alignment.centerRight : Alignment.centerLeft,
+            colors: [AppTheme.sidebar, AppTheme.sidebar.withOpacity(0)],
+          ),
+        ),
+        child: IconButton(
+          tooltip: leftSide ? 'More menus' : 'More menus',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon, color: Colors.white, size: 20),
+          onPressed: onTap,
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, box) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _update());
+      final step = (box.maxWidth * 0.6).clamp(160.0, 600.0);
+      return Listener(
+        // Mouse wheel / trackpad over the menu row scrolls it sideways.
+        onPointerSignal: (e) {
+          if (e is PointerScrollEvent && _ctrl.hasClients) {
+            final d = e.scrollDelta.dx.abs() > e.scrollDelta.dy.abs() ? e.scrollDelta.dx : e.scrollDelta.dy;
+            final p = _ctrl.position;
+            _ctrl.jumpTo((p.pixels + d).clamp(0.0, p.maxScrollExtent));
+          }
+        },
+        child: Stack(children: [
+          NotificationListener<ScrollMetricsNotification>(
+            onNotification: (_) {
+              _update();
+              return false;
+            },
+            child: SingleChildScrollView(
+              controller: _ctrl,
+              scrollDirection: Axis.horizontal,
+              child: Row(children: widget.children),
+            ),
+          ),
+          if (_left)
+            Positioned(left: 0, top: 0, bottom: 0, child: _arrow(Icons.chevron_left, () => _by(-step), true)),
+          if (_right)
+            Positioned(right: 0, top: 0, bottom: 0, child: _arrow(Icons.chevron_right, () => _by(step), false)),
+        ]),
+      );
+    });
   }
 }
 
