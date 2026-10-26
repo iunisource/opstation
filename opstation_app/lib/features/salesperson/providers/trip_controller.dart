@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../../../core/utils/customer_locations.dart';
 import '../../../core/utils/receipt_books.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -139,6 +140,16 @@ class TripController extends AsyncNotifier<TripState> {
       for (var i = 0; i < added.length; i++) {
         await _repo.addTripStop(earlier.id, added[i].id, earlier.stopSnapshot.length + i);
       }
+      // Remember the end being undone, so the sync can tell this deliberate
+      // reopen from a server close, and can put the salesperson's own end
+      // back if the reopened trip is never ended again.
+      try {
+        await ref.read(appDatabaseProvider).setConfig('trip.reopen.${earlier.id}', jsonEncode({
+          'ended': earlier.endedAt?.toUtc().toIso8601String(),
+          'lat': earlier.endLat,
+          'lng': earlier.endLng,
+        }));
+      } catch (_) {}
       final resumed = earlier.copyWith(
         reopen: true,
         stopSnapshot: added.isEmpty ? null : List.unmodifiable([...earlier.stopSnapshot, ...added]),
@@ -271,6 +282,9 @@ class TripController extends AsyncNotifier<TripState> {
       endLng: fix?.lng,
     );
     await _repo.updateTrip(closed);
+    try {
+      await ref.read(appDatabaseProvider).deleteConfig('trip.reopen.${active.id}');
+    } catch (_) {}
 
     final exhausted = Set<String>.from(s.exhaustedOneTimeRouteIds);
     if (active.routeKind == RouteKind.oneTime) {

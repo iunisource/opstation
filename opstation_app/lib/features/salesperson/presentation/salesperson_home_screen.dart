@@ -276,6 +276,28 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
 
   Future<void> _startRoute(SalesRoute route) async {
     if (_startingRouteId != null) return;
+    // Already ended this route today? Starting it again reopens that trip —
+    // ask first, so a stray tap can't undo the end.
+    final done = ref.read(tripControllerProvider).valueOrNull?.completedToday
+        .where((t) => t.routeId == route.id && !t.isFree && t.closeReason == TripCloseReason.userEnded)
+        .toList();
+    if (done != null && done.isNotEmpty) {
+      final end = done.last.endedAt;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Route already ended'),
+          content: Text('You ended ${route.name} today'
+              '${end == null ? '' : ' at ${DateFormat('h:mm a').format(end)}'}. '
+              'Continue it? Your earlier visits stay in the same summary, and you will need to end it again.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Continue route')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
     unawaited(ref.read(orgConfigSyncProvider).sync());
     setState(() => _startingRouteId = route.id);
 

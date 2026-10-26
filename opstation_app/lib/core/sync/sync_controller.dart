@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:drift/drift.dart';
@@ -124,6 +125,7 @@ class SyncController extends Notifier<SyncStatus> {
     if (trips.isEmpty) return;
     final ids = trips.map((t) => t.id).toList();
     final closedOnServer = <String, DateTime>{};
+    final serverRow = <String, Map<String, dynamic>>{};
     try {
       final client = Supabase.instance.client;
       // Batched: `in.(...)` rides in the URL, so a long id list 400s.
@@ -132,13 +134,14 @@ class SyncController extends Notifier<SyncStatus> {
             ids.sublist(i, i + 40 > ids.length ? ids.length : i + 40);
         final rows = await client
             .from('trips')
-            .select('id, ended_at')
+            .select('id, ended_at, close_reason, end_lat, end_lng')
             .inFilter('id', batch);
         for (final r in (rows as List)) {
           final m = Map<String, dynamic>.from(r as Map);
           final ended = m['ended_at'] as String?;
           if (ended != null) {
             closedOnServer[m['id'] as String] = DateTime.parse(ended);
+            serverRow[m['id'] as String] = m;
           }
         }
       }
@@ -154,14 +157,64 @@ class SyncController extends Notifier<SyncStatus> {
     for (var t in trips) {
       final serverEnd = closedOnServer[t.id];
       if (serverEnd != null && t.endedAt == null) {
-        await (_db.update(_db.trips)..where((r) => r.id.equals(t.id))).write(
-          TripsCompanion(
-            endedAt: Value(serverEnd),
-            closeReason: const Value('cutoff'),
-          ),
-        );
-        adopted++;
-        continue;
+        // Was this trip reopened on purpose (same route started again today)?
+        Map<String, dynamic>? reopen;
+        try {
+          final raw = await _db.getConfig('trip.reopen.${t.id}');
+          if (raw != null) reopen = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+        } catch (_) {}
+        final prevEnd = reopen?['ended'] == null ? null : DateTime.tryParse('${reopen!['ended']}');
+        if (prevEnd != null && serverEnd.difference(prevEnd).inSeconds.abs() <= 5) {
+          // The server only holds the end we undid ourselves — push the reopen.
+          // (falls through to the push below)
+        } else if (prevEnd != null) {
+          // Reopened, then closed by the cut-off without ending again: put the
+          // salesperson's own earlier end back (time and location) unless they
+          // visited shops after it, in which case keep the cut-off close.
+          final later = await (_db.select(_db.visits)
+                ..where((v) => v.tripId.equals(t.id) & v.timestamp.isBiggerThanValue(prevEnd.toLocal())))
+              .get();
+          final restore = later.isEmpty;
+          final row = serverRow[t.id] ?? const {};
+          await (_db.update(_db.trips)..where((r) => r.id.equals(t.id))).write(
+            restore
+                ? TripsCompanion(
+                    endedAt: Value(prevEnd.toLocal()),
+                    closeReason: const Value('userEnded'),
+                    endLat: Value((reopen!['lat'] as num?)?.toDouble()),
+                    endLng: Value((reopen['lng'] as num?)?.toDouble()),
+                  )
+                : TripsCompanion(
+                    endedAt: Value(serverEnd),
+                    closeReason: Value((row['close_reason'] as String?) ?? 'cutoff'),
+                    endLat: Value((row['end_lat'] as num?)?.toDouble()),
+                    endLng: Value((row['end_lng'] as num?)?.toDouble()),
+                  ),
+          );
+          try { await _db.deleteConfig('trip.reopen.${t.id}'); } catch (_) {}
+          if (!restore) {
+            adopted++;
+            continue;
+          }
+          final fresh = await (_db.select(_db.trips)..where((r) => r.id.equals(t.id))).getSingleOrNull();
+          if (fresh == null) continue;
+          t = fresh; // push the restored end to the server below
+        } else {
+          // Closed on the server (cut-off, or ended on another device): take
+          // the server's close exactly as it is — its reason and end location
+          // too, so a later push can never wipe them.
+          final row = serverRow[t.id] ?? const {};
+          await (_db.update(_db.trips)..where((r) => r.id.equals(t.id))).write(
+            TripsCompanion(
+              endedAt: Value(serverEnd),
+              closeReason: Value((row['close_reason'] as String?) ?? 'cutoff'),
+              endLat: Value((row['end_lat'] as num?)?.toDouble()),
+              endLng: Value((row['end_lng'] as num?)?.toDouble()),
+            ),
+          );
+          adopted++;
+          continue;
+        }
       }
       // A trip written while orgIdProvider was still null carries no org, and
       // the `Tenant scoped` RLS policy (org_id = current_user_org_id()) then
