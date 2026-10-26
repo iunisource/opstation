@@ -29,6 +29,14 @@ class DeviceGuard {
   static const blockedMessage =
       'You signed in on another phone. Routes can only be run from that phone. '
       'To use this phone, sign out and sign in again here.';
+  static const pendingMessage =
+      'This is a new phone for your login. Your admin must approve it before you can run routes on it. '
+      'Until then, use your previous phone.';
+  static const rejectedMessage =
+      'Your admin did not approve this phone. Please use your approved phone, or contact your admin.';
+
+  /// Why routes can't run on this phone now (null = they can).
+  static String? message;
   static const timezoneMessage =
       "Your device's timezone is not same as the country you are in. Please adjust the timezone.";
 
@@ -91,29 +99,46 @@ class DeviceGuard {
         // Server without update 423: the older call.
         await Supabase.instance.client.rpc('claim_trip_device', params: {'p_device': d});
       }
-      blocked = false;
       _blockAlerted = false;
     } catch (_) {
       // Server not updated yet (update 421) — nothing to enforce.
     }
   }
 
-  /// Is another phone the route phone now? Updates [blocked] and the banner.
+  /// May this phone run routes now? Updates [blocked], [message] and the banner.
   static Future<void> check(Ref ref) async {
     final d = await id();
     try {
-      final res = await Supabase.instance.client.rpc('my_trip_device');
-      final current = res is String ? res : null;
-      blocked = current != null && current.isNotEmpty && current != d;
+      String? state;
+      try {
+        final r = await Supabase.instance.client.rpc('my_device_status', params: {'p_device': d});
+        state = r is String ? r : null;
+      } catch (_) {
+        // Server without update 424: older check.
+        final res = await Supabase.instance.client.rpc('my_trip_device');
+        final current = res is String ? res : null;
+        state = (current != null && current.isNotEmpty && current != d) ? 'other' : 'ok';
+      }
+      final was = message;
+      message = switch (state) {
+        'pending' => pendingMessage,
+        'rejected' => rejectedMessage,
+        'other' => blockedMessage,
+        _ => null,
+      };
+      blocked = message != null;
+      if (message != was) _blockAlerted = false;
     } catch (_) {
-      // Offline or server not updated: keep the last known state.
+      // Offline: keep the last known state.
     }
-    ref.read(deviceBlockedProvider.notifier).state = blocked;
+    ref.read(deviceBlockedProvider.notifier).state = message;
     try {
       if (blocked && !_blockAlerted) {
         _blockAlerted = true;
-        await ref.read(notificationServiceProvider)
-            .showLocalAlert(id: 90011, title: 'Signed in on another phone', body: blockedMessage);
+        await ref.read(notificationServiceProvider).showLocalAlert(
+            id: 90011,
+            title: message == pendingMessage ? 'New phone waiting for approval' : 'This phone can\'t run routes',
+            body: message!);
       }
       if (timezoneWrong && !_tzAlerted) {
         _tzAlerted = true;
@@ -124,4 +149,5 @@ class DeviceGuard {
   }
 }
 
-final deviceBlockedProvider = StateProvider<bool>((ref) => DeviceGuard.blocked);
+/// Why this phone can't run routes now (null = it can).
+final deviceBlockedProvider = StateProvider<String?>((ref) => DeviceGuard.message);

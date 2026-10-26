@@ -635,10 +635,10 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
             child: _HeroHeader(firstName: firstName, dateStr: dateStr),
           ),
           const Padding(padding: EdgeInsets.fromLTRB(16, 12, 16, 0), child: TempPasswordBanner()),
-          if (ref.watch(deviceBlockedProvider))
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: _WarnBanner(icon: Icons.phonelink_lock_outlined, text: DeviceGuard.blockedMessage),
+          if (ref.watch(deviceBlockedProvider) != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: _WarnBanner(icon: Icons.phonelink_lock_outlined, text: ref.watch(deviceBlockedProvider)!),
             ),
           if (DeviceGuard.timezoneWrong)
             const Padding(

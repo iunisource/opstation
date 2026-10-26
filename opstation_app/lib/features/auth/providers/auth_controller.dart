@@ -377,6 +377,7 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
           lng = fix?.lng;
         } catch (_) {}
         await DeviceGuard.claim(lat: lat, lng: lng);
+        unawaited(DeviceGuard.check(ref));
       } catch (_) {}
 
       Future.microtask(() async {

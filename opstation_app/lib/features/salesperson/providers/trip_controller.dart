@@ -159,7 +159,7 @@ class TripController extends AsyncNotifier<TripState> {
   }
 
   Future<Trip> startTrip(SalesRoute route) async {
-    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
     if (s.hasActiveTrip) throw StateError('A trip is already active. End it before starting another.');
@@ -279,7 +279,7 @@ class TripController extends AsyncNotifier<TripState> {
   /// salesperson adds customers on the fly (addFreeStop) and each add opens the
   /// normal visit modal. Closes and summarizes exactly like a regular route.
   Future<Trip> startFreeTrip() async {
-    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final route = SalesRoute(
       id: _newId('freeroute'),
       name: 'Free Route',
@@ -316,7 +316,7 @@ class TripController extends AsyncNotifier<TripState> {
   }
 
   Future<void> completeTrip() async {
-    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     final active = s?.active;
     if (s == null || active == null) return;
@@ -409,7 +409,7 @@ class TripController extends AsyncNotifier<TripState> {
     String? notes,
     List<String> photoPaths = const [],
   }) async {
-    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     final active = s?.active;
     if (s == null || active == null) throw StateError('No active trip.');
@@ -572,7 +572,7 @@ class TripController extends AsyncNotifier<TripState> {
     String? receiptNumber,
     String? notes,
   }) async {
-    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
 
