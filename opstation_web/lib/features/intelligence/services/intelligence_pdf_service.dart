@@ -28,21 +28,14 @@ class IntelligencePdfService {
         header: (ctx) => ctx.pageNumber == 1 ? _header(orgName, 'Placement Audit', dateStr) : pw.SizedBox(),
         footer: (ctx) => _footer(ctx),
         build: (ctx) => [
-          pw.SizedBox(height: 12),
+          pw.SizedBox(height: 4),
           pw.Text(
             '${customers.length} shops audited x ${products.length} products. '
             'Green = displayed, red = not displayed, dash = not surveyed.',
-            style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
           ),
-          pw.SizedBox(height: 12),
-          if (groups == null)
-            _placementMatrix(customers, products, latest)
-          else
-            for (final g in groups) ...[
-              _marketHeading(g.key, g.value.length),
-              _placementMatrix(g.value, products, latest),
-              pw.SizedBox(height: 14),
-            ],
+          pw.SizedBox(height: 6),
+          ..._placementPages(groups ?? [MapEntry('', customers)], products, latest),
         ],
       ),
     );
@@ -133,6 +126,99 @@ class IntelligencePdfService {
 
   // ----- helpers -----
 
+  /// Shops per page. Each market starts on a new page; a market with more
+  /// than this many shops continues on the next page (heading repeated).
+  static const int _rowsPerPage = 25;
+
+  static List<pw.Widget> _placementPages(
+    List<MapEntry<String, List<Map<String, dynamic>>>> sections,
+    List<Map<String, dynamic>> products,
+    Map<String, Map<String, Map<String, dynamic>>> latest,
+  ) {
+    final out = <pw.Widget>[];
+    var first = true;
+    for (final g in sections) {
+      final shops = g.value;
+      if (shops.isEmpty) continue;
+      for (var i = 0; i < shops.length; i += _rowsPerPage) {
+        if (!first) out.add(pw.NewPage());
+        first = false;
+        final chunk = shops.sublist(i, i + _rowsPerPage > shops.length ? shops.length : i + _rowsPerPage);
+        if (g.key.isNotEmpty) {
+          out.add(_marketHeading(i == 0 ? g.key : '${g.key} (continued)', shops.length));
+        }
+        out.add(_compactPlacementTable(chunk, products, latest, i));
+      }
+    }
+    if (out.isEmpty) {
+      out.add(pw.Text('No data', style: const pw.TextStyle(color: PdfColors.grey600)));
+    }
+    return out;
+  }
+
+  static String _clip(String s, int max) => s.length <= max ? s : '${s.substring(0, max - 1).trimRight()}…';
+
+  /// One page worth of shops: compact single-line rows, product names on top.
+  static pw.Widget _compactPlacementTable(
+    List<Map<String, dynamic>> shops,
+    List<Map<String, dynamic>> products,
+    Map<String, Map<String, Map<String, dynamic>>> latest,
+    int startIndex,
+  ) {
+    pw.Widget c(pw.Widget child, {pw.Alignment al = pw.Alignment.center}) => pw.Container(
+          alignment: al,
+          padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2.5),
+          child: child,
+        );
+    const small = pw.TextStyle(fontSize: 7.5);
+    return pw.Table(
+      border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+      columnWidths: {
+        0: const pw.FixedColumnWidth(20),
+        1: const pw.FixedColumnWidth(190),
+        2: const pw.FixedColumnWidth(48),
+        for (int i = 0; i < products.length; i++) 3 + i: const pw.FlexColumnWidth(1),
+      },
+      children: [
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+          children: [
+            c(pw.Text('#', style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold))),
+            c(pw.Text('Shop', style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold)), al: pw.Alignment.centerLeft),
+            c(pw.Text('Code', style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold))),
+            for (final p in products)
+              c(pw.Text(_clip('${p['name'] ?? ''}', 28),
+                  maxLines: 2,
+                  textAlign: pw.TextAlign.center,
+                  style: pw.TextStyle(fontSize: 6.5, fontWeight: pw.FontWeight.bold))),
+          ],
+        ),
+        for (var r = 0; r < shops.length; r++)
+          pw.TableRow(
+            decoration: r.isOdd ? const pw.BoxDecoration(color: PdfColors.grey50) : null,
+            children: [
+              c(pw.Text('${startIndex + r + 1}', style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600))),
+              c(pw.Text(_clip('${shops[r]['shop_name'] ?? ''}', 46), maxLines: 1, style: small), al: pw.Alignment.centerLeft),
+              c(pw.Text('${shops[r]['code'] ?? ''}', maxLines: 1, style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700))),
+              for (final p in products)
+                () {
+                  final a = latest[shops[r]['id'] as String]?[p['id'] as String];
+                  if (a == null) {
+                    return c(pw.Text('-', style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey500)));
+                  }
+                  final yes = a['is_present'] == true;
+                  return c(pw.Text(yes ? '✓' : '✗',
+                      style: pw.TextStyle(
+                          fontSize: 9,
+                          fontWeight: pw.FontWeight.bold,
+                          color: yes ? PdfColors.green600 : PdfColors.red600)));
+                }(),
+            ],
+          ),
+      ],
+    );
+  }
+
   /// Market (route) name → its shops, in the given order. Null when the
   /// printout is not grouped.
   static List<MapEntry<String, List<Map<String, dynamic>>>>? _groups(
@@ -154,8 +240,8 @@ class IntelligencePdfService {
 
   static pw.Widget _marketHeading(String name, int shops) => pw.Container(
         width: double.infinity,
-        margin: const pw.EdgeInsets.only(top: 4, bottom: 6),
-        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        margin: const pw.EdgeInsets.only(top: 2, bottom: 4),
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: const pw.BoxDecoration(
           color: PdfColors.blue50,
           border: pw.Border(left: pw.BorderSide(color: PdfColors.blue700, width: 3)),
