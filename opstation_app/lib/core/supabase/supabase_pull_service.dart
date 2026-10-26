@@ -719,11 +719,11 @@ class SupabasePullService {
   /// RLS-blocked table doesn't break the main org pull.
   Future<void> _pullIntelligenceTables(String orgId) async {
     try {
-      final results = await Future.wait([
+      final results = await Future.wait<dynamic>([
         Supabase.instance.client.from('competitor_categories').select().eq('org_id', orgId),
         Supabase.instance.client.from('intelligence_products').select().eq('org_id', orgId),
-        Supabase.instance.client.from('competitor_spotting').select().eq('org_id', orgId),
-        Supabase.instance.client.from('placement_audit').select().eq('org_id', orgId),
+        _fetchAllPages('competitor_spotting', orgId),
+        _fetchAllPages('placement_audit', orgId),
       ]);
       final cats = _asList(results[0]);
       final prods = _asList(results[1]);
@@ -735,9 +735,53 @@ class SupabasePullService {
         await _pullProducts(prods);
         await _pullCompetitorSpottings(spots);
         await _pullPlacementAudits(audits);
+        // Surveys removed on the web: drop the phone's synced copies that
+        // the server no longer has (unsent ones are kept).
+        await _dropRemovedAudits(orgId, {for (final a in audits) '${a['id']}'});
+        await _dropRemovedSpottings(orgId, {for (final a in spots) '${a['id']}'});
       });
     } catch (e) {
       print('INTEL PULL ERROR (org=$orgId): $e');
+    }
+  }
+
+  /// Every row of an org's table, read in pages (one read stops at 1,000).
+  Future<List<Map<String, dynamic>>> _fetchAllPages(String table, String orgId) async {
+    final out = <Map<String, dynamic>>[];
+    for (var from = 0; ; from += 1000) {
+      final page = await Supabase.instance.client
+          .from(table)
+          .select()
+          .eq('org_id', orgId)
+          .order('id')
+          .range(from, from + 999);
+      out.addAll(_asList(page));
+      if ((page as List).length < 1000) break;
+    }
+    return out;
+  }
+
+  /// Delete this org's already-synced local survey rows whose id the server
+  /// no longer has (removed on the web). Unsent rows are never touched.
+  Future<void> _dropRemovedAudits(String orgId, Set<String> keep) async {
+    final rows = await (_db.select(_db.placementAudits)
+          ..where((t) => t.orgId.equals(orgId) & t.syncStatus.equals('synced')))
+        .get();
+    final gone = [for (final r in rows) if (!keep.contains(r.id)) r.id];
+    for (var i = 0; i < gone.length; i += 500) {
+      final chunk = gone.sublist(i, i + 500 > gone.length ? gone.length : i + 500);
+      await (_db.delete(_db.placementAudits)..where((t) => t.id.isIn(chunk))).go();
+    }
+  }
+
+  Future<void> _dropRemovedSpottings(String orgId, Set<String> keep) async {
+    final rows = await (_db.select(_db.competitorSpottings)
+          ..where((t) => t.orgId.equals(orgId) & t.syncStatus.equals('synced')))
+        .get();
+    final gone = [for (final r in rows) if (!keep.contains(r.id)) r.id];
+    for (var i = 0; i < gone.length; i += 500) {
+      final chunk = gone.sublist(i, i + 500 > gone.length ? gone.length : i + 500);
+      await (_db.delete(_db.competitorSpottings)..where((t) => t.id.isIn(chunk))).go();
     }
   }
 
