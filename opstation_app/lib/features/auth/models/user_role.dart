@@ -7,6 +7,9 @@ enum UserRole {
   admin,
   salesperson,
   surveyor,
+  /// Survey-only: placement audits and competitor spottings; cannot edit
+  /// customer information.
+  auditor,
   dispatchManager,
   driver,
   accountant,
@@ -25,6 +28,8 @@ extension UserRoleX on UserRole {
         return 'Salesperson';
       case UserRole.surveyor:
         return 'Surveyor';
+      case UserRole.auditor:
+        return 'Auditor';
       case UserRole.dispatchManager:
         return 'Dispatch Manager';
       case UserRole.driver:
@@ -46,6 +51,8 @@ extension UserRoleX on UserRole {
       case UserRole.salesperson:
         return '/salesperson';
       case UserRole.surveyor:
+        return '/surveyor';
+      case UserRole.auditor:
         return '/surveyor';
       case UserRole.dispatchManager:
         return '/dispatch';

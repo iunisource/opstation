@@ -7,6 +7,7 @@ import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import 'survey_customer_filter.dart';
+import 'survey_view_sheet.dart';
 
 class CompetitorSpottingScreen extends ConsumerStatefulWidget {
   const CompetitorSpottingScreen({super.key});
@@ -292,7 +293,14 @@ class _CompetitorSpottingScreenState extends ConsumerState<CompetitorSpottingScr
                     title: Text(c.shopName),
                     subtitle: Text(c.code),
                     trailing: audited
-                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        ? Row(mainAxisSize: MainAxisSize.min, children: [
+                            IconButton(
+                              tooltip: 'View survey',
+                              icon: const Icon(Icons.visibility_outlined, size: 20),
+                              onPressed: () => SurveyViewSheet.show(context, c),
+                            ),
+                            const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                          ])
                         : null,
                     onTap: () => setState(() => _selectedCustomer = c),
                   );

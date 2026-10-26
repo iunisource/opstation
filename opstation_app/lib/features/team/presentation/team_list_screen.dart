@@ -128,6 +128,7 @@ class _TeamListScreenState extends ConsumerState<TeamListScreen> {
                 UserRole.admin,
                 UserRole.salesperson,
                 UserRole.surveyor,
+                UserRole.auditor,
                 UserRole.dispatchManager,
                 UserRole.driver,
               ])

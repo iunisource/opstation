@@ -349,7 +349,7 @@ final teamControllerProvider =
 /// Roles that a given actor is allowed to CREATE. Matches Q3 strict policy:
 ///   Super Admin   -> Master Admin + all non-admin roles (not Super Admin itself)
 ///   Master Admin  -> Admin + all non-admin roles (not Master Admin itself)
-///   Admin         -> non-admin roles only (Salesperson, Surveyor, Driver, Dispatch, Accountant)
+///   Admin         -> non-admin roles only (Salesperson, Surveyor, Auditor, Driver, Dispatch, Accountant)
 ///   Everyone else -> nothing
 List<UserRole> assignableRolesFor(UserRole? actor) {
   if (actor == null) return const [];
@@ -360,6 +360,7 @@ List<UserRole> assignableRolesFor(UserRole? actor) {
         UserRole.admin,
         UserRole.salesperson,
         UserRole.surveyor,
+        UserRole.auditor,
         UserRole.dispatchManager,
         UserRole.driver,
         UserRole.accountant,
@@ -369,6 +370,7 @@ List<UserRole> assignableRolesFor(UserRole? actor) {
         UserRole.admin,
         UserRole.salesperson,
         UserRole.surveyor,
+        UserRole.auditor,
         UserRole.dispatchManager,
         UserRole.driver,
         UserRole.accountant,
@@ -377,6 +379,7 @@ List<UserRole> assignableRolesFor(UserRole? actor) {
       return const [
         UserRole.salesperson,
         UserRole.surveyor,
+        UserRole.auditor,
         UserRole.dispatchManager,
         UserRole.driver,
         UserRole.accountant,
