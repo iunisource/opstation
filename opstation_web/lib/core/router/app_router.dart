@@ -169,6 +169,7 @@ import '../../features/erp/presentation/erp_investors_screen.dart' deferred as _
 import '../../features/erp/presentation/erp_duplicate_refs_screen.dart' deferred as _s158;
 import '../../features/erp/presentation/erp_receipt_books_screen.dart' deferred as _s159;
 import '../../features/operations/presentation/time_in_market_screen.dart' deferred as _s160;
+import '../../features/intelligence/presentation/intelligence_score_distribution_screen.dart' deferred as _s161;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -317,7 +318,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // Intelligence screens (surveys) are registry-gated too.
             final permScopedIntel = const {
               '/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement',
-              '/intelligence/competitors', '/products', '/competitor-categories', '/competitor-brand-aliases',
+              '/intelligence/score-distribution', '/intelligence/competitors', '/products', '/competitor-categories', '/competitor-brand-aliases',
             }.contains(loc);
             if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps && !permScopedMgmt && !permScopedIntel) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
@@ -439,6 +440,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/competitor-brand-aliases', builder: (_, __) => _deferred(_s050.loadLibrary(), () => _s050.CompetitorBrandAliasesScreen())),
           GoRoute(path: '/intelligence/dashboard', builder: (_, __) => _deferred(_s052.loadLibrary(), () => _s052.IntelligenceDashboardScreen())),
           GoRoute(path: '/intelligence/placement', builder: (_, __) => _deferred(_s051.loadLibrary(), () => _s051.IntelligencePlacementScreen())),
+          GoRoute(path: '/intelligence/score-distribution', builder: (_, __) => _deferred(_s161.loadLibrary(), () => _s161.IntelligenceScoreDistributionScreen())),
           GoRoute(path: '/intelligence/competitors', builder: (_, __) => _deferred(_s053.loadLibrary(), () => _s053.IntelligenceCompetitorsScreen())),
           GoRoute(path: '/intelligence/performance', builder: (_, __) => _deferred(_s054.loadLibrary(), () => _s054.IntelligencePerformanceScreen())),
           GoRoute(path: '/routes', builder: (_, __) => _deferred(_s055.loadLibrary(), () => _s055.RoutesScreen())),
