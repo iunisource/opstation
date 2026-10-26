@@ -24,6 +24,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
   List<Map<String, dynamic>> _products = [];
   // customer_id -> product_id -> latest audit row
   Map<String, Map<String, Map<String, dynamic>>> _latest = {};
+  final Set<String> _expandedShops = {};
   final _customerSearchCtrl = TextEditingController();
   final _productSearchCtrl = TextEditingController();
 
@@ -571,9 +572,9 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                     horizontalMargin: isMobile ? 8 : 24,
                     headingRowHeight: 60,
                     dataRowMinHeight: 44,
-                    dataRowMaxHeight: 44,
+                    dataRowMaxHeight: 100,
                     columns: [
-                      DataColumn(label: SizedBox(width: isMobile ? 130 : 200, child: const Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
+                      DataColumn(label: SizedBox(width: isMobile ? 170 : 280, child: const Text('Shop', style: TextStyle(fontWeight: FontWeight.w700)))),
                       ..._filteredProducts.map((p) => DataColumn(
                         label: SizedBox(
                           width: isMobile ? 80 : 100,
@@ -589,16 +590,29 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                       final cid = c['id'] as String;
                       return DataRow(cells: [
                         DataCell(SizedBox(
-                          width: isMobile ? 130 : 200,
+                          width: isMobile ? 170 : 280,
                           child: Row(children: [
                             Expanded(
-                              child: Column(
+                              child: InkWell(
+                                // Tap the name to show it in full; tap again to shorten.
+                                onTap: () => setState(() {
+                                  if (!_expandedShops.remove(cid)) _expandedShops.add(cid);
+                                }),
+                                child: Tooltip(
+                                  message: c['shop_name'] as String,
+                                  waitDuration: const Duration(milliseconds: 400),
+                                  child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text(c['shop_name'] as String, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  Text(c['shop_name'] as String,
+                                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                      maxLines: _expandedShops.contains(cid) ? 4 : 1,
+                                      overflow: TextOverflow.ellipsis),
                                   Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
                                 ],
+                              ),
+                                ),
                               ),
                             ),
                             if (_canRemoveSurvey)
