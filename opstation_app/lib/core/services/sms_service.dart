@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/providers/auth_controller.dart';
+import '../database/app_database_provider.dart';
 
 /// One recorded SMS attempt, kept on-device so the outcome is visible in the
 /// app without depending on Sentry, adb, or the network. Read via
@@ -44,14 +45,33 @@ class SmsService {
     print('SMSLOG NOTE :: $msg');
   }
 
+  /// Visits whose SMS is being sent right now (stops a same-moment double).
+  static final Set<String> _inFlight = {};
+
+  /// [visitId]: one SMS per visit. The SMS is sent when the visit is marked,
+  /// and again tried when the visit uploads later (offline at the time) — the
+  /// second try is skipped once the first one went through.
   Future<void> sendVisitSms({
     required String customerPhone,
     required String customerName,
     required int amount,
     required String receiptNo,
     String salespersonName = '',
+    String? visitId,
   }) async {
-    await _send(
+    final key = visitId == null ? null : 'sms.visit.$visitId';
+    if (visitId != null) {
+      if (_inFlight.contains(visitId)) return;
+      try {
+        if (await _ref.read(appDatabaseProvider).getConfig(key!) == 'sent') {
+          _record(customerPhone, 'SKIPPED — already sent for this visit', false);
+          return;
+        }
+      } catch (_) {}
+      _inFlight.add(visitId);
+    }
+    try {
+      final ok = await _send(
       phone: customerPhone,
       configKey: 'org.sms_visit_template',
       placeholders: {
@@ -61,6 +81,12 @@ class SmsService {
         '{salesperson_name}': salespersonName,
       },
     );
+      if (ok && key != null) {
+        try { await _ref.read(appDatabaseProvider).setConfig(key, 'sent'); } catch (_) {}
+      }
+    } finally {
+      if (visitId != null) _inFlight.remove(visitId);
+    }
   }
 
   Future<void> sendDeliverySms({
@@ -80,7 +106,8 @@ class SmsService {
     );
   }
 
-  Future<void> _send({
+  /// True when the gateway confirmed the message.
+  Future<bool> _send({
     required String phone,
     required String configKey,
     required Map<String, String> placeholders,
@@ -113,7 +140,7 @@ class SmsService {
         _record(phone, 'SKIPPED — orgId is null (no org in session)', false);
         await Sentry.captureMessage('SMS skipped: orgId is null',
             level: SentryLevel.warning);
-        return;
+        return false;
       }
 
       final client = Supabase.instance.client;
@@ -141,7 +168,7 @@ class SmsService {
         _record(phone,
             'SKIPPED — no app_config rows returned for org $orgId (config fetch empty)',
             false);
-        return;
+        return false;
       }
 
       print('SMS CONFIG: enabled=' + (cfg['org.sms_enabled'] ?? 'null') + ' url=' + (cfg['org.sms_api_url'] ?? 'null'));
@@ -152,7 +179,7 @@ class SmsService {
         await Sentry.captureMessage(
             'SMS skipped: org.sms_enabled != true (was "${cfg['org.sms_enabled'] ?? 'null'}")',
             level: SentryLevel.warning);
-        return;
+        return false;
       }
 
       final apiUrl = cfg['org.sms_api_url'] ?? '';
@@ -160,7 +187,7 @@ class SmsService {
         _record(phone, 'SKIPPED — sms_api_url is empty', false);
         await Sentry.captureMessage('SMS skipped: org.sms_api_url is empty',
             level: SentryLevel.warning);
-        return;
+        return false;
       }
 
       final apiMethod = cfg['org.sms_api_method'] ?? 'POST';
@@ -231,13 +258,16 @@ class SmsService {
           'SMS gateway did not confirm success — status=${resp.statusCode} body=$bodyText',
           level: SentryLevel.error,
         );
+        return false;
       } else {
         _record(phone, 'SENT — status ${resp.statusCode}: $shortBody', true);
+        return true;
       }
     } catch (e, st) {
       _record(phone, 'THREW — $e', false);
       print('SMS ERROR: ' + e.toString());
       await Sentry.captureException(e, stackTrace: st);
+      return false;
     }
   }
 }

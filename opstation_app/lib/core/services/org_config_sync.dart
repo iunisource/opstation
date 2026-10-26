@@ -10,6 +10,7 @@ import '../../features/customers/presentation/customer_detail_screen.dart' show 
 import '../../features/customers/services/field_location_capture.dart' show fieldLocationConfigProvider;
 import '../../features/salesperson/presentation/salesperson_drawer.dart' show salespersonTargetsEnabledProvider;
 import '../database/app_database_provider.dart';
+import 'device_guard.dart';
 import '../utils/customer_locations.dart';
 import '../utils/receipt_books.dart';
 
@@ -20,6 +21,7 @@ import '../utils/receipt_books.dart';
 class OrgConfigSync with WidgetsBindingObserver {
   OrgConfigSync(this._ref) {
     WidgetsBinding.instance.addObserver(this);
+    unawaited(DeviceGuard.id()); // so trip uploads carry this phone's id
     _timer = Timer.periodic(const Duration(minutes: 10), (_) => sync());
     // First check shortly after start (the login pull already ran).
     Future.delayed(const Duration(seconds: 20), sync);
@@ -51,6 +53,8 @@ class OrgConfigSync with WidgetsBindingObserver {
     if (_running) return;
     final orgId = _ref.read(orgIdProvider);
     if (orgId == null) return;
+    // Route phone + timezone check (never blocks the settings refresh).
+    unawaited(DeviceGuard.check(_ref));
     _running = true;
     _last = DateTime.now();
     try {

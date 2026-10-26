@@ -29,9 +29,29 @@ class GoogleDirectionsService {
   /// Requires at least 2 points. Returns a list of length
   /// points.length - 1 where each entry is the road distance in km
   /// for that leg. Returns null if the call fails or no key is set.
+  /// Google allows at most 25 points per request (origin + 23 stops +
+  /// destination). Longer trips are asked in pieces that share their end
+  /// points, and the legs are joined — previously a trip with more than ~23
+  /// visits failed the single request and fell back to straight lines.
+  static const _maxPoints = 25;
+
   static Future<List<double>?> getLegsKm(
       List<DirectionsPoint> points) async {
     if (!MapsConfig.hasKey) return null;
+    if (points.length < 2) return null;
+    if (points.length <= _maxPoints) return _legsOneCall(points);
+    final out = <double>[];
+    for (var i = 0; i < points.length - 1; i += _maxPoints - 1) {
+      final end = (i + _maxPoints - 1 < points.length - 1) ? i + _maxPoints - 1 : points.length - 1;
+      final legs = await _legsOneCall(points.sublist(i, end + 1));
+      if (legs == null) return null;
+      out.addAll(legs);
+    }
+    return out.length == points.length - 1 ? out : null;
+  }
+
+  static Future<List<double>?> _legsOneCall(
+      List<DirectionsPoint> points) async {
     if (points.length < 2) return null;
 
     final origin = points.first.param;

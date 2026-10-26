@@ -6,6 +6,8 @@ import '../../../core/services/sms_service.dart';
 import '../../../core/services/notification_service.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../../core/services/device_gps_service.dart';
+import '../../../core/services/cutoff_service.dart';
+import '../../../core/services/device_guard.dart';
 import '../../../core/sync/sync_controller.dart';
 import '../../../core/utils/geo_utils.dart';
 import '../../admin_settings/providers/org_settings_controller.dart';
@@ -79,7 +81,15 @@ class TripController extends AsyncNotifier<TripState> {
     final user = ref.watch(authControllerProvider).valueOrNull;
     final userId = user?.id ?? '';
 
-    final active = userId.isEmpty ? null : await _repo.activeTripForUser(userId);
+    var active = userId.isEmpty ? null : await _repo.activeTripForUser(userId);
+    // A route left open from an earlier day (not ended, phone offline at the
+    // cut-off): close it here the way the server's cut-off does, so today's
+    // visits never land in yesterday's trip and today's route can start.
+    if (active != null && _dateOnly(active.startedAt).isBefore(today)) {
+      try {
+        active = await _closeStale(active);
+      } catch (_) {}
+    }
     final completed = userId.isEmpty ? <Trip>[] : await _repo.tripsClosedOnLocalDateForUser(today, userId);
     final exhausted = userId.isEmpty ? <String>{} : await _repo.exhaustedOneTimeRoutesForUser(userId);
     final settings = await ref.watch(orgSettingsProvider.future);
@@ -95,6 +105,41 @@ class TripController extends AsyncNotifier<TripState> {
   }
 
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// Returns null once [t] is closed, or [t] if it can't be closed yet.
+  Future<Trip?> _closeStale(Trip t) async {
+    final cut = await ref.read(cutoffServiceProvider).currentCutoff();
+    final parts = cut.split(':');
+    final h = int.tryParse(parts.isNotEmpty ? parts[0] : '') ?? 23;
+    final m = int.tryParse(parts.length > 1 ? parts[1] : '') ?? 0;
+    final d = _dateOnly(t.startedAt);
+    var at = DateTime(d.year, d.month, d.day, h, m);
+    if (at.isBefore(t.startedAt)) at = t.startedAt;
+    if (DateTime.now().isBefore(at)) return t;
+
+    final db = ref.read(appDatabaseProvider);
+    Trip closed = t.copyWith(endedAt: at, closeReason: TripCloseReason.cutoff);
+    // Reopened earlier that day and never ended again: put back the
+    // salesperson's own end (time and location) if nothing happened after it.
+    try {
+      final raw = await db.getConfig('trip.reopen.${t.id}');
+      if (raw != null) {
+        final m0 = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+        final prev = m0['ended'] == null ? null : DateTime.tryParse('${m0['ended']}')?.toLocal();
+        if (prev != null && !t.visits.any((v) => v.timestamp.isAfter(prev))) {
+          closed = t.copyWith(
+            endedAt: prev,
+            closeReason: TripCloseReason.userEnded,
+            endLat: (m0['lat'] as num?)?.toDouble(),
+            endLng: (m0['lng'] as num?)?.toDouble(),
+          );
+        }
+        await db.deleteConfig('trip.reopen.${t.id}');
+      }
+    } catch (_) {}
+    await _repo.updateTrip(closed);
+    return null;
+  }
 
   Future<void> _refresh() async {
     state = const AsyncLoading();
@@ -114,6 +159,7 @@ class TripController extends AsyncNotifier<TripState> {
   }
 
   Future<Trip> startTrip(SalesRoute route) async {
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
     if (s.hasActiveTrip) throw StateError('A trip is already active. End it before starting another.');
@@ -233,6 +279,7 @@ class TripController extends AsyncNotifier<TripState> {
   /// salesperson adds customers on the fly (addFreeStop) and each add opens the
   /// normal visit modal. Closes and summarizes exactly like a regular route.
   Future<Trip> startFreeTrip() async {
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
     final route = SalesRoute(
       id: _newId('freeroute'),
       name: 'Free Route',
@@ -269,6 +316,7 @@ class TripController extends AsyncNotifier<TripState> {
   }
 
   Future<void> completeTrip() async {
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     final active = s?.active;
     if (s == null || active == null) return;
@@ -361,6 +409,7 @@ class TripController extends AsyncNotifier<TripState> {
     String? notes,
     List<String> photoPaths = const [],
   }) async {
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     final active = s?.active;
     if (s == null || active == null) throw StateError('No active trip.');
@@ -489,6 +538,7 @@ class TripController extends AsyncNotifier<TripState> {
                 amount: amount,
                 receiptNo: receiptNumber ?? '',
                 salespersonName: active.userName,
+                visitId: visitId,
               );
         } catch (e) {
           SmsService.note('markVisit: SMS threw — $e');
@@ -522,6 +572,7 @@ class TripController extends AsyncNotifier<TripState> {
     String? receiptNumber,
     String? notes,
   }) async {
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     if (s == null) throw StateError('Trip state not ready.');
 
@@ -650,6 +701,7 @@ class TripController extends AsyncNotifier<TripState> {
                 amount: amount,
                 receiptNo: receiptNumber ?? '',
                 salespersonName: trip.userName,
+                visitId: visit.id,
               );
         } catch (e) {
           SmsService.note('adhoc CR: SMS threw — $e');

@@ -478,6 +478,7 @@ class SyncController extends Notifier<SyncStatus> {
                   amount: v.amount,
                   receiptNo: v.receiptNumber ?? '',
                   salespersonName: v.userName,
+                  visitId: v.id,
                 );
               } catch (e) {
                 SmsService.note('pushAll: visit ${v.id} SMS threw — $e');
@@ -709,6 +710,7 @@ class SyncController extends Notifier<SyncStatus> {
                   amount: v.amount,
                   receiptNo: v.receiptNumber ?? '',
                   salespersonName: v.userName,
+                  visitId: v.id,
                 );
               } catch (e) {
                 SmsService.note('visit ${v.id}: SMS call threw — $e');

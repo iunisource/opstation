@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../services/device_guard.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../database/app_database.dart';
@@ -157,6 +158,8 @@ class SupabaseSyncService {
       'user_name': t.userName,
       'user_role': t.userRole,
       'org_id': t.orgId,
+      // The phone that runs this trip (one phone per login, update 421).
+      if (DeviceGuard.cachedId != null) 'device_id': DeviceGuard.cachedId,
     });
   }
 

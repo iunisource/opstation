@@ -1,4 +1,5 @@
 import '../../../core/services/org_config_sync.dart';
+import '../../../core/services/device_guard.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -634,6 +635,16 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
             child: _HeroHeader(firstName: firstName, dateStr: dateStr),
           ),
           const Padding(padding: EdgeInsets.fromLTRB(16, 12, 16, 0), child: TempPasswordBanner()),
+          if (ref.watch(deviceBlockedProvider))
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: _WarnBanner(icon: Icons.phonelink_lock_outlined, text: DeviceGuard.blockedMessage),
+            ),
+          if (DeviceGuard.timezoneWrong)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: _WarnBanner(icon: Icons.schedule_outlined, text: DeviceGuard.timezoneMessage),
+            ),
 
 
           // ── On route now ───────────────────────────────────────────────
@@ -867,6 +878,26 @@ class _SectionTitle extends StatelessWidget {
           ],
           const Spacer(),
           if (trailing != null) trailing!,
+        ]),
+      );
+}
+
+class _WarnBanner extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _WarnBanner({required this.icon, required this.text});
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEE2E2),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFFCA5A5)),
+        ),
+        child: Row(children: [
+          Icon(icon, color: const Color(0xFFB91C1C), size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF7F1D1D)))),
         ]),
       );
 }

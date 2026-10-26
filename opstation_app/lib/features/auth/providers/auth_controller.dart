@@ -10,6 +10,7 @@ import '../../../core/supabase/supabase_auth_service.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../../core/sync/sync_controller.dart';
 import '../../../core/services/notification_service.dart';
+import '../../../core/services/device_guard.dart';
 import '../data/mock_auth_repository.dart' hide AuthException;
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../models/auth_user.dart' as app;
@@ -363,6 +364,11 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
       }
 
       ref.invalidate(orgSettingsProvider);
+
+      // This phone now runs this login's routes (any other phone is told).
+      try {
+        await DeviceGuard.claim();
+      } catch (_) {}
 
       Future.microtask(() async {
         try {
