@@ -118,36 +118,41 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           u['id'] as String: (u['name'] as String?) ?? 'Unknown',
       };
 
-      final routesRows = await client
+      final routesRows = List<Map<String, dynamic>>.from(await client
           .from('sales_routes')
-          .select('id, name')
+          .select('id, name, kind, is_unassigned, is_active')
           .eq('org_id', orgId)
-          .eq('kind', 'recurring')
-          .order('name');
+          .order('name'));
+      routesRows.removeWhere((r) => r['is_unassigned'] == true);
       final routeIds = [for (final r in routesRows) r['id'] as String];
 
+      // Route owners, read in small batches (a long id list can fail).
       final spToRoutes = <String, Set<String>>{};
-      if (routeIds.isNotEmpty) {
+      for (var i = 0; i < routeIds.length; i += 100) {
+        final chunk = routeIds.sublist(i, i + 100 > routeIds.length ? routeIds.length : i + 100);
         final assignments = await client
             .from('route_assignments')
             .select('user_id, route_id')
-            .inFilter('route_id', routeIds);
+            .inFilter('route_id', chunk);
         for (final a in assignments) {
-          final uid = a['user_id'] as String;
-          final rid = a['route_id'] as String;
+          final uid = a['user_id'] as String?;
+          final rid = a['route_id'] as String?;
+          if (uid == null || rid == null) continue;
           spToRoutes.putIfAbsent(uid, () => <String>{}).add(rid);
         }
       }
 
+      // Which route(s) each shop is on — the whole organisation's stops, read
+      // in pages (one read stops at 1,000 rows), kept for these routes only.
       final custToRoutes = <String, Set<String>>{};
-      if (routeIds.isNotEmpty) {
-        // Read in pages: one read stops at 1,000 rows.
+      final routeSet = routeIds.toSet();
+      {
         final stops = <Map<String, dynamic>>[];
         for (var from = 0; ; from += 1000) {
           final page = await client
               .from('route_stops')
               .select('customer_id, route_id')
-              .inFilter('route_id', routeIds)
+              .eq('org_id', orgId)
               .order('route_id')
               .order('customer_id')
               .range(from, from + 999);
@@ -155,8 +160,9 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           if (page.length < 1000) break;
         }
         for (final s in stops) {
-          final cid = s['customer_id'] as String;
-          final rid = s['route_id'] as String;
+          final cid = s['customer_id'] as String?;
+          final rid = s['route_id'] as String?;
+          if (cid == null || rid == null || !routeSet.contains(rid)) continue;
           custToRoutes.putIfAbsent(cid, () => <String>{}).add(rid);
         }
       }
@@ -168,10 +174,15 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
         _salespeople = List<Map<String, dynamic>>.from(salespeopleRows);
         _routes = List<Map<String, dynamic>>.from(routesRows);
         _customerToRoutes..clear()..addAll(custToRoutes);
+        _routesLoaded = true;
         _salespersonToRoutes..clear()..addAll(spToRoutes);
       });
     } catch (e, st) {
       print('competitor _loadFilters error: $e\n$st');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not load routes — market grouping is not available. Refresh to try again.')));
+      }
     }
   }
 
@@ -353,7 +364,14 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
   /// No route picked: group the printout by market (route). Each market lists
   /// its shops; a shop on two routes shows under both. Shops on no route come
   /// last. With a salesperson picked, only that person's routes are used.
+  bool _routesLoaded = false;
+
   Map<String, List<String>> _marketsFor(List<Map<String, dynamic>> customers) {
+    // Routes not loaded (no internet / error): don't pretend every shop is
+    // "Not on any route" — print one list instead.
+    if (!_routesLoaded || _customerToRoutes.isEmpty) {
+      return {'All shops': [for (final c in customers) c['id'] as String]};
+    }
     final spRoutes = _selectedSalespersonId == null
         ? null
         : (_salespersonToRoutes[_selectedSalespersonId] ?? const <String>{});

@@ -126,9 +126,16 @@ class IntelligencePdfService {
 
   // ----- helpers -----
 
-  /// Shops per page. Each market starts on a new page; a market with more
-  /// than this many shops continues on the next page (heading repeated).
-  static const int _rowsPerPage = 25;
+  /// One market per page: the rows shrink to fit (normal up to 25 shops,
+  /// smaller up to 35, smallest up to 50). Only a market with more than 50
+  /// shops — too small to read on one page — continues on the next page.
+  static const int _maxRowsPerPage = 50;
+
+  static ({double font, double pad, double mark}) _sizeFor(int rows) {
+    if (rows <= 25) return (font: 7.5, pad: 2.5, mark: 9.0);
+    if (rows <= 35) return (font: 6.5, pad: 1.5, mark: 7.5);
+    return (font: 5.5, pad: 0.8, mark: 6.5);
+  }
 
   static List<pw.Widget> _placementPages(
     List<MapEntry<String, List<Map<String, dynamic>>>> sections,
@@ -140,10 +147,10 @@ class IntelligencePdfService {
     for (final g in sections) {
       final shops = g.value;
       if (shops.isEmpty) continue;
-      for (var i = 0; i < shops.length; i += _rowsPerPage) {
+      for (var i = 0; i < shops.length; i += _maxRowsPerPage) {
         if (!first) out.add(pw.NewPage());
         first = false;
-        final chunk = shops.sublist(i, i + _rowsPerPage > shops.length ? shops.length : i + _rowsPerPage);
+        final chunk = shops.sublist(i, i + _maxRowsPerPage > shops.length ? shops.length : i + _maxRowsPerPage);
         if (g.key.isNotEmpty) {
           out.add(_marketHeading(i == 0 ? g.key : '${g.key} (continued)', shops.length));
         }
@@ -165,12 +172,13 @@ class IntelligencePdfService {
     Map<String, Map<String, Map<String, dynamic>>> latest,
     int startIndex,
   ) {
+    final z = _sizeFor(shops.length);
     pw.Widget c(pw.Widget child, {pw.Alignment al = pw.Alignment.center}) => pw.Container(
           alignment: al,
-          padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2.5),
+          padding: pw.EdgeInsets.symmetric(horizontal: 3, vertical: z.pad),
           child: child,
         );
-    const small = pw.TextStyle(fontSize: 7.5);
+    final small = pw.TextStyle(fontSize: z.font);
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
       columnWidths: {
@@ -197,19 +205,19 @@ class IntelligencePdfService {
           pw.TableRow(
             decoration: r.isOdd ? const pw.BoxDecoration(color: PdfColors.grey50) : null,
             children: [
-              c(pw.Text('${startIndex + r + 1}', style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600))),
+              c(pw.Text('${startIndex + r + 1}', style: pw.TextStyle(fontSize: z.font - 0.5, color: PdfColors.grey600))),
               c(pw.Text(_clip('${shops[r]['shop_name'] ?? ''}', 46), maxLines: 1, style: small), al: pw.Alignment.centerLeft),
-              c(pw.Text('${shops[r]['code'] ?? ''}', maxLines: 1, style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700))),
+              c(pw.Text('${shops[r]['code'] ?? ''}', maxLines: 1, style: pw.TextStyle(fontSize: z.font - 0.5, color: PdfColors.grey700))),
               for (final p in products)
                 () {
                   final a = latest[shops[r]['id'] as String]?[p['id'] as String];
                   if (a == null) {
-                    return c(pw.Text('-', style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey500)));
+                    return c(pw.Text('-', style: pw.TextStyle(fontSize: z.font, color: PdfColors.grey500)));
                   }
                   final yes = a['is_present'] == true;
                   return c(pw.Text(yes ? '✓' : '✗',
                       style: pw.TextStyle(
-                          fontSize: 9,
+                          fontSize: z.mark,
                           fontWeight: pw.FontWeight.bold,
                           color: yes ? PdfColors.green600 : PdfColors.red600)));
                 }(),
