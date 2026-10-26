@@ -790,7 +790,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                 } catch (e) {
                   if (ctx.mounted) {
                     setS(() => saving = false);
-                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(_userSaveError(e))));
                   }
                 }
               },
@@ -983,4 +983,28 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
       ),
     );
   }
+}
+
+/// Plain message for a failed ERP-user save (no technical codes on screen).
+String _userSaveError(Object e) {
+  String? code;
+  if (e is FunctionException) {
+    final d = e.details;
+    if (d is Map) code = d['error']?.toString();
+  } else {
+    final m = RegExp(r'(forbidden_role|forbidden|email_exists|weak_password|missing_fields)').firstMatch(e.toString());
+    code = m?.group(1);
+  }
+  switch (code) {
+    case 'forbidden_role':
+    case 'forbidden':
+      return 'You do not have permission to create this user. Ask a Master Admin.';
+    case 'email_exists':
+      return 'This email is already in use by another member.';
+    case 'weak_password':
+      return 'Password must be at least 6 characters.';
+    case 'missing_fields':
+      return 'Fill in name, email and password.';
+  }
+  return friendlyError('That did not save', e);
 }
