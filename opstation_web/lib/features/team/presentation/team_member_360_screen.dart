@@ -539,7 +539,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     final showTim = role == 'salesperson' || role == 'driver';
     final orgId = ref.read(currentUserProvider)?.orgId ?? (widget.user['org_id'] as String?);
     return DefaultTabController(
-      length: showTim && orgId != null ? 8 : 7,
+      length: showTim && orgId != null ? 9 : 8,
       child: Scaffold(
         backgroundColor: AppTheme.background,
         appBar: AppBar(
@@ -572,6 +572,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
               const Tab(text: 'Routes'),
               const Tab(text: 'Tasks'),
               const Tab(text: 'Reports'),
+              const Tab(text: 'Devices'),
             ],
           ),
         ),
@@ -590,6 +591,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                     _routesTab(),
                     _tasksTab(),
                     _reportsTab(),
+                    _DevicesTab(userId: _uid),
                   ]),
       ),
     );
@@ -2371,6 +2373,154 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
           ),
           _chip(status, overdue ? AppTheme.danger : Colors.orange),
         ]));
+      },
+    );
+  }
+}
+
+/// Team 360 → Devices: the phones this person has used — model, sign-ins
+/// (when and where), last use, routes run on each and the first route's start.
+class _DevicesTab extends StatefulWidget {
+  final String userId;
+  const _DevicesTab({required this.userId});
+  @override
+  State<_DevicesTab> createState() => _DevicesTabState();
+}
+
+class _DevicesTabState extends State<_DevicesTab> {
+  late Future<List<Map<String, dynamic>>> _future = _load();
+  final _df = DateFormat('d MMM yyyy, h:mm a');
+  final Map<String, String?> _places = {};
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final rows = await Supabase.instance.client.rpc('user_devices', params: {'p_user': widget.userId});
+    final list = [for (final r in rows as List) Map<String, dynamic>.from(r as Map)];
+    // Place names for sign-in and first-route points (best effort).
+    for (final d in list) {
+      for (final k in const [('signin_lat', 'signin_lng'), ('first_trip_lat', 'first_trip_lng')]) {
+        final lat = (d[k.$1] as num?)?.toDouble();
+        final lng = (d[k.$2] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+        final key = '${lat.toStringAsFixed(4)},${lng.toStringAsFixed(4)}';
+        if (!_places.containsKey(key)) {
+          try {
+            _places[key] = await placeName(lat, lng);
+          } catch (_) {
+            _places[key] = null;
+          }
+        }
+      }
+    }
+    return list;
+  }
+
+  String _at(dynamic v) {
+    final d = v == null ? null : DateTime.tryParse('$v');
+    return d == null ? '—' : _df.format(d.toLocal());
+  }
+
+  String? _where(Map<String, dynamic> d, String la, String lo) {
+    final lat = (d[la] as num?)?.toDouble();
+    final lng = (d[lo] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+    final name = _places['${lat.toStringAsFixed(4)},${lng.toStringAsFixed(4)}'];
+    final pt = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+    return name == null || name.isEmpty ? pt : '$name ($pt)';
+  }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 150, child: Text(k, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
+          Expanded(child: Text(v, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+        ]),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snap.hasError) {
+          final m = snap.error.toString();
+          return Center(
+            child: Text(m.contains('PGRST202') || m.contains('Could not find the function')
+                ? 'Phone history isn\'t set up yet — run update 423.'
+                : 'Could not load the phone history.'),
+          );
+        }
+        final list = snap.data ?? const [];
+        if (list.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('No phone recorded yet. It appears after this person signs in on the updated app.',
+                  textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary)),
+            ),
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: () async {
+            setState(() => _future = _load());
+            await _future;
+          },
+          child: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              for (var i = 0; i < list.length; i++)
+                () {
+                  final d = list[i];
+                  final current = d['is_current'] == true;
+                  final model = (d['device_model'] as String?)?.trim();
+                  final title = (model == null || model.isEmpty) ? 'Phone ${list.length - i}' : model;
+                  final signinWhere = _where(d, 'signin_lat', 'signin_lng');
+                  final tripWhere = _where(d, 'first_trip_lat', 'first_trip_lng');
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 14),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: current ? AppTheme.primary : AppTheme.border, width: current ? 1.5 : 1),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        Icon(Icons.smartphone, color: current ? AppTheme.primary : AppTheme.textSecondary),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800))),
+                        if (current)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                            child: const Text('Current phone', style: TextStyle(fontSize: 11.5, color: AppTheme.primary, fontWeight: FontWeight.w700)),
+                          ),
+                      ]),
+                      const SizedBox(height: 10),
+                      if ((d['os_version'] ?? '').toString().isNotEmpty || (d['app_version'] ?? '').toString().isNotEmpty)
+                        _kv('System', [d['os_version'], if (d['app_version'] != null) 'App ${d['app_version']}']
+                            .where((x) => x != null && '$x'.isNotEmpty).join(' · ')),
+                      _kv('First sign-in', _at(d['first_signin'])),
+                      _kv('Last sign-in', '${_at(d['last_signin'])}${(d['signins'] ?? 0) > 1 ? '  (${d['signins']} sign-ins)' : ''}'),
+                      if (signinWhere != null) _kv('Signed in at', signinWhere),
+                      _kv('Last used', _at(d['last_seen'])),
+                      _kv('Routes on this phone', '${d['trips'] ?? 0}'),
+                      if (d['first_trip_at'] != null)
+                        _kv('First route', '${_at(d['first_trip_at'])}${tripWhere == null ? '' : ' — $tripWhere'}'),
+                      if (model == null || model.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text('Phone model shows after the next sign-in on the updated app.',
+                              style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                        ),
+                    ]),
+                  );
+                }(),
+            ],
+          ),
+        );
       },
     );
   }
