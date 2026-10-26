@@ -37,6 +37,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _smsObscure = true;
 
   bool _loading = true;
+  bool _cutoffEndAtStart = false;
 
   static const _defaultVisitTpl =
       'Dear {customer_name}, payment of Rs. {amount} received. Receipt: {receipt_no}. Thank you.';
@@ -81,6 +82,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
       setState(() {
         _cutoffCtrl.text = cfg['org.cutoff_time'] ?? '23:00';
+        _cutoffEndAtStart = cfg['org.cutoff_end_at_start'] == 'true';
         try {
           _categories = List<String>.from(jsonDecode(cfg['org.categories'] ?? '[]'));
         } catch (_) {}
@@ -190,6 +192,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         _save('org.cutoff_time', _cutoffCtrl.text.trim()),
                     child: const Text('Save')),
               ])),
+          const SizedBox(height: 12),
+          _Section(
+            title: 'End location for cut-off trips',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text(
+                'When a salesperson does not end a route, the cut-off closes it. Its end location is '
+                'then the last visit (where the salesperson was last seen), so the trip distance '
+                'counts up to there. Turn this on to use the route\'s start location as the end '
+                'instead — for teams who start and finish at the same place, so the drive back is counted.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 6),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Use the start location as the end location'),
+                subtitle: Text(_cutoffEndAtStart ? 'On — start location' : 'Off — last visit'),
+                value: _cutoffEndAtStart,
+                onChanged: (v) async {
+                  setState(() => _cutoffEndAtStart = v);
+                  await _save('org.cutoff_end_at_start', v.toString());
+                },
+              ),
+            ]),
+          ),
           const SizedBox(height: 24),
           if (isMaster) ...[
             _Section(
