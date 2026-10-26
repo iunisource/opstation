@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../widgets/searchable_dropdown.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -64,7 +65,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       final allUsers = await client
           .from('users')
           .select('id, name')
-          .eq('org_id', orgId);
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       final names = <String, String>{
         for (final u in allUsers)
           u['id'] as String: (u['name'] as String?) ?? 'Unknown',
@@ -93,10 +94,19 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
       final custToRoutes = <String, Set<String>>{};
       if (routeIds.isNotEmpty) {
-        final stops = await client
-            .from('route_stops')
-            .select('customer_id, route_id')
-            .inFilter('route_id', routeIds);
+        // Read in pages: one read stops at 1,000 rows.
+        final stops = <Map<String, dynamic>>[];
+        for (var from = 0; ; from += 1000) {
+          final page = await client
+              .from('route_stops')
+              .select('customer_id, route_id')
+              .inFilter('route_id', routeIds)
+              .order('route_id')
+              .order('customer_id')
+              .range(from, from + 999);
+          stops.addAll(List<Map<String, dynamic>>.from(page));
+          if (page.length < 1000) break;
+        }
         for (final s in stops) {
           final cid = s['customer_id'] as String;
           final rid = s['route_id'] as String;
@@ -301,6 +311,42 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     );
   }
 
+  /// No route picked: group the printout by market (route). Each market lists
+  /// its shops; a shop on two routes shows under both. Shops on no route come
+  /// last. With a salesperson picked, only that person's routes are used.
+  Map<String, List<String>> _marketsFor(List<Map<String, dynamic>> customers) {
+    final spRoutes = _selectedSalespersonId == null
+        ? null
+        : (_salespersonToRoutes[_selectedSalespersonId] ?? const <String>{});
+    final routes = [
+      for (final r in _routes)
+        if (spRoutes == null || spRoutes.contains(r['id'])) r,
+    ]..sort((a, b) => '${a['name'] ?? ''}'.toLowerCase().compareTo('${b['name'] ?? ''}'.toLowerCase()));
+    final out = <String, List<String>>{};
+    final placed = <String>{};
+    for (final r in routes) {
+      final rid = r['id'] as String;
+      final ids = [
+        for (final c in customers)
+          if (_customerToRoutes[c['id']]?.contains(rid) ?? false) c['id'] as String,
+      ];
+      if (ids.isEmpty) continue;
+      var name = '${r['name'] ?? ''}'.trim();
+      if (name.isEmpty) name = 'Route';
+      while (out.containsKey(name)) {
+        name = '$name ';
+      }
+      out[name] = ids;
+      placed.addAll(ids);
+    }
+    final rest = [
+      for (final c in customers)
+        if (!placed.contains(c['id'])) c['id'] as String,
+    ];
+    if (rest.isNotEmpty) out['Not on any route'] = rest;
+    return out;
+  }
+
   Future<void> _exportPdf() async {
     try {
       final orgName = ref.read(currentUserProvider)?.orgName ?? '';
@@ -309,11 +355,9 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         customers: _filteredCustomers,
         products: _filteredProducts,
         latest: _latest,
+        markets: _selectedRouteId == null ? _marketsFor(_filteredCustomers) : null,
       );
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-        name: 'placement_audit_${DateTime.now().toIso8601String().split('T').first}.pdf',
-      );
+      await outputPdf(bytes, 'Placement Audit');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

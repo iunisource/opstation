@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../widgets/searchable_dropdown.dart';
+import 'package:opstation_web/core/pdf/pdf_output.dart';
 
 class IntelligenceCompetitorsScreen extends ConsumerStatefulWidget {
   const IntelligenceCompetitorsScreen({super.key});
@@ -25,6 +26,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
 
   String? _selectedSalespersonId;
   String? _selectedRouteId;
+  String? _selectedBrand; // only shops where this competitor brand was spotted
   List<Map<String, dynamic>> _salespeople = [];
   List<Map<String, dynamic>> _routes = [];
   final Map<String, String> _userNames = {};
@@ -61,7 +63,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
       final allUsers = await client
           .from('users')
           .select('id, name')
-          .eq('org_id', orgId);
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer');
       final names = <String, String>{
         for (final u in allUsers)
           u['id'] as String: (u['name'] as String?) ?? 'Unknown',
@@ -90,10 +92,19 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
 
       final custToRoutes = <String, Set<String>>{};
       if (routeIds.isNotEmpty) {
-        final stops = await client
-            .from('route_stops')
-            .select('customer_id, route_id')
-            .inFilter('route_id', routeIds);
+        // Read in pages: one read stops at 1,000 rows.
+        final stops = <Map<String, dynamic>>[];
+        for (var from = 0; ; from += 1000) {
+          final page = await client
+              .from('route_stops')
+              .select('customer_id, route_id')
+              .inFilter('route_id', routeIds)
+              .order('route_id')
+              .order('customer_id')
+              .range(from, from + 999);
+          stops.addAll(List<Map<String, dynamic>>.from(page));
+          if (page.length < 1000) break;
+        }
         for (final s in stops) {
           final cid = s['customer_id'] as String;
           final rid = s['route_id'] as String;
@@ -168,13 +179,31 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
     }
   }
 
+  /// Competitor brands currently spotted at a shop (latest per category).
+  List<String> _brandsAt(String customerId) => [
+        for (final sp in (_latest[customerId]?.values ?? const <Map<String, dynamic>>[]))
+          if ((sp['brand_name'] as String?)?.trim().isNotEmpty == true) (sp['brand_name'] as String).trim(),
+      ];
+
+  /// Every brand spotted, with how many shops it's at.
+  Map<String, int> get _brandCounts {
+    final m = <String, int>{};
+    for (final c in _customers) {
+      for (final b in _brandsAt(c['id'] as String).toSet()) { m[b] = (m[b] ?? 0) + 1; }
+    }
+    return m;
+  }
+
   List<Map<String, dynamic>> get _filteredCustomers {
     Iterable<Map<String, dynamic>> result = _customers;
     final q = _customerSearchCtrl.text.toLowerCase();
     if (q.isNotEmpty) {
-      result = result.where((c) =>
-        matchesQuery('${c['shop_name'] ?? ''} ${c['code'] ?? ''}', q)
-      );
+      // Shop name / code, or any competitor brand spotted there.
+      result = result.where((c) => matchesQuery(
+          '${c['shop_name'] ?? ''} ${c['code'] ?? ''} ${_brandsAt(c['id'] as String).join(' ')}', q));
+    }
+    if (_selectedBrand != null) {
+      result = result.where((c) => _brandsAt(c['id'] as String).contains(_selectedBrand));
     }
     if (_selectedRouteId != null) {
       result = result.where((c) =>
@@ -272,6 +301,42 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
     );
   }
 
+  /// No route picked: group the printout by market (route). Each market lists
+  /// its shops; a shop on two routes shows under both. Shops on no route come
+  /// last. With a salesperson picked, only that person's routes are used.
+  Map<String, List<String>> _marketsFor(List<Map<String, dynamic>> customers) {
+    final spRoutes = _selectedSalespersonId == null
+        ? null
+        : (_salespersonToRoutes[_selectedSalespersonId] ?? const <String>{});
+    final routes = [
+      for (final r in _routes)
+        if (spRoutes == null || spRoutes.contains(r['id'])) r,
+    ]..sort((a, b) => '${a['name'] ?? ''}'.toLowerCase().compareTo('${b['name'] ?? ''}'.toLowerCase()));
+    final out = <String, List<String>>{};
+    final placed = <String>{};
+    for (final r in routes) {
+      final rid = r['id'] as String;
+      final ids = [
+        for (final c in customers)
+          if (_customerToRoutes[c['id']]?.contains(rid) ?? false) c['id'] as String,
+      ];
+      if (ids.isEmpty) continue;
+      var name = '${r['name'] ?? ''}'.trim();
+      if (name.isEmpty) name = 'Route';
+      while (out.containsKey(name)) {
+        name = '$name ';
+      }
+      out[name] = ids;
+      placed.addAll(ids);
+    }
+    final rest = [
+      for (final c in customers)
+        if (!placed.contains(c['id'])) c['id'] as String,
+    ];
+    if (rest.isNotEmpty) out['Not on any route'] = rest;
+    return out;
+  }
+
   Future<void> _exportPdf() async {
     try {
       final orgName = ref.read(currentUserProvider)?.orgName ?? '';
@@ -291,11 +356,9 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
         customers: toExport,
         categories: _categories,
         latest: _latest,
+        markets: _selectedRouteId == null ? _marketsFor(toExport) : null,
       );
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-        name: 'competitor_spotting_${DateTime.now().toIso8601String().split('T').first}.pdf',
-      );
+      await outputPdf(bytes, 'Competitor Spotting');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -330,9 +393,20 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
       ],
       onChanged: (v) => setState(() => _selectedRouteId = v),
     );
+    final brandCounts = _brandCounts;
+    final brandDropdown = SearchableDropdown(
+      label: 'Competitor brand',
+      value: _selectedBrand,
+      allLabel: 'All brands',
+      options: [
+        for (final b in (brandCounts.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()))))
+          MapEntry<String?, String>(b, '$b (${brandCounts[b]} shop${brandCounts[b] == 1 ? '' : 's'})'),
+      ],
+      onChanged: (v) => setState(() => _selectedBrand = v),
+    );
     final searchField = TextField(
       controller: _customerSearchCtrl,
-      decoration: const InputDecoration(hintText: 'Filter shops...', prefixIcon: Icon(Icons.search), isDense: true),
+      decoration: const InputDecoration(hintText: 'Search shops or brands...', prefixIcon: Icon(Icons.search), isDense: true),
       onChanged: (_) => setState(() {}),
     );
     final chartBtn = TextButton.icon(
@@ -376,6 +450,8 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           const SizedBox(height: 10),
           routeDropdown,
           const SizedBox(height: 10),
+          brandDropdown,
+          const SizedBox(height: 10),
           searchField,
           const SizedBox(height: 6),
           Wrap(spacing: 4, runSpacing: 0, children: [chartBtn, selectBtn, pdfBtn]),
@@ -384,6 +460,8 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
             Expanded(child: spDropdown),
             const SizedBox(width: 12),
             Expanded(child: routeDropdown),
+            const SizedBox(width: 12),
+            Expanded(child: brandDropdown),
           ]),
           const SizedBox(height: 12),
           Row(children: [
@@ -479,7 +557,9 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: AppTheme.primary.withOpacity(0.08),
+                                    color: _selectedBrand != null && (spotting['brand_name'] as String?)?.trim() == _selectedBrand
+                                        ? Colors.amber.withOpacity(0.35)
+                                        : AppTheme.primary.withOpacity(0.08),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Center(
