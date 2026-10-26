@@ -38,6 +38,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   bool _loading = true;
   bool _cutoffEndAtStart = false;
+  bool _devApproval = false;
+  bool _devReview = false;
+  Set<String> _devSupervisors = {};
+  List<Map<String, dynamic>> _erpUsers = [];
 
   static const _defaultVisitTpl =
       'Dear {customer_name}, payment of Rs. {amount} received. Receipt: {receipt_no}. Thank you.';
@@ -80,9 +84,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       for (final r in rows) {
         cfg[r['key'] as String] = r['value'] as String? ?? '';
       }
+      try {
+        final us = await client.from('users').select('id, name, role, is_active')
+            .eq('org_id', orgId).eq('role', 'erpUser').order('name');
+        _erpUsers = [for (final u in us) if (u['is_active'] != false) Map<String, dynamic>.from(u)];
+      } catch (_) {}
       setState(() {
         _cutoffCtrl.text = cfg['org.cutoff_time'] ?? '23:00';
         _cutoffEndAtStart = cfg['org.cutoff_end_at_start'] == 'true';
+        _devApproval = cfg['org.device_change_approval'] == 'true';
+        _devReview = !_devApproval && cfg['org.device_change_review'] == 'true';
+        _devSupervisors = (cfg['org.device_change_supervisors'] ?? '')
+            .split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
         try {
           _categories = List<String>.from(jsonDecode(cfg['org.categories'] ?? '[]'));
         } catch (_) {}
@@ -108,6 +121,44 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } catch (_) {
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _pickDeviceSupervisors() async {
+    final picked = Set<String>.from(_devSupervisors);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: const Text('ERP users who can supervise phone changes'),
+        content: SizedBox(
+          width: 420,
+          height: 380,
+          child: _erpUsers.isEmpty
+              ? const Center(child: Text('No ERP users in this organisation.'))
+              : ListView(children: [
+                  for (final u in _erpUsers)
+                    CheckboxListTile(
+                      dense: true,
+                      title: Text('${u['name'] ?? ''}'),
+                      value: picked.contains(u['id']),
+                      onChanged: (v) => setD(() {
+                        if (v == true) {
+                          picked.add(u['id'] as String);
+                        } else {
+                          picked.remove(u['id']);
+                        }
+                      }),
+                    ),
+                ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true), child: const Text('Save')),
+        ],
+      )),
+    );
+    if (ok != true) return;
+    setState(() => _devSupervisors = picked);
+    await _save('org.device_change_supervisors', picked.join(','));
   }
 
   Future<void> _save(String key, String value) async {
@@ -192,6 +243,63 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         _save('org.cutoff_time', _cutoffCtrl.text.trim()),
                     child: const Text('Save')),
               ])),
+          const SizedBox(height: 12),
+          _Section(
+            title: 'Phone changes (field staff)',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text(
+                'When a salesperson, driver, surveyor or auditor signs in on a different phone. '
+                'Turn on one of these (not both), or leave both off. Admins always supervise; '
+                'you can add ERP users below. Supervise from Team → the person → Devices.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 6),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('New phone needs approval before routes work'),
+                subtitle: const Text('The new phone is blocked until a supervisor approves it; the previous phone keeps working meanwhile.'),
+                value: _devApproval,
+                onChanged: (v) async {
+                  setState(() {
+                    _devApproval = v;
+                    if (v) _devReview = false;
+                  });
+                  await _save('org.device_change_approval', v.toString());
+                  if (v) await _save('org.device_change_review', 'false');
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Review phone changes (not blocking)'),
+                subtitle: const Text('The new phone works at once; the change waits for a supervisor to review it.'),
+                value: _devReview,
+                onChanged: (v) async {
+                  setState(() {
+                    _devReview = v;
+                    if (v) _devApproval = false;
+                  });
+                  await _save('org.device_change_review', v.toString());
+                  if (v) await _save('org.device_change_approval', 'false');
+                },
+              ),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                  child: Text(
+                    _devSupervisors.isEmpty
+                        ? 'Supervisors: admins only'
+                        : 'Supervisors: admins + ${[for (final u in _erpUsers) if (_devSupervisors.contains(u['id'])) u['name']].join(', ')}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _pickDeviceSupervisors,
+                  icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
+                  label: const Text('ERP users'),
+                ),
+              ]),
+            ]),
+          ),
           const SizedBox(height: 12),
           _Section(
             title: 'End location for cut-off trips',

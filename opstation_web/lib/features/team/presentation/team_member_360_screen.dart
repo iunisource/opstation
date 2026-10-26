@@ -1,4 +1,5 @@
 // ignore: avoid_web_libraries_in_flutter
+import '../../../core/layout/main_layout.dart' show deviceChangePendingProvider;
 import 'dart:html' as html;
 import '../../../core/utils/place_name.dart';
 import 'package:flutter/material.dart';
@@ -572,7 +573,20 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
               const Tab(text: 'Routes'),
               const Tab(text: 'Tasks'),
               const Tab(text: 'Reports'),
-              const Tab(text: 'Devices'),
+              Tab(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('Devices'),
+                  if ((ref.watch(deviceChangePendingProvider).valueOrNull?[_uid] ?? 0) > 0) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(color: AppTheme.danger, borderRadius: BorderRadius.circular(10)),
+                      child: Text('${ref.watch(deviceChangePendingProvider).valueOrNull?[_uid] ?? 0}',
+                          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+                    ),
+                  ],
+                ]),
+              ),
             ],
           ),
         ),
@@ -2380,21 +2394,168 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
 
 /// Team 360 → Devices: the phones this person has used — model, sign-ins
 /// (when and where), last use, routes run on each and the first route's start.
-class _DevicesTab extends StatefulWidget {
+class _DevicesTab extends ConsumerStatefulWidget {
   final String userId;
   const _DevicesTab({required this.userId});
   @override
-  State<_DevicesTab> createState() => _DevicesTabState();
+  ConsumerState<_DevicesTab> createState() => _DevicesTabState();
 }
 
-class _DevicesTabState extends State<_DevicesTab> {
+class _DevicesTabState extends ConsumerState<_DevicesTab> {
   late Future<List<Map<String, dynamic>>> _future = _load();
+  List<Map<String, dynamic>> _log = [];
+  bool _deciding = false;
+
+  Future<void> _loadLog() async {
+    try {
+      final rows = await Supabase.instance.client.rpc('device_change_log', params: {'p_user': widget.userId});
+      _log = [for (final r in rows as List) Map<String, dynamic>.from(r as Map)];
+    } catch (_) {
+      _log = [];
+    }
+  }
+
+  Future<void> _decide(Map<String, dynamic> r, String decision) async {
+    final noteCtrl = TextEditingController();
+    final label = decision == 'approved' ? 'Approve' : decision == 'rejected' ? 'Reject' : 'Mark reviewed';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('$label phone change?'),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(decision == 'approved'
+                ? 'The new phone can run routes right away; the previous phone stops.'
+                : decision == 'rejected'
+                    ? 'The new phone stays blocked; the previous phone keeps working.'
+                    : 'Records that you checked this phone change.'),
+            const SizedBox(height: 12),
+            TextField(controller: noteCtrl, maxLines: 2, decoration: const InputDecoration(labelText: 'Note (optional)')),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: decision == 'rejected'
+                ? ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white)
+                : null,
+            onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
+            child: Text(label),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _deciding = true);
+    try {
+      await Supabase.instance.client.rpc('device_change_decide',
+          params: {'p_id': r['id'], 'p_decision': decision, 'p_note': noteCtrl.text.trim()});
+      ref.invalidate(deviceChangePendingProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$label — saved')));
+        setState(() => _future = _load());
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.toString().contains('not allowed')
+                ? 'You are not allowed to supervise phone changes.'
+                : 'Could not save. Please try again.')));
+      }
+    } finally {
+      if (mounted) setState(() => _deciding = false);
+    }
+  }
+
+  Widget _logCard(Map<String, dynamic> r) {
+    final pending = r['status'] == 'pending';
+    final approval = r['mode'] == 'approval';
+    final canDecide = r['can_decide'] == true && pending && !_deciding;
+    final model = (r['device_model'] as String?)?.trim();
+    final where = _where(r, 'signin_lat', 'signin_lng');
+    final statusText = switch ('${r['status']}') {
+      'pending' => approval ? 'Waiting for approval' : 'Waiting for review',
+      'approved' => 'Approved',
+      'rejected' => 'Rejected',
+      'reviewed' => 'Reviewed',
+      _ => '${r['status']}',
+    };
+    final color = pending ? AppTheme.warning : (r['status'] == 'rejected' ? AppTheme.danger : AppTheme.success);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: pending ? const Color(0xFFFFFBEB) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: pending ? AppTheme.warning : AppTheme.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.swap_horiz, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('Changed to ${model == null || model.isEmpty ? 'a new phone' : model}',
+                style: const TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(12)),
+            child: Text(statusText, style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w700)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        _kv('Signed in', _at(r['created_at'])),
+        if (where != null) _kv('Signed in at', where),
+        _kv('Supervision', approval ? 'Approval needed before routes' : 'Review (phone works meanwhile)'),
+        if (!pending)
+          _kv('Decided by', '${r['decided_by_name'] ?? '—'} · ${_at(r['decided_at'])}'),
+        if ((r['note'] ?? '').toString().isNotEmpty) _kv('Note', '${r['note']}'),
+        if (canDecide) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, children: [
+            if (approval) ...[
+              ElevatedButton.icon(
+                onPressed: () => _decide(r, 'approved'),
+                icon: const Icon(Icons.check, size: 18),
+                label: const Text('Approve'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _decide(r, 'rejected'),
+                icon: const Icon(Icons.close, size: 18, color: AppTheme.danger),
+                label: const Text('Reject', style: TextStyle(color: AppTheme.danger)),
+              ),
+            ] else
+              ElevatedButton.icon(
+                onPressed: () => _decide(r, 'reviewed'),
+                icon: const Icon(Icons.done_all, size: 18),
+                label: const Text('Mark reviewed'),
+              ),
+          ]),
+        ],
+      ]),
+    );
+  }
   final _df = DateFormat('d MMM yyyy, h:mm a');
   final Map<String, String?> _places = {};
 
   Future<List<Map<String, dynamic>>> _load() async {
     final rows = await Supabase.instance.client.rpc('user_devices', params: {'p_user': widget.userId});
     final list = [for (final r in rows as List) Map<String, dynamic>.from(r as Map)];
+    await _loadLog();
+    for (final d in _log) {
+      final lat = (d['signin_lat'] as num?)?.toDouble();
+      final lng = (d['signin_lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      final key = '${lat.toStringAsFixed(4)},${lng.toStringAsFixed(4)}';
+      if (!_places.containsKey(key)) {
+        try {
+          _places[key] = await placeName(lat, lng);
+        } catch (_) {
+          _places[key] = null;
+        }
+      }
+    }
     // Place names for sign-in and first-route points (best effort).
     for (final d in list) {
       for (final k in const [('signin_lat', 'signin_lng'), ('first_trip_lat', 'first_trip_lng')]) {
@@ -2453,7 +2614,7 @@ class _DevicesTabState extends State<_DevicesTab> {
           );
         }
         final list = snap.data ?? const [];
-        if (list.isEmpty) {
+        if (list.isEmpty && _log.isEmpty) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(24),
@@ -2470,6 +2631,14 @@ class _DevicesTabState extends State<_DevicesTab> {
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
+              if (_log.isNotEmpty) ...[
+                const Text('Phone changes', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                for (final r in _log) _logCard(r),
+                const SizedBox(height: 14),
+                const Text('Phones', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+              ],
               for (var i = 0; i < list.length; i++)
                 () {
                   final d = list[i];

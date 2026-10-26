@@ -469,6 +469,21 @@ final dupRefPendingProvider = FutureProvider<int>((ref) async {
 
 // Cancelled receipt slips still to review (SQL 411c). Shown to whoever can
 // open Reports → Receipt Books (gated by the menu's access check).
+/// Phone changes waiting for this supervisor (Team → person → Devices).
+final deviceChangePendingProvider = FutureProvider<Map<String, int>>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return const {};
+  try {
+    final res = await Supabase.instance.client.rpc('device_change_pending', params: {'p_org': user.orgId});
+    return {
+      for (final r in res as List) '${(r as Map)['user_id']}': (r['pending'] as num?)?.toInt() ?? 0,
+    };
+  } catch (_) {
+    return const {};
+  }
+});
+
 final receiptSlipPendingProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
@@ -1308,6 +1323,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final jvPending = gate('/financials/journal-vouchers', ref.watch(jvPendingCountProvider).valueOrNull ?? 0);
   final dupRefPending = gate('/financials/duplicate-references', ref.watch(dupRefPendingProvider).valueOrNull ?? 0);
   final receiptSlipPending = gate('/reports/receipt-books', ref.watch(receiptSlipPendingProvider).valueOrNull ?? 0);
+  final devicePending = gate('/team', (ref.watch(deviceChangePendingProvider).valueOrNull ?? const <String, int>{})
+      .values.fold<int>(0, (a, b) => a + b));
   final piReviewPending = gate('/erp/purchase-invoices', ref.watch(piReviewPendingProvider).valueOrNull ?? 0);
   final grnPendingInvoice = gate('/erp/purchase-invoices', ref.watch(grnPendingInvoiceCountProvider).valueOrNull ?? 0);
   final priReviewPending = gate('/erp/purchase-return-vouchers', ref.watch(priReviewPendingProvider).valueOrNull ?? 0);
@@ -1682,7 +1699,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
 
   final opsErpItems = <Widget>[
     if (show('/dashboard')) _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
-    if (show('/team')) _menuItem(context, 'Team', Icons.people_outline, '/team', location),
+    if (show('/team')) _menuItem(context, 'Team', Icons.people_outline, '/team', location, badge: devicePending),
     // Same Customers screen as Sales → Customers, same permission.
     if (show('/customers')) _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location, badge: customerSupervisePending),
     if (show('/routes')) _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
@@ -1719,7 +1736,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
             ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
-              _menuItem(context, 'Team', Icons.people_outline, '/team', location),
+              _menuItem(context, 'Team', Icons.people_outline, '/team', location, badge: devicePending),
               _menuItem(context, 'Customers', Icons.store_outlined, '/customers', location, badge: customerSupervisePending),
               _menuItem(context, 'Routes', Icons.route_outlined, '/routes', location),
               if (show('/operations/route-roster')) _menuItem(context, 'Route Roster', Icons.calendar_view_week_outlined, '/operations/route-roster', location),
@@ -1737,7 +1754,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               if (user?.role == WebUserRole.masterAdmin)
                 _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
-            badge: customerSupervisePending,
+            badge: customerSupervisePending + devicePending,
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
             ['/crm/customers', '/crm/follow-ups', '/crm/pipeline', '/crm/supplier-profile'],
@@ -1781,7 +1798,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
             const ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/operations/route-roster', '/live-map', '/operations/retailers',
              '/reports', '/reports/combined-summary', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications'],
-            opsErpItems),
+            opsErpItems,
+            badge: devicePending),
 
         // Assets/Facility grants live outside erpMenuItems (their menu is built
         // inline from show()), so count them in the gate too.

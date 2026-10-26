@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/layout/main_layout.dart' show deviceChangePendingProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -338,7 +339,23 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                                     style: TextStyle(color: _roleColor(role), fontWeight: FontWeight.w700)),
                                 ),
                                 const SizedBox(width: 10),
-                                Text(u['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
+                                Flexible(child: Text(u['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis)),
+                                if ((ref.watch(deviceChangePendingProvider).valueOrNull?[u['id']] ?? 0) > 0) ...[
+                                  const SizedBox(width: 8),
+                                  Tooltip(
+                                    message: 'Phone change waiting — open the profile → Devices',
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(color: AppTheme.danger, borderRadius: BorderRadius.circular(10)),
+                                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                        const Icon(Icons.smartphone, size: 12, color: Colors.white),
+                                        const SizedBox(width: 3),
+                                        Text('${ref.watch(deviceChangePendingProvider).valueOrNull?[u['id']] ?? 0}',
+                                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+                                      ]),
+                                    ),
+                                  ),
+                                ],
                               ])),
                               Expanded(flex: 3, child: Text(u['email'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                               Expanded(flex: 2, child: Container(
@@ -359,9 +376,12 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                               SizedBox(width: 340, child: SingleChildScrollView(scrollDirection: Axis.horizontal, reverse: true, child: Row(mainAxisSize: MainAxisSize.min, children: [
                                 IconButton(
                                   icon: const Icon(Icons.account_circle_outlined, size: 18, color: AppTheme.primary),
-                                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                                    builder: (_) => TeamMember360Screen(user: u),
-                                  )),
+                                  onPressed: () async {
+                                    await Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => TeamMember360Screen(user: u),
+                                    ));
+                                    ref.invalidate(deviceChangePendingProvider);
+                                  },
                                   tooltip: 'Profile',
                                 ),
                                 if (canEdit)
