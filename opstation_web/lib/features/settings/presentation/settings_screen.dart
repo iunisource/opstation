@@ -217,62 +217,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ]),
           ),
           const SizedBox(height: 24),
-          if (isMaster) ...[
-            _Section(
-              title: 'Voucher Footer Note',
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text(
-                  'This text appears at the bottom of every voucher PDF (SO, DO, SI, etc). Use it for terms, return policy, or contact info.',
-                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _voucherFooterCtrl,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    hintText: 'e.g. Goods once sold will not be taken back. Subject to Lahore jurisdiction.',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: ElevatedButton(
-                    onPressed: () => _save('org.voucher_footer_note', _voucherFooterCtrl.text.trim()),
-                    child: const Text('Save'),
-                  ),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 24),
-          ],
-          _Section(
-            title: 'Purchase Voucher Footer Note',
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text(
-                'Appears at the bottom of PO, GRN, and PI PDFs. Leave blank to use the Sales footer note.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _purchaseFooterCtrl,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  hintText: 'e.g. Payment terms: Net 30 days. Subject to Lahore jurisdiction.',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton(
-                  onPressed: () => _save('org.purchase_footer_note', _purchaseFooterCtrl.text.trim()),
-                  child: const Text('Save'),
-                ),
-              ),
-            ]),
-          ),
-          const SizedBox(height: 24),
           _Section(
               title: 'Categories',
               child: Column(
