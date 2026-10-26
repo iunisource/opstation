@@ -637,6 +637,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                                   tooltip: 'Assignment history',
                                   onPressed: () => _showAssignmentHistory(
                                       r['id'] as String, '${r['name'] ?? ''}')),
+                              if (!_isUnassignedRoute(r))
+                                IconButton(
+                                    icon: const Icon(Icons.copy_all_outlined,
+                                        size: 18, color: AppTheme.primary),
+                                    tooltip: 'Duplicate route',
+                                    onPressed: () => _duplicateRoute(row)),
                               IconButton(
                                   icon: const Icon(Icons.edit_outlined,
                                       size: 18),
@@ -955,6 +961,115 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     }
     _showSnack('Route deleted');
     _load();
+  }
+
+  /// True when another route in this organisation already has [name]
+  /// (ignoring upper/lower case and extra spaces). Checked against the
+  /// database, not the page's copy.
+  Future<bool> _routeNameTaken(String name, {String? exceptId}) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return false;
+    String norm(String v) => v.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+    final want = norm(name);
+    if (want.isEmpty) return false;
+    List rows;
+    try {
+      rows = await Supabase.instance.client.from('sales_routes').select('id, name').eq('org_id', orgId);
+    } catch (_) {
+      rows = [for (final rr in _routes) rr.data];
+    }
+    return rows.any((x) {
+      final m = x as Map;
+      return m['id'] != exceptId && norm('${m['name'] ?? ''}') == want;
+    });
+  }
+
+  /// New route with the same customers (same order) and type. The person it
+  /// is assigned to is not copied.
+  Future<void> _duplicateRoute(_RouteRow row) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final srcName = '${row.data['name'] ?? ''}'.trim();
+    final nameCtrl = TextEditingController(text: '$srcName copy');
+    String? err;
+    var busy = false;
+    final stops = await _currentStops(row);
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(builder: (ctx, setD) {
+        Future<void> go() async {
+          final name = nameCtrl.text.trim();
+          if (name.isEmpty) { setD(() => err = 'Enter a route name'); return; }
+          setD(() { busy = true; err = null; });
+          if (await _routeNameTaken(name)) {
+            setD(() { busy = false; err = 'A route with this name already exists.'; });
+            return;
+          }
+          final client = Supabase.instance.client;
+          final now = DateTime.now();
+          final newId = 'route_${now.millisecondsSinceEpoch}';
+          final ids = [for (final st in stops) st['customer_id'] as String];
+          try {
+            await client.from('sales_routes').insert({
+              'id': newId,
+              'name': name,
+              'kind': row.data['kind'] ?? 'recurring',
+              'is_active': true,
+              'org_id': orgId,
+              'created_at': now.toUtc().toIso8601String(),
+            });
+            if (ids.isNotEmpty) {
+              try {
+                await _saveRouteCustomers({'p_route': newId, 'p_customer_ids': ids, 'p_moves': const []});
+              } catch (e) {
+                if (!_rpcMissing(e)) rethrow;
+                await client.from('route_stops').insert([
+                  for (var i = 0; i < ids.length; i++)
+                    {'route_id': newId, 'customer_id': ids[i], 'position': i + 1},
+                ]);
+              }
+            }
+            if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
+            _showSnack('Route "$name" created with ${ids.length} customer${ids.length == 1 ? '' : 's'}');
+            _load();
+          } catch (e) {
+            setD(() { busy = false; err = _friendly(e); });
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('Duplicate route'),
+          content: SizedBox(
+            width: 440,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('A new route with the same ${stops.length} customer${stops.length == 1 ? '' : 's'} as "$srcName", '
+                  'in the same order. It is not assigned to anyone yet.',
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: nameCtrl,
+                autofocus: true,
+                onChanged: (_) { if (err != null) setD(() => err = null); },
+                onSubmitted: (_) { if (!busy) go(); },
+                decoration: InputDecoration(labelText: 'New route name', errorText: err),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: busy ? null : () => Navigator.of(ctx, rootNavigator: true).pop(),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: busy ? null : go,
+              child: busy
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Duplicate'),
+            ),
+          ],
+        );
+      }),
+    );
   }
 
   /// Save a route's customers. Uses the newer "apply only my changes" call
@@ -1449,6 +1564,26 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                   if (orgId == null) return;
                   final client = Supabase.instance.client;
                   final now = DateTime.now();
+
+                  // Route names must be unique (ignoring case and spaces).
+                  final newName = nameCtrl.text.trim();
+                  if (newName.isEmpty && !(route != null && _isUnassignedRoute(route.data))) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(content: Text('Enter a route name')));
+                    return;
+                  }
+                  // Only when the name is new or changed, so routes that already
+                  // share a name can still be edited.
+                  final nameChanged = route == null ||
+                      newName.toLowerCase() != '${route.data['name'] ?? ''}'.trim().toLowerCase();
+                  if (nameChanged && !(route != null && _isUnassignedRoute(route.data)) &&
+                      await _routeNameTaken(newName, exceptId: route?.data['id'] as String?)) {
+                    if (ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                          content: Text('A route named "$newName" already exists. Choose a different name.')));
+                    }
+                    return;
+                  }
 
                   // Flow on: customers taken off this route and on no other
                   // route need a next route before the editor can close.
