@@ -13,10 +13,12 @@ class IntelligencePdfService {
     required List<Map<String, dynamic>> customers,
     required List<Map<String, dynamic>> products,
     required Map<String, Map<String, Map<String, dynamic>>> latest,
+    Map<String, List<String>>? markets,
   }) async {
     final pdf = pw.Document();
     final dateStr = _today();
     final theme = await _loadTheme();
+    final groups = _groups(customers, markets);
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
@@ -32,7 +34,14 @@ class IntelligencePdfService {
             style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
           ),
           pw.SizedBox(height: 12),
-          _placementMatrix(customers, products, latest),
+          if (groups == null)
+            _placementMatrix(customers, products, latest)
+          else
+            for (final g in groups) ...[
+              _marketHeading(g.key, g.value.length),
+              _placementMatrix(g.value, products, latest),
+              pw.SizedBox(height: 14),
+            ],
         ],
       ),
     );
@@ -44,19 +53,19 @@ class IntelligencePdfService {
     required List<Map<String, dynamic>> customers,
     required List<Map<String, dynamic>> categories,
     required Map<String, Map<String, Map<String, dynamic>>> latest,
+    Map<String, List<String>>? markets,
   }) async {
     final pdf = pw.Document();
     final dateStr = _today();
     final theme = await _loadTheme();
+    final groups = _groups(customers, markets);
 
     // Flatten into detail rows for the appendix table
+    List<Map<String, dynamic>> detailsFor(List<Map<String, dynamic>> shops) {
     final details = <Map<String, dynamic>>[];
-    for (final cid in latest.keys) {
-      final customer = customers.firstWhere(
-        (c) => c['id'] == cid,
-        orElse: () => <String, dynamic>{},
-      );
-      if (customer.isEmpty) continue;
+    for (final customer in shops) {
+      final cid = customer['id'] as String;
+      if (latest[cid] == null) continue;
       for (final catId in latest[cid]!.keys) {
         final cat = categories.firstWhere(
           (c) => c['id'] == catId,
@@ -73,6 +82,9 @@ class IntelligencePdfService {
         });
       }
     }
+    return details;
+    }
+    final details = detailsFor(customers);
 
     pdf.addPage(
       pw.MultiPage(
@@ -89,7 +101,19 @@ class IntelligencePdfService {
             style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
           ),
           pw.SizedBox(height: 16),
-          if (details.isNotEmpty) ...[
+          if (details.isNotEmpty && groups != null) ...[
+            pw.Text(
+              'Brand spottings by shop',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            for (final g in groups)
+              if (detailsFor(g.value).isNotEmpty) ...[
+                _marketHeading(g.key, g.value.length),
+                _competitorDetails(detailsFor(g.value)),
+                pw.SizedBox(height: 14),
+              ],
+          ] else if (details.isNotEmpty) ...[
             pw.Text(
               'Brand spottings by shop',
               style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
@@ -106,6 +130,43 @@ class IntelligencePdfService {
   }
 
   // ----- helpers -----
+
+  /// Market (route) name → its shops, in the given order. Null when the
+  /// printout is not grouped.
+  static List<MapEntry<String, List<Map<String, dynamic>>>>? _groups(
+    List<Map<String, dynamic>> customers,
+    Map<String, List<String>>? markets,
+  ) {
+    if (markets == null || markets.isEmpty) return null;
+    final byId = {for (final c in customers) c['id'] as String: c};
+    final out = <MapEntry<String, List<Map<String, dynamic>>>>[];
+    for (final e in markets.entries) {
+      final shops = [
+        for (final id in e.value)
+          if (byId[id] != null) byId[id]!,
+      ];
+      if (shops.isNotEmpty) out.add(MapEntry(e.key.trim(), shops));
+    }
+    return out;
+  }
+
+  static pw.Widget _marketHeading(String name, int shops) => pw.Container(
+        width: double.infinity,
+        margin: const pw.EdgeInsets.only(top: 4, bottom: 6),
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: const pw.BoxDecoration(
+          color: PdfColors.blue50,
+          border: pw.Border(left: pw.BorderSide(color: PdfColors.blue700, width: 3)),
+        ),
+        child: pw.Row(children: [
+          pw.Expanded(
+            child: pw.Text('Market: $name',
+                style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.blue900)),
+          ),
+          pw.Text('$shops shop${shops == 1 ? '' : 's'}',
+              style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+        ]),
+      );
 
   static String _today() {
     final n = DateTime.now();
