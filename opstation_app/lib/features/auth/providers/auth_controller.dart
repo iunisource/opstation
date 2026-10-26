@@ -113,14 +113,14 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
           for (int i = 0; i < 3 && !authSuccess; i++) {
             try {
               await supabaseAuth.signIn(email: email, password: password)
-                  .timeout(const Duration(seconds: 15));
+                  .timeout(const Duration(seconds: 25));
               authSuccess = true;
             } on SupabaseAuthException catch (e) {
               print('AUTH SUPABASE ERROR (auth): ${e.message}');
               throw Exception(e.message); // wrong password - don't retry
             } catch (e) {
               print('AUTH SUPABASE RETRY $i: $e');
-              authError = e.toString().contains('timeout')
+              authError = e.toString().toLowerCase().contains('timeout')
                   ? 'Connection timed out. Try again.'
                   : e.toString();
               if (i < 2) await Future.delayed(const Duration(seconds: 2));
@@ -199,14 +199,14 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
           for (int i = 0; i < 3 && !authSuccess; i++) {
             try {
               await supabaseAuth.signIn(email: email, password: password)
-                  .timeout(const Duration(seconds: 15));
+                  .timeout(const Duration(seconds: 25));
               authSuccess = true;
             } on SupabaseAuthException catch (e) {
               print('AUTH SUPABASE ERROR: ${e.message}');
               throw Exception(e.message); // wrong password — don't retry
             } catch (e) {
               print('AUTH SUPABASE RETRY $i: $e');
-              authError = e.toString().contains('timeout')
+              authError = e.toString().toLowerCase().contains('timeout')
                   ? 'Connection timed out. Try again.'
                   : e.toString();
               if (i < 2) await Future.delayed(const Duration(seconds: 2));
@@ -280,14 +280,14 @@ class AuthController extends AsyncNotifier<app.AuthUser?> {
         for (int i = 0; i < 3 && !authSuccess; i++) {
           try {
             await supabaseAuth.signIn(email: email, password: password)
-                .timeout(const Duration(seconds: 15));
+                .timeout(const Duration(seconds: 25));
             authSuccess = true;
           } on SupabaseAuthException catch (e) {
             print('AUTH SUPERADMIN SUPABASE ERROR: ${e.message}');
             throw Exception(e.message);
           } catch (e) {
             print('AUTH SUPERADMIN SUPABASE RETRY $i: $e');
-            authError = e.toString().contains('timeout')
+            authError = e.toString().toLowerCase().contains('timeout')
                 ? 'Connection timed out. Try again.'
                 : e.toString();
             if (i < 2) await Future.delayed(const Duration(seconds: 2));

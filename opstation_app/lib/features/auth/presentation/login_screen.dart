@@ -8,6 +8,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../retailer/presentation/role_picker_screen.dart' show setLastLoginRole;
 import '../models/user_role.dart';
 import '../providers/auth_controller.dart';
+import '../../../shared/widgets/opstation_mark.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -81,7 +82,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     // error, independent of _submit's mount timing.
     ref.listen(authControllerProvider, (prev, next) {
       if (next.hasError && !next.isLoading) {
-        final msg = next.error.toString().replaceFirst('Exception: ', '');
+        final msg = _friendlyLoginError(next.error);
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(
@@ -431,18 +432,7 @@ class _Logo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: AppColors.primary,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        alignment: Alignment.center,
-        child: const Icon(Icons.route_outlined, color: Colors.white, size: 32),
-      ),
-    );
+    return const Center(child: OpstationLogoTile(size: 64));
   }
 }
 
@@ -474,4 +464,21 @@ class _RolePill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Sign-in errors in plain words — never a raw technical message.
+String _friendlyLoginError(Object? e) {
+  final raw = (e ?? '').toString().replaceFirst('Exception: ', '').trim();
+  final l = raw.toLowerCase();
+  if (l.contains('timeout') || l.contains('timed out') || l.contains('future not completed')) {
+    return 'The internet is too slow or not working. Check your connection and try again.';
+  }
+  if (l.contains('socketexception') || l.contains('failed host lookup') ||
+      l.contains('network is unreachable') || l.contains('connection refused') ||
+      l.contains('connection reset') || l.contains('clientexception') || l.contains('handshake')) {
+    return 'Could not reach the server. Check your internet and try again.';
+  }
+  if (l.contains('invalid login credentials')) return 'Wrong email or password.';
+  if (raw.isEmpty) return 'Sign in failed. Please try again.';
+  return raw;
 }
