@@ -625,7 +625,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
 
           // ── Today's route (roster) ─────────────────────────────────────
           if (planned.isNotEmpty) ...[
-            _SectionTitle("Today's route"),
+            _SectionTitle("Today's route", count: planned.length),
             for (final r in planned)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -643,6 +643,8 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
           if (recurring.isNotEmpty || oneTimeAvailable.isNotEmpty) ...[
             _SectionTitle(
               planned.isNotEmpty || hasActive ? 'Other routes' : 'My routes',
+              count: recurring.where((r) => !plannedIds.contains(r.id)).length +
+                  oneTimeAvailable.where((r) => !plannedIds.contains(r.id)).length,
               trailing: IconButton(
                 visualDensity: VisualDensity.compact,
                 tooltip: _searching ? 'Close search' : 'Search routes',
@@ -694,7 +696,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
 
           // ── Done today ─────────────────────────────────────────────────
           if (completedTrips.isNotEmpty) ...[
-            _SectionTitle('Done today'),
+            _SectionTitle('Done today', count: completedTrips.length),
             for (final t in completedTrips)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -791,27 +793,29 @@ class _HeroHeaderState extends ConsumerState<_HeroHeader> {
       syncText = mins == null ? 'All synced' : (mins < 1 ? 'All synced · just now' : 'All synced · $mins min ago');
       dot = const Color(0xFF34D399);
     }
+    final org = (ref.watch(authControllerProvider).valueOrNull?.organizationName ?? '').trim();
+    final ink = Theme.of(context).colorScheme.onSurface;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 22),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
-            colors: [_HomeColors.top, _HomeColors.bottom]),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(26)),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        border: const Border(bottom: BorderSide(color: AppColors.borderLight)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('$greet, $firstName',
-            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
+            style: TextStyle(color: ink, fontSize: 24, fontWeight: FontWeight.w800)),
         const SizedBox(height: 2),
-        Text(dateStr, style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 14)),
+        Text(org.isEmpty ? dateStr : '$dateStr  ·  $org',
+            style: const TextStyle(color: AppColors.textSecondaryLight, fontSize: 14)),
         const SizedBox(height: 12),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(color: Colors.white.withOpacity(0.16), borderRadius: BorderRadius.circular(20)),
+          decoration: BoxDecoration(color: AppColors.borderLight.withOpacity(0.6), borderRadius: BorderRadius.circular(20)),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Container(width: 7, height: 7, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
             const SizedBox(width: 6),
-            Text(syncText, style: const TextStyle(color: Colors.white, fontSize: 12)),
+            Text(syncText, style: TextStyle(color: ink, fontSize: 12)),
           ]),
         ),
       ]),
@@ -822,12 +826,24 @@ class _HeroHeaderState extends ConsumerState<_HeroHeader> {
 class _SectionTitle extends StatelessWidget {
   final String text;
   final Widget? trailing;
-  const _SectionTitle(this.text, {this.trailing});
+  final int? count;
+  const _SectionTitle(this.text, {this.trailing, this.count});
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 18, 8, 8),
         child: Row(children: [
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
+          Flexible(child: Text(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
+          if (count != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              constraints: const BoxConstraints(minWidth: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: AppColors.primaryLight, borderRadius: BorderRadius.circular(12)),
+              child: Text('$count', textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.primary)),
+            ),
+          ],
+          const Spacer(),
           if (trailing != null) trailing!,
         ]),
       );
@@ -1019,9 +1035,9 @@ class _PlannedRouteCard extends StatelessWidget {
           child: ElevatedButton.icon(
             onPressed: disabled || loading ? null : onStart,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
+              backgroundColor: _HomeColors.green,
               foregroundColor: Colors.white,
-              disabledBackgroundColor: loading ? AppColors.primary : AppColors.borderLight,
+              disabledBackgroundColor: loading ? _HomeColors.green : AppColors.borderLight,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
             icon: loading
@@ -1077,9 +1093,9 @@ class _RouteTile extends StatelessWidget {
           child: ElevatedButton(
             onPressed: disabled || loading ? null : onStart,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
+              backgroundColor: _HomeColors.green,
               foregroundColor: Colors.white,
-              disabledBackgroundColor: loading ? AppColors.primary : AppColors.borderLight,
+              disabledBackgroundColor: loading ? _HomeColors.green : AppColors.borderLight,
               disabledForegroundColor: loading ? Colors.white : AppColors.textTertiaryLight,
               padding: const EdgeInsets.symmetric(horizontal: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),

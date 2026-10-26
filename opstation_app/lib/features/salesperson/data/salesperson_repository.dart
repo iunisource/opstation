@@ -39,7 +39,16 @@ class SalespersonRepository {
   /// ad-hoc collection picker. Returns full Customer rows (with phone).
   Future<List<Customer>> searchCustomers(String q, {int limit = 30}) async {
     final ql = q.trim();
-    final sel = _db.select(_db.customers)..limit(limit);
+    // Only this organisation's active customers — a phone signed in to more
+    // than one organisation keeps all of their customers locally.
+    final sel = _db.select(_db.customers)
+      ..where((c) => c.isActive.equals(true))
+      ..orderBy([(c) => OrderingTerm.asc(c.shopName)])
+      ..limit(limit);
+    final org = _orgId;
+    if (org != null && org.isNotEmpty) {
+      sel.where((c) => c.orgId.isNull() | c.orgId.equals(org));
+    }
     if (ql.isNotEmpty) {
       sel.where((c) => c.shopName.like('%$ql%') | c.code.like('%$ql%'));
     }
