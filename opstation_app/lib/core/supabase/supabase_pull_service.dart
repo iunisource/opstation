@@ -535,7 +535,20 @@ class SupabasePullService {
 
   Future<void> _pullTrips(List<Map<String, dynamic>> rows) async {
     print('INSERTING \${rows.length} trips');
+    // The phone's own end of a trip wins over an older server copy. A pull
+    // that read the server just before the salesperson ended a route used to
+    // write the trip back as "open" (no end, no end location); the next sync
+    // then mistook the server's end for a cut-off and wiped the end location.
+    final local = {
+      for (final t in await _db.select(_db.trips).get()) t.id: t,
+    };
     for (final r in rows) {
+      final mine = local['${r['id']}'];
+      if (mine != null && mine.endedAt != null) {
+        final serverOpen = r['ended_at'] == null;
+        final serverLacksEnd = r['end_lat'] == null && mine.endLat != null;
+        if (serverOpen || serverLacksEnd) continue;
+      }
       try {
         await _db.into(_db.trips).insertOnConflictUpdate(TripsCompanion(
           id: Value(r['id'] as String),
