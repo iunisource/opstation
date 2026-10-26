@@ -25,7 +25,7 @@ interface Payload {
 // "app user" roles plus ERP users. Admins cannot mint other admins/masters/
 // supers here.
 const ADMIN_CREATABLE_ROLES = [
-  'salesperson', 'driver', 'surveyor', 'dispatchManager', 'accountant', 'erpUser',
+  'salesperson', 'driver', 'surveyor', 'auditor', 'dispatchManager', 'accountant', 'erpUser',
 ]
 
 serve(async (req) => {

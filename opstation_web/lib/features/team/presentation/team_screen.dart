@@ -94,7 +94,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       if (r.isEmpty) continue;
       counts[r] = (counts[r] ?? 0) + 1;
     }
-    const order = ['masterAdmin', 'admin', 'erpUser', 'accountant', 'dispatchManager', 'salesperson', 'surveyor', 'driver'];
+    const order = ['masterAdmin', 'admin', 'erpUser', 'accountant', 'dispatchManager', 'salesperson', 'surveyor', 'auditor', 'driver'];
     final roles = counts.keys.toList()
       ..sort((a, b) {
         final ia = order.indexOf(a), ib = order.indexOf(b);
@@ -131,6 +131,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       case 'driver': return AppTheme.warning;
       case 'dispatchManager': return const Color(0xFF06B6D4);
       case 'surveyor': return const Color(0xFFEC4899);
+      case 'auditor': return const Color(0xFFDB2777);
       case 'accountant': return const Color(0xFF4F46E5);
       default: return AppTheme.textSecondary;
     }
@@ -144,6 +145,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
       case 'driver': return 'Driver';
       case 'dispatchManager': return 'Dispatch Manager';
       case 'surveyor': return 'Surveyor';
+      case 'auditor': return 'Auditor';
       case 'accountant': return 'Accountant';
       case 'erpUser': return 'ERP User';
       case 'superAdmin': return 'Super Admin';
@@ -164,7 +166,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
   /// check in `create-team-user`: admins may only manage field roles;
   /// masterAdmins may also make admins; superAdmins may also make masters.
   List<String> _assignableRoles(String? viewerRole) {
-    const field = ['salesperson', 'driver', 'surveyor', 'dispatchManager', 'accountant'];
+    const field = ['salesperson', 'driver', 'surveyor', 'auditor', 'dispatchManager', 'accountant'];
     switch (viewerRole) {
       case 'superAdmin':
         return ['masterAdmin', 'admin', ...field];

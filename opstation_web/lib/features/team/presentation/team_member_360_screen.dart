@@ -1565,7 +1565,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     // Surveyors don't run trips — show their field activity (audits +
     // spottings per shop, day by day) instead. Also used for any member with
     // no trips but survey activity.
-    final isSurveyor = (widget.user['role'] as String?) == 'surveyor';
+    final isSurveyor = const {'surveyor', 'auditor'}.contains(widget.user['role'] as String?);
     if (isSurveyor || (_trips.isEmpty && _surveyEvents.isNotEmpty)) {
       return _surveyActivityFeed();
     }
@@ -1694,7 +1694,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
 
   // ── Reports tab ────────────────────────────────────────────────────────
   bool get _isSurveyMode =>
-      (widget.user['role'] as String?) == 'surveyor' ||
+      const {'surveyor', 'auditor'}.contains(widget.user['role'] as String?) ||
       (_trips.isEmpty && _surveyEvents.isNotEmpty);
 
   String _tripStatus(Map<String, dynamic> t) {
