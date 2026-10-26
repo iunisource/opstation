@@ -231,6 +231,55 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     ).toList();
   }
 
+  bool get _canRemoveSurvey {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
+
+  /// Delete every survey row for one shop, after a confirm.
+  Future<void> _removeShopSurvey(Map<String, dynamic> c) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove survey?'),
+        content: SizedBox(
+          width: 400,
+          child: Text('This deletes the whole placement survey of ${c['shop_name']} '
+              '(${c['code'] ?? ''}), including its history. The shop will leave this '
+              'report until it is surveyed again. This can\'t be undone.'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
+            onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await Supabase.instance.client.rpc('placement_audit_remove_shop',
+          params: {'p_org': orgId, 'p_customer': c['id']});
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Survey removed for ${c['shop_name']}')));
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      final m = e.toString();
+      final msg = m.contains('PGRST202') || m.contains('Could not find the function')
+          ? 'This option isn\'t set up yet — run update 416 first.'
+          : m.contains('Only admins')
+              ? 'Only admins can remove a survey.'
+              : 'Could not remove the survey. Please try again.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
   void _showCellDetail(Map<String, dynamic> customer, Map<String, dynamic> product, Map<String, dynamic>? audit) {
     showDialog(
       context: context,
@@ -541,14 +590,25 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                       return DataRow(cells: [
                         DataCell(SizedBox(
                           width: isMobile ? 130 : 200,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(c['shop_name'] as String, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
-                              Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                            ],
-                          ),
+                          child: Row(children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(c['shop_name'] as String, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                            if (_canRemoveSurvey)
+                              IconButton(
+                                tooltip: 'Remove this shop\'s survey',
+                                visualDensity: VisualDensity.compact,
+                                icon: const Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                                onPressed: () => _removeShopSurvey(c),
+                              ),
+                          ]),
                         )),
                         ..._filteredProducts.map((p) {
                           final pid = p['id'] as String;
