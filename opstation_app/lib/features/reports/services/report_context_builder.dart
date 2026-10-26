@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import '../../auth/providers/auth_controller.dart';
+import '../../../core/services/route_distance_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/maps_config.dart';
@@ -125,8 +127,13 @@ class ReportContextBuilder {
     // 4. Try Google Directions (single call for all legs).
     bool usedGoogle = false;
     List<double>? googleLegs;
-    if (MapsConfig.hasKey && allPoints.length >= 2) {
-      googleLegs = await GoogleDirectionsService.getLegsKm(allPoints);
+    if (allPoints.length >= 2) {
+      // Server first (saved per trip, same as the web), then Google directly.
+      final orgId = _ref.read(authControllerProvider).valueOrNull?.organizationId;
+      googleLegs = await serverRoadLegsKm(orgId, allPoints);
+      if (googleLegs == null && MapsConfig.hasKey) {
+        googleLegs = await GoogleDirectionsService.getLegsKm(allPoints);
+      }
       if (googleLegs != null) usedGoogle = true;
     }
 
