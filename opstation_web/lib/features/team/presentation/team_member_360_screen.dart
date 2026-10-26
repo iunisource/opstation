@@ -2214,7 +2214,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       // Same builder as the Reports screen and the mobile app, so the Visit
       // Report is identical wherever it is generated.
       final places = await tripPlaceNames(t); // start / end area names
-      final ctx = TripReportContext.build(
+      final ctx = await TripReportContext.buildRoad(
         trip: t,
         visits: visits,
         customersById: custs,

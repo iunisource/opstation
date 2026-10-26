@@ -7,10 +7,11 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:opstation_web/core/utils/visit_outcome.dart';
 
 import '../../../core/format/money.dart';
+import '../../../core/utils/route_distances.dart';
 
 /// Web port of mobile's TripReportContext.
-/// Pre-computed data for a trip report. Distances via Haversine (no Google
-/// Directions on web yet).
+/// Pre-computed data for a trip report. [build] uses straight lines;
+/// [buildRoad] uses Google road distances via the server when available.
 class TripReportContext {
   final Map<String, dynamic> trip;
   final List<Map<String, dynamic>> visits;
@@ -105,6 +106,61 @@ class TripReportContext {
       returnDistanceKm: returnKm,
       totalDistanceKm: total,
       usedGoogle: false,
+    );
+  }
+
+  /// Same as [build], but with road distances from Google (via the server,
+  /// saved per trip) when available; straight lines otherwise.
+  static Future<TripReportContext> buildRoad({
+    required Map<String, dynamic> trip,
+    required List<Map<String, dynamic>> visits,
+    required Map<String, Map<String, dynamic>> customersById,
+    String? startAddress,
+    String? endAddress,
+  }) async {
+    final base = TripReportContext.build(
+      trip: trip,
+      visits: visits,
+      customersById: customersById,
+      startAddress: startAddress,
+      endAddress: endAddress,
+    );
+    final ordered = base.orderedVerifiedVisits;
+    if (ordered.isEmpty) return base;
+    final sLat = (trip['start_lat'] as num?)?.toDouble();
+    final sLng = (trip['start_lng'] as num?)?.toDouble();
+    final eLat = (trip['end_lat'] as num?)?.toDouble();
+    final eLng = (trip['end_lng'] as num?)?.toDouble();
+    final hasStart = sLat != null && sLng != null;
+    final hasEnd = eLat != null && eLng != null;
+    final points = <List<double>>[
+      if (hasStart) [sLat, sLng],
+      for (final v in ordered) [(v['captured_lat'] as num).toDouble(), (v['captured_lng'] as num).toDouble()],
+      if (hasEnd) [eLat, eLng],
+    ];
+    final legs = await roadLegsKm(trip['org_id'] as String?, points);
+    if (legs == null) return base;
+    final distances = <double>[];
+    for (var i = 0; i < ordered.length; i++) {
+      if (hasStart) {
+        distances.add(legs[i]);
+      } else {
+        distances.add(i == 0 ? 0 : legs[i - 1]);
+      }
+    }
+    final returnKm = hasEnd ? legs.last : 0.0;
+    final total = distances.fold<double>(0, (s, d) => s + d) + returnKm;
+    return TripReportContext(
+      trip: trip,
+      visits: visits,
+      customersById: customersById,
+      startAddress: startAddress,
+      endAddress: endAddress,
+      orderedVerifiedVisits: ordered,
+      distanceKm: distances,
+      returnDistanceKm: returnKm,
+      totalDistanceKm: total,
+      usedGoogle: true,
     );
   }
 
@@ -267,7 +323,7 @@ class ReportPdfBuilder {
       pageTheme: _pageTheme(duplicate),
       header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
       footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Combined Trip Summary',
-          distanceNote: 'Distances: straight-line / Haversine')),
+          distanceNote: 'Distances: road distance (Google Directions API); straight-line where unavailable')),
       build: (c) => [
         pw.Text(salespersonLabel,
             style: pw.TextStyle(

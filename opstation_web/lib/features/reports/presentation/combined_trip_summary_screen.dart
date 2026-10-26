@@ -150,7 +150,25 @@ class _CombinedTripSummaryScreenState
       // but are flagged for review; they don't count as trips.
       final sessions = TripSessions.collapse(
           tripList, (id) => (visitsByTrip[id] ?? const []).length);
-      for (final t in sessions) {
+      // Road distance per trip (Google via the server, saved per trip; straight
+      // lines if unavailable), a few trips at a time.
+      final ctxs = List<TripReportContext?>.filled(sessions.length, null);
+      for (var i = 0; i < sessions.length; i += 6) {
+        final end = i + 6 > sessions.length ? sessions.length : i + 6;
+        final part = await Future.wait([
+          for (var k = i; k < end; k++)
+            TripReportContext.buildRoad(
+              trip: sessions[k],
+              visits: visitsByTrip[sessions[k]['id']] ?? const <Map<String, dynamic>>[],
+              customersById: customersById,
+            ),
+        ]);
+        for (var k = i; k < end; k++) {
+          ctxs[k] = part[k - i];
+        }
+      }
+      for (var si = 0; si < sessions.length; si++) {
+        final t = sessions[si];
         final abandoned = t['_abandoned'] == true;
         final startedAt = t['started_at'] as String?;
         if (startedAt == null) continue;
@@ -162,11 +180,7 @@ class _CombinedTripSummaryScreenState
           key,
           () => _DayRow(date: d, userId: uid, salesperson: t['user_name'] as String? ?? '-'),
         );
-        final ctx = TripReportContext.build(
-          trip: t,
-          visits: visitsByTrip[t['id']] ?? const <Map<String, dynamic>>[],
-          customersById: customersById,
-        );
+        final ctx = ctxs[si]!;
         row.km += ctx.totalDistanceKm;
         if (abandoned) {
           row.abandonedKm += ctx.totalDistanceKm;

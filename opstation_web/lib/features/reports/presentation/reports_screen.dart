@@ -186,7 +186,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
       final places = await tripPlaceNames(trip); // start / end area names
-      final ctx = TripReportContext.build(
+      final ctx = await TripReportContext.buildRoad(
         trip: trip,
         visits: visits,
         customersById: _customersById,
@@ -226,7 +226,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
       final places = await tripPlaceNames(trip); // start / end area names
-      final ctx = TripReportContext.build(
+      final ctx = await TripReportContext.buildRoad(
         trip: trip,
         visits: visits,
         customersById: _customersById,
