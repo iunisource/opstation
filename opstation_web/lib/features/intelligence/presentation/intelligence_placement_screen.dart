@@ -8,6 +8,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
+import '../services/intelligence_excel_service.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 
@@ -347,6 +348,49 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     return out;
   }
 
+  /// Excel download — same shops and market grouping as the PDF.
+  Future<void> _exportExcel() async {
+    try {
+      final orgName = ref.read(currentUserProvider)?.orgName ?? '';
+      final shops = _filteredCustomers;
+      if (shops.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No shops to export. Adjust the filters.')));
+        return;
+      }
+      String nameIn(List<Map<String, dynamic>> list, String? id) {
+        if (id == null) return '';
+        for (final x in list) {
+          if (x['id'] == id) return '${x['name'] ?? ''}';
+        }
+        return '';
+      }
+      final routeName = nameIn(_routes, _selectedRouteId);
+      final spName = nameIn(_salespeople, _selectedSalespersonId);
+      final filters = [
+        if (spName.isNotEmpty) 'Salesperson: $spName',
+        routeName.isNotEmpty ? 'Route: $routeName' : 'All routes',
+      ].join('   ·   ');
+      final markets = _selectedRouteId == null
+          ? _marketsFor(shops)
+          : {(routeName.isEmpty ? 'Route' : routeName): [for (final c in shops) c['id'] as String]};
+      IntelligenceExcelService.placementAudit(
+        orgName: orgName,
+        filters: filters,
+        customers: shops,
+        products: _filteredProducts,
+        latest: _latest,
+        markets: markets,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not create the Excel file. Please try again.')),
+        );
+      }
+    }
+  }
+
   Future<void> _exportPdf() async {
     try {
       final orgName = ref.read(currentUserProvider)?.orgName ?? '';
@@ -405,6 +449,11 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       icon: const Icon(Icons.show_chart, size: 18),
       label: Text(isMobile ? 'Chart' : 'Visual chart'),
     );
+    final excelBtn = OutlinedButton.icon(
+      onPressed: _exportExcel,
+      icon: const Icon(Icons.grid_on_outlined, size: 18),
+      label: Text(isMobile ? 'Excel' : 'Export Excel'),
+    );
     final pdfBtn = OutlinedButton.icon(
       onPressed: _exportPdf,
       icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
@@ -430,7 +479,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           const SizedBox(height: 10),
           productSearch,
           const SizedBox(height: 6),
-          Wrap(spacing: 4, children: [chartBtn, pdfBtn]),
+          Wrap(spacing: 4, children: [chartBtn, excelBtn, pdfBtn]),
         ] else ...[
           Row(children: [
             Expanded(child: spDropdown),
@@ -444,6 +493,8 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
             Expanded(child: productSearch),
             const SizedBox(width: 12),
             chartBtn,
+            const SizedBox(width: 8),
+            excelBtn,
             const SizedBox(width: 8),
             pdfBtn,
           ]),

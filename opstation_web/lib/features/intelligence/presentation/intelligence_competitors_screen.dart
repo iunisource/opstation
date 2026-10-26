@@ -8,6 +8,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
+import '../services/intelligence_excel_service.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 
@@ -337,6 +338,53 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
     return out;
   }
 
+  List<Map<String, dynamic>> get _exportList => _selectedIds.isEmpty
+      ? _filteredCustomers
+      : _filteredCustomers.where((c) => _selectedIds.contains(c['id'])).toList();
+
+  /// Excel download — same shops and market grouping as the PDF.
+  Future<void> _exportExcel() async {
+    try {
+      final orgName = ref.read(currentUserProvider)?.orgName ?? '';
+      final shops = _exportList;
+      if (shops.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No shops to export. Adjust the filters.')));
+        return;
+      }
+      String nameIn(List<Map<String, dynamic>> list, String? id) {
+        if (id == null) return '';
+        for (final x in list) {
+          if (x['id'] == id) return '${x['name'] ?? ''}';
+        }
+        return '';
+      }
+      final routeName = nameIn(_routes, _selectedRouteId);
+      final spName = nameIn(_salespeople, _selectedSalespersonId);
+      final filters = [
+        if (spName.isNotEmpty) 'Salesperson: $spName',
+        routeName.isNotEmpty ? 'Route: $routeName' : 'All routes',
+      ].join('   ·   ');
+      final markets = _selectedRouteId == null
+          ? _marketsFor(shops)
+          : {(routeName.isEmpty ? 'Route' : routeName): [for (final c in shops) c['id'] as String]};
+      IntelligenceExcelService.competitorSpotting(
+        orgName: orgName,
+        filters: filters,
+        customers: shops,
+        categories: _categories,
+        latest: _latest,
+        markets: markets,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not create the Excel file. Please try again.')),
+        );
+      }
+    }
+  }
+
   Future<void> _exportPdf() async {
     try {
       final orgName = ref.read(currentUserProvider)?.orgName ?? '';
@@ -425,6 +473,11 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
       icon: const Icon(Icons.checklist, size: 18),
       label: Text(allSelected ? (isMobile ? 'Clear' : 'Clear selection') : 'Select all'),
     );
+    final excelBtn = OutlinedButton.icon(
+      onPressed: _exportExcel,
+      icon: const Icon(Icons.grid_on_outlined, size: 18),
+      label: Text(isMobile ? 'Excel' : 'Export Excel'),
+    );
     final pdfBtn = OutlinedButton.icon(
       onPressed: _exportPdf,
       icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
@@ -454,7 +507,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           const SizedBox(height: 10),
           searchField,
           const SizedBox(height: 6),
-          Wrap(spacing: 4, runSpacing: 0, children: [chartBtn, selectBtn, pdfBtn]),
+          Wrap(spacing: 4, runSpacing: 0, children: [chartBtn, selectBtn, excelBtn, pdfBtn]),
         ] else ...[
           Row(children: [
             Expanded(child: spDropdown),
@@ -470,6 +523,8 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
             chartBtn,
             const SizedBox(width: 8),
             selectBtn,
+            const SizedBox(width: 8),
+            excelBtn,
             const SizedBox(width: 8),
             pdfBtn,
           ]),

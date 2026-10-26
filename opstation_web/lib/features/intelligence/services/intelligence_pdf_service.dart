@@ -24,7 +24,8 @@ class IntelligencePdfService {
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.all(24),
         theme: theme,
-        header: (ctx) => _header(orgName, 'Placement Audit', dateStr),
+        // Company name and title on the first page only.
+        header: (ctx) => ctx.pageNumber == 1 ? _header(orgName, 'Placement Audit', dateStr) : pw.SizedBox(),
         footer: (ctx) => _footer(ctx),
         build: (ctx) => [
           pw.SizedBox(height: 12),
@@ -91,7 +92,8 @@ class IntelligencePdfService {
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.all(24),
         theme: theme,
-        header: (ctx) => _header(orgName, 'Competitor Spotting', dateStr),
+        // Company name and title on the first page only.
+        header: (ctx) => ctx.pageNumber == 1 ? _header(orgName, 'Competitor Spotting', dateStr) : pw.SizedBox(),
         footer: (ctx) => _footer(ctx),
         build: (ctx) => [
           pw.SizedBox(height: 12),
