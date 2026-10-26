@@ -93,6 +93,7 @@ class IntelligenceExcelService {
     required List<Map<String, dynamic>> categories,
     required Map<String, Map<String, Map<String, dynamic>>> latest,
     required Map<String, List<String>> markets,
+    String Function(String?)? brandLabel,
   }) {
     final excel = xls.Excel.createExcel();
     final sheet = _sheet(excel, 'Competitor Spotting');
@@ -129,7 +130,7 @@ class IntelligenceExcelService {
             _t(c['code']),
             _t(c['shop_name']),
             _t(catName[catId]),
-            _t(s['brand_name']),
+            _t(brandLabel == null ? s['brand_name'] : brandLabel(s['brand_name'] as String?)),
             price is num ? xls.DoubleCellValue(price.toDouble()) : _t(price ?? ''),
             _t(s['specs']),
             _t(when == null

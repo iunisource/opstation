@@ -197,6 +197,15 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           .eq('org_id', orgId)
           .order('surveyed_at', ascending: false);
       final spottings = List<Map<String, dynamic>>.from(spottingRows);
+      try {
+        final al = await client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId);
+        _alias
+          ..clear()
+          ..addAll({
+            for (final a in al)
+              '${a['alias'] ?? ''}'.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' '): '${a['canonical'] ?? ''}',
+          });
+      } catch (_) {}
 
       final latest = <String, Map<String, Map<String, dynamic>>>{};
       for (final s in spottings) {
@@ -239,10 +248,45 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
     }
   }
 
+  /// Brand aliases (variant, lower-case → correct name) from Competitor
+  /// Brand Aliases. Applied when showing and filtering, so new aliases take
+  /// effect at once — whether or not "Apply to existing spottings" was run.
+  final Map<String, String> _alias = {};
+  final Map<String, String> _spelling = {};
+
+  static final _splitter = RegExp(r'\s*(?:&|,|\+|/|\band\b)\s*', caseSensitive: false);
+
+  String _canon(String b) {
+    final t = b.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (t.isEmpty) return t;
+    final hit = _alias[t.toLowerCase()];
+    if (hit != null && hit.trim().isNotEmpty) return hit.trim();
+    // Same name in different case ("PAKLITE", "paklite") → one spelling
+    // (the first one seen), keeping acronyms like "TCL" as typed.
+    return _spelling.putIfAbsent(t.toLowerCase(), () => t);
+  }
+
+  /// One spotting's brand(s): "Paklite & Osaka" → [Paklite, Osaka], each
+  /// through the aliases ("Paklight" → "Paklite"); duplicates removed.
+  List<String> _brandParts(String? raw) {
+    final whole = (raw ?? '').trim();
+    if (whole.isEmpty) return const [];
+    final direct = _alias[whole.toLowerCase().replaceAll(RegExp(r'\s+'), ' ')];
+    if (direct != null && direct.trim().isNotEmpty) return [direct.trim()];
+    final out = <String>[];
+    for (final part in whole.split(_splitter)) {
+      final c = _canon(part);
+      if (c.isNotEmpty && !out.contains(c)) out.add(c);
+    }
+    return out;
+  }
+
+  String _brandLabel(String? raw) => _brandParts(raw).join(' & ');
+
   /// Competitor brands currently spotted at a shop (latest per category).
   List<String> _brandsAt(String customerId) => [
         for (final sp in (_latest[customerId]?.values ?? const <Map<String, dynamic>>[]))
-          if ((sp['brand_name'] as String?)?.trim().isNotEmpty == true) (sp['brand_name'] as String).trim(),
+          ..._brandParts(sp['brand_name'] as String?),
       ];
 
   /// Every brand spotted, with how many shops it's at.
@@ -291,7 +335,9 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _kv('Brand', spotting['brand_name'] as String? ?? ''),
+              _kv('Brand', _brandLabel(spotting['brand_name'] as String?)),
+              if (_brandLabel(spotting['brand_name'] as String?) != (spotting['brand_name'] as String? ?? '').trim())
+                _kv('Typed as', spotting['brand_name'] as String? ?? ''),
               _kv('Price', spotting['price'] == null ? '—' : 'PKR ${spotting['price']}'),
               _kv('Specs', (spotting['specs'] as String?)?.isEmpty ?? true ? '—' : spotting['specs'] as String),
               _kv('Surveyed', _fmt(spotting['surveyed_at'] as String?)),
@@ -441,6 +487,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
         categories: _categories,
         latest: _latest,
         markets: markets,
+        brandLabel: _brandLabel,
       );
     } catch (e) {
       if (mounted) {
@@ -471,6 +518,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
         categories: _categories,
         latest: _latest,
         markets: _selectedRouteId == null ? _marketsFor(toExport) : null,
+        brandLabel: _brandLabel,
       );
       await outputPdf(bytes, 'Competitor Spotting');
     } catch (e) {
@@ -701,14 +749,14 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: _selectedBrand != null && (spotting['brand_name'] as String?)?.trim() == _selectedBrand
+                                    color: _selectedBrand != null && _brandParts(spotting['brand_name'] as String?).contains(_selectedBrand)
                                         ? Colors.amber.withOpacity(0.35)
                                         : AppTheme.primary.withOpacity(0.08),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Center(
                                     child: Text(
-                                      spotting['brand_name'] as String? ?? '',
+                                      _brandLabel(spotting['brand_name'] as String?),
                                       style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primary, fontSize: 12),
                                       overflow: TextOverflow.ellipsis,
                                       maxLines: 1,

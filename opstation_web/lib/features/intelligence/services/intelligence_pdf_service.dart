@@ -48,6 +48,7 @@ class IntelligencePdfService {
     required List<Map<String, dynamic>> categories,
     required Map<String, Map<String, Map<String, dynamic>>> latest,
     Map<String, List<String>>? markets,
+    String Function(String?)? brandLabel,
   }) async {
     final pdf = pw.Document();
     final dateStr = _today();
@@ -70,7 +71,7 @@ class IntelligencePdfService {
         details.add({
           'shop': customer['shop_name'],
           'category': cat['name'],
-          'brand': spotting['brand_name'],
+          'brand': brandLabel == null ? spotting['brand_name'] : brandLabel(spotting['brand_name'] as String?),
           'price': spotting['price'],
           'specs': spotting['specs'],
         });
