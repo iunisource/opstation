@@ -102,6 +102,27 @@ class SupabaseSyncService {
     });
   }
 
+  /// Saves an edited route's customers through the server's merge save:
+  /// only the changes made here ([base] = what the route had when editing
+  /// began) are applied, so edits made elsewhere are kept.
+  Future<void> saveRouteCustomers(
+      String routeId, List<String> customerIds, List<String> base) async {
+    final params = <String, dynamic>{
+      'p_route': routeId,
+      'p_customer_ids': customerIds,
+      'p_moves': const [],
+      'p_base': base,
+    };
+    try {
+      await _client.rpc('save_route_customers', params: params);
+    } catch (e) {
+      final m = '$e';
+      if (!m.contains('PGRST202') && !m.contains('p_base')) rethrow;
+      await _client.rpc('save_route_customers',
+          params: Map<String, dynamic>.from(params)..remove('p_base'));
+    }
+  }
+
   /// Route_stops for a set of routes — bounded + paginated (see _pullChildIn),
   /// so a large org is never silently truncated at PostgREST's 1000-row cap the
   /// way a bare `.select()` on route_stops is.

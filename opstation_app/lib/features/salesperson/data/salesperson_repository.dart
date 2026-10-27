@@ -169,6 +169,10 @@ class SalespersonRepository {
     try {
       final row = await (_db.select(_db.salesRoutesTable)..where((r) => r.id.equals(id))).getSingleOrNull();
       if (row != null) await _sync?.pushRoute(row);
+      final stops = await (_db.select(_db.routeStops)..where((s) => s.routeId.equals(id))).get();
+      for (final s in stops) {
+        await _sync?.pushRouteStop(s);
+      }
     } catch (_) {}
     return created!;
   }
@@ -182,6 +186,13 @@ class SalespersonRepository {
     required List<String> customerIds,
   }) async {
     final now = DateTime.now();
+    final base = [
+      for (final s in await (_db.select(_db.routeStops)
+            ..where((s) => s.routeId.equals(id))
+            ..orderBy([(s) => OrderingTerm.asc(s.position)]))
+          .get())
+        s.customerId,
+    ];
     await _db.transaction(() async {
       await (_db.update(_db.salesRoutesTable)
             ..where((r) => r.id.equals(id)))
@@ -213,6 +224,7 @@ class SalespersonRepository {
     try {
       final row = await (_db.select(_db.salesRoutesTable)..where((r) => r.id.equals(id))).getSingleOrNull();
       if (row != null) await _sync?.pushRoute(row);
+      await _sync?.saveRouteCustomers(id, customerIds, base);
     } catch (_) {}
     return updated!;
   }

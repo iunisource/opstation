@@ -404,34 +404,11 @@ class SyncController extends Notifier<SyncStatus> {
 
       await _pushPendingFieldOrders();
 
-      final routes = orgId == null
-          ? await _db.select(_db.salesRoutesTable).get()
-          : await (_db.select(_db.salesRoutesTable)..where((r) => r.orgId.equals(orgId))).get();
-      for (final r in routes) {
-        try {
-          await _supabase.pushRoute(r);
-        } catch (e) {
-          print('pushRoute FAILED: $e');
-        }
-      }
-
-      final routeStops = await _db.select(_db.routeStops).get();
-      for (final s in routeStops) {
-        try {
-          await _supabase.pushRouteStop(s);
-        } catch (e) {
-          print('pushRouteStop FAILED: $e');
-        }
-      }
-
-      final assignments = await _db.select(_db.routeAssignments).get();
-      for (final a in assignments) {
-        try {
-          await _supabase.pushRouteAssignment(a);
-        } catch (e) {
-          print('pushRouteAssignment FAILED: $e');
-        }
-      }
+      // Routes, route stops and route assignments are NOT re-sent here any
+      // more. The server owns them: re-sending the phone's stored copy put
+      // back customers / salespeople an admin had removed on the web. Route
+      // edits made on the phone are sent at the moment they are saved
+      // (SalespersonRepository.createRoute / updateRoute / assignments).
 
       final trips = orgId == null
           ? await _db.select(_db.trips).get()
