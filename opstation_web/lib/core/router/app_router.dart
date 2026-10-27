@@ -170,6 +170,7 @@ import '../../features/erp/presentation/erp_duplicate_refs_screen.dart' deferred
 import '../../features/erp/presentation/erp_receipt_books_screen.dart' deferred as _s159;
 import '../../features/operations/presentation/time_in_market_screen.dart' deferred as _s160;
 import '../../features/intelligence/presentation/intelligence_score_distribution_screen.dart' deferred as _s161;
+import '../../features/erp/presentation/erp_quick_costing_screen.dart' deferred as _s162;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -552,6 +553,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/price-list', builder: (_, __) => _deferred(_s122.loadLibrary(), () => _s122.ErpPriceListScreen())),
           GoRoute(path: '/erp/fg-without-bom', builder: (_, __) => _deferred(_s121.loadLibrary(), () => _s121.ErpFgWithoutBomScreen())),
           GoRoute(path: '/erp/quotation', builder: (_, __) => _deferred(_s123.loadLibrary(), () => _s123.ErpQuotationScreen())),
+          GoRoute(path: '/erp/quick-costing', builder: (_, __) => _deferred(_s162.loadLibrary(), () => _s162.ErpQuickCostingScreen())),
           GoRoute(path: '/erp/demand-plan', builder: (_, __) => _deferred(_s127.loadLibrary(), () => _s127.ErpDemandPlanScreen())),
           GoRoute(path: '/erp/pos-config', builder: (_, __) => _deferred(_s129.loadLibrary(), () => _s129.ErpPosConfigScreen())),
           GoRoute(path: '/erp/pos-catalog', builder: (_, __) => _deferred(_s128.loadLibrary(), () => _s128.ErpPosCatalogScreen())),

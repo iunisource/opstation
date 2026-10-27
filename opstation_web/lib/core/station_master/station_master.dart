@@ -674,6 +674,7 @@ const List<_Feature> _features = [
   _Feature('Sales Orders', 'Sales', '/erp/sales', ['sale order', 'sales order', 'so', 'order']),
   _Feature('Sales Invoices', 'Sales', '/erp/sales-invoices', ['sale invoice', 'sales invoice', 'si', 'invoice', 'bill']),
   _Feature('Quotation', 'Sales', '/erp/quotation', ['quote', 'quotation']),
+  _Feature('Quick Costing', 'Sales', '/erp/quick-costing', ['quick costing', 'costing', 'price a spec', 'custom price', 'estimate', 'cost sheet', 'prospect price']),
   _Feature('Delivery Orders', 'Sales', '/erp/delivery-orders', ['delivery order', 'do', 'dispatch note']),
   _Feature('Customers', 'Sales', '/customers', ['customer', 'shop', 'client']),
   _Feature('Field Orders', 'Sales', '/erp/field-orders', ['field order', 'booking']),
