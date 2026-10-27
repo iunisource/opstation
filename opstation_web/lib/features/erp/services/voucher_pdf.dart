@@ -667,6 +667,7 @@ class VoucherPdf {
         // (right, label/value rows). Replaces the three stacked boxes.
         _partyAndDetails(
           isPurchase: isPurchase,
+          docLabel: voucherTypeLabel,
           party: customerOrSupplier,
           partyCode: customerCode,
           address: customerAddress,
@@ -821,6 +822,7 @@ class VoucherPdf {
 
   static pw.Widget _partyAndDetails({
     required bool isPurchase,
+    String docLabel = '',
     String? party,
     String? partyCode,
     String? address,
@@ -836,7 +838,13 @@ class VoucherPdf {
         ]);
 
     final detailsCol = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-      caption(isPurchase ? 'DOCUMENT' : 'INVOICE DETAILS'),
+      // Only invoices say "Invoice details"; a price offer, quotation or order
+      // must not be mistaken for an invoice.
+      caption(isPurchase
+          ? 'DOCUMENT'
+          : (docLabel.toLowerCase().contains('invoice')
+              ? 'INVOICE DETAILS'
+              : (docLabel.toLowerCase().contains('price offer') ? 'OFFER DETAILS' : 'DETAILS'))),
       pw.SizedBox(height: 5),
       for (var i = 0; i < details.length; i++)
         pw.Container(
@@ -863,7 +871,11 @@ class VoucherPdf {
     }
 
     final partyCol = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-      caption(isPurchase ? 'SUPPLIER' : 'BILL TO'),
+      caption(isPurchase
+          ? 'SUPPLIER'
+          : (docLabel.toLowerCase().contains('price offer') || docLabel.toLowerCase().contains('quotation')
+              ? 'PREPARED FOR'
+              : 'BILL TO')),
       pw.SizedBox(height: 6),
       pw.Text(party!, style: pw.TextStyle(fontSize: 13.5, fontWeight: pw.FontWeight.bold)),
       if (has(partyCode)) ...[
