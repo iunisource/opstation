@@ -46,6 +46,7 @@ create table if not exists public.quick_costings (
   constraint quick_costings_status_ck check (status in ('draft', 'sent', 'won', 'lost'))
 );
 alter table public.quick_costings add column if not exists priced_at timestamptz not null default now();
+alter table public.quick_costings add column if not exists seq int;
 create index if not exists quick_costings_org_idx on public.quick_costings (org_id, updated_at desc);
 
 create table if not exists public.quick_costing_lines (
@@ -363,11 +364,10 @@ begin
 
   if v_id is null then
     perform pg_advisory_xact_lock(hashtext('quick_costing_code:' || v_org));
-    select coalesce(max(nullif(regexp_replace(code, '\D', '', 'g'), '')::int), 0) + 1 into v_n
-      from public.quick_costings where org_id = v_org and code ~ '^QC-\d+$';
-    v_code := 'QC-' || lpad(v_n::text, 4, '0');
-    insert into public.quick_costings (org_id, branch_id, code, created_by, created_by_name)
-    values (v_org, nullif(p ->> 'branch_id', ''), v_code, v_uid, v_uname)
+    select coalesce(max(seq), 0) + 1 into v_n from public.quick_costings where org_id = v_org;
+    v_code := public._qc_code(v_n, now());
+    insert into public.quick_costings (org_id, branch_id, code, seq, created_by, created_by_name)
+    values (v_org, nullif(p ->> 'branch_id', ''), v_code, v_n, v_uid, v_uname)
     returning id into v_id;
   end if;
 

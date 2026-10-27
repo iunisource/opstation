@@ -1064,6 +1064,7 @@ class _State extends ConsumerState<ErpQuickCostingScreen> {
         'no purchase yet' => 'Never bought — stock cost used',
         'no cost found' => 'No cost found — type a cost',
         'stock cost' => 'Stock cost',
+        'BOM cost' => 'Made in-house — BOM cost',
         _ => '',
       };
 
