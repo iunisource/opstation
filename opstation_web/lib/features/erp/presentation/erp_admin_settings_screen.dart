@@ -662,7 +662,7 @@ const List<_AdminToggle> _toggles = [
     'org.quick_costing_cost_access',
     'Quick Costing: show costs and profit to everyone',
     'Admins always see material costs, labour, overheads, profit and margin on '
-        'Sales → Quick Costing. When ON, everyone who can open Quick Costing sees '
+        'Manufacturing → Quick Costing. When ON, everyone who can open Quick Costing sees '
         'them too and can change the profit and the price. When OFF, other users '
         'see only the selling price, worked out with the default profit set on '
         'the Quick Costing page.',

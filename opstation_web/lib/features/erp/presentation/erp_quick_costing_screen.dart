@@ -1,4 +1,6 @@
+// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -113,6 +115,21 @@ class _State extends ConsumerState<ErpQuickCostingScreen> {
   int _calcSeq = 0;
 
   static final _date = DateFormat('dd MMM yyyy');
+
+  // Simple view (default) / Detailed view — remembered on this computer.
+  bool _simple = () {
+    try {
+      return html.window.localStorage['qc.view'] != 'detailed';
+    } catch (_) {
+      return true;
+    }
+  }();
+  void _setSimple(bool v) {
+    setState(() => _simple = v);
+    try {
+      html.window.localStorage['qc.view'] = v ? 'simple' : 'detailed';
+    } catch (_) {}
+  }
 
   @override
   void initState() {
@@ -857,6 +874,16 @@ class _State extends ConsumerState<ErpQuickCostingScreen> {
               label: Text('Product made: ${_productById[d['product_id']]?['name'] ?? d['title']}'),
             ),
           const SizedBox(width: 12),
+          SegmentedButton<bool>(
+            showSelectedIcon: false,
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            segments: const [
+              ButtonSegment(value: true, label: Text('Simple'), icon: Icon(Icons.view_agenda_outlined, size: 16)),
+              ButtonSegment(value: false, label: Text('Detailed'), icon: Icon(Icons.view_quilt_outlined, size: 16)),
+            ],
+            selected: {_simple},
+            onSelectionChanged: (v) => _setSimple(v.first),
+          ),
           FilledButton.icon(
             onPressed: _saving ? null : _save,
             icon: _saving
@@ -893,13 +920,20 @@ class _State extends ConsumerState<ErpQuickCostingScreen> {
       Expanded(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(18),
-          child: wide
-              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(child: left),
-                  const SizedBox(width: 16),
-                  SizedBox(width: 360, child: right),
-                ])
-              : Column(children: [left, right]),
+          child: _simple
+              ? Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 920),
+                    child: _simpleBody(),
+                  ),
+                )
+              : wide
+                  ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Expanded(child: left),
+                      const SizedBox(width: 16),
+                      SizedBox(width: 360, child: right),
+                    ])
+                  : Column(children: [left, right]),
         ),
       ),
     ]);
@@ -907,7 +941,7 @@ class _State extends ConsumerState<ErpQuickCostingScreen> {
 
   Widget _detailsCard() => _card('Request', [
         Wrap(spacing: 12, runSpacing: 12, children: [
-          SizedBox(width: 280, child: TextField(controller: _prospectCtrl, decoration: _dec('Prospect name *'), onChanged: (_) => _markDirty())),
+          SizedBox(width: 300, child: _prospectField()),
           SizedBox(width: 200, child: TextField(controller: _phoneCtrl, decoration: _dec('Phone'), onChanged: (_) => _markDirty())),
           SizedBox(width: 400, child: TextField(controller: _titleCtrl, decoration: _dec('Item being priced *', hint: 'e.g. 3-core cable 2.5 mm, 100 m coil'), onChanged: (_) => _markDirty())),
           _numField(_qtyCtrl, 'Quantity asked *', width: 160),
@@ -942,6 +976,196 @@ class _State extends ConsumerState<ErpQuickCostingScreen> {
 
   void _markDirty() {
     if (!_dirty) setState(() => _dirty = true);
+  }
+
+  // Prospect: type a new name, or pick one of your customers.
+  Widget _prospectField() => TextField(
+        controller: _prospectCtrl,
+        decoration: InputDecoration(
+          labelText: 'Prospect name *',
+          hintText: 'Type a name or pick a customer',
+          isDense: true,
+          border: const OutlineInputBorder(),
+          suffixIcon: IconButton(
+            tooltip: 'Pick an existing customer',
+            icon: const Icon(Icons.person_search_outlined),
+            onPressed: _pickCustomer,
+          ),
+        ),
+        onChanged: (_) => _markDirty(),
+      );
+
+  Future<void> _pickCustomer() async {
+    final c = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => _CustomerPickerDialog(orgId: _orgId!),
+    );
+    if (c == null || !mounted) return;
+    setState(() {
+      _prospectCtrl.text = '${c['shop_name'] ?? ''}'.trim();
+      final ph = '${c['phone'] ?? ''}'.trim();
+      if (ph.isNotEmpty) _phoneCtrl.text = ph;
+      _dirty = true;
+    });
+  }
+
+  // ------------------------------------------------------------------ simple view
+  // One column: who / what / how many, a short list of what goes in, and the
+  // price. Cost basis, wastage, batch size, phone, specs and notes keep their
+  // values and live in the Detailed view.
+  Widget _simpleBody() {
+    final c = _calc;
+    num? n(String k) => c?[k] as num?;
+    final qty = double.tryParse(_qtyCtrl.text.trim()) ?? 0;
+    final price = n('unit_price');
+    final margin = n('margin_pct');
+    final lines = _lines;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _card('Request', [
+        Wrap(spacing: 12, runSpacing: 12, children: [
+          SizedBox(width: 300, child: _prospectField()),
+          SizedBox(width: 340, child: TextField(controller: _titleCtrl, decoration: _dec('Item being priced *'), onChanged: (_) => _markDirty())),
+          _numField(_qtyCtrl, 'Quantity *', width: 140),
+        ]),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _specsCtrl,
+          minLines: 1,
+          maxLines: 3,
+          decoration: _dec('Specifications (printed)'),
+          onChanged: (_) => _markDirty(),
+        ),
+      ]),
+      _card(
+        'What goes in',
+        [
+          if (lines.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('Nothing added yet. Copy a BOM, or add materials.', style: TextStyle(color: AppTheme.textSecondary)),
+            ),
+          for (final l in lines) _simpleRow(l),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            FilledButton.tonalIcon(onPressed: _copyFromBom, icon: const Icon(Icons.copy_all_outlined, size: 18), label: const Text('Copy from a BOM')),
+            OutlinedButton.icon(onPressed: _addMaterial, icon: const Icon(Icons.add, size: 18), label: const Text('Material')),
+            OutlinedButton.icon(onPressed: _addOneOff, icon: const Icon(Icons.edit_note, size: 18), label: const Text('One-off item')),
+            if (_laborTypes.isNotEmpty || _overheadTypes.isNotEmpty)
+              OutlinedButton.icon(onPressed: _addCost, icon: const Icon(Icons.add, size: 18), label: const Text('Labour / overhead')),
+          ]),
+          if ((double.tryParse(_outCtrl.text.trim()) ?? 1) != 1 || (double.tryParse(_wasteCtrl.text.trim()) ?? 0) != 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                'Batch makes ${_outCtrl.text.trim()} units · wastage ${_wasteCtrl.text.trim()}% (change in Detailed view)',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+            ),
+        ],
+        sub: _basis == 'method' ? 'Priced at stock cost' : 'Priced at last purchase price',
+      ),
+      // Price strip
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          color: AppTheme.primary.withValues(alpha: 0.06),
+          border: Border.all(color: AppTheme.primary.withValues(alpha: 0.25)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: c == null
+            ? const Center(child: CircularProgressIndicator())
+            : Wrap(spacing: 22, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                if (_canSee) _stat('Cost per unit', moneyRs(n('unit_cost'))),
+                if (_canSee) _numField(_profitCtrl, 'Profit', suffix: '%', width: 110),
+                if (_canSee) _numField(_priceCtrl, 'Your price', width: 150, hint: money(n('suggested_price'))),
+                _stat('Price per unit', moneyRs(price), big: true),
+                _stat('Total for ${_LineNum.fmt(qty)}', moneyRs((price ?? 0) * qty), big: true, color: AppTheme.primary),
+                if (_canSee && margin != null)
+                  _stat('Margin', '${margin.toStringAsFixed(1)}%', color: margin < 0 ? AppTheme.danger : AppTheme.success),
+                if (_calcBusy) const SizedBox(width: 60, child: LinearProgressIndicator(minHeight: 2)),
+              ]),
+      ),
+    ]);
+  }
+
+  Widget _stat(String label, String value, {bool big = false, Color? color}) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          Text(value, style: TextStyle(fontSize: big ? 18 : 14, fontWeight: FontWeight.w800, color: color)),
+        ],
+      );
+
+  Widget _simpleRow(_QLine l) {
+    final isCost = l.kind != 'material';
+    final list = l.kind == 'labor' ? _laborTypes : _overheadTypes;
+    Widget nameCell;
+    if (isCost) {
+      final valid = list.any((r) => r['id'] == l.rateId);
+      nameCell = DropdownButtonFormField<String>(
+        value: valid ? l.rateId : null,
+        isDense: true,
+        isExpanded: true,
+        decoration: _dec(l.kind == 'labor' ? 'Labour' : 'Overhead'),
+        items: [
+          for (final r in [..._laborTypes.map((e) => {...e, '_k': 'labor'}), ..._overheadTypes.map((e) => {...e, '_k': 'overhead'})])
+            if (r['_k'] == l.kind)
+              DropdownMenuItem(value: r['id'] as String, child: Text('${r['name']}', overflow: TextOverflow.ellipsis)),
+        ],
+        onChanged: (v) {
+          setState(() {
+            l.rateId = v;
+            l.label = _rateName(l.kind, v);
+          });
+          _scheduleCalc();
+        },
+      );
+    } else if (l.oneOff) {
+      nameCell = TextField(controller: l.descCtrl, decoration: _dec('One-off item'), onChanged: (_) => _scheduleCalc());
+    } else {
+      nameCell = Text(l.label, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600));
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border, width: 0.6))),
+      child: Row(children: [
+        Expanded(child: nameCell),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 110,
+          child: TextField(
+            controller: l.qtyCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [_LineNum.decimal],
+            decoration: _dec('Qty', suffix: isCost || (l.uom ?? '').isEmpty ? null : l.uom),
+            onChanged: (_) => _scheduleCalc(),
+          ),
+        ),
+        if (l.oneOff) ...[
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 120,
+            child: TextField(
+              controller: l.costCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [_LineNum.decimal],
+              decoration: _dec('Price *'),
+              onChanged: (_) => _scheduleCalc(),
+            ),
+          ),
+        ],
+        if (_canSee)
+          SizedBox(
+            width: 110,
+            child: Text(l.amount == null ? '' : moneyRs(l.amount),
+                textAlign: TextAlign.right,
+                style: TextStyle(fontWeight: FontWeight.w600, color: l.source == 'no cost found' ? AppTheme.danger : null)),
+          ),
+        IconButton(tooltip: 'Remove', onPressed: () => _removeLine(l), icon: const Icon(Icons.close, size: 18)),
+      ]),
+    );
   }
 
   Widget _materialsCard() {
@@ -1366,6 +1590,98 @@ class _MakeProductDialogState extends State<_MakeProductDialog> {
           child: const Text('Create'),
         ),
       ],
+    );
+  }
+}
+
+
+class _CustomerPickerDialog extends StatefulWidget {
+  final String orgId;
+  const _CustomerPickerDialog({required this.orgId});
+  @override
+  State<_CustomerPickerDialog> createState() => _CustomerPickerDialogState();
+}
+
+class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
+  List<Map<String, dynamic>> _rows = [];
+  bool _loading = true;
+  Timer? _t;
+  int _seq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _search('');
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _search(String q) async {
+    final seq = ++_seq;
+    setState(() => _loading = true);
+    try {
+      var query = Supabase.instance.client
+          .from('customers')
+          .select('id, code, shop_name, phone')
+          .eq('org_id', widget.orgId);
+      final t = q.trim().replaceAll(RegExp(r'[,()%]'), ' ').trim();
+      if (t.isNotEmpty) query = query.or('shop_name.ilike.%$t%,code.ilike.%$t%,phone.ilike.%$t%');
+      final rows = await query.order('shop_name').limit(60);
+      if (!mounted || seq != _seq) return;
+      setState(() {
+        _rows = List<Map<String, dynamic>>.from(rows as List);
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted && seq == _seq) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Pick a customer'),
+      content: SizedBox(
+        width: 480,
+        height: 460,
+        child: Column(children: [
+          TextField(
+            autofocus: true,
+            decoration: const InputDecoration(
+                isDense: true, prefixIcon: Icon(Icons.search), hintText: 'Name, code or phone', border: OutlineInputBorder()),
+            onChanged: (v) {
+              _t?.cancel();
+              _t = Timer(const Duration(milliseconds: 300), () => _search(v));
+            },
+          ),
+          const SizedBox(height: 8),
+          if (_loading) const LinearProgressIndicator(minHeight: 2),
+          Expanded(
+            child: _rows.isEmpty && !_loading
+                ? const Center(child: Text('No customers found', style: TextStyle(color: AppTheme.textSecondary)))
+                : ListView.builder(
+                    itemCount: _rows.length,
+                    itemBuilder: (_, i) {
+                      final r = _rows[i];
+                      return ListTile(
+                        dense: true,
+                        title: Text('${r['shop_name'] ?? ''}'),
+                        subtitle: Text([
+                          if ('${r['code'] ?? ''}'.isNotEmpty) '${r['code']}',
+                          if ('${r['phone'] ?? ''}'.isNotEmpty) '${r['phone']}',
+                        ].join(' · ')),
+                        onTap: () => Navigator.pop(context, r),
+                      );
+                    },
+                  ),
+          ),
+        ]),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel'))],
     );
   }
 }

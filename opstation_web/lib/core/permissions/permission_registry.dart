@@ -87,7 +87,6 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('sales_dashboard', 'Sales Dashboard', PermKind.report, '/erp/sales-dashboard'),
     PermItem('customers', 'Customers', PermKind.doc, '/customers'),
     PermItem('quotation', 'Quotation', PermKind.doc, '/erp/quotation'),
-    PermItem('quick_costing', 'Quick Costing', PermKind.doc, '/erp/quick-costing'),
     PermItem('so', 'Sales Orders', PermKind.doc, '/erp/sales'),
     PermItem('field_orders', 'Field Orders', PermKind.doc, '/erp/field-orders'),
     PermItem('retailer_orders', 'Retailer Orders', PermKind.doc, '/erp/retailer-orders'),
@@ -136,6 +135,8 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('production_floor', 'Production Floor', PermKind.report, '/manufacturing/production-floor'),
     PermItem('production_plan', 'Production Material Planner', PermKind.report, '/manufacturing/production-plan'),
     PermItem('bom', 'Product Assembly (BOM)', PermKind.doc, '/manufacturing/product-assembly'),
+    // Same key as before (moved from Sales) so existing grants carry over.
+    PermItem('quick_costing', 'Quick Costing', PermKind.doc, '/manufacturing/quick-costing'),
     PermItem('production', 'Production Voucher', PermKind.doc, '/manufacturing/production-voucher'),
     PermItem('job_card', 'Job Card', PermKind.doc, '/manufacturing/job-card'),
     PermItem('qc_checkpoints', 'QC Checkpoints', PermKind.doc, '/manufacturing/qc-checkpoints'),
