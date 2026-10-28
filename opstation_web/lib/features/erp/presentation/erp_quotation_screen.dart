@@ -10,6 +10,9 @@ import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
+import '../services/quotation_design.dart';
+import '../../../core/pdf/pdf_output.dart';
+import 'quotation_brands.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
@@ -51,6 +54,11 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   final _globalDiscCtrl = TextEditingController(text: '0');
   String _globalDiscType = 'fixed'; // fixed | percent
   bool _printCompany = true; // include company name on printed quotation
+  List<Map<String, dynamic>> _brands = []; // quotation brands (update 430)
+  bool get _isAdmin {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
   bool _printBranch = true;  // include branch on printed quotation
   bool _printPreparedBy = true; // include prepared-by (username) on printed quotation
   bool _printCustomCompany = false; // show admin-defined custom company name instead
@@ -133,6 +141,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     branchId = ref.read(selectedBranchProvider)?['id'] as String?;
     await _loadRefs();
     await _loadCustomCompanyConfig();
+    if (orgId != null) _brands = await loadQuotationBrands(orgId!);
     await _loadList();
     if (mounted) setState(() => _loading = false);
   }
@@ -284,6 +293,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'voucher_date': DateTime.now(),
         'valid_until': null,
         'status': 'saved',
+        'brand_id': null,
       };
       _clearAllLineCtl();
       _lines = [];
@@ -314,6 +324,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           'valid_until': row['valid_until'] != null ? DateTime.parse(row['valid_until'] as String) : null,
           'status': row['status'] ?? 'draft',
           'created_by': row['created_by'],
+          'brand_id': row['brand_id'],
         };
         _lines = List<Map<String, dynamic>>.from(items).map((it) => {
               'product_id': it['product_id'],
@@ -397,6 +408,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
         'global_discount': double.tryParse(_globalDiscCtrl.text.trim()) ?? 0,
         'global_discount_type': _globalDiscType,
+        'brand_id': _doc!['brand_id'],
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
       if (isNew) {
@@ -826,6 +838,35 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       if (validUntil != null) refs['Valid Until'] = validUntil;
       if (remarksText.isNotEmpty) refs['Remarks'] = remarksText;
 
+      final brandRow = _brands.firstWhere((b) => b['id'] == _doc!['brand_id'], orElse: () => const {});
+      // A voided quotation always prints in the standard format with its VOID mark.
+      if (brandRow.isNotEmpty && VoucherPdf.voidMark(_doc) == null) {
+        final design = QuoteDesign(Map<String, dynamic>.from((brandRow['design'] as Map?) ?? const {}));
+        final number = (_doc!['voucher_number']?.toString().isNotEmpty ?? false) ? _doc!['voucher_number'].toString() : '(unsaved)';
+        final bytes = await buildBrandQuotationPdf(
+          design,
+          QuoteBrand.fromRow(brandRow),
+          QuoteData(
+            number: number,
+            date: DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime),
+            validUntil: validUntil,
+            customer: custName,
+            customerPhone: custPhone,
+            preparedBy: _printPreparedBy ? preparedBy : null,
+            remarks: remarksText.isEmpty ? null : remarksText,
+            lines: [
+              for (final l in lines)
+                QuoteLine(item: l.product, sku: l.sku, uom: l.uom, qty: l.qty, price: l.unitPrice ?? 0,
+                    discPct: l.discountPct ?? 0, total: l.lineTotal ?? 0),
+            ],
+            subtotal: subtotal,
+            discount: discTotal + globalDisc,
+            grandTotal: subtotal - discTotal - globalDisc,
+          ),
+        );
+        await showPdf(bytes, '${brandRow['name']} $number.pdf'.replaceAll(RegExp(r'[^A-Za-z0-9 ._-]'), ''));
+        return;
+      }
       await VoucherPdf.printVoucher(
       watermark: VoucherPdf.voidMark(_doc),
         voucherNumber: (_doc!['voucher_number']?.toString().isNotEmpty ?? false)
@@ -903,6 +944,18 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         Row(children: [
           const Text('Quotations', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
           const Spacer(),
+          if (_isAdmin && orgId != null) ...[
+            OutlinedButton.icon(
+              onPressed: () async {
+                await showBrandManager(context, orgId!);
+                final b = await loadQuotationBrands(orgId!);
+                if (mounted) setState(() => _brands = b);
+              },
+              icon: const Icon(Icons.palette_outlined, size: 18),
+              label: const Text('Brands'),
+            ),
+            const SizedBox(width: 10),
+          ],
           ElevatedButton.icon(
             onPressed: _newDoc,
             icon: const Icon(Icons.add, size: 18),
@@ -1123,6 +1176,18 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               if (_doc!['valid_until'] != null) InkWell(onTap: () => setState(() => _doc!['valid_until'] = null), child: const Icon(Icons.clear, size: 14)),
             ])),
           ))),
+          if (_brands.isNotEmpty || _doc!['brand_id'] != null)
+            _field('Brand', SizedBox(width: 220, child: DropdownButtonFormField<String?>(
+              value: _brands.any((b) => b['id'] == _doc!['brand_id']) ? _doc!['brand_id'] as String? : null,
+              isExpanded: true,
+              decoration: _decLabel('Issue under brand'),
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('Standard format', style: TextStyle(fontSize: 13))),
+                for (final b in _brands)
+                  DropdownMenuItem<String?>(value: b['id'] as String, child: Text('${b['name']}', overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
+              ],
+              onChanged: (v) => setState(() => _doc!['brand_id'] = v),
+            ))),
         ]),
         const SizedBox(height: 10),
         // Lines header
