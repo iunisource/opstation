@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
+import 'field_order_edit_screen.dart';
 
 /// All field orders this salesperson has punched/submitted, over a date range.
 /// Online read (field orders are an online-only write on the create side), so
@@ -160,6 +161,8 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
           final pid = it['product_id'] as String?;
           final p = pid != null ? prodMap[pid] : null;
           lines.add(_LineVM(
+            productId: pid ?? '',
+            uomId: it['uom_id'] as String?,
             name: (p?['name'] as String?) ?? 'Product',
             sku: (p?['sku'] as String?) ?? '',
             qty: qty,
@@ -178,9 +181,34 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
           notes: (o['notes'] as String?)?.trim(),
           status: (o['status'] as String?) ?? 'submitted',
           rejectReason: (o['reject_reason'] as String?)?.trim(),
+          cancelReason: (o['cancel_reason'] as String?)?.trim(),
+          editCount: (o['edit_count'] as num?)?.toInt() ?? 0,
           total: total,
           lines: lines,
         ));
+      }
+
+      // What happened after approval: SO / DO / invoice numbers and how much
+      // has been dispatched. Optional — the list still shows if this fails.
+      final approvedIds = [
+        for (final v in vms)
+          if (v.status.toLowerCase() == 'approved') v.id
+      ];
+      for (var i = 0; i < approvedIds.length; i += 300) {
+        final chunk = approvedIds.sublist(
+            i, i + 300 > approvedIds.length ? approvedIds.length : i + 300);
+        try {
+          final res = await client
+              .rpc('field_order_tracking', params: {'p_ids': chunk});
+          if (res is List) {
+            for (final r in res) {
+              final t = _TrackVM.fromJson(Map<String, dynamic>.from(r as Map));
+              for (final v in vms) {
+                if (v.id == t.id) v.track = t;
+              }
+            }
+          }
+        } catch (_) {/* tracking is optional */}
       }
 
       if (!mounted) return;
@@ -382,9 +410,37 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis),
                 ],
+                if (o.refsLine.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(o.refsLine,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ],
+                if (o.stage == 'partially_dispatched' && o.track != null) ...[
+                  const SizedBox(height: 3),
+                  Text(o.track!.dispatchSummary,
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.orange.shade800)),
+                ],
+                if (o.editCount > 0 && o.stage == 'submitted') ...[
+                  const SizedBox(height: 3),
+                  Text('Changed after sending',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textTertiaryLight,
+                          fontStyle: FontStyle.italic)),
+                ],
                 if (o.status.toLowerCase() == 'rejected') ...[
                   const SizedBox(height: 6),
                   _RejectReason(o.rejectReason),
+                ],
+                if (o.status.toLowerCase() == 'cancelled') ...[
+                  const SizedBox(height: 6),
+                  _CancelNote(o.cancelReason),
                 ],
               ],
             ),
@@ -395,7 +451,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                 style:
                     const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            _statusChip(o.status),
+            _statusChip(o.stage),
           ]),
         ]),
       ),
@@ -430,7 +486,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                     style: const TextStyle(
                         fontSize: 17, fontWeight: FontWeight.w700)),
               ),
-              _statusChip(o.status),
+              _statusChip(o.stage),
               IconButton(
                   icon: const Icon(Icons.close),
                   onPressed: () => Navigator.pop(ctx)),
@@ -470,10 +526,60 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
               child: _RejectReason(o.rejectReason),
             ),
+          if (o.status.toLowerCase() == 'cancelled')
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: _CancelNote(o.cancelReason),
+            ),
+          if (o.track != null && o.track!.hasRefs)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: _RefsBox(o.track!),
+            ),
           const SizedBox(height: 8),
           const Divider(height: 1),
           Expanded(
-            child: o.lines.isEmpty
+            child: (o.track != null && o.track!.anyDispatched)
+                ? ListView.separated(
+                    controller: scrollCtrl,
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    itemCount: o.track!.lines.length + 1,
+                    separatorBuilder: (_, __) => const Divider(height: 16),
+                    itemBuilder: (_, i) {
+                      if (i == 0) {
+                        return Text('Dispatched vs pending',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.3,
+                                color: AppColors.textSecondaryLight));
+                      }
+                      final l = o.track!.lines[i - 1];
+                      final pending = l.ordered - l.dispatched;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(l.name,
+                              style: const TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 4),
+                          Row(children: [
+                            _qtyPill('Ordered', l.ordered,
+                                AppColors.textSecondaryLight),
+                            const SizedBox(width: 6),
+                            _qtyPill('Dispatched', l.dispatched,
+                                AppColors.successDark),
+                            const SizedBox(width: 6),
+                            _qtyPill('Pending', pending > 0 ? pending : 0,
+                                pending > 0
+                                    ? Colors.orange.shade800
+                                    : AppColors.textTertiaryLight),
+                          ]),
+                        ],
+                      );
+                    },
+                  )
+                : o.lines.isEmpty
                 ? Center(
                     child: Text('No products on this order.',
                         style:
@@ -528,14 +634,47 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
               border:
                   Border(top: BorderSide(color: AppColors.borderLight)),
             ),
-            child: Row(children: [
-              Text('${o.lines.length} item${o.lines.length == 1 ? '' : 's'}',
-                  style: TextStyle(
-                      fontSize: 13, color: AppColors.textSecondaryLight)),
-              const Spacer(),
-              Text('Rs. ${_money(o.total)}',
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.w800)),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                Text(
+                    '${o.lines.length} item${o.lines.length == 1 ? '' : 's'}',
+                    style: TextStyle(
+                        fontSize: 13, color: AppColors.textSecondaryLight)),
+                const Spacer(),
+                Text('Rs. ${_money(o.total)}',
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w800)),
+              ]),
+              if (o.status.toLowerCase() == 'submitted') ...[
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _cancelOrder(ctx, o),
+                      icon: const Icon(Icons.close, size: 18),
+                      label: const Text('Cancel order'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.danger,
+                        side: const BorderSide(color: AppColors.danger),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _editOrder(ctx, o),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('Change order'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ]),
+              ],
             ]),
           ),
         ]),
@@ -567,6 +706,26 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
         fg = AppColors.warningDark;
         label = 'Submitted';
         break;
+      case 'partially_dispatched':
+        bg = Colors.orange.shade50;
+        fg = Colors.orange.shade800;
+        label = 'Partly dispatched';
+        break;
+      case 'dispatched':
+        bg = Colors.teal.shade50;
+        fg = Colors.teal.shade700;
+        label = 'Dispatched';
+        break;
+      case 'invoiced':
+        bg = AppColors.primaryLight;
+        fg = AppColors.primaryDark;
+        label = 'Invoiced';
+        break;
+      case 'cancelled':
+        bg = AppColors.borderLight;
+        fg = AppColors.textSecondaryLight;
+        label = 'Cancelled';
+        break;
       default:
         bg = AppColors.borderLight;
         fg = AppColors.textSecondaryLight;
@@ -582,6 +741,96 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
           style: TextStyle(
               fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
     );
+  }
+
+  Widget _qtyPill(String label, double v, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text('$label ${_qty(v)}',
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+      );
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> _editOrder(BuildContext sheetCtx, _OrderVM o) async {
+    Navigator.pop(sheetCtx);
+    final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => FieldOrderEditScreen(
+        orderId: o.id,
+        customerName: o.customerName,
+        notes: o.notes,
+        lines: [
+          for (final l in o.lines)
+            if (l.productId.isNotEmpty)
+              EditOrderLine(
+                  productId: l.productId,
+                  name: l.name,
+                  sku: l.sku,
+                  uomId: l.uomId,
+                  price: l.price,
+                  qty: l.qty),
+        ],
+      ),
+    ));
+    if (saved == true) {
+      _snack('Order updated. The office has been told.');
+      _load();
+    }
+  }
+
+  Future<void> _cancelOrder(BuildContext sheetCtx, _OrderVM o) async {
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: sheetCtx,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Cancel this order?'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(
+              'The order for ${o.customerName} will be cancelled and the office will be told.',
+              style: TextStyle(color: AppColors.textSecondaryLight)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: reasonCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Reason (optional)',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Keep order')),
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            child: const Text('Cancel order'),
+          ),
+        ],
+      ),
+    );
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (ok != true) return;
+    try {
+      await Supabase.instance.client.rpc('cancel_field_order',
+          params: {'p_id': o.id, 'p_reason': reason});
+      if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+      _snack('Order cancelled. The office has been told.');
+      _load();
+    } catch (e) {
+      _snack(fieldOrderErrorText(e));
+    }
   }
 
   // Quantities can be whole or fractional depending on UoM.
@@ -610,8 +859,31 @@ class _OrderVM {
   final String? notes;
   final String status;
   final String? rejectReason;
+  final String? cancelReason;
+  final int editCount;
   final double total;
   final List<_LineVM> lines;
+  _TrackVM? track;
+
+  /// Where the order is now: submitted, approved, partially_dispatched,
+  /// dispatched, invoiced, rejected or cancelled.
+  String get stage {
+    final s = status.toLowerCase();
+    if (s == 'approved' && track != null) return track!.stage;
+    return s;
+  }
+
+  /// "SO-0001 · DO-0001 · SI-0001" — whatever exists so far.
+  String get refsLine {
+    final t = track;
+    if (t == null) return '';
+    return [
+      if ((t.soNumber ?? '').isNotEmpty) t.soNumber!,
+      ...t.dos,
+      ...t.invoices,
+    ].join(' · ');
+  }
+
   _OrderVM({
     required this.id,
     required this.customerName,
@@ -620,21 +892,156 @@ class _OrderVM {
     required this.notes,
     required this.status,
     this.rejectReason,
+    this.cancelReason,
+    this.editCount = 0,
     required this.total,
     required this.lines,
   });
 }
 
 class _LineVM {
+  final String productId;
+  final String? uomId;
   final String name;
   final String sku;
   final double qty;
   final double price;
   _LineVM(
-      {required this.name,
+      {this.productId = '',
+      this.uomId,
+      required this.name,
       required this.sku,
       required this.qty,
       required this.price});
+}
+
+class _TrackLine {
+  final String name;
+  final double ordered;
+  final double dispatched;
+  _TrackLine(this.name, this.ordered, this.dispatched);
+}
+
+/// Server view of an approved order (field_order_tracking).
+class _TrackVM {
+  final String id;
+  final String stage;
+  final String? soNumber;
+  final List<String> dos;
+  final List<String> invoices;
+  final List<_TrackLine> lines;
+  _TrackVM({
+    required this.id,
+    required this.stage,
+    required this.soNumber,
+    required this.dos,
+    required this.invoices,
+    required this.lines,
+  });
+
+  static List<String> _numbers(dynamic v) => [
+        if (v is List)
+          for (final x in v)
+            if (x is Map && (x['number'] ?? '').toString().isNotEmpty)
+              x['number'].toString()
+      ];
+
+  factory _TrackVM.fromJson(Map<String, dynamic> j) {
+    final lines = <_TrackLine>[];
+    final raw = j['lines'];
+    if (raw is List) {
+      for (final l in raw) {
+        if (l is! Map) continue;
+        lines.add(_TrackLine(
+          (l['name'] ?? 'Product').toString(),
+          (l['ordered'] as num?)?.toDouble() ?? 0,
+          (l['dispatched'] as num?)?.toDouble() ?? 0,
+        ));
+      }
+    }
+    return _TrackVM(
+      id: (j['id'] ?? '').toString(),
+      stage: (j['stage'] ?? 'approved').toString(),
+      soNumber: j['so_number']?.toString(),
+      dos: _numbers(j['dos']),
+      invoices: _numbers(j['invoices']),
+      lines: lines,
+    );
+  }
+
+  bool get hasRefs =>
+      (soNumber ?? '').isNotEmpty || dos.isNotEmpty || invoices.isNotEmpty;
+  bool get anyDispatched => lines.any((l) => l.dispatched > 0);
+
+  String get dispatchSummary {
+    final pending = lines.where((l) => l.dispatched < l.ordered).length;
+    return '$pending product${pending == 1 ? '' : 's'} still to be dispatched';
+  }
+}
+
+/// Order numbers given by the office: sales order, dispatch, invoice.
+class _RefsBox extends StatelessWidget {
+  final _TrackVM t;
+  const _RefsBox(this.t);
+
+  @override
+  Widget build(BuildContext context) {
+    Widget row(String label, String value) => Padding(
+          padding: const EdgeInsets.only(bottom: 3),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+              width: 92,
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 12, color: AppColors.textSecondaryLight)),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+        );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 5),
+      decoration: BoxDecoration(
+        color: AppColors.infoLight,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if ((t.soNumber ?? '').isNotEmpty) row('Sales order', t.soNumber!),
+        if (t.dos.isNotEmpty) row('Dispatch', t.dos.join(', ')),
+        if (t.invoices.isNotEmpty) row('Invoice', t.invoices.join(', ')),
+      ]),
+    );
+  }
+}
+
+/// Shown on a cancelled order.
+class _CancelNote extends StatelessWidget {
+  final String? reason;
+  const _CancelNote(this.reason);
+
+  @override
+  Widget build(BuildContext context) {
+    final r = (reason ?? '').trim();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppColors.borderLight.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        r.isEmpty ? 'You cancelled this order' : 'You cancelled this order · $r',
+        style: TextStyle(
+            fontSize: 12.5,
+            color: AppColors.textSecondaryLight,
+            fontWeight: FontWeight.w600),
+      ),
+    );
+  }
 }
 
 /// Why the order was rejected, as typed by the reviewer.

@@ -7,6 +7,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/app_version_label.dart';
 import '../../auth/providers/auth_controller.dart';
 import 'my_orders_screen.dart';
+import 'notifications_inbox_screen.dart';
 import 'salesperson_files_screen.dart';
 import 'salesperson_performance_screen.dart';
 
@@ -44,6 +45,7 @@ class SalespersonDrawer extends ConsumerWidget {
         : 'Salesperson';
     final targetsOn =
         ref.watch(salespersonTargetsEnabledProvider).valueOrNull ?? false;
+    final unread = ref.watch(unreadInboxCountProvider).valueOrNull ?? 0;
 
     return Drawer(
       child: SafeArea(
@@ -82,7 +84,17 @@ class SalespersonDrawer extends ConsumerWidget {
             ]),
           ),
           const Divider(height: 1),
-          const SizedBox(height: 8),
+          Expanded(
+            child: ListView(padding: const EdgeInsets.only(top: 8), children: [
+          _tile(
+            context,
+            icon: Icons.notifications_outlined,
+            label: 'Notifications',
+            subtitle: 'Messages you received',
+            badge: unread,
+            onTap: () => _go(context, const NotificationsInboxScreen()),
+          ),
+          const Divider(height: 1),
           if (targetsOn)
             _tile(
               context,
@@ -142,7 +154,8 @@ class SalespersonDrawer extends ConsumerWidget {
               }
             },
           ),
-          const Spacer(),
+            ]),
+          ),
           const Divider(height: 1),
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 10, 20, 12),
@@ -170,9 +183,24 @@ class SalespersonDrawer extends ConsumerWidget {
     required String label,
     required String subtitle,
     required VoidCallback onTap,
+    int badge = 0,
   }) {
     return ListTile(
       leading: Icon(icon, color: AppColors.primary),
+      trailing: badge > 0
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.danger,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(badge >= 100 ? '99+' : '$badge',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
+            )
+          : null,
       title: Text(label,
           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
       subtitle: Text(subtitle,
