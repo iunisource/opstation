@@ -386,7 +386,8 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
     final docs = _stageDocs[st.key] ?? const [];
     final selected = _selected == st.key;
     final oldest = docs.isEmpty ? null : docs.first['age'] as int?;
-    final hasAmount = st.step == 3;
+    // The completed "Invoiced" tile shows the count only, no amount.
+    final hasAmount = st.step == 3 && !st.done;
     final total = hasAmount
         ? docs.fold<double>(0, (s, d) => s + ((d['amount'] as double?) ?? 0))
         : 0.0;
