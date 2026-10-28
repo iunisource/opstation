@@ -1973,6 +1973,14 @@ Widget _userMenu(BuildContext context, WidgetRef ref, WebUser? user, Offset offs
                 Text('Sign out', style: TextStyle(color: Colors.white70, fontSize: 13)),
               ]),
             ),
+            if (webVersionLabel.isNotEmpty) ...[
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                enabled: false,
+                height: 28,
+                child: Text(webVersionLabel, style: const TextStyle(color: AppTheme.sidebarText, fontSize: 10.5)),
+              ),
+            ],
           ],
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -3014,3 +3022,22 @@ Widget _menuLabel(String text) => Padding(
   )),
 );
 
+
+
+/// "Version 512 · Built 28 Oct 2026, 4:40 PM" — stamped by the web build
+/// command (--dart-define=BUILD_NO=… --dart-define=BUILD_TIME=…).
+String get webVersionLabel {
+  const no = String.fromEnvironment('BUILD_NO');
+  const at = String.fromEnvironment('BUILD_TIME');
+  String built = at;
+  final d = DateTime.tryParse(at);
+  if (d != null) {
+    const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    built = '${d.day} ${m[d.month - 1]} ${d.year}, $h:${d.minute.toString().padLeft(2, '0')} ${d.hour < 12 ? 'AM' : 'PM'}';
+  }
+  return [
+    if (no.isNotEmpty) 'Version $no',
+    if (at.isNotEmpty) 'Built $built',
+  ].join('  ·  ');
+}
