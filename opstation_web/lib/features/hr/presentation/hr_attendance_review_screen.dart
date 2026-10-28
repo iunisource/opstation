@@ -358,6 +358,136 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
     ref.invalidate(attendanceReviewPendingCountProvider);
   }
 
+  // Missed punch → the employee WAS present. Records the day as Present with
+  // the in / out times picked (default: the shift's times). Only for days still
+  // pending review — already decided days are never touched here.
+  static String? _hhmm(Object? v) {
+    final t = '${v ?? ''}'.trim();
+    final m = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(t);
+    if (m == null) return null;
+    return '${m.group(1)!.padLeft(2, '0')}:${m.group(2)}';
+  }
+
+  static double? _hoursBetween(String? a, String? b) {
+    int? mins(String? x) {
+      if (x == null) return null;
+      final p = x.split(':');
+      if (p.length != 2) return null;
+      final h = int.tryParse(p[0]), m = int.tryParse(p[1]);
+      return (h == null || m == null) ? null : h * 60 + m;
+    }
+    final x = mins(a), y = mins(b);
+    if (x == null || y == null) return null;
+    var d = y - x;
+    if (d <= 0) d += 1440;
+    return (d / 60.0 * 100).roundToDouble() / 100;
+  }
+
+  Future<void> _markPresent(_Pending p, String checkIn, String checkOut, String note) async {
+    final orgId = _orgId; if (orgId == null) return;
+    setState(() => _working = true);
+    try {
+      final client = Supabase.instance.client;
+      final empId = p.emp['id'] as String;
+      final now = DateTime.now().toUtc().toIso8601String();
+      final existing = await _rowFor(empId, p.dateStr);
+      // Still pending? (someone may have decided it meanwhile)
+      final st = existing?['status'] as String?;
+      final rv = existing?['review_status'] as String?;
+      if (existing != null && (st == 'present' || st == 'half_day' || st == 'leave' ||
+          rv == 'excused' || rv == 'unapproved' || existing['is_penalty'] == true ||
+          ('${existing['check_in'] ?? ''}').isNotEmpty)) {
+        await _afterWrites();
+        _snack('${p.emp['full_name']} — this day was already decided, nothing changed.');
+        return;
+      }
+      final remarks = 'Missed punch — marked present by ${_userName.isEmpty ? 'HR' : _userName}${note.trim().isEmpty ? '' : ': ${note.trim()}'}';
+      final id = (existing?['id'] as String?) ?? 'att_${DateTime.now().microsecondsSinceEpoch}_$empId';
+      await client.from('hr_attendance').upsert({
+        'id': id, 'org_id': orgId, 'employee_id': empId, 'branch_id': existing?['branch_id'] ?? p.emp['branch_id'],
+        'att_date': p.dateStr, 'status': 'present', 'is_penalty': false,
+        'check_in': checkIn, 'check_out': checkOut, 'work_hours': _hoursBetween(checkIn, checkOut),
+        'remarks': remarks, 'updated_at': now,
+      }, onConflict: 'org_id,employee_id,att_date');
+      await _audit(id, empId, p.dateStr, 'Missed punch — marked present, in $checkIn, out $checkOut${note.trim().isEmpty ? '' : ' (${note.trim()})'}');
+      await _afterWrites();
+      _snack('${p.emp['full_name']} — present on ${DateFormat('d MMM').format(p.date)}, $checkIn to $checkOut.');
+    } catch (e) {
+      _snack(friendlyError('Failed', e));
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<void> _confirmPresent(_Pending p) async {
+    final name = p.emp['full_name'] as String? ?? 'this employee';
+    String inT = _hhmm(p.shift?['start_time']) ?? '09:00';
+    String outT = _hhmm(p.shift?['end_time']) ?? '17:00';
+    final note = TextEditingController();
+    TimeOfDay tod(String s) => TimeOfDay(hour: int.parse(s.split(':')[0]), minute: int.parse(s.split(':')[1]));
+    String fmt(TimeOfDay t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        Widget timeBtn(String label, String v, void Function(String) set) => Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.schedule, size: 18),
+                label: Text('$label  $v'),
+                onPressed: () async {
+                  final t = await showTimePicker(context: ctx, initialTime: tod(v));
+                  if (t != null) setD(() => set(fmt(t)));
+                },
+              ),
+            );
+        final hrs = _hoursBetween(inT, outT);
+        return AlertDialog(
+          title: const Text('Was present — missed punch', style: TextStyle(fontSize: 16)),
+          content: SizedBox(
+            width: 400,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('$name forgot to punch on ${DateFormat('EEEE, d MMM').format(p.date)}. '
+                  'Record the day as present with these times:', style: const TextStyle(fontSize: 13)),
+              const SizedBox(height: 6),
+              Text(p.shift == null
+                  ? 'No shift is set for this employee, so 09:00 – 17:00 is filled in.'
+                  : 'Filled in from the shift "${p.shift!['name'] ?? ''}". Change them if needed.',
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              const SizedBox(height: 14),
+              Row(children: [
+                timeBtn('In', inT, (v) => inT = v),
+                const SizedBox(width: 10),
+                timeBtn('Out', outT, (v) => outT = v),
+              ]),
+              if (hrs != null) ...[
+                const SizedBox(height: 6),
+                Text('${hrs.toStringAsFixed(hrs == hrs.roundToDouble() ? 0 : 2)} hours',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: note,
+                decoration: const InputDecoration(
+                    labelText: 'Note (optional)', hintText: 'e.g. machine was down, confirmed by supervisor',
+                    isDense: true, border: OutlineInputBorder()),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+              child: const Text('Mark present'),
+            ),
+          ],
+        );
+      }),
+    );
+    final n = note.text;
+    note.dispose();
+    if (ok == true) await _markPresent(p, inT, outT, n);
+  }
+
   // ── Per-row actions ───────────────────────────────────────────────────────
   Future<void> _excuse(_Pending p) async {
     final orgId = _orgId; if (orgId == null) return;
@@ -726,6 +856,14 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       ),
       child: const Text('Unapproved', style: TextStyle(fontSize: 12)),
     );
+    final presentBtn = OutlinedButton(
+      onPressed: _working ? null : () => _confirmPresent(p),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppTheme.primary, visualDensity: VisualDensity.compact,
+        side: BorderSide(color: AppTheme.primary.withOpacity(0.5)),
+      ),
+      child: const Text('Was present', style: TextStyle(fontSize: 12)),
+    );
     final penaltyText = Text(penaltyNote,
         style: TextStyle(fontSize: 10, color: p.penaltyDays > 0 ? Colors.deepOrange : AppTheme.textSecondary));
 
@@ -745,6 +883,8 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
           ]),
           const SizedBox(height: 8),
           Row(children: [
+            Expanded(child: presentBtn),
+            const SizedBox(width: 8),
             Expanded(child: excuseBtn),
             const SizedBox(width: 8),
             Expanded(child: unapprovedBtn),
@@ -767,6 +907,8 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
         const SizedBox(width: 8),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Row(mainAxisSize: MainAxisSize.min, children: [
+            presentBtn,
+            const SizedBox(width: 8),
             excuseBtn,
             const SizedBox(width: 8),
             unapprovedBtn,
