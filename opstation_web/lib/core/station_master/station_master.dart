@@ -678,6 +678,7 @@ const List<_Feature> _features = [
   _Feature('Delivery Orders', 'Sales', '/erp/delivery-orders', ['delivery order', 'do', 'dispatch note']),
   _Feature('Customers', 'Sales', '/customers', ['customer', 'shop', 'client']),
   _Feature('Field Orders', 'Sales', '/erp/field-orders', ['field order', 'booking']),
+  _Feature('Field Returns', 'Sales', '/erp/field-returns', ['field return', 'return request']),
   _Feature('Retailer Orders', 'Sales', '/erp/retailer-orders', ['retailer order']),
   _Feature('Customer Ledger', 'Sales', '/erp/customer-ledger', ['customer ledger']),
   _Feature('Customer Aging', 'Sales', '/erp/customer-aging', ['customer aging', 'receivable aging']),

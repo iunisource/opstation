@@ -959,6 +959,23 @@ final inventoryIntegrityCountProvider = FutureProvider<int>((ref) async {
 /// Count of field orders awaiting review (status 'submitted') for the org.
 /// Drives the live nav badge on the Field Orders menu item. Invalidated by
 /// erp_field_orders_screen on approve/reject and realtime arrival.
+/// Return requests from salespeople waiting for the office.
+final fieldReturnPendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('field_returns')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('status', 'submitted');
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 final fieldOrderPendingCountProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
   final user = await ref.watch(authControllerProvider.future);
@@ -1330,6 +1347,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final priReviewPending = gate('/erp/purchase-return-vouchers', ref.watch(priReviewPendingProvider).valueOrNull ?? 0);
   final siReviewPending = gate('/erp/sales-invoices', ref.watch(siReviewPendingProvider).valueOrNull ?? 0);
   final fieldOrdersPending = gate('/erp/field-orders', ref.watch(fieldOrderPendingCountProvider).valueOrNull ?? 0);
+  final fieldReturnsPending = gate('/erp/field-returns', ref.watch(fieldReturnPendingCountProvider).valueOrNull ?? 0);
   final retailerOrdersPending = gate('/erp/retailer-orders', ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0);
   final shopNewOrders = gate('/erp/fulfillment', ref.watch(shopNewOrdersCountProvider).valueOrNull ?? 0);
   final doRemarkPending = gate('/erp/delivery-orders', ref.watch(doRemarkPendingProvider).valueOrNull ?? 0);
@@ -1432,6 +1450,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/schemes')) _menuItem(context, 'Schemes & Offers',      Icons.local_offer_outlined,       '/erp/schemes',               location),
     ];
     final salesReturns = <Widget>[
+      if (show('/erp/field-returns')) _menuItem(context, 'Field Returns',         Icons.assignment_return_outlined, '/erp/field-returns',         location, badge: fieldReturnsPending),
       if (show('/erp/sales-returns')) _menuItem(context, 'Sales Return Notes',    Icons.assignment_return_outlined, '/erp/sales-returns',         location),
       if (show('/erp/sales-return-invoices')) _menuItem(context, 'Sales Return Invoices', Icons.receipt_long_outlined,      '/erp/sales-return-invoices', location, badge: sriSupervisePending),
     ];
@@ -1618,9 +1637,9 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/fulfillment', '/erp/delivery-orders', '/erp/sales-invoices', '/erp/schemes',
-           '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/dispatch-summary', '/erp/schemes-report',
+           '/erp/field-returns', '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/dispatch-summary', '/erp/schemes-report',
            '/erp/customer-ledger', '/erp/customer-aging', '/erp/customer-balance-report', '/erp/sale-vs-recovery'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + retailerOrdersPending + shopNewOrders + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + fieldReturnsPending + retailerOrdersPending + shopNewOrders + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),

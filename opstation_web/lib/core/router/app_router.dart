@@ -171,6 +171,7 @@ import '../../features/erp/presentation/erp_receipt_books_screen.dart' deferred 
 import '../../features/operations/presentation/time_in_market_screen.dart' deferred as _s160;
 import '../../features/intelligence/presentation/intelligence_score_distribution_screen.dart' deferred as _s161;
 import '../../features/erp/presentation/erp_quick_costing_screen.dart' deferred as _s162;
+import '../../features/erp/presentation/erp_field_returns_screen.dart' deferred as _s163;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -580,6 +581,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/schemes',   builder: (_, __) => _deferred(_s124.loadLibrary(), () => _s124.ErpSchemesScreen())),
           GoRoute(path: '/erp/schemes-report', builder: (_, __) => _deferred(_s126.loadLibrary(), () => _s126.ErpSchemesReportScreen())),
           GoRoute(path: '/erp/field-orders', builder: (_, state) => _deferred(_s094.loadLibrary(), () => _s094.ErpFieldOrdersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/field-returns', builder: (_, state) => _deferred(_s163.loadLibrary(), () => _s163.ErpFieldReturnsScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/fulfillment', builder: (_, state) => _deferred(_s155.loadLibrary(), () => _s155.ErpFulfillmentScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/retailer-orders', builder: (_, state) => _deferred(_s095.loadLibrary(), () => _s095.ErpRetailerOrdersScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/sales-report', builder: (_, __) => _deferred(_s096.loadLibrary(), () => _s096.ErpSalesReportScreen())),
