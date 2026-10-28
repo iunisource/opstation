@@ -77,6 +77,16 @@ Future<double> _posCashRefundTotal(
   double total = 0;
   for (final t in returns) {
     final refund = ((t['total'] as num?)?.toDouble() ?? 0).abs();
+    // The cashier's choice on the return wins — the same rule post_pos_money
+    // uses for the accounts: "Cash" leaves the drawer, "Customer Account"
+    // goes to the account. Only older returns without a choice use the split.
+    final pm = ((t['payment_method'] as String?) ?? '').trim();
+    final noCustomer = t.containsKey('customer_id') && t['customer_id'] == null;
+    if (pm == 'Cash' || (pm == 'Customer Account' && noCustomer)) {
+      total += refund;
+      continue;
+    }
+    if (pm == 'Customer Account') continue;
     final refId = t['reference_transaction_id'] as String?;
     final orig = refId == null ? null : origs[refId];
     if (orig == null) {
@@ -197,7 +207,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
       double cashSales = 0, cashExpenses = 0;
       final txns = await client
           .from('pos_transactions')
-          .select('total, amount_paid, payment_method, transaction_type, payment_details, reference_transaction_id')
+          .select('total, amount_paid, payment_method, transaction_type, payment_details, reference_transaction_id, customer_id')
           .eq('session_id', sid);
       final returnTxns = <Map<String, dynamic>>[];
       for (final t in txns as List) {
@@ -1646,6 +1656,29 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       _showSnack('This sale has no customer — attach a customer to refund to their account, or choose Cash.');
       return;
     }
+    // Cash back on a sale that was put on the customer's account: they never
+    // paid for it, so make sure the cashier really means to hand over cash.
+    final origTot = (originalTxn['total'] as num?)?.toDouble() ?? 0;
+    final origPaid = (originalTxn['amount_paid'] as num?)?.toDouble() ?? origTot;
+    if (refundDest == 'Cash' && hasCustomer && origTot - origPaid > 0.01) {
+      if (!mounted) return;
+      final sure = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('This sale was on account'),
+        content: Text('Rs. ${money(origTot - origPaid)} of this sale is still unpaid on the customer\'s account.\n\n'
+            'Usually the return should reduce what they owe. Give cash only if you are really handing cash to the customer.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          OutlinedButton(onPressed: () => Navigator.pop(ctx, 'Cash'), child: const Text('Give cash anyway')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, 'Customer Account'), child: const Text('Reduce their account')),
+        ],
+      ));
+      if (sure == null) return;
+      if (sure == 'Customer Account') return _processReturnTo(originalTxn, returnItems, 'Customer Account');
+    }
+    return _processReturnTo(originalTxn, returnItems, refundDest);
+  }
+
+  Future<void> _processReturnTo(Map<String, dynamic> originalTxn, List<Map<String, dynamic>> returnItems, String refundDest) async {
     // Batch tracking: scan the units coming back so their serials return to stock.
     List<String> backSerials = const [];
     if (_orgId != null && originalTxn['id'] is String && await BatchTracking.isOn(_orgId)) {

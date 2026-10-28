@@ -339,7 +339,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           // touched the account. Only the credit portion of the ORIGINAL sale
           // stays on the ledger.
           double cashRefund = amt;
-          if (origTxn != null) {
+          // The cashier's choice on the return wins (same rule as the
+          // accounts): "Cash" = paid from the drawer, "Customer Account" =
+          // credited to the account. Older returns without a choice: split.
+          final pm = ((t['payment_method'] as String?) ?? '').trim();
+          if (pm == 'Cash') {
+            cashRefund = amt;
+          } else if (pm == 'Customer Account') {
+            cashRefund = 0;
+          } else if (origTxn != null) {
             final origTotal = (origTxn['total'] as num?)?.toDouble() ?? 0;
             final origPaid = (origTxn['amount_paid'] as num?)?.toDouble() ?? origTotal;
             final arPortion = (origTotal - origPaid).clamp(0.0, amt).toDouble();
