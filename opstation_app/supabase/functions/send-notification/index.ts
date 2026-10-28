@@ -72,9 +72,18 @@ serve(async (req) => {
     // Get user's FCM token
     const { data: user } = await supabase
       .from('users')
-      .select('fcm_token')
+      .select('fcm_token, org_id')
       .eq('id', userId)
       .single()
+    // Keep a copy in the user's notifications inbox (field app → Notifications).
+    if (user && !(data && String(data.inbox) === 'false')) {
+      try {
+        await supabase.from('push_inbox').insert({
+          user_id: userId, org_id: user.org_id ?? null,
+          title: title ?? null, body: body ?? null, data: data ?? {},
+        })
+      } catch (_) { /* inbox is best-effort */ }
+    }
     if (!user?.fcm_token) {
       return new Response(JSON.stringify({ error: 'No FCM token for user' }), {
         status: 404,

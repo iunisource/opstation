@@ -86,7 +86,33 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
           filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
           callback: (payload) => _onNewOrder(payload.newRecord),
         )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'field_orders',
+          filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'org_id', value: orgId),
+          callback: (payload) => _onOrderChanged(payload.newRecord),
+        )
         .subscribe();
+  }
+
+  // The salesperson changed or cancelled an order from the app.
+  Future<void> _onOrderChanged(Map<String, dynamic> row) async {
+    if (!mounted) return;
+    final id = row['id'] as String?;
+    final sel = _selected;
+    ref.invalidate(fieldOrderPendingCountProvider);
+    if (sel != null && sel['id'] == id && !_saving) {
+      final st = row['status'] as String?;
+      if (st == 'cancelled' && sel['status'] != 'cancelled') {
+        setState(() => _selected = null);
+        _snack('The salesperson cancelled this order.');
+      } else if (((row['edit_count'] as num?) ?? 0) != ((sel['edit_count'] as num?) ?? 0)) {
+        await _openOrder(Map<String, dynamic>.from(row));
+        _snack('The salesperson just changed this order. Showing the latest version.');
+      }
+    }
+    _loadOrders();
   }
 
   Future<void> _onNewOrder(Map<String, dynamic> row) async {
@@ -359,6 +385,24 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     try {
       final client = Supabase.instance.client;
       final foId = o['id'] as String;
+      // Make sure the salesperson has not changed or cancelled it meanwhile.
+      final fresh = await client.from('field_orders').select('*').eq('id', foId).maybeSingle();
+      if (fresh == null || fresh['status'] != 'submitted') {
+        if (!mounted) return;
+        setState(() { _saving = false; _selected = null; });
+        _snack(fresh?['status'] == 'cancelled'
+            ? 'The salesperson cancelled this order, so it was not approved.'
+            : 'This order was already handled.');
+        _loadOrders();
+        return;
+      }
+      if (((fresh['edit_count'] as num?) ?? 0) != ((o['edit_count'] as num?) ?? 0)) {
+        if (!mounted) return;
+        setState(() => _saving = false);
+        await _openOrder(Map<String, dynamic>.from(fresh));
+        _snack('The salesperson just changed this order. Please check it again, then approve.');
+        return;
+      }
       // persist the (possibly edited) lines: replace all items for this order
       await client.from('field_order_items').delete().eq('field_order_id', foId);
       await client.from('field_order_items').insert(_lines.map((l) => {
@@ -390,6 +434,14 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
     if (ok != true) return;
     setState(() => _saving = true);
     try {
+      final fresh = await Supabase.instance.client.from('field_orders').select('status').eq('id', o['id'] as String).maybeSingle();
+      if (fresh == null || fresh['status'] != 'submitted') {
+        if (!mounted) return;
+        setState(() { _saving = false; _selected = null; });
+        _snack(fresh?['status'] == 'cancelled' ? 'The salesperson already cancelled this order.' : 'This order was already handled.');
+        _loadOrders();
+        return;
+      }
       await Supabase.instance.client.rpc('reject_field_order',
           params: {'p_id': o['id'], 'p_user': _userId, 'p_reason': reasonCtrl.text.trim()});
       if (!mounted) return;
@@ -438,13 +490,17 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       }
     }
     final headers = reviewed
-        ? ['Submitted', 'Customer', 'Salesperson', '$status by', 'On', _filter == 'rejected' ? 'Reason' : 'SO #']
+        ? ['Submitted', 'Customer', 'Salesperson', '$status by', 'On', _filter == 'approved' ? 'SO #' : 'Reason']
         : ['Submitted', 'Customer', 'Salesperson', 'Notes'];
     final rows = _orders.map((o) {
       final sub = o['submitted_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '-';
       final cust = _custNames[o['customer_id']] ?? '-';
       final sp = _spNames[o['salesperson_id']] ?? '-';
       if (!reviewed) return [sub, cust, sp, (o['notes'] as String?) ?? ''];
+      if (_filter == 'cancelled') {
+        final on = o['cancelled_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['cancelled_at'] as String).toLocal()) : '-';
+        return [sub, cust, sp, sp, on, (o['cancel_reason'] as String?) ?? ''];
+      }
       final by = _spNames[o['reviewed_by']] ?? '-';
       final on = o['reviewed_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal()) : '-';
       final last = _filter == 'rejected'
@@ -521,7 +577,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       const Text('Orders submitted by salespeople from the field. Review, adjust, then approve into a draft Sales Order.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
       const SizedBox(height: 14),
       Row(children: [
-        for (final f in const ['submitted', 'approved', 'rejected'])
+        for (final f in const ['submitted', 'approved', 'rejected', 'cancelled'])
           Padding(padding: const EdgeInsets.only(right: 8), child: ChoiceChip(
             label: Text(() {
               final base = f == 'submitted' ? 'Received' : '${f[0].toUpperCase()}${f.substring(1)}';
@@ -581,6 +637,10 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
             Text(_custNames[o['customer_id']] ?? 'Customer', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('By ${_spNames[o['salesperson_id']] ?? '—'}  ·  $when', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            if (((o['edit_count'] as num?) ?? 0) > 0 && o['status'] == 'submitted') ...[
+              const SizedBox(height: 3),
+              const Text('Changed by salesperson', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.warning)),
+            ],
             if ((o['notes'] as String?)?.isNotEmpty == true) ...[
               const SizedBox(height: 4),
               Text(o['notes'] as String, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, fontStyle: FontStyle.italic, color: AppTheme.textSecondary)),
@@ -614,6 +674,23 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
                 '${DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal())}',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: o['status'] == 'approved' ? AppTheme.success : AppTheme.danger),
+              ),
+            ),
+            if (o['status'] == 'cancelled') Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                'Cancelled by the salesperson'
+                '${o['cancelled_at'] != null ? ' · ${DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['cancelled_at'] as String).toLocal())}' : ''}'
+                '${(o['cancel_reason'] as String?)?.isNotEmpty == true ? ' · ${o['cancel_reason']}' : ''}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+              ),
+            ),
+            if (((o['edit_count'] as num?) ?? 0) > 0) Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                'Changed by the salesperson after sending'
+                '${o['edited_at'] != null ? ' · last on ${DateFormat('d MMM, HH:mm').format(DateTime.parse(o['edited_at'] as String).toLocal())}' : ''}',
+                style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textSecondary),
               ),
             ),
           ])),

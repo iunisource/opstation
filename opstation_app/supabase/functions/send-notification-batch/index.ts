@@ -78,8 +78,19 @@ serve(async (req) => {
     // fetch tokens for all recipients in one query
     const { data: users } = await supabase
       .from('users')
-      .select('id, fcm_token')
+      .select('id, fcm_token, org_id')
       .in('id', recipient_user_ids)
+
+    // Keep a copy in each recipient's notifications inbox (field app → Notifications).
+    if (users && users.length > 0 && !(data && String(data.inbox) === 'false')) {
+      try {
+        await supabase.from('push_inbox').insert(users.map((u: any) => ({
+          user_id: u.id, org_id: u.org_id ?? null,
+          title: title ?? null, body: body ?? null,
+          data: (data && typeof data === 'object') ? data : {},
+        })))
+      } catch (_) { /* inbox is best-effort */ }
+    }
 
     const tokens = (users ?? [])
       .map((u: any) => u.fcm_token)
