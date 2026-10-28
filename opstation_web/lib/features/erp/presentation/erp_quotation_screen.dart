@@ -301,6 +301,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       _globalDiscCtrl.text = '0';
       _globalDiscType = 'fixed';
     });
+    _openedTotal = null;
   }
 
   Future<void> _openDoc(Map<String, dynamic> row) async {
@@ -339,7 +340,112 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         _globalDiscCtrl.text = ((row['global_discount'] as num?)?.toDouble() ?? 0).toString();
         _globalDiscType = row['global_discount_type'] as String? ?? 'fixed';
       });
+      _openedTotal = _grandTotal;
     } catch (_) {}
+  }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────
+  double? _openedTotal; // total when the quotation was opened (for "edited" notes)
+  Future<void> _logEvent(String event, String detail) async {
+    final id = _doc?['id'] as String?;
+    if (id == null || orgId == null) return;
+    final u = ref.read(currentUserProvider);
+    try {
+      await _client.from('quotation_events').insert({
+        'org_id': orgId, 'quotation_id': id, 'voucher_number': _doc!['voucher_number'],
+        'event': event, 'detail': detail, 'by_id': u?.id, 'by_name': u?.name,
+      });
+    } catch (_) {/* lifecycle is best-effort; never blocks the action */}
+  }
+
+  Future<void> _showLifecycle() async {
+    final id = _doc?['id'] as String?;
+    if (id == null) return;
+    List<Map<String, dynamic>> rows = [];
+    try {
+      rows = List<Map<String, dynamic>>.from(await _client.from('quotation_events')
+          .select().eq('quotation_id', id).order('at') as List);
+    } catch (e) {
+      _toast(friendlyError('Could not load the history', e));
+      return;
+    }
+    if (!mounted) return;
+    IconData icon(String e) => switch (e) {
+          'created' => Icons.add_circle_outline,
+          'edited' => Icons.edit_outlined,
+          'printed' => Icons.print_outlined,
+          'exported' => Icons.ios_share,
+          'status' => Icons.flag_outlined,
+          'deleted' => Icons.delete_outline,
+          _ => Icons.circle_outlined,
+        };
+    String title(String e) => switch (e) {
+          'created' => 'Created',
+          'edited' => 'Edited',
+          'printed' => 'Printed',
+          'exported' => 'Exported',
+          'status' => 'Status changed',
+          'deleted' => 'Deleted',
+          _ => e,
+        };
+    await showDialog(context: context, builder: (c) => AlertDialog(
+      title: Text('Lifecycle · ${_doc!['voucher_number'] ?? ''}'),
+      content: SizedBox(
+        width: 460,
+        child: rows.isEmpty
+            ? const Text('No history recorded yet. Steps are recorded from now on.',
+                style: TextStyle(color: AppTheme.textSecondary))
+            : ListView(shrinkWrap: true, children: [
+                for (final r in rows)
+                  ListTile(
+                    dense: true,
+                    leading: Icon(icon('${r['event']}'), color: AppTheme.primary, size: 20),
+                    title: Text(title('${r['event']}'), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text([
+                      if ('${r['detail'] ?? ''}'.isNotEmpty) '${r['detail']}',
+                      [
+                        if ('${r['by_name'] ?? ''}'.isNotEmpty) '${r['by_name']}',
+                        DateFormat('dd MMM yyyy, h:mm a').format(DateTime.parse('${r['at']}').toLocal()),
+                      ].join(' · '),
+                    ].join('\n')),
+                  ),
+              ]),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Close'))],
+    ));
+  }
+
+  Future<void> _deleteQuotation() async {
+    final id = _doc?['id'] as String?;
+    if (id == null) return;
+    final no = _doc!['voucher_number'] ?? 'this quotation';
+    final exported = _doc!['status'] == 'exported';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text('Delete $no?'),
+        content: Text(exported
+            ? 'This quotation was already exported. The sales order / POS bill made from it stays; only the quotation is deleted. This cannot be undone.'
+            : 'The quotation and its lines will be removed. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await _client.rpc('delete_quotation', params: {'p_id': id});
+      _closeDoc();
+      await _loadList();
+      _toast('$no deleted');
+    } catch (e) {
+      _toast(friendlyError('Could not delete', e));
+    }
   }
 
   void _closeDoc() => setState(() { _clearAllLineCtl(); _doc = null; _lines = []; _dupLine = null; _dupMsg = null; });
@@ -438,6 +544,13 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
 
       _doc!['id'] = qid;
       _doc!['voucher_number'] = vnum;
+      final totalNow = _grandTotal;
+      await _logEvent(isNew ? 'created' : 'edited', [
+        '${_lines.length} line${_lines.length == 1 ? '' : 's'}',
+        'total Rs ${money(totalNow)}',
+        if (!isNew && _openedTotal != null && (_openedTotal! - totalNow).abs() > 0.004) 'was Rs ${money(_openedTotal)}',
+      ].join(', '));
+      _openedTotal = totalNow;
       if (!mounted) return;
       _toast('Quotation ${vnum ?? ''} saved');
       await _loadList();
@@ -490,9 +603,10 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     if (choice == 'pos') await _exportToPOS();
   }
 
-  Future<void> _markExported() async {
+  Future<void> _markExported([String detail = '']) async {
     final id = _doc?['id'] as String?;
     if (id == null) return;
+    await _logEvent('exported', detail);
     try {
       await _client.from('quotations').update({'status': 'exported', 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id);
       _doc!['status'] = 'exported';
@@ -506,6 +620,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
     try {
       await _client.from('quotations').update({'status': status, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id);
       setState(() => _doc!['status'] = status);
+      await _logEvent('status', 'Marked as ${status[0].toUpperCase()}${status.substring(1)}');
       await _loadList();
       _toast('Marked as ${status[0].toUpperCase()}${status.substring(1)}');
     } catch (e) { _toast(friendlyError('That did not save', e)); }
@@ -701,7 +816,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           }).toList();
       await _client.from('sales_order_items').insert(soItems);
 
-      await _markExported();
+      await _markExported('To draft Sales Order ${soVnum ?? ''}'.trim());
       if (!mounted) return;
       setState(() => _saving = false);
       _toast('Draft SO ${soVnum ?? ''} created');
@@ -768,7 +883,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         'status': 'held',
       });
 
-      await _markExported();
+      await _markExported('To POS as a held bill');
       if (!mounted) return;
       setState(() => _saving = false);
       _toast('Sent to POS Holds (${_doc!['voucher_number'] ?? ''})');
@@ -864,9 +979,11 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             grandTotal: subtotal - discTotal - globalDisc,
           ),
         );
+        await _logEvent('printed', 'Under brand ${brandRow['name']}');
         await showPdf(bytes, '${brandRow['name']} $number.pdf'.replaceAll(RegExp(r'[^A-Za-z0-9 ._-]'), ''));
         return;
       }
+      await _logEvent('printed', 'Standard format');
       await VoucherPdf.printVoucher(
       watermark: VoucherPdf.voidMark(_doc),
         voucherNumber: (_doc!['voucher_number']?.toString().isNotEmpty ?? false)
@@ -1092,6 +1209,12 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                 const PopupMenuItem(value: 'mark_draft', child: Text('Mark as Draft')),
               if ((_doc!['status'] as String? ?? 'saved') != 'saved')
                 const PopupMenuItem(value: 'mark_saved', child: Text('Mark as Saved')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'lifecycle', child: Text('Lifecycle')),
+              if (_isAdmin) ...[
+                const PopupMenuDivider(),
+                const PopupMenuItem(value: 'delete', child: Text('Delete quotation', style: TextStyle(color: AppTheme.danger))),
+              ],
             ],
             onSelected: (v) {
               if (v == 'company') setState(() {
@@ -1106,6 +1229,8 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               if (v == 'preparedBy') setState(() => _printPreparedBy = !_printPreparedBy);
               if (v == 'mark_draft') _setStatus('draft');
               if (v == 'mark_saved') _setStatus('saved');
+              if (v == 'delete') _deleteQuotation();
+              if (v == 'lifecycle') _showLifecycle();
             },
           ),
           if (!isNew) const SizedBox(width: 10),
