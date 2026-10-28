@@ -255,16 +255,16 @@ class _ErpFieldReturnsScreenState extends ConsumerState<ErpFieldReturnsScreen> {
         'p_id': o['id'], 'p_branch': _branchId,
         'p_items': [for (final l in items) {'product_id': l['product_id'], 'uom_id': l['uom_id'], 'quantity': l['quantity']}],
       });
-      String num = '';
+      String srnNo = '';
       try {
         final s = await client.from('sales_returns').select('voucher_number').eq('id', srnId as String).maybeSingle();
-        num = (s?['voucher_number'] as String?) ?? '';
+        srnNo = (s?['voucher_number'] as String?) ?? '';
       } catch (_) {}
       if (!mounted) return;
       setState(() { _saving = false; _selected = null; });
       ref.invalidate(fieldReturnPendingCountProvider);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Approved — ${num.isEmpty ? 'Sales Return Note' : num} created as a draft. Save it when the goods arrive.'),
+        content: Text('Approved — ${srnNo.isEmpty ? 'Sales Return Note' : srnNo} created as a draft. Save it when the goods arrive.'),
         action: SnackBarAction(label: 'Open', onPressed: () => context.go('/erp/sales-returns')),
         duration: const Duration(seconds: 6),
       ));
