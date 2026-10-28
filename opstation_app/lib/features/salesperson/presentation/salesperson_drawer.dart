@@ -7,6 +7,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/app_version_label.dart';
 import '../../auth/providers/auth_controller.dart';
 import 'my_orders_screen.dart';
+import 'my_returns_screen.dart';
 import 'notifications_inbox_screen.dart';
 import 'salesperson_files_screen.dart';
 import 'salesperson_performance_screen.dart';
@@ -109,6 +110,13 @@ class SalespersonDrawer extends ConsumerWidget {
             label: 'My Orders',
             subtitle: 'Orders you submitted',
             onTap: () => _go(context, const MyOrdersScreen()),
+          ),
+          _tile(
+            context,
+            icon: Icons.assignment_return_outlined,
+            label: 'My Returns',
+            subtitle: 'Ask for a return and track it',
+            onTap: () => _go(context, const MyReturnsScreen()),
           ),
           const Divider(height: 1),
           _tile(

@@ -138,7 +138,7 @@ class _FieldOrderEditScreenState extends ConsumerState<FieldOrderEditScreen> {
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => const _ProductPickerSheet(),
+      builder: (_) => const CatalogProductPickerSheet(),
     );
     if (picked == null || !mounted) return;
     final existing = _lines.where((l) => l.productId == picked.id);
@@ -370,14 +370,14 @@ class _FieldOrderEditScreenState extends ConsumerState<FieldOrderEditScreen> {
 }
 
 /// Search the product catalog saved on the phone.
-class _ProductPickerSheet extends ConsumerStatefulWidget {
-  const _ProductPickerSheet();
+class CatalogProductPickerSheet extends ConsumerStatefulWidget {
+  const CatalogProductPickerSheet({super.key});
   @override
-  ConsumerState<_ProductPickerSheet> createState() =>
-      _ProductPickerSheetState();
+  ConsumerState<CatalogProductPickerSheet> createState() =>
+      CatalogProductPickerSheetState();
 }
 
-class _ProductPickerSheetState extends ConsumerState<_ProductPickerSheet> {
+class CatalogProductPickerSheetState extends ConsumerState<CatalogProductPickerSheet> {
   List<CatalogProductRow> _all = [];
   String _q = '';
   bool _loading = true;
