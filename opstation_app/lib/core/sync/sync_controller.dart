@@ -349,34 +349,10 @@ class SyncController extends Notifier<SyncStatus> {
     _flushing = true;
     state = state.copyWith(state: SyncState.syncing);
     try {
-      final orgs = await _db.select(_db.orgs).get();
-      for (final o in orgs) {
-        try {
-          await _supabase.pushOrg(o);
-        } catch (e) {
-          print('pushOrg FAILED: $e');
-        }
-      }
-
-      final users = await _db.select(_db.users).get();
-      for (final u in users) {
-        try {
-          // If user has null org_id but we have an orgId context,
-          // fix it locally and in Supabase before pushing
-          // Never push is_active from the bulk loop — otherwise a phone with a
-          // stale cached is_active re-activates admin-deactivated users on
-          // every full sync (the Kaleem-resurrection bug). Activation is a
-          // web-admin action; the server stays authoritative.
-          if (u.orgId == null && orgId != null && u.role != 'superAdmin') {
-            await (_db.update(_db.users)..where((t) => t.id.equals(u.id)))
-                .write(UsersCompanion(orgId: Value(orgId)));
-            await _supabase.pushUser(u.copyWith(orgId: Value(orgId)),
-                includeActive: false);
-          } else if (u.orgId != null || u.role == 'superAdmin') {
-            await _supabase.pushUser(u, includeActive: false);
-          }
-        } catch (_) {}
-      }
+      // The organisation and its users are NOT re-sent from the phone any
+      // more: the phone's stored copy is old and was overwriting the server
+      // (an org rename reverted; a user's new role or name put back). Both are
+      // edited on the web only; the phone just reads them.
 
       // Only push customers that actually changed. Pushing the entire local
       // customer table row-by-row on every login / manual sync was the cause
@@ -470,16 +446,9 @@ class SyncController extends Notifier<SyncStatus> {
         }
       }
 
-      final deliveries = orgId == null
-          ? await _db.select(_db.deliveries).get()
-          : await (_db.select(_db.deliveries)..where((d) => d.orgId.equals(orgId))).get();
-      for (final d in deliveries) {
-        try {
-          await _supabase.pushDelivery(d);
-        } catch (e) {
-          print('pushDelivery FAILED: $e');
-        }
-      }
+      // Deliveries are NOT bulk re-sent either: a stored copy could undo a
+      // dispatcher's change on the web (cancel / re-assign). The driver's own
+      // changes are sent when made, and again with any pending stop below.
 
       final deliveryStops = await (_db.select(_db.deliveryStops)
             ..where((s) => s.syncStatus.equals('pending')))
