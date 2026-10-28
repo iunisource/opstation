@@ -302,6 +302,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       _globalDiscType = 'fixed';
     });
     _openedTotal = null;
+    _openedSnap = null;
   }
 
   Future<void> _openDoc(Map<String, dynamic> row) async {
@@ -342,11 +343,83 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         _globalDiscType = row['global_discount_type'] as String? ?? 'fixed';
       });
       _openedTotal = _grandTotal;
+      _openedSnap = _snapshot();
     } catch (_) {}
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
   double? _openedTotal; // total when the quotation was opened (for "edited" notes)
+  Map<String, dynamic>? _openedSnap; // header + lines as last saved
+
+  String _q(num? v) {
+    final d = (v ?? 0).toDouble();
+    return d == d.roundToDouble() ? d.toInt().toString() : d.toStringAsFixed(2);
+  }
+
+  Map<String, dynamic> _snapshot() => {
+        'customer': _custDisplay(_doc!),
+        'branch': _branches.firstWhere((b) => b['id'] == _doc!['branch_id'], orElse: () => const {})['name'],
+        'date': _doc!['voucher_date'] is DateTime ? DateFormat('dd MMM yyyy').format(_doc!['voucher_date'] as DateTime) : null,
+        'valid': _doc!['valid_until'] is DateTime ? DateFormat('dd MMM yyyy').format(_doc!['valid_until'] as DateTime) : null,
+        'brand': _brands.firstWhere((b) => b['id'] == _doc!['brand_id'], orElse: () => const {})['name'] ?? 'Standard format',
+        'remarks': _notesCtrl.text.trim(),
+        'gdisc': '${_globalDiscCtrl.text.trim()} ${_globalDiscType == 'percent' ? '%' : 'Rs'}',
+        'lines': [
+          for (final l in _lines)
+            {
+              'key': l['product_id'] ?? l['item_name'],
+              'name': l['item_name'] ?? '-',
+              'qty': (l['quantity'] as num?)?.toDouble() ?? 0,
+              'rate': (l['unit_price'] as num?)?.toDouble() ?? 0,
+              'disc': (l['discount'] as num?)?.toDouble() ?? 0,
+              'dtype': l['discount_type'] ?? 'fixed',
+            },
+        ],
+      };
+
+  String _discText(Map l) => (l['disc'] as num) == 0
+      ? ''
+      : ', discount ${_q(l['disc'] as num)}${l['dtype'] == 'percent' ? '%' : ' Rs'}';
+
+  String _lineText(Map l) => '${l['name']} — ${_q(l['qty'] as num)} × Rs ${money(l['rate'] as num)}${_discText(l)}';
+
+  /// Plain-words list of what changed between two snapshots.
+  List<String> _diff(Map<String, dynamic>? a, Map<String, dynamic> b) {
+    if (a == null) return ['Saved'];
+    final out = <String>[];
+    const labels = {
+      'customer': 'Customer', 'branch': 'Branch', 'date': 'Date', 'valid': 'Valid until',
+      'brand': 'Brand', 'remarks': 'Remarks', 'gdisc': 'Global discount',
+    };
+    labels.forEach((k, label) {
+      final x = '${a[k] ?? ''}'.trim(), y = '${b[k] ?? ''}'.trim();
+      if (x != y) out.add('$label: ${x.isEmpty ? '—' : x} → ${y.isEmpty ? '—' : y}');
+    });
+    final oldLines = List<Map>.from(a['lines'] as List);
+    final newLines = List<Map>.from(b['lines'] as List);
+    final unmatched = [...oldLines];
+    for (final n in newLines) {
+      final i = unmatched.indexWhere((o) => o['key'] == n['key']);
+      if (i < 0) {
+        out.add('+ Added ${_lineText(n)}');
+        continue;
+      }
+      final o = unmatched.removeAt(i);
+      final parts = <String>[];
+      if (o['qty'] != n['qty']) parts.add('qty ${_q(o['qty'] as num)} → ${_q(n['qty'] as num)}');
+      if (o['rate'] != n['rate']) parts.add('rate Rs ${money(o['rate'] as num)} → Rs ${money(n['rate'] as num)}');
+      if (o['disc'] != n['disc'] || o['dtype'] != n['dtype']) {
+        String dt(Map l) => (l['disc'] as num) == 0 ? 'none' : '${_q(l['disc'] as num)}${l['dtype'] == 'percent' ? '%' : ' Rs'}';
+        parts.add('discount ${dt(o)} → ${dt(n)}');
+      }
+      if (o['name'] != n['name']) parts.add('name "${o['name']}" → "${n['name']}"');
+      if (parts.isNotEmpty) out.add('~ ${n['name']}: ${parts.join(', ')}');
+    }
+    for (final o in unmatched) {
+      out.add('− Removed ${_lineText(o)}');
+    }
+    return out;
+  }
   Future<void> _logEvent(String event, String detail) async {
     final id = _doc?['id'] as String?;
     if (id == null || orgId == null) return;
@@ -565,12 +638,23 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         await _logEvent('edited', 'Moved to ${bn ?? 'standard format'} — number changed from $oldNumber to $vnum');
       }
       final totalNow = _grandTotal;
-      await _logEvent(isNew ? 'created' : 'edited', [
-        '${_lines.length} line${_lines.length == 1 ? '' : 's'}',
-        'total Rs ${money(totalNow)}',
-        if (!isNew && _openedTotal != null && (_openedTotal! - totalNow).abs() > 0.004) 'was Rs ${money(_openedTotal)}',
-      ].join(', '));
+      final snapNow = _snapshot();
+      if (isNew) {
+        await _logEvent('created', [
+          for (final l in snapNow['lines'] as List) '+ ${_lineText(l as Map)}',
+          'Total Rs ${money(totalNow)}',
+        ].join('\n'));
+      } else {
+        final changes = _diff(_openedSnap, snapNow);
+        if (changes.isNotEmpty) {
+          if (_openedTotal != null && (_openedTotal! - totalNow).abs() > 0.004) {
+            changes.add('Total Rs ${money(_openedTotal)} → Rs ${money(totalNow)}');
+          }
+          await _logEvent('edited', changes.join('\n'));
+        }
+      }
       _openedTotal = totalNow;
+      _openedSnap = snapNow;
       if (!mounted) return;
       _toast('Quotation ${vnum ?? ''} saved');
       await _loadList();
