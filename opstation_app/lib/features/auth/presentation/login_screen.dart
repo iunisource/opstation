@@ -1,3 +1,4 @@
+import '../../../shared/widgets/app_version_label.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -213,6 +214,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             )
                           : const Text('Sign in'),
                     ),
+                    const SizedBox(height: 28),
+                    const AppVersionLabel(align: TextAlign.center),
                   ],
                 ),
               ),

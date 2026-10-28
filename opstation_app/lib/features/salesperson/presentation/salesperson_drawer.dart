@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_colors.dart';
+import '../../../shared/widgets/app_version_label.dart';
 import '../../auth/providers/auth_controller.dart';
 import 'my_orders_screen.dart';
 import 'salesperson_files_screen.dart';
@@ -140,6 +141,12 @@ class SalespersonDrawer extends ConsumerWidget {
                 context.push('/salesperson/combined-summary?uid=$userId');
               }
             },
+          ),
+          const Spacer(),
+          const Divider(height: 1),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 10, 20, 12),
+            child: AppVersionLabel(),
           ),
         ]),
       ),
