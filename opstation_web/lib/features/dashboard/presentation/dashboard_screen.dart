@@ -800,9 +800,37 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         // Standing route plan for THIS org: who is assigned to which route, and
         // which customers each route carries.
         client.from('route_assignments').select('user_id, route_id').eq('org_id', orgId),
-        client.from('route_stops').select('route_id, customer_id').eq('org_id', orgId),
-        client.from('customers').select('id, shop_name').eq('org_id', orgId),
+        // Paged: a big org has far more than the 1000 rows one call returns.
+        _pagedRows((f, t) => client.from('route_stops').select('route_id, customer_id').eq('org_id', orgId)
+            .order('route_id').order('customer_id').range(f, t)),
+        _pagedRows((f, t) => client.from('customers').select('id, shop_name').eq('org_id', orgId)
+            .order('id').range(f, t)),
       ]);
+      // The route(s) each rep actually STARTED today. A shop that sits on two
+      // routes must not pull the second route's shops into "not visited".
+      // A route started by mistake and closed with no visits (e.g. opened for
+      // two minutes, then the right route started) is left out: only trips
+      // with at least one of today's visits count, when visits carry the trip.
+      final tripRoutes = <String, Set<String>>{};
+      try {
+        final trs = await client.from('trips').select('id, user_id, route_id')
+            .eq('org_id', orgId).gte('started_at', todayStart).lt('started_at', tomorrowStart);
+        final visitTrips = <String>{
+          for (final v in (results[0] as List))
+            if ((v as Map)['trip_id'] is String) v['trip_id'] as String,
+        };
+        final all = <String, Set<String>>{};
+        final worked = <String, Set<String>>{};
+        for (final t in trs as List) {
+          final u = t['user_id'] as String?; final r = t['route_id'] as String?;
+          if (u == null || r == null) continue;
+          (all[u] ??= <String>{}).add(r);
+          if (visitTrips.contains(t['id'])) (worked[u] ??= <String>{}).add(r);
+        }
+        for (final u in all.keys) {
+          tripRoutes[u] = (worked[u]?.isNotEmpty ?? false) ? worked[u]! : all[u]!;
+        }
+      } catch (_) {}
 
       final rows = results[0] as List;
       // customer id -> name
@@ -890,10 +918,15 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
         // WORKED today (a route holding at least one shop they visited), minus
         // the ones they hit — not their entire multi-route beat.
         final visited = visitedByUser[uid] ?? const <String>{};
-        final todayRoutes = <String>{};
-        for (final rid in (userRoutes[uid] ?? const <String>{})) {
-          final stops = routeCustomers[rid];
-          if (stops != null && stops.any(visited.contains)) todayRoutes.add(rid);
+        final todayRoutes = <String>{...?tripRoutes[uid]};
+        if (todayRoutes.isEmpty) {
+          // No trip found: the ONE assigned route holding most of today's visits.
+          String? best; var bestHits = 0;
+          for (final rid in (userRoutes[uid] ?? const <String>{})) {
+            final hits = (routeCustomers[rid] ?? const <String>{}).where(visited.contains).length;
+            if (hits > bestHits) { best = rid; bestHits = hits; }
+          }
+          if (best != null) todayRoutes.add(best);
         }
         final plannedToday = <String>{};
         for (final rid in todayRoutes) {
@@ -1757,4 +1790,19 @@ class _ActiveRoute {
 String _withPlace(String shop, Map<String, dynamic> visit) {
   final p = '${visit['location_name'] ?? ''}'.trim();
   return p.isEmpty ? shop : '$shop ($p)';
+}
+
+
+/// Reads every row of a query in pages of 1000 (PostgREST returns at most
+/// 1000 per call).
+Future<List<dynamic>> _pagedRows(dynamic Function(int from, int to) page) async {
+  final out = <dynamic>[];
+  var from = 0;
+  while (true) {
+    final rows = await page(from, from + 999) as List;
+    out.addAll(rows);
+    if (rows.length < 1000 || from > 200000) break;
+    from += 1000;
+  }
+  return out;
 }
