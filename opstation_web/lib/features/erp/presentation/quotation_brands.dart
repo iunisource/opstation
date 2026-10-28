@@ -130,6 +130,10 @@ class _BrandEditorState extends State<_BrandEditor> {
   late final _website = TextEditingController(text: '${widget.brand?['website'] ?? ''}');
   late final _tax = TextEditingController(text: '${widget.brand?['tax_no'] ?? ''}');
   late final _footer = TextEditingController(text: '${widget.brand?['footer'] ?? ''}');
+  late final _prefix = TextEditingController(text: '${widget.brand?['number_prefix'] ?? ''}');
+  late bool _numYear = widget.brand?['number_year'] != false;
+  late int _numDigits = (widget.brand?['number_digits'] as num?)?.toInt() ?? 4;
+  late String _numSep = (widget.brand?['number_sep'] as String?) ?? '-';
   String? _logo; // data: URI
   late QuoteDesign _design;
   final List<QuoteDesign> _history = [];
@@ -147,7 +151,7 @@ class _BrandEditorState extends State<_BrandEditor> {
 
   @override
   void dispose() {
-    for (final c in [_name, _tagline, _phone, _email, _address, _website, _tax, _footer]) {
+    for (final c in [_name, _tagline, _phone, _email, _address, _website, _tax, _footer, _prefix]) {
       c.dispose();
     }
     super.dispose();
@@ -173,6 +177,17 @@ class _BrandEditorState extends State<_BrandEditor> {
     final ext = (f.extension ?? 'png').toLowerCase();
     setState(() => _logo = 'data:image/${ext == 'jpg' ? 'jpeg' : ext};base64,${base64Encode(f.bytes!)}');
   }
+
+  // Prefix typed by the user, else the first 3 letters of the brand name.
+  String get _prefixNow {
+    final t = _prefix.text.trim().toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    if (t.isNotEmpty) return t;
+    final n = _name.text.toUpperCase().replaceAll(RegExp(r'[^A-Z]'), '');
+    return n.isEmpty ? 'QB' : n.substring(0, n.length < 3 ? n.length : 3);
+  }
+
+  String get _numberExample =>
+      '$_prefixNow$_numSep${_numYear ? '${DateTime.now().year}$_numSep' : ''}${'1'.padLeft(_numDigits, '0')}';
 
   void _generate() => setState(() {
         _history.add(_design);
@@ -211,6 +226,10 @@ class _BrandEditorState extends State<_BrandEditor> {
       'footer': _footer.text.trim().isEmpty ? null : _footer.text.trim(),
       'logo_data': _logo,
       'design': _design.p,
+      'number_prefix': _prefixNow,
+      'number_year': _numYear,
+      'number_digits': _numDigits,
+      'number_sep': _numSep,
       'is_active': _active,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
@@ -243,7 +262,7 @@ class _BrandEditorState extends State<_BrandEditor> {
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Wrap(spacing: 10, runSpacing: 10, children: [
-              SizedBox(width: 290, child: TextField(controller: _name, decoration: _dec('Brand name *'))),
+              SizedBox(width: 290, child: TextField(controller: _name, decoration: _dec('Brand name *'), onChanged: (_) => setState(() {}))),
               SizedBox(width: 290, child: TextField(controller: _tagline, decoration: _dec('Tagline', hint: 'e.g. Quality lighting since 1998'))),
               SizedBox(width: 290, child: TextField(controller: _phone, decoration: _dec('Phone'))),
               SizedBox(width: 290, child: TextField(controller: _email, decoration: _dec('Email'))),
@@ -268,6 +287,42 @@ class _BrandEditorState extends State<_BrandEditor> {
               const Text('Show on quotations'),
               Switch(value: _active, onChanged: (v) => setState(() => _active = v)),
             ]),
+            const Divider(height: 26),
+            const Text('Quote number', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              SizedBox(width: 130, child: TextField(
+                controller: _prefix,
+                textCapitalization: TextCapitalization.characters,
+                decoration: _dec('Prefix', hint: _prefixNow),
+                onChanged: (_) => setState(() {}),
+              )),
+              SizedBox(width: 110, child: DropdownButtonFormField<String>(
+                value: _numSep,
+                isDense: true,
+                decoration: _dec('Separator'),
+                items: const [
+                  DropdownMenuItem(value: '-', child: Text('-  dash')),
+                  DropdownMenuItem(value: '/', child: Text('/  slash')),
+                  DropdownMenuItem(value: '.', child: Text('.  dot')),
+                ],
+                onChanged: (v) => setState(() => _numSep = v ?? '-'),
+              )),
+              SizedBox(width: 110, child: DropdownButtonFormField<int>(
+                value: _numDigits,
+                isDense: true,
+                decoration: _dec('Digits'),
+                items: [for (final d in [3, 4, 5, 6]) DropdownMenuItem(value: d, child: Text('$d'))],
+                onChanged: (v) => setState(() => _numDigits = v ?? 4),
+              )),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Switch(value: _numYear, onChanged: (v) => setState(() => _numYear = v)),
+                const Text('Include year'),
+              ]),
+            ]),
+            const SizedBox(height: 6),
+            Text('Example: $_numberExample  ·  this brand keeps its own series',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             const Divider(height: 26),
             const Text('Quotation design', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
             const SizedBox(height: 6),

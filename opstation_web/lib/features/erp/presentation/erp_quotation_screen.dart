@@ -326,6 +326,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           'status': row['status'] ?? 'draft',
           'created_by': row['created_by'],
           'brand_id': row['brand_id'],
+          '_saved_brand': row['brand_id'],
         };
         _lines = List<Map<String, dynamic>>.from(items).map((it) => {
               'product_id': it['product_id'],
@@ -477,7 +478,21 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       String qid = _doc!['id'] as String? ?? 'qt_${DateTime.now().microsecondsSinceEpoch}';
       String? vnum = _doc!['voucher_number']?.toString();
 
-      if (isNew) {
+      // Each brand has its own number series (update 432); a quotation moved
+      // to another brand gets that brand's next number.
+      final brandChanged = !isNew && _doc!['brand_id'] != _doc!['_saved_brand'];
+      String? oldNumber;
+      if (isNew || brandChanged) {
+        try {
+          final n = await _client.rpc('next_quotation_number',
+              params: {'p_org': orgId, 'p_brand': _doc!['brand_id']});
+          if (n is String && n.isNotEmpty) {
+            oldNumber = vnum;
+            vnum = n;
+          }
+        } catch (_) {/* older database: fall back below */}
+      }
+      if (isNew && (vnum == null || vnum.isEmpty)) {
         final y = DateTime.now().year;
         try {
           // next_voucher_number does NOT track the 'QT' sequence — it returned a
@@ -544,6 +559,11 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
 
       _doc!['id'] = qid;
       _doc!['voucher_number'] = vnum;
+      _doc!['_saved_brand'] = _doc!['brand_id'];
+      if (brandChanged && oldNumber != null && oldNumber != vnum) {
+        final bn = _brands.firstWhere((b) => b['id'] == _doc!['brand_id'], orElse: () => const {})['name'];
+        await _logEvent('edited', 'Moved to ${bn ?? 'standard format'} — number changed from $oldNumber to $vnum');
+      }
       final totalNow = _grandTotal;
       await _logEvent(isNew ? 'created' : 'edited', [
         '${_lines.length} line${_lines.length == 1 ? '' : 's'}',
