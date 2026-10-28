@@ -381,14 +381,44 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
   /// Open the right scanner for the next check: camera on phones, the scan
   /// box (hardware scanner) on desktop.
   void _startNextScan(bool mobile) {
-    final sb = _scanKey.currentState;
-    if (sb == null) return;
     if (mobile) {
-      sb.openCamera();
-    } else {
-      sb.focusInput();
-      _snack('Ready — scan it now with the scanner (or use the camera icon in the scan box)');
+      _scanKey.currentState?.openCamera();
+      return;
     }
+    final o = _sel;
+    if (o != null) _openCheckDialog(o);
+  }
+
+  bool _checkDialogOpen = false;
+
+  /// Desktop: a scan window for the box checks (packing slip, then courier
+  /// label). The scanner types straight into it — no clicking needed. A wrong
+  /// slip / label is shown in red and the window waits for the right one; it
+  /// closes by itself once every check is done.
+  Future<void> _openCheckDialog(Map<String, dynamic> o) async {
+    if (_checkDialogOpen || !mounted || _nextCheck(o) == null) return;
+    _checkDialogOpen = true;
+    final id = o['id'];
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _CheckScanDialog(
+          orderNo: '${o['order_no'] ?? ''}',
+          customer: '${o['customer_name'] ?? ''}',
+          what: () => _nextCheck(o),
+          onCode: (code) async {
+            final r = await _onScan(code, 1);
+            if (r.ok) { ScanFeedback.ok(); } else if (mounted) { ScanFeedback.wrong(context); }
+            return r;
+          },
+        ),
+      );
+    } finally {
+      _checkDialogOpen = false;
+    }
+    if (mounted && _selId == id && _nextCheck(o) == null) _snack('✓ Box checked — ${o['order_no'] ?? ''}');
+    if (mounted) _scanKey.currentState?.focusInput();
   }
 
   Widget _nextScanPrompt(Map<String, dynamic> o, bool mobile) {
@@ -660,6 +690,10 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     }
     if (allDone && _nextCheck(o) != null) {
       Future.delayed(const Duration(milliseconds: 150), ScanFeedback.done);
+      // Last item scanned: open the slip / label scan window by itself (desktop).
+      if (mounted && MediaQuery.of(context).size.width >= 700) {
+        Future.delayed(const Duration(milliseconds: 400), () { if (mounted && _selId == o['id']) _openCheckDialog(o); });
+      }
       return ScanOutcome(true, '$name  ${_q(now)} / ${_q(need)}   ✓ all items picked — now scan ${_nextCheck(o)}');
     }
     if (allDone) {
@@ -2678,6 +2712,112 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             );
           }),
       ]),
+    );
+  }
+}
+
+
+/// Scan window for the box checks. Keeps focus in its field so a hardware
+/// scanner (which types the code and presses Enter) works hands-free.
+class _CheckScanDialog extends StatefulWidget {
+  final String orderNo;
+  final String customer;
+  final String? Function() what; // next check, null = all done
+  final Future<ScanOutcome> Function(String code) onCode;
+  const _CheckScanDialog({required this.orderNo, required this.customer, required this.what, required this.onCode});
+  @override
+  State<_CheckScanDialog> createState() => _CheckScanDialogState();
+}
+
+class _CheckScanDialogState extends State<_CheckScanDialog> {
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+  String? _msg;
+  bool _ok = false;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit(String v) async {
+    final code = v.trim();
+    _ctrl.clear();
+    if (code.isEmpty || _busy) {
+      _focus.requestFocus();
+      return;
+    }
+    setState(() => _busy = true);
+    final r = await widget.onCode(code);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _ok = r.ok;
+      _msg = r.message;
+    });
+    if (widget.what() == null) {
+      await Future.delayed(const Duration(milliseconds: 700));
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      return;
+    }
+    _focus.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final what = widget.what() ?? 'the box';
+    final label = what.contains('label');
+    return AlertDialog(
+      title: Row(children: [
+        Icon(label ? Icons.local_shipping_outlined : Icons.receipt_long_outlined, color: Colors.indigo),
+        const SizedBox(width: 10),
+        Expanded(child: Text(label ? 'Scan the courier label' : 'Scan the packing slip')),
+      ]),
+      content: SizedBox(
+        width: 440,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${widget.orderNo}  ·  ${widget.customer}', style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text('All items are picked. Scan $what now.', style: const TextStyle(color: Colors.black54)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _ctrl,
+            focusNode: _focus,
+            autofocus: true,
+            enabled: !_busy,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.qr_code_scanner),
+              hintText: label ? 'Scan or type the tracking number' : 'Scan or type the order number on the slip',
+              isDense: true,
+              border: const OutlineInputBorder(),
+            ),
+            onSubmitted: _submit,
+          ),
+          if (_busy) const Padding(padding: EdgeInsets.only(top: 10), child: LinearProgressIndicator(minHeight: 2)),
+          if (_msg != null)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: (_ok ? Colors.green : Colors.red).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(_msg!, style: TextStyle(
+                  color: _ok ? Colors.green.shade800 : Colors.red.shade800, fontWeight: FontWeight.w700)),
+            ),
+        ]),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+          child: const Text('Close'),
+        ),
+      ],
     );
   }
 }
