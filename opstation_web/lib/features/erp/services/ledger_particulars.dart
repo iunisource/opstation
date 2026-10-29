@@ -1,16 +1,52 @@
+import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/format/money.dart';
+import '../../../core/theme/app_theme.dart';
 
-/// "Detailed view" for the customer / supplier ledgers: the particulars of
-/// each voucher (products, quantities, rates, discounts, payment mode,
-/// cheque, the other side of a journal…) as one short line of text.
+/// One product line of a voucher, for the ledger's Detailed view.
+class LedgerItemRow {
+  final String name;
+  final double qty;
+  final double rate;
+  final double discount;
+  final double amount;
+  final bool free;
+  const LedgerItemRow(this.name, this.qty, this.rate, this.discount, this.amount, this.free);
+}
+
+/// Particulars of one invoice-type voucher: its product lines plus header
+/// extras (invoice discount, tax, freight, supplier bill no, POS payment).
+class LedgerDetail {
+  final List<LedgerItemRow> rows;
+  final List<String> extras;
+  const LedgerDetail(this.rows, this.extras);
+
+  bool get isEmpty => rows.isEmpty && extras.isEmpty;
+
+  /// One-line text for Print / Share / Excel.
+  String get text {
+    final parts = [
+      for (final r in rows)
+        r.free
+            ? '${r.name} ${LedgerParticulars.qty(r.qty)} (free)'
+            : '${r.name} ${LedgerParticulars.qty(r.qty)} × ${money(r.rate)}'
+                '${r.discount >= 0.01 ? ' − disc ${money(r.discount)}' : ''} = ${money(r.amount)}',
+      ...extras,
+    ];
+    return parts.join('  ·  ');
+  }
+}
+
+/// "Detailed view" for the customer / supplier ledgers: the products,
+/// quantities, rates and discounts of each invoice-type voucher.
 ///
-/// Everything is loaded in batches per voucher type, never one query per row.
-/// Every column is read defensively, so a missing column only leaves that
-/// detail out instead of breaking the ledger.
+/// Receipts, payments and journals are left out on purpose — their own
+/// descriptions already carry the detail.
+///
+/// Loaded in batches per voucher type (never one query per row), and every
+/// column is read defensively, so a missing column only leaves that detail out.
 class LedgerParticulars {
-  /// Key used to look up the particulars of a ledger entry.
   static String keyOf(Map<String, dynamic> e) =>
       '${_group(e['type'] as String? ?? '')}|${e['id'] ?? ''}';
 
@@ -27,23 +63,12 @@ class LedgerParticulars {
         return 'PI';
       case 'Purchase Return':
         return 'PRI';
-      case 'Receipt (CRV)':
-        return 'CRV';
-      case 'Payment (CPV)':
-        return 'CPV';
-      case 'Journal (JV)':
-      case 'Opening Balance':
-      case 'Job-work Fee':
-        return 'JV';
       default:
-        return ''; // settlement lines (Paid at POS, cash refund) have no own particulars
+        return '';
     }
   }
 
-  /// Loads particulars for [entries]. [partyId] is the customer / supplier, so
-  /// a journal shows only the OTHER side of the entry.
-  static Future<Map<String, String>> load(
-      List<Map<String, dynamic>> entries, String partyId) async {
+  static Future<Map<String, LedgerDetail>> load(List<Map<String, dynamic>> entries) async {
     final client = Supabase.instance.client;
     final ids = <String, Set<String>>{};
     for (final e in entries) {
@@ -52,7 +77,7 @@ class LedgerParticulars {
       if (g.isEmpty || id == null || id.isEmpty) continue;
       ids.putIfAbsent(g, () => <String>{}).add(id);
     }
-    final out = <String, String>{};
+    final out = <String, LedgerDetail>{};
     final jobs = <Future<void>>[];
 
     void items(String g, String headerTable, String itemTable, String fk) {
@@ -70,8 +95,8 @@ class LedgerParticulars {
           }
           final hMap = {for (final h in headers) h['id'].toString(): h};
           for (final id in list) {
-            final txt = _docText(hMap[id], byDoc[id] ?? const [], names);
-            if (txt.isNotEmpty) out['$g|$id'] = txt;
+            final d = _detail(hMap[id], byDoc[id] ?? const [], names);
+            if (!d.isEmpty) out['$g|$id'] = d;
           }
         } catch (_) {/* detail is optional */}
       }());
@@ -83,77 +108,13 @@ class LedgerParticulars {
     items('PI', 'purchase_invoices', 'purchase_invoice_items', 'invoice_id');
     items('PRI', 'purchase_return_invoices', 'purchase_return_invoice_items', 'voucher_id');
 
-    for (final g in const ['CRV', 'CPV']) {
-      final list = ids[g];
-      if (list == null || list.isEmpty) continue;
-      jobs.add(() async {
-        try {
-          final table = g == 'CRV' ? 'crv_vouchers' : 'cpv_vouchers';
-          final lineTable = g == 'CRV' ? 'crv_voucher_lines' : 'cpv_voucher_lines';
-          final headers = await _byIds(client, table, 'id', list.toList());
-          final lines = await _byIds(client, lineTable, 'voucher_id', list.toList());
-          final accIds = <String>{
-            for (final h in headers)
-              for (final k in const ['account_id', 'cash_account_id', 'bank_account_id', 'payment_account_id', 'deposit_account_id'])
-                if ((h[k] ?? '').toString().isNotEmpty) h[k].toString(),
-          };
-          final accNames = await _accountNames(client, accIds.toList());
-          final otherLines = <String, int>{};
-          for (final l in lines) {
-            final vid = l['voucher_id']?.toString();
-            if (vid != null && l['account_id']?.toString() != partyId) {
-              otherLines[vid] = (otherLines[vid] ?? 0) + 1;
-            }
-          }
-          for (final h in headers) {
-            final id = h['id'].toString();
-            final txt = _payText(h, accNames, otherLines[id] ?? 0);
-            if (txt.isNotEmpty) out['$g|$id'] = txt;
-          }
-        } catch (_) {}
-      }());
-    }
-
-    final jv = ids['JV'];
-    if (jv != null && jv.isNotEmpty) {
-      jobs.add(() async {
-        try {
-          final lines = await _byIds(client, 'journal_lines', 'entry_id', jv.toList());
-          final accNames = await _accountNames(client, [
-            for (final l in lines)
-              if ((l['account_id'] ?? '').toString().isNotEmpty) l['account_id'].toString()
-          ]);
-          final byEntry = <String, List<Map<String, dynamic>>>{};
-          for (final l in lines) {
-            final k = l['entry_id']?.toString();
-            if (k != null) byEntry.putIfAbsent(k, () => []).add(l);
-          }
-          for (final id in jv) {
-            final parts = <String>[];
-            for (final l in byEntry[id] ?? const <Map<String, dynamic>>[]) {
-              if (l['party_id']?.toString() == partyId) continue; // this party's own line
-              final dr = _num(l['debit']);
-              final cr = _num(l['credit']);
-              if (dr == 0 && cr == 0) continue;
-              final acc = accNames[l['account_id']?.toString()] ??
-                  (l['description']?.toString().trim().isNotEmpty == true ? l['description'].toString().trim() : 'Account');
-              parts.add('${dr > 0 ? 'Dr' : 'Cr'} $acc ${money(dr > 0 ? dr : cr)}');
-            }
-            if (parts.isNotEmpty) out['JV|$id'] = _cap(parts, 8);
-          }
-        } catch (_) {}
-      }());
-    }
-
     await Future.wait(jobs);
     return out;
   }
 
-  // ── Formatting ────────────────────────────────────────────────────────────
-
-  static String _docText(Map<String, dynamic>? h, List<Map<String, dynamic>> lines,
+  static LedgerDetail _detail(Map<String, dynamic>? h, List<Map<String, dynamic>> lines,
       Map<String, String> names) {
-    final parts = <String>[];
+    final rows = <LedgerItemRow>[];
     for (final l in lines) {
       final q = _firstNonZero(l, const ['qty_delivered', 'quantity', 'qty', 'qty_received', 'qty_returned']);
       final p = _firstNonZero(l, const ['unit_price', 'price', 'rate', 'unit_cost']);
@@ -162,21 +123,12 @@ class LedgerParticulars {
       final name = names[l['product_id']?.toString()] ??
           (l['product_name'] ?? l['description'] ?? 'Item').toString();
       final foc = l['is_foc'] == true;
-      var s = '$name ${_qty(q)}';
-      if (foc) {
-        s += ' (free)';
-      } else if (p > 0) {
-        s += ' × ${money(p)}';
-        final gross = q * p;
-        if ((gross - t).abs() >= 0.01 && t > 0) s += ' − disc ${money(gross - t)}';
-        s += ' = ${money(t)}';
-      }
-      parts.add(s);
+      final disc = (q * p - t) >= 0.01 && t > 0 ? q * p - t : 0.0;
+      rows.add(LedgerItemRow(name, q, p, disc, foc ? 0 : t, foc));
     }
-    var text = _cap(parts, 12);
+    final extras = <String>[];
     if (h != null) {
-      final extras = <String>[];
-      final disc = _firstNonZero(h, const ['discount_total', 'discount_amount', 'discount', 'invoice_discount']);
+      final disc = _firstNonZero(h, const ['discount_total', 'discount_amount', 'invoice_discount']);
       if (disc > 0) extras.add('Discount ${money(disc)}');
       final tax = _firstNonZero(h, const ['tax_total', 'tax_amount', 'sales_tax', 'gst_amount']);
       if (tax > 0) extras.add('Tax ${money(tax)}');
@@ -186,32 +138,64 @@ class LedgerParticulars {
       if (bill.isNotEmpty) extras.add('Bill $bill');
       final pm = _firstText(h, const ['payment_method']);
       if (pm.isNotEmpty) extras.add(pm);
-      if (extras.isNotEmpty) text = text.isEmpty ? extras.join(' · ') : '$text  ·  ${extras.join(' · ')}';
     }
-    return text;
+    return LedgerDetail(rows, extras);
   }
 
-  static String _payText(Map<String, dynamic> h, Map<String, String> accNames, int otherLines) {
-    final parts = <String>[];
-    final mode = _firstText(h, const ['payment_mode', 'payment_method', 'mode', 'payment_type', 'instrument_type']);
-    if (mode.isNotEmpty) parts.add(_titleCase(mode));
-    for (final k in const ['account_id', 'cash_account_id', 'bank_account_id', 'payment_account_id', 'deposit_account_id']) {
-      final n = accNames[(h[k] ?? '').toString()];
-      if (n != null) {
-        parts.add(n);
-        break;
-      }
+  /// The small product grid shown under the description.
+  static Widget table(LedgerDetail d) {
+    const head = TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary);
+    const cell = TextStyle(fontSize: 10.5, color: AppTheme.textPrimary);
+    final showDisc = d.rows.any((r) => r.discount >= 0.01);
+    Widget c(String s, TextStyle st, {bool right = false}) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+          child: Text(s, style: st, textAlign: right ? TextAlign.right : TextAlign.left),
+        );
+    final children = <Widget>[];
+    if (d.rows.isNotEmpty) {
+      children.add(ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Table(
+          border: TableBorder.all(color: AppTheme.border, width: 0.6),
+          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          columnWidths: {
+            0: const FlexColumnWidth(4),
+            1: const FlexColumnWidth(1.1),
+            2: const FlexColumnWidth(1.5),
+            if (showDisc) 3: const FlexColumnWidth(1.4),
+            (showDisc ? 4 : 3): const FlexColumnWidth(1.7),
+          },
+          children: [
+            TableRow(
+              decoration: const BoxDecoration(color: AppTheme.background),
+              children: [
+                c('Product', head),
+                c('Qty', head, right: true),
+                c('Rate', head, right: true),
+                if (showDisc) c('Disc', head, right: true),
+                c('Amount', head, right: true),
+              ],
+            ),
+            for (final r in d.rows)
+              TableRow(children: [
+                c(r.free ? '${r.name} (free)' : r.name, cell),
+                c(qty(r.qty), cell, right: true),
+                c(r.free ? '—' : money(r.rate), cell, right: true),
+                if (showDisc) c(r.discount >= 0.01 ? money(r.discount) : '—', cell, right: true),
+                c(r.free ? '—' : money(r.amount), cell, right: true),
+              ]),
+          ],
+        ),
+      ));
     }
-    final chq = _firstText(h, const ['cheque_number', 'cheque_no', 'instrument_no', 'instrument_number', 'transaction_ref', 'reference_number', 'reference_no']);
-    if (chq.isNotEmpty) parts.add('Chq/Ref $chq');
-    final bank = _firstText(h, const ['bank_name', 'drawee_bank', 'cheque_bank', 'bank']);
-    if (bank.isNotEmpty) parts.add(bank);
-    final cd = _firstText(h, const ['cheque_date', 'instrument_date']);
-    if (cd.length >= 10) parts.add('dated ${cd.substring(0, 10)}');
-    final narr = _firstText(h, const ['narration', 'description', 'remarks', 'notes', 'memo']);
-    if (narr.isNotEmpty) parts.add(narr);
-    if (otherLines > 0) parts.add('+$otherLines other line${otherLines == 1 ? '' : 's'} on this voucher');
-    return parts.join(' · ');
+    if (d.extras.isNotEmpty) {
+      children.add(Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text(d.extras.join('  ·  '),
+            style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+      ));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: children);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -249,22 +233,6 @@ class LedgerParticulars {
     return out;
   }
 
-  static Future<Map<String, String>> _accountNames(SupabaseClient client, List<String> ids) async {
-    final out = <String, String>{};
-    final uniq = ids.toSet().toList();
-    if (uniq.isEmpty) return out;
-    try {
-      for (var i = 0; i < uniq.length; i += 100) {
-        final chunk = uniq.sublist(i, i + 100 > uniq.length ? uniq.length : i + 100);
-        final rows = await client.from('chart_of_accounts').select('id, name').inFilter('id', chunk);
-        for (final r in rows as List) {
-          out[r['id'].toString()] = (r['name'] ?? '').toString();
-        }
-      }
-    } catch (_) {}
-    return out;
-  }
-
   static double _num(dynamic v) {
     if (v is num) return v.toDouble();
     return double.tryParse(v?.toString() ?? '') ?? 0;
@@ -286,16 +254,6 @@ class LedgerParticulars {
     return '';
   }
 
-  static String _qty(double v) =>
+  static String qty(double v) =>
       v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
-
-  static String _titleCase(String s) {
-    final t = s.replaceAll('_', ' ').trim();
-    return t.isEmpty ? t : t[0].toUpperCase() + t.substring(1);
-  }
-
-  static String _cap(List<String> parts, int max) {
-    if (parts.length <= max) return parts.join('  ·  ');
-    return '${parts.take(max).join('  ·  ')}  ·  +${parts.length - max} more';
-  }
 }

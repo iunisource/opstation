@@ -45,7 +45,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   // Basic / Detailed view. Detailed shows each voucher's particulars (products,
   // rates, payment mode, cheque, other side of a journal…) under the description.
   bool _detailed = false;
-  Map<String, String> _particulars = {};
+  Map<String, LedgerDetail> _particulars = {};
   bool _partLoading = false;
   int _partSeq = 0;
   final _entrySearchCtrl = TextEditingController();
@@ -424,7 +424,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     if (party == null || _entries.isEmpty) return;
     final seq = ++_partSeq;
     setState(() => _partLoading = true);
-    final res = await LedgerParticulars.load(_entries, party);
+    final res = await LedgerParticulars.load(_entries);
     if (!mounted || seq != _partSeq) return;
     setState(() { _particulars = res; _partLoading = false; });
   }
@@ -461,22 +461,26 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     ]);
   }
 
-  String _particularsOf(Map<String, dynamic> e) =>
-      _detailed ? (_particulars[LedgerParticulars.keyOf(e)] ?? '') : '';
+  LedgerDetail? _detailOf(Map<String, dynamic> e) =>
+      _detailed ? _particulars[LedgerParticulars.keyOf(e)] : null;
+
+  String _particularsOf(Map<String, dynamic> e) => _detailOf(e)?.text ?? '';
 
   Widget _descCell(Map<String, dynamic> e) {
     final desc = (e['description'] as String?) ?? '';
     if (!_detailed) {
       return Text(desc, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis);
     }
-    final part = _particularsOf(e);
+    final d = _detailOf(e);
+    if (d == null || d.isEmpty) {
+      return Text(desc, style: const TextStyle(fontSize: 12));
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-      if (desc.isNotEmpty) Text(desc, style: const TextStyle(fontSize: 12)),
-      if (part.isNotEmpty) Padding(
-        padding: EdgeInsets.only(top: desc.isNotEmpty ? 2 : 0),
-        child: Text(part, style: const TextStyle(fontSize: 10.5, height: 1.35, color: AppTheme.textSecondary)),
+      if (desc.isNotEmpty) Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(desc, style: const TextStyle(fontSize: 12)),
       ),
-      if (desc.isEmpty && part.isEmpty) const Text('', style: TextStyle(fontSize: 12)),
+      LedgerParticulars.table(d),
     ]);
   }
 
