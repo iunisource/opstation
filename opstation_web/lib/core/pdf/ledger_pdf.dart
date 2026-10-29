@@ -13,8 +13,20 @@ import 'pdf_output.dart';
 /// decoupled from the app's money/date formatting).
 class LedgerLine {
   final String date, voucher, description, type, debit, credit, balance;
+
+  /// Detailed view only: the voucher's product lines (shown as a small grid
+  /// inside the description cell) and a line of extras (discount, tax…).
+  final List<LedgerSubRow> items;
+  final String extras;
   const LedgerLine(this.date, this.voucher, this.description, this.type,
-      this.debit, this.credit, this.balance);
+      this.debit, this.credit, this.balance,
+      {this.items = const [], this.extras = ''});
+}
+
+/// One product line inside a ledger entry (pre-formatted strings).
+class LedgerSubRow {
+  final String product, qty, rate, disc, amount;
+  const LedgerSubRow(this.product, this.qty, this.rate, this.disc, this.amount);
 }
 
 /// A pending-cheque (PDC) memo line, customer ledger only.
@@ -216,6 +228,67 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
 
   final netColor = d.netIsDanger ? _danger : _green;
 
+  // Description cell: plain text, or text + a small product grid (Detailed view).
+  pw.Widget descCell(LedgerLine l) {
+    if (l.items.isEmpty && l.extras.isEmpty) return c(l.description);
+    final showDisc = l.items.any((r) => r.disc.isNotEmpty);
+    pw.Widget sc(String t, {bool right = false, bool head = false}) => pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 2.5, vertical: 1.5),
+        child: pw.Text(t,
+            textAlign: right ? pw.TextAlign.right : pw.TextAlign.left,
+            style: pw.TextStyle(
+                fontSize: 7,
+                fontWeight: head ? pw.FontWeight.bold : pw.FontWeight.normal,
+                color: head ? PdfColors.grey700 : null)));
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(4),
+      child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        if (l.description.isNotEmpty)
+          pw.Text(l.description, style: const pw.TextStyle(fontSize: 8.5)),
+        if (l.items.isNotEmpty)
+          pw.Padding(
+            padding: pw.EdgeInsets.only(top: l.description.isNotEmpty ? 3 : 0),
+            child: pw.Table(
+              border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.4),
+              columnWidths: {
+                0: const pw.FlexColumnWidth(3.2),
+                1: const pw.FlexColumnWidth(1),
+                2: const pw.FlexColumnWidth(1.4),
+                if (showDisc) 3: const pw.FlexColumnWidth(1.3),
+                (showDisc ? 4 : 3): const pw.FlexColumnWidth(1.6),
+              },
+              children: [
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                  children: [
+                    sc('Product', head: true),
+                    sc('Qty', right: true, head: true),
+                    sc('Rate', right: true, head: true),
+                    if (showDisc) sc('Disc', right: true, head: true),
+                    sc('Amount', right: true, head: true),
+                  ],
+                ),
+                for (final r in l.items)
+                  pw.TableRow(children: [
+                    sc(r.product),
+                    sc(r.qty, right: true),
+                    sc(r.rate, right: true),
+                    if (showDisc) sc(r.disc.isEmpty ? '-' : r.disc, right: true),
+                    sc(r.amount, right: true),
+                  ]),
+              ],
+            ),
+          ),
+        if (l.extras.isNotEmpty)
+          pw.Padding(
+            padding: const pw.EdgeInsets.only(top: 2),
+            child: pw.Text(l.extras,
+                style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
+          ),
+      ]),
+    );
+  }
+
   // A bordered stat card (Total Debit / Total Credit / Net Balance) matching the
   // print header cards.
   pw.Widget stat(String label, String value, PdfColor valueColor) => pw.Expanded(
@@ -331,7 +404,7 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
             pw.TableRow(children: [
               c(l.date),
               c(l.voucher),
-              c(l.description),
+              descCell(l),
               c(l.type),
               c(l.debit, a: pw.TextAlign.right),
               c(l.credit, a: pw.TextAlign.right),

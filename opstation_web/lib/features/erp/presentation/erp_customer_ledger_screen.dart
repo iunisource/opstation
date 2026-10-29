@@ -771,6 +771,25 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     ]);
   }
 
+  /// Detailed view in Print / Share: the voucher's products as a grid.
+  ({List<LedgerSubRow> items, String extras})? _pdfDetail(Map<String, dynamic> e) {
+    final d = _detailOf(e);
+    if (d == null || d.isEmpty) return null;
+    return (
+      items: [
+        for (final r in d.rows)
+          LedgerSubRow(
+            r.free ? '${r.name} (free)' : r.name,
+            LedgerParticulars.qty(r.qty),
+            r.free ? '-' : money(r.rate),
+            r.discount >= 0.01 ? money(r.discount) : '',
+            r.free ? '-' : money(r.amount),
+          ),
+      ],
+      extras: d.extras.join('  ·  '),
+    );
+  }
+
   /// Description for Print / Share / Excel: adds the particulars in Detailed view.
   String _exportDesc(Map<String, dynamic> e) {
     final desc = (e['description'] as String?) ?? '';
@@ -1604,8 +1623,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       final dt = DateTime.tryParse(e['date'] as String? ?? '');
       final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
       final debit = e['debit'] as double; final credit = e['credit'] as double;
-      lines.add(LedgerLine(date, e['voucher'] as String? ?? '', _exportDesc(e), e['type'] as String? ?? '',
-        debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
+      lines.add(LedgerLine(date, e['voucher'] as String? ?? '', _pdfDetail(e) == null ? _exportDesc(e) : ((e['description'] as String?) ?? ''), e['type'] as String? ?? '',
+        debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double),
+        items: _pdfDetail(e)?.items ?? const [], extras: _pdfDetail(e)?.extras ?? ''));
     }
     final pdc = <LedgerPdc>[]; double pdcTotal = 0;
     for (final ch in _pendingCheques) {
