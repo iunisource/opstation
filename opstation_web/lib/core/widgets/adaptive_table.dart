@@ -54,6 +54,9 @@ class AdaptiveTable<T> extends StatelessWidget {
   /// Zebra striping on desktop. Off on mobile — cards already separate rows.
   final bool striped;
 
+  /// Desktop row alignment. Top-align when a cell can grow to several lines.
+  final CrossAxisAlignment rowAlignment;
+
   const AdaptiveTable({
     super.key,
     required this.columns,
@@ -62,6 +65,7 @@ class AdaptiveTable<T> extends StatelessWidget {
     this.empty,
     this.footer,
     this.striped = true,
+    this.rowAlignment = CrossAxisAlignment.center,
   });
 
   @override
@@ -110,7 +114,7 @@ class AdaptiveTable<T> extends StatelessWidget {
                 color: striped && i.isOdd ? Colors.grey.shade50 : null,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                child: Row(children: [
+                child: Row(crossAxisAlignment: rowAlignment, children: [
                   for (final c in columns)
                     c.width == null
                         ? Expanded(child: c.cell(row))

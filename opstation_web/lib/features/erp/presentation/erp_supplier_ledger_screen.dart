@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/format/money.dart';
 import '../../../core/pdf/ledger_pdf.dart';
+import '../services/ledger_particulars.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
@@ -40,6 +41,13 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   DateTime? _dateFrom;
   DateTime? _dateTo;
   String _typeFilter = 'All';
+
+  // Basic / Detailed view. Detailed shows each voucher's particulars (products,
+  // rates, payment mode, cheque, other side of a journal…) under the description.
+  bool _detailed = false;
+  Map<String, String> _particulars = {};
+  bool _partLoading = false;
+  int _partSeq = 0;
   final _entrySearchCtrl = TextEditingController();
 
   static const _types = ['All', 'Purchase Invoice', 'Purchase Return', 'Receipt (CRV)', 'Payment (CPV)', 'Journal (JV)'];
@@ -47,6 +55,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   @override
   void initState() {
     super.initState();
+    try { _detailed = html.window.localStorage['supp_ledger_view'] == 'detailed'; } catch (_) {}
     _earlyRestore();
     _loadSuppliers();
     _loadFooterMsg();
@@ -210,7 +219,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     final orgId = _orgId;
     if (orgId == null) return;
     final seq = ++_ledgerSeq;
-    setState(() { _loading = true; _entries = []; _errors = []; });
+    setState(() { _loading = true; _entries = []; _errors = []; _particulars = {}; _partSeq++; _partLoading = false; });
     final client = Supabase.instance.client;
     final List<Map<String, dynamic>> entries = [];
     final List<String> errors = [];
@@ -390,6 +399,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     // matching the old ERP / how the team reconciles.
     for (final e in entries) { bal += (e['debit'] as double) - (e['credit'] as double); e['balance'] = bal; }
     setState(() { _entries = entries; _loading = false; _errors = errors; });
+    if (_detailed) _loadParticulars();
   }
 
   /// Posted voucher headers for [ids], fetched in chunks (keeps URLs short).
@@ -408,6 +418,76 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     return [for (final r in res) ...List<Map<String, dynamic>>.from(r as List)];
   }
 
+  // ── Basic / Detailed view ────────────────────────────────────────────────
+  Future<void> _loadParticulars() async {
+    final party = _selectedSupplier?['id'] as String?;
+    if (party == null || _entries.isEmpty) return;
+    final seq = ++_partSeq;
+    setState(() => _partLoading = true);
+    final res = await LedgerParticulars.load(_entries, party);
+    if (!mounted || seq != _partSeq) return;
+    setState(() { _particulars = res; _partLoading = false; });
+  }
+
+  void _setDetailed(bool v) {
+    if (v == _detailed) return;
+    setState(() => _detailed = v);
+    try { html.window.localStorage['supp_ledger_view'] = v ? 'detailed' : 'basic'; } catch (_) {}
+    if (v && _particulars.isEmpty && _entries.isNotEmpty) _loadParticulars();
+  }
+
+  Widget _viewToggle() {
+    Widget seg(String label, bool value) {
+      final on = _detailed == value;
+      return InkWell(
+        onTap: () => _setDetailed(value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          color: on ? AppTheme.primary : Colors.white,
+          child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: on ? Colors.white : AppTheme.textSecondary)),
+        ),
+      );
+    }
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
+        clipBehavior: Clip.antiAlias,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [seg('Basic', false), seg('Detailed', true)]),
+      ),
+      if (_detailed && _partLoading) const Padding(
+        padding: EdgeInsets.only(left: 8),
+        child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+      ),
+    ]);
+  }
+
+  String _particularsOf(Map<String, dynamic> e) =>
+      _detailed ? (_particulars[LedgerParticulars.keyOf(e)] ?? '') : '';
+
+  Widget _descCell(Map<String, dynamic> e) {
+    final desc = (e['description'] as String?) ?? '';
+    if (!_detailed) {
+      return Text(desc, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis);
+    }
+    final part = _particularsOf(e);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      if (desc.isNotEmpty) Text(desc, style: const TextStyle(fontSize: 12)),
+      if (part.isNotEmpty) Padding(
+        padding: EdgeInsets.only(top: desc.isNotEmpty ? 2 : 0),
+        child: Text(part, style: const TextStyle(fontSize: 10.5, height: 1.35, color: AppTheme.textSecondary)),
+      ),
+      if (desc.isEmpty && part.isEmpty) const Text('', style: TextStyle(fontSize: 12)),
+    ]);
+  }
+
+  /// Description for Print / Share / Excel: adds the particulars in Detailed view.
+  String _exportDesc(Map<String, dynamic> e) {
+    final desc = (e['description'] as String?) ?? '';
+    final part = _particularsOf(e);
+    if (part.isEmpty) return desc;
+    return desc.isEmpty ? part : '$desc — $part';
+  }
+
   List<Map<String, dynamic>> get _displayEntries {
     var list = _entries.where((e) {
       if (_typeFilter != 'All' && e['type'] != _typeFilter) return false;
@@ -419,7 +499,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           if (_dateTo != null && d.isAfter(_dateTo!.add(const Duration(days: 1)))) return false;
         }
       }
-      if (!matchesQuery('${e['description']} ${e['voucher']}', _entrySearchCtrl.text)) return false;
+      if (!matchesQuery('${e['description']} ${e['voucher']} ${_particularsOf(e)}', _entrySearchCtrl.text)) return false;
       return true;
     }).toList();
     // Recalculate running balance for filtered view
@@ -620,7 +700,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                   onChanged: (v) { setState(() => _typeFilter = v ?? 'All'); _persist(); },
                 )),
               ),
+              if (!context.isMobile) ...[const SizedBox(width: 10), _viewToggle()],
             ]),
+            if (context.isMobile) Padding(padding: const EdgeInsets.only(top: 8), child: _viewToggle()),
             const SizedBox(height: 12),
           ],
           if (_loading) const Expanded(child: Center(child: CircularProgressIndicator()))
@@ -631,6 +713,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           ])))
           else Expanded(child: AdaptiveTable<Map<String, dynamic>>(
             rows: display,
+            rowAlignment: _detailed ? CrossAxisAlignment.start : CrossAxisAlignment.center,
             empty: const Center(child: Text('No transactions found.', style: TextStyle(color: AppTheme.textSecondary))),
             columns: [
               AdaptiveColumn(
@@ -654,7 +737,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               ),
               AdaptiveColumn(
                 label: 'Description', width: null,
-                cell: (e) => Text(e['description'] as String, style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis),
+                cell: (e) => _descCell(e),
               ),
               AdaptiveColumn(
                 label: 'Type', width: 80,
@@ -742,7 +825,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       final ds = e['date'] as String? ?? '';
       final dt = DateTime.tryParse(ds); final date = dt != null ? DateFormat('yyyy-MM-dd').format(dt) : '';
       td += e['debit'] as double; tc += e['credit'] as double;
-      buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(e['description'] as String), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
+      buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(_exportDesc(e)), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
     }
     buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
     final csvContent = String.fromCharCode(0xFEFF) + buf.toString();
@@ -1073,7 +1156,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       final dt = DateTime.tryParse(e['date'] as String? ?? '');
       final date = dt != null ? DateFormat('d MMM yy').format(dt) : '-';
       final debit = e['debit'] as double; final credit = e['credit'] as double;
-      lines.add(LedgerLine(date, e['voucher'] as String? ?? '', e['description'] as String? ?? '', e['type'] as String? ?? '',
+      lines.add(LedgerLine(date, e['voucher'] as String? ?? '', _exportDesc(e), e['type'] as String? ?? '',
         debit > 0 ? money(debit) : '-', credit > 0 ? money(credit) : '-', money(e['display_balance'] as double)));
     }
     final fileBase = (supplierName + '_' + DateFormat('d MMM yyyy').format(DateTime.now()) + '_Ledger')
