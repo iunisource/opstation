@@ -50,6 +50,14 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   bool get _isLocked => _detail['is_locked'] as bool? ?? false;
   bool get _isVoided => _detail['is_voided'] as bool? ?? false;
   bool get _isDraft  => !_isLocked;
+  // Sales Return Invoices made from this SRN (not voided). While one exists the
+  // SRN's customer is fixed, the same way an SO's customer is fixed once a
+  // Delivery Order exists against it.
+  bool _hasSri = false;
+  List<String> _sriRefs = [];
+  /// The customer can be changed while the SRN is unlocked and no Sales Return
+  /// Invoice has been made from it.
+  bool get _canEditParty => !_isVoided && !_isLocked && !_hasSri;
   bool get _canDelete { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _canUnlock { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
   bool get _isAdmin { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
@@ -138,8 +146,52 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       final items = await client.from('sales_return_items')
           .select('*,products(name,sku),uoms(abbreviation)').eq('return_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: ret['customer_id'] as String?, createdById: ret['created_by'] as String?);
-      setState(() { _detail = Map<String, dynamic>.from(ret); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; });
+      final sris = await _activeSris(id);
+      setState(() {
+        _detail = Map<String, dynamic>.from(ret); _items = List<Map<String, dynamic>>.from(items); _meta = meta;
+        _hasSri = sris.isNotEmpty;
+        _sriRefs = [for (final x in sris) (x['voucher_number'] as String? ?? '').trim()].where((v) => v.isNotEmpty).toList();
+        _detailLoading = false;
+      });
     } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
+  }
+
+  /// Sales Return Invoices made from this SRN that are not voided.
+  Future<List<Map<String, dynamic>>> _activeSris(String srnId) async {
+    final r = await Supabase.instance.client.from('sales_return_invoices')
+        .select('id,voucher_number,is_voided').eq('srn_id', srnId);
+    return List<Map<String, dynamic>>.from(r).where((x) => x['is_voided'] != true).toList();
+  }
+
+  /// Change the SRN's customer — allowed while it is unlocked and no Sales
+  /// Return Invoice has been made from it (re-checked on the server first).
+  Future<void> _changeCustomer() async {
+    final id = _detail['id'] as String?;
+    if (id == null || !_canEditParty) return;
+    if (_customers.isEmpty) { _showSnack('Loading customers…'); await _ensureCustomers(); }
+    if (!mounted) return;
+    final picked = await showDialog<Map<String, dynamic>?>(context: context, builder: (_) => _CustomerPickDialog(customers: _customers));
+    if (picked == null || picked['id'] == _detail['customer_id']) return;
+    try {
+      final client = Supabase.instance.client;
+      final fresh = await client.from('sales_returns').select('is_locked,is_voided').eq('id', id).maybeSingle();
+      if (fresh == null || fresh['is_voided'] == true) { _showSnack('This SRN was voided.'); _loadDetail(id); return; }
+      if (fresh['is_locked'] == true) { _showSnack('This SRN was locked meanwhile. Unlock it to change the customer.'); _loadDetail(id); return; }
+      final sris = await _activeSris(id);
+      if (sris.isNotEmpty) {
+        final refs = [for (final x in sris) (x['voucher_number'] as String? ?? '')].where((v) => v.isNotEmpty).join(', ');
+        _showSnack('Sales Return Invoice ${refs.isEmpty ? '' : '$refs '}exists against this SRN. Void it first to change the customer.');
+        _loadDetail(id);
+        return;
+      }
+      await client.from('sales_returns').update({
+        'customer_id': picked['id'], 'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', id);
+      await _logAudit(id, 'customer_changed', 'Customer set to ${picked['shop_name'] ?? '-'}');
+      _showSnack('Customer changed to ${picked['shop_name'] ?? '-'}');
+      await _loadList();
+      _loadDetail(id);
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
   Future<void> _logAudit(String id, String action, String? details) async {
@@ -513,7 +565,24 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
               ])),
       Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
-          _SrnChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
+          if (_canEditParty)
+            Tooltip(
+              message: 'Change customer',
+              child: InkWell(
+                onTap: _changeCustomer,
+                borderRadius: BorderRadius.circular(6),
+                child: _SrnChip(label: 'Customer', value: '${cust?['shop_name'] as String? ?? 'Walk-in'}  ✎'),
+              ),
+            )
+          else if (!_isVoided && (_isLocked || _hasSri))
+            Tooltip(
+              message: _hasSri
+                  ? 'Sales Return Invoice ${_sriRefs.join(', ')} exists — void it first to change the customer'
+                  : 'Unlock the SRN to change the customer',
+              child: _SrnChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
+            )
+          else
+            _SrnChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
           _SrnChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _SrnChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           _SrnChip(label: 'Status', value: _isVoided ? 'voided' : (_isLocked ? (_detail['status'] == 'invoiced' ? 'invoiced' : 'confirmed') : 'draft')),
