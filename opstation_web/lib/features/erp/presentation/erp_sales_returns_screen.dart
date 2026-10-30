@@ -291,8 +291,10 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     if (_items.isEmpty) { _showSnack('Add at least one item before confirming'); return; }
     // Check if SRI already exists
     try {
-      final existing = await Supabase.instance.client.from('sales_return_invoices').select('id,voucher_number').eq('srn_id', _detail['id'] as String);
-      if ((existing as List).isNotEmpty) { _showSnack('Invoice ${existing.first['voucher_number']} already exists. Cannot re-confirm.'); return; }
+      // Only a live (not voided) invoice blocks re-confirming. A voided SRI
+      // was reversed, so the SRN can be confirmed and invoiced again.
+      final existing = await _activeSris(_detail['id'] as String);
+      if (existing.isNotEmpty) { _showSnack('Invoice ${existing.first['voucher_number']} already exists. Void it first to re-confirm.'); return; }
     } catch (_) {}
     try {
       // Atomic + idempotent: the DB function claims the draft (lock guard),
@@ -312,8 +314,8 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     if (orgId == null || branchId == null) return;
     if (_items.isEmpty) { _showSnack('No items to invoice'); return; }
     try {
-      final existing = await Supabase.instance.client.from('sales_return_invoices').select('id,voucher_number').eq('srn_id', _detail['id'] as String);
-      if ((existing as List).isNotEmpty) { _showSnack('Invoice ${existing.first['voucher_number']} already exists'); return; }
+      final existing = await _activeSris(_detail['id'] as String);
+      if (existing.isNotEmpty) { _showSnack('Invoice ${existing.first['voucher_number']} already exists'); return; }
     } catch (_) {}
     final confirm = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       title: const Text('Generate Sales Return Invoice?'),
