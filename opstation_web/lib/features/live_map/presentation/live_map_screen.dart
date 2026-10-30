@@ -106,6 +106,102 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   // location too — the pin is the salesperson's own GPS).
   bool _showFlagged = true;
   List<_FlagVisit> _flagged = [];
+
+  // One salesperson picked: only they are drawn (their position, route run
+  // start / end, numbered visits, track and visits to check).
+  String? _selUserId;
+  bool _reselectAfterLoad = false;
+
+  _UserLoc? get _selUser {
+    if (_selUserId == null) return null;
+    for (final u in _users) {
+      if (u.userId == _selUserId) return u;
+    }
+    return null;
+  }
+
+  List<_UserLoc> get _visibleUsers =>
+      _selUserId == null ? _users : _users.where((u) => u.userId == _selUserId).toList();
+
+  List<_FlagVisit> get _visibleFlagged =>
+      _selUserId == null ? _flagged : _flagged.where((f) => f.userId == _selUserId).toList();
+
+  Iterable<_TripEnds> get _visibleTripEnds {
+    if (_focusTrip != null) return _tripEnds.where((x) => x.tripId == _focusTrip!.tripId);
+    if (_selUserId != null) return _tripEnds.where((x) => x.userId == _selUserId);
+    return _tripEnds;
+  }
+
+  List<_TripEnds> _tripsOf(String userId) => _tripEnds.where((t) => t.userId == userId).toList();
+
+  String get _selName {
+    final u = _selUser;
+    if (u != null) return u.userName;
+    if (_focusTrip != null) return _focusTrip!.userName;
+    for (final t in _tripEnds) {
+      if (t.userId == _selUserId) return t.userName;
+    }
+    return 'Salesperson';
+  }
+
+  /// Pick one salesperson: hide everyone else, open their route run for the day.
+  void _selectUser(_UserLoc u) {
+    setState(() => _selUserId = u.userId);
+    final runs = _tripsOf(u.userId);
+    if (runs.isNotEmpty) {
+      _openTrip(runs.last.tripId);
+    } else {
+      setState(() {
+        _stopPlay();
+        _focusTrip = null;
+        _focusRequested = null;
+        _focusLoading = false;
+      });
+      _mapController.move(LatLng(u.lat, u.lng), 15);
+    }
+  }
+
+  /// Back to everyone.
+  void _clearSelection() {
+    setState(() {
+      _stopPlay();
+      _focusTrip = null;
+      _focusRequested = null;
+      _focusLoading = false;
+      _selUserId = null;
+    });
+    _fitAll();
+  }
+
+  void _fitAll() {
+    final pts = [for (final u in _users) LatLng(u.lat, u.lng)];
+    if (pts.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (pts.length == 1) {
+        _mapController.move(pts.first, 14);
+        return;
+      }
+      final lats = pts.map((p) => p.latitude).toList()..sort();
+      final lngs = pts.map((p) => p.longitude).toList()..sort();
+      _mapController.fitCamera(CameraFit.bounds(
+        bounds: LatLngBounds(LatLng(lats.first, lngs.first), LatLng(lats.last, lngs.last)),
+        padding: const EdgeInsets.all(80),
+      ));
+    });
+  }
+
+  Widget _selChip() => Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: InputChip(
+          avatar: CircleAvatar(backgroundColor: _userColor(_selUserId ?? ''), radius: 6),
+          label: Text('Only $_selName', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          deleteIcon: const Icon(Icons.close, size: 16),
+          deleteButtonTooltipMessage: 'Show everyone',
+          onDeleted: _clearSelection,
+          visualDensity: VisualDensity.compact,
+        ),
+      );
   final _mapController = MapController();
   DateTime? _lastRefresh;
   bool _showTracks = false;
@@ -330,6 +426,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         _stopPlay();
         _focusTrip = ft;
         _focusLoading = false;
+        _selUserId = ft.userId; // a route run shows only its salesperson
       });
       final pts = ft.path;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -350,13 +447,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     }
   }
 
-  void _closeTrip() {
-    setState(() {
-      _stopPlay();
-      _focusTrip = null;
-      _focusRequested = null;
-    });
-  }
+  void _closeTrip() => _clearSelection();
 
   Widget _endPin({required bool start, bool big = false}) {
     final c = start ? const Color(0xFF16A34A) : const Color(0xFFDC2626);
@@ -421,6 +512,28 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       if (t.start == null) 'start',
       if (t.endedAt != null && t.end == null) 'end',
     ];
+    // Visit results for this run.
+    final outcome = <String, int>{};
+    for (final v in t.visits) {
+      final l = visitOutcomeLabel(v.status, v.amount);
+      outcome[l] = (outcome[l] ?? 0) + 1;
+    }
+    Color outColor(String l) {
+      switch (l) {
+        case 'Visited': return AppTheme.success;
+        case 'Outside geofence': return const Color(0xFFEA580C);
+        case 'Not verified': return const Color(0xFFDC2626);
+        default: return AppTheme.textSecondary;
+      }
+    }
+    // Straight-line distance start → visits → end (a rough guide, not road km).
+    double km = 0;
+    final path = t.path;
+    for (var i = 1; i < path.length; i++) {
+      km += const Distance().as(LengthUnit.Meter, path[i - 1], path[i]) / 1000;
+    }
+    final runs = _tripsOf(t.userId);
+    final me = _selUser;
     return Card(
       elevation: 5,
       child: Padding(
@@ -437,10 +550,30 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             IconButton(
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.close, size: 18),
-              tooltip: 'Close',
+              tooltip: 'Show everyone',
               onPressed: _closeTrip,
             ),
           ]),
+          if (t.startedAt != null && !_isSameDay(t.startedAt!, _todayDate()))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(DateFormat('EEE d MMM y').format(t.startedAt!),
+                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ),
+          if (runs.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6, right: 8),
+              child: Wrap(spacing: 6, runSpacing: 4, children: [
+                for (var i = 0; i < runs.length; i++)
+                  ChoiceChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text('Run ${i + 1}${runs[i].startedAt == null ? '' : ' · ${fmt.format(runs[i].startedAt!)}'}',
+                        style: const TextStyle(fontSize: 11.5)),
+                    selected: runs[i].tripId == t.tripId,
+                    onSelected: (_) => _openTrip(runs[i].tripId),
+                  ),
+              ]),
+            ),
           Wrap(spacing: 12, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
             Row(mainAxisSize: MainAxisSize.min, children: [
               SizedBox(width: 16, height: 16, child: _endPin(start: true)),
@@ -453,8 +586,41 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               Text(t.endedAt == null ? 'Still running' : '${t.cutoff ? 'Cut-off ' : ''}${fmt.format(t.endedAt!)}$dur',
                   style: const TextStyle(fontSize: 12)),
             ]),
-            Text('${t.visitCount} visit${t.visitCount == 1 ? '' : 's'} · Sales ${NumberFormat('#,##0').format(t.sales)}',
+            Text('${t.visitCount} visit${t.visitCount == 1 ? '' : 's'} · Collected ${NumberFormat('#,##0').format(t.sales)}'
+                '${km >= 0.1 ? ' · ~${km.toStringAsFixed(1)} km' : ''}',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          ]),
+          if (outcome.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, right: 8),
+              child: Wrap(spacing: 6, runSpacing: 4, children: [
+                for (final e in outcome.entries)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(color: outColor(e.key).withOpacity(0.10), borderRadius: BorderRadius.circular(10)),
+                    child: Text('${e.key} ${e.value}',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: outColor(e.key))),
+                  ),
+              ]),
+            ),
+          Wrap(spacing: 4, children: [
+            if (t.visits.isNotEmpty)
+              TextButton.icon(
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 4)),
+                icon: const Icon(Icons.list_alt, size: 16),
+                label: const Text('All visits', style: TextStyle(fontSize: 12)),
+                onPressed: () => _showVisitSheet(t.visits),
+              ),
+            if (me != null && me.userId == t.userId)
+              TextButton.icon(
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 4)),
+                icon: const Icon(Icons.my_location, size: 16),
+                label: const Text('Last position', style: TextStyle(fontSize: 12)),
+                onPressed: () {
+                  _mapController.move(LatLng(me.lat, me.lng), 16);
+                  _showDetails(me);
+                },
+              ),
           ]),
           if (_playPts(t).length >= 2) _playControls(t),
           if (t.visits.any((v) => v.point == null))
@@ -476,6 +642,53 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               child: Text('No GPS was recorded for the ${missing.join(' and ')} location of this route.',
                   style: const TextStyle(fontSize: 11, color: AppTheme.warning)),
             ),
+        ]),
+      ),
+    );
+  }
+
+  static bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Picked salesperson with no route run on the day: their last position.
+  Widget _userCard(_UserLoc u) {
+    final fmt = DateFormat('h:mm a · d MMM');
+    final flagged = _visibleFlagged;
+    return Card(
+      elevation: 5,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            Container(width: 10, height: 10, decoration: BoxDecoration(color: _userColor(u.userId), shape: BoxShape.circle)),
+            const SizedBox(width: 8),
+            Expanded(child: Text(u.userName, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800))),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Show everyone',
+              onPressed: _clearSelection,
+            ),
+          ]),
+          Text('No route run started ${_isToday ? 'today' : 'on this day'}.',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 4),
+          Text('Last position: ${fmt.format(u.timestamp)}'
+              '${u.customerName == null ? '' : ' · ${u.customerName}'}',
+              style: const TextStyle(fontSize: 12)),
+          if (flagged.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('${flagged.length} visit${flagged.length == 1 ? '' : 's'} to check',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFEA580C))),
+            ),
+          TextButton.icon(
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 4)),
+            icon: const Icon(Icons.info_outline, size: 16),
+            label: const Text('Details', style: TextStyle(fontSize: 12)),
+            onPressed: () => _showDetails(u),
+          ),
         ]),
       ),
     );
@@ -660,8 +873,17 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         _lastRefresh = DateTime.now();
       });
 
-      if (_focusTrip != null || _focusRequested != null) {
-        // A route run is open — keep the map on it.
+      if (_reselectAfterLoad && _selUserId != null) {
+        _reselectAfterLoad = false;
+        final u = _selUser;
+        final runs = _tripsOf(_selUserId!);
+        if (runs.isNotEmpty) {
+          _openTrip(runs.last.tripId);
+        } else if (u != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _mapController.move(LatLng(u.lat, u.lng), 15));
+        }
+      } else if (_focusTrip != null || _focusRequested != null || _selUserId != null) {
+        // A route run / salesperson is open — keep the map on it.
       } else if (result.length == 1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _mapController.move(LatLng(result.first.lat, result.first.lng), 14);
@@ -918,8 +1140,11 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   void _focusUser(_UserLoc u) {
-    _mapController.move(LatLng(u.lat, u.lng), 15);
-    _showDetails(u);
+    if (_selUserId == u.userId) {
+      _clearSelection(); // tapping the picked one again = everyone
+    } else {
+      _selectUser(u);
+    }
   }
 
   void _showDetails(_UserLoc u) {
@@ -1131,6 +1356,12 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       _tripEnds = [];
       _tracks = [];
       _flagged = [];
+      // Keep the picked salesperson; show their run for the new day.
+      _stopPlay();
+      _focusTrip = null;
+      _focusRequested = null;
+      _focusLoading = false;
+      _reselectAfterLoad = _selUserId != null;
     });
     _load();
   }
@@ -1324,7 +1555,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   /// Flagged visits close together share one tap target.
   List<List<_FlagVisit>> get _flagGroups {
     final groups = <List<_FlagVisit>>[];
-    for (final f in _flagged) {
+    for (final f in _visibleFlagged) {
       if (f.point == null) continue;
       if (_focusTrip != null && f.tripId != _focusTrip!.tripId) continue;
       List<_FlagVisit>? hit;
@@ -1369,7 +1600,11 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             _focusUser(u);
           },
           borderRadius: BorderRadius.circular(6),
-          child: Padding(
+          child: Container(
+            decoration: BoxDecoration(
+              color: _selUserId == u.userId ? AppTheme.primary.withOpacity(0.10) : null,
+              borderRadius: BorderRadius.circular(6),
+            ),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             child: Row(children: [
               Icon(u.role == 'driver' ? Icons.local_shipping : Icons.person, size: 14, color: AppTheme.textSecondary),
@@ -1486,7 +1721,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   /// Freshness / routes / visit legends.
   Widget _legendContent({BuildContext? sheetCtx}) {
-    final noGps = _flagged.where((f) => f.point == null).toList();
+    final flagged = _visibleFlagged;
+    final noGps = flagged.where((f) => f.point == null).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
       if (_isToday) ...[
         const Text('FRESHNESS',
@@ -1516,9 +1752,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
           const Text('Ended', style: TextStyle(fontSize: 11)),
         ]),
       ],
-      if (_showFlagged && _flagged.isNotEmpty) ...[
+      if (_showFlagged && flagged.isNotEmpty) ...[
         const SizedBox(height: 8),
-        Text('VISITS TO CHECK · ${_flagged.length}',
+        Text('VISITS TO CHECK · ${flagged.length}',
             style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
         const SizedBox(height: 6),
         _legendIcon(const Color(0xFFEA580C), Icons.wrong_location, 'Outside geofence'),
@@ -1610,7 +1846,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             if (_showTracks)
               PolylineLayer(
                 polylines: [
-                  for (final t in _tracks)
+                  for (final t in _tracks.where((x) => _selUserId == null || x.userId == _selUserId))
                     Polyline(
                       points: t.points,
                       color: t.color,
@@ -1629,9 +1865,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               ]),
             // Where each route run started (green) and ended (red) today.
             MarkerLayer(markers: [
-              for (final t in _focusTrip != null
-                  ? _tripEnds.where((x) => x.tripId == _focusTrip!.tripId)
-                  : _tripEnds) ...[
+              for (final t in _visibleTripEnds) ...[
                 if (t.start != null)
                   Marker(
                     point: t.start!,
@@ -1718,14 +1952,15 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               ]),
             MarkerLayer(
               markers: [
-                for (final u in _users)
+                for (final u in _visibleUsers)
                   Marker(
                     point: LatLng(u.lat, u.lng),
                     width: 56,
                     height: 56,
                     alignment: Alignment.center,
                     child: GestureDetector(
-                      onTap: () => _showDetails(u),
+                      // First tap: show only this salesperson. Tap again: details.
+                      onTap: () => _selUserId == u.userId ? _showDetails(u) : _selectUser(u),
                       child: _buildMarker(u),
                     ),
                   ),
@@ -1845,8 +2080,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         const SizedBox(width: 8),
         Flexible(
           child: Text(
-            '${_isToday ? 'Live Map' : 'Map'} · ${_users.length} on map'
-            '${_flagged.isNotEmpty ? ' · ${_flagged.length} to check' : ''}',
+            '${_isToday ? 'Live Map' : 'Map'} · ${_selUserId != null ? '1 of ${_users.length}' : '${_users.length}'} on map'
+            '${_visibleFlagged.isNotEmpty ? ' · ${_visibleFlagged.length} to check' : ''}',
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontWeight: FontWeight.w700, fontSize: compact ? 13 : 14)),
         ),
@@ -1859,7 +2094,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   Widget _focusOrLoading({required double maxWidth}) => ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
-        child: _focusTrip == null
+        child: _focusTrip == null && !_focusLoading && _selUser != null
+            ? _userCard(_selUser!)
+            : _focusTrip == null
             ? const Card(
                 elevation: 4,
                 child: Padding(
@@ -1926,6 +2163,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                         _statusText(compact: true),
                         _dayChip(dense: true),
+                        if (_selUserId != null) _selChip(),
                       ]),
                     ),
                   ),
@@ -1941,7 +2179,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                 ]),
               ),
             ),
-            if (_focusTrip != null || _focusLoading)
+            if (_focusTrip != null || _focusLoading || _selUser != null)
               Positioned(
                 left: 8, right: 8, bottom: 8,
                 child: SafeArea(top: false, child: _focusOrLoading(maxWidth: box.maxWidth - 16)),
@@ -1967,12 +2205,13 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                       _statusText(),
                       _dayChip(),
+                      if (_selUserId != null) _selChip(),
                     ]),
                   ),
                 ),
                 const SizedBox(height: 8),
                 _routeSelector(),
-                if (_focusTrip != null || _focusLoading) ...[
+                if (_focusTrip != null || _focusLoading || _selUser != null) ...[
                   const SizedBox(height: 8),
                   _focusOrLoading(maxWidth: 380),
                 ],
