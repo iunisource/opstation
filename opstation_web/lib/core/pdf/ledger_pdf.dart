@@ -228,65 +228,63 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
 
   final netColor = d.netIsDanger ? _danger : _green;
 
-  // Description cell: plain text, or text + a small product grid (Detailed view).
-  pw.Widget descCell(LedgerLine l) {
-    if (l.items.isEmpty && l.extras.isEmpty) return c(l.description);
-    final showDisc = l.items.any((r) => r.disc.isNotEmpty);
-    pw.Widget sc(String t, {bool right = false, bool head = false}) => pw.Padding(
-        padding: const pw.EdgeInsets.symmetric(horizontal: 2.5, vertical: 1.5),
-        child: pw.Text(t,
+  // Detailed view: each product of a voucher is its own small row in the
+  // ledger table (not one tall nested table), so a long invoice can break
+  // across pages. A single row taller than a page used to stop the PDF from
+  // being made at all.
+  pw.Widget sub(List<String> cols, {bool head = false, required bool disc}) {
+    pw.Widget t(String v, int flex, {bool right = false}) => pw.Expanded(
+        flex: flex,
+        child: pw.Text(v,
             textAlign: right ? pw.TextAlign.right : pw.TextAlign.left,
+            maxLines: 2,
             style: pw.TextStyle(
                 fontSize: 7,
                 fontWeight: head ? pw.FontWeight.bold : pw.FontWeight.normal,
-                color: head ? PdfColors.grey700 : null)));
+                color: head ? PdfColors.grey700 : PdfColors.grey900)));
     return pw.Padding(
-      padding: const pw.EdgeInsets.all(4),
-      child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-        if (l.description.isNotEmpty)
-          pw.Text(l.description, style: const pw.TextStyle(fontSize: 8.5)),
-        if (l.items.isNotEmpty)
-          pw.Padding(
-            padding: pw.EdgeInsets.only(top: l.description.isNotEmpty ? 3 : 0),
-            child: pw.Table(
-              border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.4),
-              columnWidths: {
-                0: const pw.FlexColumnWidth(3.2),
-                1: const pw.FlexColumnWidth(1),
-                2: const pw.FlexColumnWidth(1.4),
-                if (showDisc) 3: const pw.FlexColumnWidth(1.3),
-                (showDisc ? 4 : 3): const pw.FlexColumnWidth(1.6),
-              },
-              children: [
-                pw.TableRow(
-                  decoration: const pw.BoxDecoration(color: PdfColors.grey100),
-                  children: [
-                    sc('Product', head: true),
-                    sc('Qty', right: true, head: true),
-                    sc('Rate', right: true, head: true),
-                    if (showDisc) sc('Disc', right: true, head: true),
-                    sc('Amount', right: true, head: true),
-                  ],
-                ),
-                for (final r in l.items)
-                  pw.TableRow(children: [
-                    sc(r.product),
-                    sc(r.qty, right: true),
-                    sc(r.rate, right: true),
-                    if (showDisc) sc(r.disc.isEmpty ? '-' : r.disc, right: true),
-                    sc(r.amount, right: true),
-                  ]),
-              ],
-            ),
-          ),
-        if (l.extras.isNotEmpty)
-          pw.Padding(
-            padding: const pw.EdgeInsets.only(top: 2),
-            child: pw.Text(l.extras,
-                style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
-          ),
+      padding: const pw.EdgeInsets.fromLTRB(10, 1.5, 4, 1.5),
+      child: pw.Row(children: [
+        t(cols[0], 32),
+        t(cols[1], 10, right: true),
+        t(cols[2], 14, right: true),
+        if (disc) t(cols[3], 13, right: true),
+        t(cols[4], 16, right: true),
       ]),
     );
+  }
+
+  List<pw.TableRow> lineRows(LedgerLine l) {
+    final rows = <pw.TableRow>[
+      pw.TableRow(children: [
+        c(l.date),
+        c(l.voucher),
+        c(l.description),
+        c(l.type),
+        c(l.debit, a: pw.TextAlign.right),
+        c(l.credit, a: pw.TextAlign.right),
+        c(l.balance, a: pw.TextAlign.right, bold: true),
+      ]),
+    ];
+    if (l.items.isEmpty && l.extras.isEmpty) return rows;
+    final disc = l.items.any((r) => r.disc.isNotEmpty);
+    pw.TableRow cont(pw.Widget w, {PdfColor? bg}) => pw.TableRow(
+          decoration: bg == null ? null : pw.BoxDecoration(color: bg),
+          children: [pw.SizedBox(), pw.SizedBox(), w, pw.SizedBox(), pw.SizedBox(), pw.SizedBox(), pw.SizedBox()],
+        );
+    if (l.items.isNotEmpty) {
+      rows.add(cont(sub(const ['Product', 'Qty', 'Rate', 'Disc', 'Amount'], head: true, disc: disc), bg: PdfColors.grey100));
+      for (final r in l.items) {
+        rows.add(cont(sub([r.product, r.qty, r.rate, r.disc.isEmpty ? '-' : r.disc, r.amount], disc: disc)));
+      }
+    }
+    if (l.extras.isNotEmpty) {
+      rows.add(cont(pw.Padding(
+        padding: const pw.EdgeInsets.fromLTRB(10, 1.5, 4, 2),
+        child: pw.Text(l.extras, style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
+      )));
+    }
+    return rows;
   }
 
   // A bordered stat card (Total Debit / Total Credit / Net Balance) matching the
@@ -316,6 +314,9 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
   doc.addPage(pw.MultiPage(
     pageFormat: PdfPageFormat.a4,
     margin: const pw.EdgeInsets.all(28),
+    // The default stops at 20 pages and throws — a long Detailed ledger is
+    // easily more. Allow plenty.
+    maxPages: 2000,
     build: (ctx) => [
       // ── Header ─────────────────────────────────────────────────────────
       pw.Row(
@@ -400,16 +401,7 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
                 hc('Credit', a: pw.TextAlign.right),
                 hc('Balance', a: pw.TextAlign.right),
               ]),
-          for (final l in d.lines)
-            pw.TableRow(children: [
-              c(l.date),
-              c(l.voucher),
-              descCell(l),
-              c(l.type),
-              c(l.debit, a: pw.TextAlign.right),
-              c(l.credit, a: pw.TextAlign.right),
-              c(l.balance, a: pw.TextAlign.right, bold: true),
-            ]),
+          for (final l in d.lines) ...lineRows(l),
           pw.TableRow(
               decoration: const pw.BoxDecoration(color: PdfColors.grey100),
               children: [

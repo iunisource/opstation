@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/pdf/ledger_pdf.dart';
+import '../../../core/widgets/saving_overlay.dart';
 import '../services/ledger_particulars.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
@@ -1658,7 +1659,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     try {
       final d = _buildLedgerDoc();
       if (d == null) return;
-      await shareLedgerPdf(d);
+      // A long Detailed ledger takes a few seconds to lay out: show progress
+      // and let it paint before the work starts.
+      SavingOverlay.show(context, label: 'Preparing PDF…');
+      await Future.delayed(const Duration(milliseconds: 60));
+      try {
+        await shareLedgerPdf(d);
+      } finally {
+        SavingOverlay.hide();
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
     }
@@ -1668,7 +1677,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     try {
       final d = _buildLedgerDoc();
       if (d == null) return;
-      await printLedgerPdf(d);
+      // A long Detailed ledger takes a few seconds to lay out: show progress
+      // and let it paint before the work starts.
+      SavingOverlay.show(context, label: 'Preparing PDF…');
+      await Future.delayed(const Duration(milliseconds: 60));
+      try {
+        await printLedgerPdf(d);
+      } finally {
+        SavingOverlay.hide();
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Print error: ' + e.toString())));
     }

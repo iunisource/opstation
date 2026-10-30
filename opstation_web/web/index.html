@@ -139,17 +139,19 @@
 <!-- /opstation:splash-white -->
 <!-- opstation:splash-throb -->
 <style>
+  /* Bigger, stronger, faster glow: two stacked shadows — a tight bright halo
+     and a wide soft bloom — pulsing about once a second. */
   @keyframes opstThrob {
-    0%, 100% { filter: drop-shadow(0 4px 6px rgba(47, 111, 237, 0.10)); }
-    50%      { filter: drop-shadow(0 10px 28px rgba(47, 111, 237, 0.55)); }
+    0%, 100% { filter: drop-shadow(0 0 8px rgba(47, 111, 237, 0.30)) drop-shadow(0 6px 18px rgba(47, 111, 237, 0.20)); }
+    50%      { filter: drop-shadow(0 0 22px rgba(47, 111, 237, 0.95)) drop-shadow(0 14px 60px rgba(47, 111, 237, 0.75)); }
   }
   .opst-throb {
-    animation: opstThrob 1.6s ease-in-out infinite !important;
+    animation: opstThrob 0.9s ease-in-out infinite !important;
     transform: none !important;
     will-change: filter;
   }
   @media (prefers-reduced-motion: reduce) {
-    .opst-throb { animation: none !important; filter: drop-shadow(0 8px 20px rgba(47, 111, 237, 0.35)); }
+    .opst-throb { animation: none !important; filter: drop-shadow(0 0 18px rgba(47, 111, 237, 0.7)) drop-shadow(0 12px 44px rgba(47, 111, 237, 0.5)); }
   }
 </style>
 <script>
