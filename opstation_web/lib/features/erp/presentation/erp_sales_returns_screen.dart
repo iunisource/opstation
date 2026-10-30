@@ -462,12 +462,20 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
     ]));
   }
 
+  // Sized by the DETAIL pane's own width (not the screen's): next to the list
+  // on a tablet the pane can be narrow even when the screen is not, and a
+  // one-line header then pushed the action buttons off the edge, where they
+  // could not be tapped.
   Widget _buildDetail() {
     if (_detailLoading) return const Center(child: CircularProgressIndicator());
+    return LayoutBuilder(builder: (_, box) => _detailBody(box.maxWidth));
+  }
+
+  Widget _detailBody(double paneWidth) {
     final cust = _detail['customers'] as Map?;
     final status = _detail['status'] as String? ?? 'draft';
     final isInvoiced = status == 'invoiced';
-    final narrow = MediaQuery.of(context).size.width < 700;
+    final narrow = paneWidth < 640;
     final title = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(_detail['voucher_number'] as String? ?? '-', style: TextStyle(fontSize: narrow ? 18 : 22, fontWeight: FontWeight.w700)),
       const Text('Sales Return Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
@@ -497,7 +505,12 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
                 const SizedBox(height: 6),
                 Wrap(spacing: 0, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: actions),
               ])
-            : Row(children: [Expanded(child: title), ...actions])),
+            : Row(children: [
+                title,
+                const SizedBox(width: 12),
+                // Buttons wrap onto a second line instead of running off the edge.
+                Expanded(child: Wrap(alignment: WrapAlignment.end, crossAxisAlignment: WrapCrossAlignment.center, runSpacing: 4, children: actions)),
+              ])),
       Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(narrow ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
           _SrnChip(label: 'Customer', value: cust?['shop_name'] as String? ?? 'Walk-in'),
