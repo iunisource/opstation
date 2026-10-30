@@ -9,6 +9,7 @@ import 'dart:html' as html;
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
+import '../../../core/permissions/access_control.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
 
@@ -1202,6 +1203,22 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     final ntnCtrl = TextEditingController(text: customer?['ntn_gst'] ?? '');
     String? category = customer?['category'] as String?;
        String? group = customer?['group_name'] as String?;
+    // Discount group (Inventory → Discount Policies) — one per customer. Only
+    // staff allowed to manage discounts can change it.
+    final dgAccess = ref.read(accessSyncProvider);
+    final canDiscGroup = dgAccess != null &&
+        (dgAccess.isAdmin || dgAccess.canEditDoc('discount_policies') || dgAccess.canAddDoc('discount_policies'));
+    String? discGroup = customer?['discount_group_id'] as String?;
+    List<Map<String, dynamic>> discGroups = [];
+    try {
+      final dgOrg = ref.read(currentUserProvider)?.orgId;
+      if (dgOrg != null) {
+        final r = await Supabase.instance.client.from('discount_groups')
+            .select('id, name, is_active').eq('org_id', dgOrg).order('name');
+        discGroups = List<Map<String, dynamic>>.from(r);
+      }
+    } catch (_) {/* discount tables not set up yet */}
+    if (!mounted) return;
 
     showDialog(
       context: context,
@@ -1272,6 +1289,28 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   Expanded(child: TextField(controller: ntnCtrl,
                       decoration: const InputDecoration(labelText: 'NTN'))),
                 ]),
+                if (discGroups.isNotEmpty || discGroup != null) ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String?>(
+                    value: discGroups.any((g) => g['id'] == discGroup) ? discGroup : null,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: 'Discount group',
+                      helperText: canDiscGroup
+                          ? 'This group\'s product discounts apply to this customer'
+                          : 'Only staff who manage discounts can change this',
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(value: null, child: Text('None')),
+                      for (final g in discGroups)
+                        DropdownMenuItem<String?>(
+                          value: g['id'] as String,
+                          child: Text('${g['name']}${g['is_active'] == false ? ' (switched off)' : ''}'),
+                        ),
+                    ],
+                    onChanged: canDiscGroup ? (v) => setS(() => discGroup = v) : null,
+                  ),
+                ],
                 if (_targetsEnabled) ...[
                   const SizedBox(height: 8),
                   Row(children: [
@@ -1416,6 +1455,8 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   'credit_limit': creditLimitCtrl.text.trim().isEmpty ? null : double.tryParse(creditLimitCtrl.text.trim()),
                   'monthly_sale_target': targetCtrl.text.trim().isEmpty ? 0 : (double.tryParse(targetCtrl.text.trim()) ?? 0),
                   'ntn_gst': ntnCtrl.text.trim().isEmpty ? null : ntnCtrl.text.trim(),
+                  if (canDiscGroup && (customer == null || customer.containsKey('discount_group_id')))
+                    'discount_group_id': discGroup,
                   'org_id': orgId,
                   'is_active': true,
                 };

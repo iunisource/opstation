@@ -17,6 +17,7 @@ import 'dart:js_util' as js_util;
 import 'dart:js_util' as js_util;
 import '../../../core/utils/friendly_error.dart';
 import '../services/batch_tracking.dart';
+import '../services/customer_discounts.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 
 // Cash actually collected for a transaction: the Cash tender from
@@ -540,6 +541,45 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   List<Map<String, dynamic>> _displayProducts = [];
   List<Map<String, dynamic>> _customers = [];
   List<Map<String, dynamic>> _cart = [];
+
+  // Customer discounts (Inventory → Discount Policies) for the selected
+  // customer, filled into each line as a % (cashier can still change it).
+  Map<String, CustDiscount> _custDisc = {};
+  String? _custDiscFor;
+
+  void _ensureCustDisc() {
+    final cid = _selectedCustomer?['id'] as String?;
+    if (cid == _custDiscFor) return;
+    _custDiscFor = cid;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final m = await loadCustomerDiscounts(cid);
+      if (!mounted || _custDiscFor != cid) return;
+      setState(() {
+        _custDisc = m;
+        for (final it in _cart) {
+          _applyCustDisc(it);
+        }
+      });
+    });
+  }
+
+  /// A line keeps a discount typed by hand; one filled in by a policy follows
+  /// the selected customer.
+  void _applyCustDisc(Map<String, dynamic> it) {
+    final cur = (it['discount'] as num?)?.toDouble() ?? 0;
+    final wasAuto = it['_autoDisc'] == true;
+    if (cur > 0 && !wasAuto) return;
+    final d = _custDisc[it['product_id'] as String? ?? ''];
+    if (d != null) {
+      it['discount'] = d.percentFor((it['unit_price'] as num?)?.toDouble() ?? 0);
+      it['discount_type'] = 'percent';
+      it['_autoDisc'] = true;
+    } else if (wasAuto) {
+      it['discount'] = 0.0;
+      it['_autoDisc'] = false;
+    }
+  }
+
   // ── Staging ──────────────────────────────────────────────
   Map<String, dynamic>? _stagedProduct;
   int? _stagedCartIndex;  // null=new, int=editing existing
@@ -918,6 +958,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _stagedDiscCtrl.clear();
         _stagedDiscType = 'percent';
         _stagedPriceCtrl.text = basePrice.toStringAsFixed(2);
+        final cd = _custDisc[product['product_id'] as String? ?? ''];
+        if (cd != null) {
+          final pct = cd.percentFor(basePrice);
+          _stagedDiscCtrl.text = pct == pct.roundToDouble() ? pct.toStringAsFixed(0) : pct.toStringAsFixed(2);
+        }
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1247,6 +1292,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
           'discount_type': 'fixed',
           'stock_qty': (product['stock_qty'] as num?)?.toDouble() ?? 0.0,
         });
+        _applyCustDisc(_cart.last);
       }
     });
   }
@@ -2227,6 +2273,7 @@ ${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table
 
   @override
   Widget build(BuildContext context) {
+    _ensureCustDisc();
     ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
       final nextId = next?['id'] as String?;
       final sessId = _session['branch_id'] as String?;

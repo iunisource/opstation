@@ -10,6 +10,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
+import '../services/customer_discounts.dart';
 import '../services/quotation_design.dart';
 import '../../../core/pdf/pdf_output.dart';
 import 'quotation_brands.dart';
@@ -49,6 +50,60 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   // Working document (null = list view, non-null = editing/creating)
   Map<String, dynamic>? _doc;              // header
   List<Map<String, dynamic>> _lines = [];  // working lines
+
+  // Customer discounts (Inventory → Discount Policies), filled into lines.
+  Map<String, CustDiscount> _custDisc = {};
+  String? _custDiscFor = '\u0000'; // customer the map was loaded for
+
+  /// Keeps [_custDisc] in step with the open quotation's customer (no line
+  /// changes — an opened quotation keeps the discounts it was saved with).
+  void _ensureCustDisc() {
+    if (_doc == null) return;
+    final cid = _doc!['customer_id'] as String?;
+    if (cid == _custDiscFor) return;
+    _custDiscFor = cid;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshCustDisc(cid, apply: false));
+  }
+
+  Future<void> _refreshCustDisc(String? cid, {required bool apply}) async {
+    _custDiscFor = cid;
+    final m = await loadCustomerDiscounts(cid);
+    if (!mounted || _custDiscFor != cid) return;
+    setState(() {
+      _custDisc = m;
+      if (apply) {
+        for (final l in _lines) {
+          _applyCustDisc(l, onlyIfEmpty: true);
+        }
+      }
+    });
+  }
+
+  /// Fill a line's discount from the customer's policy. A discount typed by
+  /// hand is kept; one filled in earlier by a policy follows the customer.
+  void _applyCustDisc(Map<String, dynamic> l, {bool onlyIfEmpty = false}) {
+    final pid = l['product_id'] as String?;
+    final d = pid == null ? null : _custDisc[pid];
+    final cur = (l['discount'] as num?)?.toDouble() ?? 0;
+    final wasAuto = l['_autoDisc'] == true;
+    if (onlyIfEmpty && cur > 0 && !wasAuto) return;
+    double? next;
+    if (d != null) {
+      next = d.percentFor((l['unit_price'] as num?)?.toDouble() ?? 0);
+      l['discount_type'] = 'percent';
+      l['_autoDisc'] = true;
+    } else if (wasAuto) {
+      next = 0.0;
+      l['_autoDisc'] = false;
+    }
+    if (next == null) return;
+    l['discount'] = next;
+    final c = _lineCtl[l];
+    if (c != null) {
+      (c['discCtrl'] as TextEditingController).text =
+          next == next.roundToDouble() ? next.toStringAsFixed(0) : next.toString();
+    }
+  }
 
   final _notesCtrl = TextEditingController();
   final _globalDiscCtrl = TextEditingController(text: '0');
@@ -535,6 +590,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       l['unit_price'] = newPrice;
       // keep the price field's controller in sync with the new product
       (_ctl(l)['priceCtrl'] as TextEditingController).text = newPrice.toStringAsFixed(2);
+      _applyCustDisc(l, onlyIfEmpty: true);
     });
   }
 
@@ -839,6 +895,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         _doc!['customer_name_text'] = picked['_name'] as String?;
         _doc!['customer_phone_text'] = phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim();
       });
+      _refreshCustDisc(null, apply: true);
       return;
     }
     // Registered customer, or Walk-in/none: clear any one-off name.
@@ -847,6 +904,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       _doc!['customer_name_text'] = null;
       _doc!['customer_phone_text'] = null;
     });
+    _refreshCustDisc(_doc!['customer_id'] as String?, apply: true);
   }
 
   Future<void> _exportToSO() async {
@@ -1124,6 +1182,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   // ── UI ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    _ensureCustDisc();
     if (_loading) return const Center(child: CircularProgressIndicator());
     return _doc == null ? _buildList() : _buildEditor();
   }
@@ -1703,6 +1762,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
       'discount': 0.0,
       'discount_type': 'percent',
     };
+    _applyCustDisc(line);
     setState(() => _lines.add(line));
     // After the row builds, focus its Qty field and select the text so typing
     // replaces the default. The Enter chain (wired in _lineRow) carries through

@@ -56,6 +56,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'suppliers', // supplierPendingCountProvider
     'field_orders', // fieldOrderPendingCountProvider
     'field_returns', // fieldReturnPendingCountProvider
+    'discount_policies', // discountPendingCountProvider
     'retailer_orders', // retailerOrderPendingCountProvider
     'products', // productSupervisePendingProvider
     'voucher_remarks', // doRemarkPendingProvider (DO remark pendency)
@@ -259,6 +260,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(supplierPendingCountProvider);
     ref.invalidate(fieldOrderPendingCountProvider);
     ref.invalidate(fieldReturnPendingCountProvider);
+    ref.invalidate(discountPendingCountProvider);
     ref.invalidate(retailerOrderPendingCountProvider);
     ref.invalidate(productSupervisePendingProvider);
     ref.invalidate(doRemarkPendingProvider);

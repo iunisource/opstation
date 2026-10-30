@@ -69,6 +69,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('stock_adjustment', 'Stock Adjustment', PermKind.doc, '/erp/stock-adjustment'),
     PermItem('demand_plan', 'Demand Planner', PermKind.report, '/erp/demand-plan'),
     PermItem('price_list', 'Price List Generator', PermKind.report, '/erp/price-list'),
+    PermItem('discount_policies', 'Discount Policies', PermKind.doc, '/erp/discounts'),
   ]),
   PermModule('purchase', 'Purchase', Icons.shopping_cart_outlined, [
     PermItem('purchase_dashboard', 'Purchase Dashboard', PermKind.report, '/erp/purchase-dashboard'),

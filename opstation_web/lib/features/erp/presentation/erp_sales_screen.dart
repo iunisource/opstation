@@ -11,6 +11,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
+import '../services/customer_discounts.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
 import '../services/batch_tracking.dart';
@@ -2650,22 +2651,30 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           }
         } catch (_) {/* price-list tables may predate migrations 263/266 */}
       }
+      // Customer discounts (Inventory → Discount Policies): pre-filled as the
+      // line discount %; staff can still change it before saving the invoice.
+      final custDisc = await loadCustomerDiscounts(_detail['customer_id'] as String?);
+      double discountTotal = 0;
       final siItems = _items.asMap().entries.map((e) {
         final i = e.key; final item = e.value;
         final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
         final isFoc = item['is_foc'] == true;
         final price = isFoc ? 0.0 : (priceMap[item['product_id'] as String] ?? 0);
-        final lineTotal = isFoc ? 0.0 : qty * price;
-        subtotal += lineTotal;
+        final gross = isFoc ? 0.0 : qty * price;
+        final discPct = isFoc ? 0.0 : (custDisc[item['product_id'] as String]?.percentFor(price) ?? 0.0);
+        final discAmt = gross * discPct / 100;
+        final lineTotal = gross - discAmt;
+        subtotal += gross;
+        discountTotal += discAmt;
         return {'id': 'sii_${DateTime.now().millisecondsSinceEpoch}_$i', 'product_id': item['product_id'],
-            'uom_id': item['uom_id'], 'qty_delivered': qty, 'unit_price': price, 'discount': 0.0, 'line_total': lineTotal,
+            'uom_id': item['uom_id'], 'qty_delivered': qty, 'unit_price': price, 'discount': discPct, 'line_total': lineTotal,
             'is_foc': isFoc};
       }).toList();
       await Supabase.instance.client.from('sales_invoices').insert({
         'id': siId, 'org_id': orgId, 'branch_id': branchId,
         'voucher_number': voucherNum, 'voucher_date': DateFormat('yyyy-MM-dd').format(DateTime.now()),
         'so_id': _detail['so_id'], 'do_id': _detail['id'], 'customer_id': _detail['customer_id'],
-        'subtotal': subtotal, 'discount_total': 0, 'grand_total': subtotal,
+        'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
         'remarks': _detail['remarks'],
         'is_locked': false, 'created_by': userId,
       });

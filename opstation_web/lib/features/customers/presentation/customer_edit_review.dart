@@ -218,6 +218,7 @@ const _labels = {
   'shop_name': 'Shop name', 'code': 'Code', 'contact_person': 'Contact', 'phone': 'Phone',
   'address': 'Address', 'category': 'Category', 'group_name': 'Group', 'credit_limit': 'Credit limit',
   'monthly_sale_target': 'Monthly target', 'ntn_gst': 'NTN / GST', 'is_active': 'Status',
+  'discount_group_id': 'Discount group',
 };
 
 String _show(String field, Object? v) {
