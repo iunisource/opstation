@@ -88,6 +88,24 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   bool _loading = true;
   List<_UserLoc> _users = [];
+
+  // The day on show. Today = live (realtime updates, freshness colours);
+  // a past day = that day's last positions, route runs, tracks and visits.
+  DateTime _day = _todayDate();
+  static DateTime _todayDate() {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month, n.day);
+  }
+  bool get _isToday => _day == _todayDate();
+  String get _dayStartIso => _day.toUtc().toIso8601String();
+  String get _dayEndIso => _day.add(const Duration(days: 1)).toUtc().toIso8601String();
+  int _loadSeq = 0;
+
+  // Visits that were outside the geofence / not verified / skipped on the day,
+  // pinned where the salesperson actually was (works for shops with no saved
+  // location too — the pin is the salesperson's own GPS).
+  bool _showFlagged = true;
+  List<_FlagVisit> _flagged = [];
   final _mapController = MapController();
   DateTime? _lastRefresh;
   bool _showTracks = false;
@@ -216,13 +234,12 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   /// Today's trips for the org → start / end flags on the map.
   Future<void> _loadTripEnds(String orgId, Map<String, String> names) async {
     try {
-      final now = DateTime.now();
-      final dayStart = DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
       final rows = await Supabase.instance.client
           .from('trips')
           .select()
           .eq('org_id', orgId)
-          .gte('started_at', dayStart)
+          .gte('started_at', _dayStartIso)
+          .lt('started_at', _dayEndIso)
           .order('started_at', ascending: true);
       final list = <_TripEnds>[];
       for (final t in (rows as List).cast<Map<String, dynamic>>()) {
@@ -466,8 +483,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   void _scheduleReload() {
     _debounce?.cancel();
+    if (!_isToday) return; // a past day doesn't change
     _debounce = Timer(const Duration(milliseconds: 800), () {
-      if (mounted) _load();
+      if (mounted && _isToday) _load();
     });
   }
 
@@ -507,6 +525,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   Future<void> _load() async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
+    final seq = ++_loadSeq;
     setState(() => _loading = true);
 
     try {
@@ -519,9 +538,14 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       final users = (allUsers as List)
           .where((u) => u['role'] == 'salesperson' || u['role'] == 'driver')
           .toList();
-      final tripEndsFut = _loadTripEnds(orgId, {
+      final names = {
         for (final u in allUsers as List) '${u['id']}': (u['name'] as String?) ?? '',
-      });
+      };
+      final tripEndsFut = _loadTripEnds(orgId, names);
+      final flaggedFut = _loadFlagged([
+        for (final u in users)
+          if (u['role'] == 'salesperson') u['id'] as String
+      ], names);
       // ignore: avoid_print
       print('LIVEMAP: ${users.length} drivers/salespeople in org');
 
@@ -534,12 +558,12 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
         if (role == 'salesperson') {
           // Pull recent visits, filter null-GPS in Dart for safety.
-          final raw = await client
+          var vq = client
               .from('visits')
               .select('id, captured_lat, captured_lng, timestamp, status, amount, customer_id')
-              .eq('user_id', userId)
-              .order('timestamp', ascending: false)
-              .limit(20);
+              .eq('user_id', userId);
+          if (!_isToday) vq = vq.gte('timestamp', _dayStartIso).lt('timestamp', _dayEndIso);
+          final raw = await vq.order('timestamp', ascending: false).limit(20);
           final withGps = (raw as List)
               .where((r) => r['captured_lat'] != null && r['captured_lng'] != null)
               .toList();
@@ -574,12 +598,12 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
             customerCode: cCode,
           ));
         } else if (role == 'driver') {
-          final dels = await client
+          var dq = client
               .from('deliveries')
               .select('id')
-              .eq('driver_id', userId)
-              .order('created_at', ascending: false)
-              .limit(20);
+              .eq('driver_id', userId);
+          if (!_isToday) dq = dq.gte('created_at', _dayStartIso).lt('created_at', _dayEndIso);
+          final dels = await dq.order('created_at', ascending: false).limit(20);
           // ignore: avoid_print
           print('LIVEMAP: $name (driver) - ${(dels as List).length} recent deliveries');
           if (dels.isEmpty) continue;
@@ -616,6 +640,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       }
 
       await tripEndsFut;
+      await flaggedFut;
+      if (!mounted || seq != _loadSeq) return; // a newer day was picked
       if (_showTracks) _loadTracks();
 
       // Routes for the selector (cheap; names only).
@@ -626,7 +652,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         routes = (r as List).cast<Map<String, dynamic>>();
       } catch (_) {}
 
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       setState(() {
         _users = result;
         _routes = routes;
@@ -684,9 +710,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
           .where((u) => u['role'] == 'salesperson' || u['role'] == 'driver')
           .toList();
 
-      final now = DateTime.now();
-      final dayStart =
-          DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
+      final dayStart = _dayStartIso;
+      final dayEnd = _dayEndIso;
 
       final List<_UserTrack> tracks = [];
 
@@ -703,6 +728,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               .select('captured_lat, captured_lng, timestamp')
               .eq('user_id', userId)
               .gte('timestamp', dayStart)
+              .lt('timestamp', dayEnd)
               .order('timestamp', ascending: true);
           points = (raw as List)
               .where((r) => r['captured_lat'] != null && r['captured_lng'] != null)
@@ -725,7 +751,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               .from('deliveries')
               .select('id')
               .eq('driver_id', userId)
-              .gte('created_at', dayStart);
+              .gte('created_at', dayStart)
+              .lt('created_at', dayEnd);
           final dIds = (dels as List).map((d) => d['id'] as String).toList();
           if (dIds.isNotEmpty) {
             final stops = await client
@@ -873,6 +900,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   Color _freshnessColor(DateTime ts) {
+    if (!_isToday) return AppTheme.textSecondary;
     final mins = DateTime.now().difference(ts).inMinutes;
     if (mins < 30) return AppTheme.success;
     if (mins < 120) return AppTheme.warning;
@@ -881,6 +909,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   String _freshnessLabel(DateTime ts) {
+    if (!_isToday) return DateFormat('h:mm a').format(ts);
     final diff = DateTime.now().difference(ts);
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
@@ -1092,19 +1121,477 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(children: [
-        FlutterMap(
-          mapController: _mapController,
-          options: const MapOptions(
-            initialCenter: LatLng(31.5204, 74.3587), // Lahore
-            initialZoom: 11,
-            minZoom: 3,
-            maxZoom: 18,
+  // ── Day picker ──────────────────────────────────────────────────────────────
+  void _setDay(DateTime d) {
+    final day = DateTime(d.year, d.month, d.day);
+    if (day.isAfter(_todayDate()) || day == _day) return;
+    setState(() {
+      _day = day;
+      _users = [];
+      _tripEnds = [];
+      _tracks = [];
+      _flagged = [];
+    });
+    _load();
+  }
+
+  Future<void> _pickDay() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: _day,
+      firstDate: DateTime(2023),
+      lastDate: _todayDate(),
+      helpText: 'Show the map for',
+    );
+    if (d != null) _setDay(d);
+  }
+
+  String get _dayLabel {
+    if (_isToday) return 'Today';
+    if (_day == _todayDate().subtract(const Duration(days: 1))) return 'Yesterday';
+    return DateFormat('EEE d MMM y').format(_day);
+  }
+
+  Widget _dayChip({bool dense = false}) {
+    final canNext = _day.isBefore(_todayDate());
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Previous day',
+        icon: const Icon(Icons.chevron_left, size: 20),
+        onPressed: () => _setDay(_day.subtract(const Duration(days: 1))),
+      ),
+      InkWell(
+        onTap: _pickDay,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: dense ? 4 : 6, vertical: 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.calendar_today_outlined, size: 14, color: AppTheme.primary),
+            const SizedBox(width: 6),
+            Text(_dayLabel, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          ]),
+        ),
+      ),
+      IconButton(
+        visualDensity: VisualDensity.compact,
+        tooltip: 'Next day',
+        icon: const Icon(Icons.chevron_right, size: 20),
+        onPressed: canNext ? () => _setDay(_day.add(const Duration(days: 1))) : null,
+      ),
+      if (!_isToday)
+        TextButton(
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+          onPressed: () => _setDay(_todayDate()),
+          child: const Text('Today', style: TextStyle(fontSize: 12)),
+        ),
+    ]);
+  }
+
+  // ── Flagged visits (outside geofence / not verified / skipped) ─────────────
+  Future<void> _loadFlagged(List<String> spIds, Map<String, String> names) async {
+    if (spIds.isEmpty) {
+      if (mounted) setState(() => _flagged = []);
+      return;
+    }
+    try {
+      final client = Supabase.instance.client;
+      final out = <_FlagVisit>[];
+      for (var i = 0; i < spIds.length; i += 80) {
+        final chunk = spIds.sublist(i, i + 80 > spIds.length ? spIds.length : i + 80);
+        final rows = await client
+            .from('visits')
+            .select('id, trip_id, user_id, status, timestamp, captured_lat, captured_lng, distance_meters, amount, notes, customers(shop_name, code)')
+            .inFilter('user_id', chunk)
+            .inFilter('status', const ['outside', 'noLocation', 'no_location', 'skipped'])
+            .gte('timestamp', _dayStartIso)
+            .lt('timestamp', _dayEndIso)
+            .order('timestamp', ascending: true);
+        for (final v in (rows as List).cast<Map<String, dynamic>>()) {
+          final cust = v['customers'] as Map?;
+          final uid = '${v['user_id'] ?? ''}';
+          out.add(_FlagVisit(
+            tripId: '${v['trip_id'] ?? ''}',
+            userId: uid,
+            userName: names[uid] ?? 'Salesperson',
+            shop: '${cust?['shop_name'] ?? 'Shop'}',
+            code: '${cust?['code'] ?? ''}',
+            status: '${v['status'] ?? ''}',
+            at: _ts(v['timestamp']),
+            point: _pt(v, 'captured_lat', 'captured_lng'),
+            distance: (v['distance_meters'] as num?)?.toDouble(),
+            amount: (v['amount'] as num?) ?? 0,
+            notes: '${v['notes'] ?? ''}',
+          ));
+        }
+      }
+      if (mounted) setState(() => _flagged = out);
+    } catch (_) {
+      if (mounted) setState(() => _flagged = []);
+    }
+  }
+
+  static Color _flagColor(_FlagVisit f) {
+    final label = visitOutcomeLabel(f.status, f.amount);
+    if (label == 'Outside geofence') return const Color(0xFFEA580C);
+    if (label == 'Skipped') return const Color(0xFF64748B);
+    return const Color(0xFFDC2626); // not verified
+  }
+
+  static IconData _flagIcon(_FlagVisit f) {
+    final label = visitOutcomeLabel(f.status, f.amount);
+    if (label == 'Outside geofence') return Icons.wrong_location;
+    if (label == 'Skipped') return Icons.block;
+    return Icons.gps_off;
+  }
+
+  Widget _flagPin(_FlagVisit f) => Container(
+        decoration: BoxDecoration(
+          color: _flagColor(f),
+          shape: BoxShape.circle,
+          // Ring in the salesperson's colour, so you can tell whose it is.
+          border: Border.all(color: _userColor(f.userId), width: 2.5),
+          boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 3)],
+        ),
+        alignment: Alignment.center,
+        child: Icon(_flagIcon(f), color: Colors.white, size: 13),
+      );
+
+  void _showFlagSheet(List<_FlagVisit> list, {String? title}) {
+    final fmt = DateFormat('h:mm a');
+    final nf = NumberFormat('#,##0');
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.75),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            children: [
+              if (title != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                ),
+              for (final f in list) ...[
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SizedBox(width: 30, height: 30, child: _flagPin(f)),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(f.shop, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                    Text([f.userName, if (f.code.isNotEmpty) f.code].join(' · '),
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 14, runSpacing: 4, children: [
+                      _kv('Result', visitOutcomeLabel(f.status, f.amount)),
+                      if (f.at != null) _kv('Time', fmt.format(f.at!)),
+                      _kv('Collected', 'Rs ${nf.format(f.amount)}'),
+                      _kv('From shop', f.distance != null && f.distance! > 0
+                          ? '${f.distance!.round()} m'
+                          : 'Shop has no saved location'),
+                      if (f.point == null) _kv('GPS', 'Not recorded'),
+                    ]),
+                    if (f.notes.trim().isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(f.notes.trim(), style: const TextStyle(fontSize: 12.5)),
+                    ],
+                    if (f.tripId.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                        icon: const Icon(Icons.timeline, size: 16),
+                        label: const Text('Show this route run'),
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _openTrip(f.tripId);
+                        },
+                      ),
+                    ],
+                  ])),
+                ]),
+                if (f != list.last) const Divider(height: 24),
+              ],
+            ],
           ),
-          children: [
+        ),
+      ),
+    );
+  }
+
+  /// Flagged visits close together share one tap target.
+  List<List<_FlagVisit>> get _flagGroups {
+    final groups = <List<_FlagVisit>>[];
+    for (final f in _flagged) {
+      if (f.point == null) continue;
+      if (_focusTrip != null && f.tripId != _focusTrip!.tripId) continue;
+      List<_FlagVisit>? hit;
+      for (final g in groups) {
+        final p = g.first.point!;
+        if ((p.latitude - f.point!.latitude).abs() < 0.00012 && (p.longitude - f.point!.longitude).abs() < 0.00012) {
+          hit = g;
+          break;
+        }
+      }
+      if (hit != null) {
+        hit.add(f);
+      } else {
+        groups.add([f]);
+      }
+    }
+    return groups;
+  }
+
+  // ── Panels (shared by desktop overlays and the mobile sheet) ───────────────
+  Widget _sectionTitle(String t) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Text(t,
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+      );
+
+  Widget _usersList({required VoidCallback refresh, BuildContext? sheetCtx}) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      _sectionTitle(_showTracks
+          ? 'USERS · TRACKS ${_isToday ? 'TODAY' : 'THIS DAY'}'
+          : (_isToday ? 'USERS ON MAP' : 'LAST POSITION THIS DAY')),
+      const SizedBox(height: 6),
+      if (_users.isEmpty)
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Text('Nobody on the map for this day.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        ),
+      for (final u in _users)
+        InkWell(
+          onTap: () {
+            if (sheetCtx != null) Navigator.of(sheetCtx).pop();
+            _focusUser(u);
+          },
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            child: Row(children: [
+              Icon(u.role == 'driver' ? Icons.local_shipping : Icons.person, size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                  color: _isToday ? _freshnessColor(u.timestamp) : _userColor(u.userId),
+                  shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: Text(u.userName, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))),
+              if (!_isToday)
+                Text(DateFormat('h:mm a').format(u.timestamp),
+                    style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+              if (_showTracks) ...[
+                const SizedBox(width: 8),
+                Container(width: 16, height: 3,
+                    decoration: BoxDecoration(color: _userColor(u.userId), borderRadius: BorderRadius.circular(2))),
+              ],
+            ]),
+          ),
+        ),
+    ]);
+  }
+
+  Widget _customerList({required VoidCallback refresh, BuildContext? sheetCtx, double listHeight = 240}) {
+    if (!_hasListableCustomers) return const SizedBox.shrink();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      const Divider(height: 14),
+      InkWell(
+        onTap: () { _custListExpanded = !_custListExpanded; refresh(); },
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Row(children: [
+            Icon(_custListExpanded ? Icons.expand_more : Icons.chevron_right, size: 16, color: AppTheme.textSecondary),
+            const SizedBox(width: 4),
+            Text('${_selectedRouteId != null ? 'ROUTE STOPS' : 'CUSTOMERS'} · ${_panelCustomers.length}',
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+          ]),
+        ),
+      ),
+      if (_custListExpanded) ...[
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: SizedBox(
+            height: 34,
+            child: TextField(
+              controller: _custSearchCtrl,
+              onChanged: (_) => refresh(),
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Search name or code...',
+                hintStyle: const TextStyle(fontSize: 12),
+                prefixIcon: const Icon(Icons.search, size: 16),
+                prefixIconConstraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                suffixIcon: _custSearchCtrl.text.isEmpty
+                    ? null
+                    : IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+                        icon: const Icon(Icons.clear, size: 14),
+                        onPressed: () { _custSearchCtrl.clear(); refresh(); },
+                      ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Builder(builder: (_) {
+          final list = _panelCustomers;
+          if (list.isEmpty) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Text('No customers match.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            );
+          }
+          return SizedBox(
+            height: listHeight,
+            child: ListView.builder(
+              itemCount: list.length,
+              itemBuilder: (_, i) {
+                final c = list[i];
+                final stopNo = _selectedRouteId != null ? _routeStops.indexOf(c) + 1 : i + 1;
+                return InkWell(
+                  onTap: () {
+                    if (sheetCtx != null) Navigator.of(sheetCtx).pop();
+                    _focusCust(c, stopNo: _selectedRouteId != null ? stopNo : null);
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                    child: Row(children: [
+                      SizedBox(width: 22, child: Text('$stopNo.', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
+                      Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(c.group), shape: BoxShape.circle)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(c.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          );
+        }),
+      ],
+    ]);
+  }
+
+  /// Freshness / routes / visit legends.
+  Widget _legendContent({BuildContext? sheetCtx}) {
+    final noGps = _flagged.where((f) => f.point == null).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      if (_isToday) ...[
+        const Text('FRESHNESS',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+        const SizedBox(height: 6),
+        _legendDot(AppTheme.success, '< 30 min'),
+        _legendDot(AppTheme.warning, '< 2 h'),
+        _legendDot(Colors.orange, '< 8 h'),
+        _legendDot(AppTheme.textSecondary, 'older'),
+      ] else
+        Text('Last position on ${DateFormat('d MMM').format(_day)}',
+            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      if (_tripEnds.isNotEmpty || _focusTrip != null) ...[
+        const SizedBox(height: 8),
+        const Text('ROUTES',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+        const SizedBox(height: 6),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(width: 14, height: 14, child: _endPin(start: true)),
+          const SizedBox(width: 8),
+          const Text('Started', style: TextStyle(fontSize: 11)),
+        ]),
+        const SizedBox(height: 4),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(width: 14, height: 14, child: _endPin(start: false)),
+          const SizedBox(width: 8),
+          const Text('Ended', style: TextStyle(fontSize: 11)),
+        ]),
+      ],
+      if (_showFlagged && _flagged.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Text('VISITS TO CHECK · ${_flagged.length}',
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+        const SizedBox(height: 6),
+        _legendIcon(const Color(0xFFEA580C), Icons.wrong_location, 'Outside geofence'),
+        _legendIcon(const Color(0xFFDC2626), Icons.gps_off, 'Not verified'),
+        _legendIcon(const Color(0xFF64748B), Icons.block, 'Skipped'),
+        const Padding(
+          padding: EdgeInsets.only(top: 2),
+          child: Text('Ring colour = salesperson', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+        ),
+        if (noGps.isNotEmpty)
+          InkWell(
+            onTap: () {
+              if (sheetCtx != null) Navigator.of(sheetCtx).pop();
+              _showFlagSheet(noGps, title: 'Visits with no GPS recorded');
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('${noGps.length} with no GPS — see list',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+            ),
+          ),
+      ],
+    ]);
+  }
+
+  Widget _legendIcon(Color c, IconData icon, String label) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 16, height: 16,
+            decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+            child: Icon(icon, size: 10, color: Colors.white),
+          ),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(fontSize: 11)),
+        ]),
+      );
+
+  void _openMobilePanel() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        void refresh() { if (mounted) setState(() {}); setSheet(() {}); }
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.3,
+          maxChildSize: 0.92,
+          expand: false,
+          builder: (_, scroll) => ListView(
+            controller: scroll,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            children: [
+              Center(child: Container(width: 40, height: 4,
+                  decoration: BoxDecoration(color: AppTheme.border, borderRadius: BorderRadius.circular(2)))),
+              const SizedBox(height: 12),
+              _usersList(refresh: refresh, sheetCtx: ctx),
+              _customerList(refresh: refresh, sheetCtx: ctx, listHeight: 280),
+              const Divider(height: 20),
+              _legendContent(sheetCtx: ctx),
+              if (_groupColors.isNotEmpty && (_showCustomers || _selectedRouteId != null)) ...[
+                const Divider(height: 20),
+                _groupsLegendCard(onChange: refresh, flat: true),
+              ],
+            ],
+          ),
+        );
+      }),
+    );
+  }
+
+  List<Widget> _mapChildren() => [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.opstation.web',
@@ -1201,6 +1688,34 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     ),
                   ),
               ]),
+            // Visits to check: outside the geofence, not verified, skipped —
+            // pinned at the salesperson's own GPS (shop location not needed).
+            if (_showFlagged && _flagged.isNotEmpty)
+              MarkerLayer(markers: [
+                for (final g in _flagGroups)
+                  Marker(
+                    point: g.first.point!,
+                    width: g.length > 1 ? 34 : 26, height: g.length > 1 ? 34 : 26, alignment: Alignment.center,
+                    child: GestureDetector(
+                      onTap: () => _showFlagSheet(g, title: g.length > 1 ? '${g.length} visits at this spot' : null),
+                      child: Tooltip(
+                        message: '${g.first.userName} · ${g.first.shop} · ${visitOutcomeLabel(g.first.status, g.first.amount)}',
+                        child: Stack(clipBehavior: Clip.none, children: [
+                          Positioned.fill(child: _flagPin(g.first)),
+                          if (g.length > 1)
+                            Positioned(
+                              right: -4, top: -4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(8)),
+                                child: Text('${g.length}', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800)),
+                              ),
+                            ),
+                        ]),
+                      ),
+                    ),
+                  ),
+              ]),
             MarkerLayer(
               markers: [
                 for (final u in _users)
@@ -1262,347 +1777,258 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     ),
                   ),
               ]),
-          ],
+      ];
+
+  Widget _fab({required String tag, required IconData icon, required String tip, required bool on, required bool busy, VoidCallback? onTap}) =>
+      FloatingActionButton.small(
+        heroTag: tag,
+        onPressed: busy ? null : onTap,
+        backgroundColor: on ? AppTheme.primary : Colors.white,
+        foregroundColor: on ? Colors.white : AppTheme.primary,
+        tooltip: tip,
+        child: busy
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : Icon(icon),
+      );
+
+  List<Widget> _fabs({required bool mobile}) => [
+        _fab(tag: 'customers_toggle', icon: Icons.storefront_outlined,
+            tip: _showCustomers ? 'Hide customers' : 'Show customers',
+            on: _showCustomers, busy: _customersLoading, onTap: _toggleCustomers),
+        _fab(tag: 'tracks_toggle', icon: Icons.timeline,
+            tip: _showTracks ? 'Hide tracks' : 'Show tracks',
+            on: _showTracks, busy: _tracksLoading, onTap: _toggleTracks),
+        _fab(tag: 'flagged_toggle', icon: Icons.wrong_location,
+            tip: _showFlagged ? 'Hide visits to check' : 'Show visits outside geofence / not verified',
+            on: _showFlagged, busy: false, onTap: () => setState(() => _showFlagged = !_showFlagged)),
+        if (mobile)
+          _fab(tag: 'panel', icon: Icons.people_alt_outlined, tip: 'People, customers & legend',
+              on: false, busy: false, onTap: _openMobilePanel),
+        _fab(tag: 'refresh', icon: Icons.refresh, tip: 'Refresh', on: false, busy: _loading, onTap: _load),
+      ];
+
+  Widget _routeSelector({double width = 190}) => Card(
+        elevation: 4,
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.alt_route, size: 18, color: AppTheme.primary),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: width,
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String?>(
+                  isExpanded: true,
+                  value: _selectedRouteId,
+                  hint: const Text('Select a route', style: TextStyle(fontSize: 13)),
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('No route', style: TextStyle(fontSize: 13))),
+                    ..._routes.map((r) => DropdownMenuItem<String?>(
+                        value: r['id'] as String,
+                        child: Text(r['name'] as String? ?? '-', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))),
+                  ],
+                  onChanged: _routeLoading ? null : _selectRoute,
+                ),
+              ),
+            ),
+            if (_routeLoading)
+              const Padding(padding: EdgeInsets.only(left: 6), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))
+            else if (_selectedRouteId != null)
+              Text('  ${_routeStops.length}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+          ]),
         ),
-        // Status card on the left
-        Positioned(
-          top: 16,
-          left: 16,
-          child: Card(
-            elevation: 4,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.location_on, color: AppTheme.primary, size: 20),
-                const SizedBox(width: 8),
-                Text('Live Map · ${_users.length} on map',
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                if (_lastRefresh != null) ...[
-                  const SizedBox(width: 12),
-                  Text('updated ${DateFormat('h:mm a').format(_lastRefresh!)}',
-                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      );
+
+  Widget _statusText({bool compact = false}) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(_isToday ? Icons.location_on : Icons.history, color: AppTheme.primary, size: 20),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            '${_isToday ? 'Live Map' : 'Map'} · ${_users.length} on map'
+            '${_flagged.isNotEmpty ? ' · ${_flagged.length} to check' : ''}',
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: compact ? 13 : 14)),
+        ),
+        if (_lastRefresh != null && _isToday && !compact) ...[
+          const SizedBox(width: 12),
+          Text('updated ${DateFormat('h:mm a').format(_lastRefresh!)}',
+              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+        ],
+      ]);
+
+  Widget _focusOrLoading({required double maxWidth}) => ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: _focusTrip == null
+            ? const Card(
+                elevation: 4,
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 10),
+                    Text('Loading route…', style: TextStyle(fontSize: 12.5)),
+                  ]),
+                ),
+              )
+            : _focusCard(_focusTrip!),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: LayoutBuilder(builder: (context, box) {
+        final mobile = box.maxWidth < 720;
+        final map = FlutterMap(
+          mapController: _mapController,
+          options: const MapOptions(
+            initialCenter: LatLng(31.5204, 74.3587), // Lahore
+            initialZoom: 11,
+            minZoom: 3,
+            maxZoom: 18,
+          ),
+          children: _mapChildren(),
+        );
+        final empty = (_users.isEmpty && _flagged.isEmpty && !_loading)
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Text(
+                        _isToday
+                            ? 'No location data yet — drivers and salespeople appear here once they sync visits.'
+                            : 'No activity recorded on ${DateFormat('d MMM y').format(_day)}.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            : null;
+
+        if (mobile) {
+          return Stack(children: [
+            map,
+            if (empty != null) empty,
+            // Header: status + day, route picker, then the map buttons.
+            Positioned(
+              top: 8, left: 8, right: 8,
+              child: SafeArea(
+                bottom: false,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Card(
+                    elevation: 4,
+                    margin: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 4, 2),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                        _statusText(compact: true),
+                        _dayChip(dense: true),
+                      ]),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Flexible(child: _routeSelector(width: (box.maxWidth - 16 - 60).clamp(120.0, 260.0).toDouble())),
+                  ]),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Wrap(spacing: 6, runSpacing: 6, children: _fabs(mobile: true)),
+                  ),
+                ]),
+              ),
+            ),
+            if (_focusTrip != null || _focusLoading)
+              Positioned(
+                left: 8, right: 8, bottom: 8,
+                child: SafeArea(top: false, child: _focusOrLoading(maxWidth: box.maxWidth - 16)),
+              ),
+          ]);
+        }
+
+        return Stack(children: [
+          map,
+          if (empty != null) empty,
+          // Top-left: status + day, route selector, opened route run.
+          Positioned(
+            top: 16,
+            left: 16,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: (box.maxWidth - 320).clamp(280.0, 520.0).toDouble()),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Card(
+                  elevation: 4,
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      _statusText(),
+                      _dayChip(),
+                    ]),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _routeSelector(),
+                if (_focusTrip != null || _focusLoading) ...[
+                  const SizedBox(height: 8),
+                  _focusOrLoading(maxWidth: 380),
                 ],
               ]),
             ),
           ),
-        ),
-        // Route selector
-        Positioned(
-          top: 64,
-          left: 16,
-          child: Card(
-            elevation: 4,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.alt_route, size: 18, color: AppTheme.primary),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 190,
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String?>(
-                      isExpanded: true,
-                      value: _selectedRouteId,
-                      hint: const Text('Select a route', style: TextStyle(fontSize: 13)),
-                      items: [
-                        const DropdownMenuItem<String?>(value: null, child: Text('No route', style: TextStyle(fontSize: 13))),
-                        ..._routes.map((r) => DropdownMenuItem<String?>(
-                            value: r['id'] as String,
-                            child: Text(r['name'] as String? ?? '-', style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))),
-                      ],
-                      onChanged: _routeLoading ? null : _selectRoute,
-                    ),
-                  ),
-                ),
-                if (_routeLoading)
-                  const Padding(padding: EdgeInsets.only(left: 6), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))
-                else if (_selectedRouteId != null)
-                  Text('  ${_routeStops.length}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary)),
-              ]),
-            ),
-          ),
-        ),
-        // Opened route run (from a Route started / ended notification).
-        if (_focusTrip != null || _focusLoading)
+          // Map buttons (top-right).
           Positioned(
-            top: 118,
-            left: 16,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: (MediaQuery.of(context).size.width - 32).clamp(200.0, 380.0).toDouble()),
-              child: _focusTrip == null
-                  ? const Card(
-                      elevation: 4,
-                      child: Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                          SizedBox(width: 10),
-                          Text('Loading route…', style: TextStyle(fontSize: 12.5)),
-                        ]),
-                      ),
-                    )
-                  : _focusCard(_focusTrip!),
-            ),
+            top: 16,
+            right: 16,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              for (final w in _fabs(mobile: false)) Padding(padding: const EdgeInsets.only(left: 8), child: w),
+            ]),
           ),
-        // Action buttons on the right (separate Positioned so the middle stays clickable for pan/zoom)
-        Positioned(
-          top: 16,
-          right: 16,
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            FloatingActionButton.small(
-              heroTag: 'customers_toggle',
-              onPressed: _customersLoading ? null : _toggleCustomers,
-              backgroundColor: _showCustomers ? AppTheme.primary : Colors.white,
-              foregroundColor: _showCustomers ? Colors.white : AppTheme.primary,
-              tooltip: _showCustomers ? 'Hide customers' : 'Show customers',
-              child: _customersLoading
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.storefront_outlined),
-            ),
-            const SizedBox(width: 8),
-            FloatingActionButton.small(
-              heroTag: 'tracks_toggle',
-              onPressed: _toggleTracks,
-              backgroundColor: _showTracks ? AppTheme.primary : Colors.white,
-              foregroundColor: _showTracks ? Colors.white : AppTheme.primary,
-              tooltip: _showTracks ? 'Hide tracks' : 'Show tracks',
-              child: _tracksLoading
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.timeline),
-            ),
-            const SizedBox(width: 8),
-            FloatingActionButton.small(
-              heroTag: 'refresh',
-              onPressed: _loading ? null : _load,
-              backgroundColor: Colors.white,
-              foregroundColor: AppTheme.primary,
-              tooltip: 'Refresh',
-              child: _loading
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh),
-            ),
-          ]),
-        ),
-        // Bottom-left stack: MAIN GROUPS (clickable filter) above FRESHNESS.
-        // Kept in one Column so the two cards never overlap the route selector.
-        Positioned(
-          left: 16,
-          bottom: 16,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
+          // Bottom-left: MAIN GROUPS above the legend.
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               if (_groupColors.isNotEmpty && (_showCustomers || _selectedRouteId != null)) ...[
                 _groupsLegendCard(),
                 const SizedBox(height: 10),
               ],
               Card(
                 elevation: 4,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                    const Text('FRESHNESS',
-                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
-                    const SizedBox(height: 6),
-                    _legendDot(AppTheme.success, '< 30 min'),
-                    _legendDot(AppTheme.warning, '< 2 h'),
-                    _legendDot(Colors.orange, '< 8 h'),
-                    _legendDot(AppTheme.textSecondary, 'older'),
-                    if (_tripEnds.isNotEmpty || _focusTrip != null) ...[
-                      const SizedBox(height: 8),
-                      const Text('ROUTES',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
-                      const SizedBox(height: 6),
-                      Row(mainAxisSize: MainAxisSize.min, children: [
-                        SizedBox(width: 14, height: 14, child: _endPin(start: true)),
-                        const SizedBox(width: 8),
-                        const Text('Started', style: TextStyle(fontSize: 11)),
-                      ]),
-                      const SizedBox(height: 4),
-                      Row(mainAxisSize: MainAxisSize.min, children: [
-                        SizedBox(width: 14, height: 14, child: _endPin(start: false)),
-                        const SizedBox(width: 8),
-                        const Text('Ended', style: TextStyle(fontSize: 11)),
-                      ]),
-                    ],
-                  ]),
-                ),
+                child: Padding(padding: const EdgeInsets.all(12), child: _legendContent()),
               ),
-            ],
+            ]),
           ),
-        ),
-        // Always-visible clickable user legend (right side)
-        if (_users.isNotEmpty)
-          Positioned(
-            right: 16,
-            top: 80,
-            child: Card(
-              elevation: 4,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 260),
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Text(
-                          _showTracks ? 'USERS · TRACKS TODAY' : 'USERS ON MAP',
-                          style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textSecondary,
-                              letterSpacing: 0.6),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      for (final u in _users)
-                        InkWell(
-                          onTap: () => _focusUser(u),
-                          borderRadius: BorderRadius.circular(6),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Icon(
-                                u.role == 'driver' ? Icons.local_shipping : Icons.person,
-                                size: 14,
-                                color: AppTheme.textSecondary,
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  color: _freshnessColor(u.timestamp),
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: Text(
-                                  u.userName,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                                ),
-                              ),
-                              if (_showTracks) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  width: 16,
-                                  height: 3,
-                                  decoration: BoxDecoration(
-                                    color: _userColor(u.userId),
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                ),
-                              ],
-                            ]),
-                          ),
-                        ),
-                      // ── Collapsible customer list ─────────────────────────
-                      if (_hasListableCustomers) ...[
-                        const Divider(height: 14),
-                        InkWell(
-                          onTap: () => setState(() => _custListExpanded = !_custListExpanded),
-                          borderRadius: BorderRadius.circular(6),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                            child: Row(children: [
-                              Icon(_custListExpanded ? Icons.expand_more : Icons.chevron_right, size: 16, color: AppTheme.textSecondary),
-                              const SizedBox(width: 4),
-                              Text('${_selectedRouteId != null ? 'ROUTE STOPS' : 'CUSTOMERS'} · ${_panelCustomers.length}',
-                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
-                            ]),
-                          ),
-                        ),
-                        if (_custListExpanded) ...[
-                          const SizedBox(height: 6),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            child: SizedBox(
-                              height: 34,
-                              child: TextField(
-                                controller: _custSearchCtrl,
-                                onChanged: (_) => setState(() {}),
-                                style: const TextStyle(fontSize: 12),
-                                decoration: InputDecoration(
-                                  isDense: true,
-                                  hintText: 'Search name or code...',
-                                  hintStyle: const TextStyle(fontSize: 12),
-                                  prefixIcon: const Icon(Icons.search, size: 16),
-                                  prefixIconConstraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-                                  suffixIcon: _custSearchCtrl.text.isEmpty
-                                      ? null
-                                      : IconButton(
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
-                                          icon: const Icon(Icons.clear, size: 14),
-                                          onPressed: () => setState(() => _custSearchCtrl.clear()),
-                                        ),
-                                  contentPadding: const EdgeInsets.symmetric(vertical: 4),
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Builder(builder: (_) {
-                            final list = _panelCustomers;
-                            if (list.isEmpty) {
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 16),
-                                child: Text('No customers match.',
-                                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                              );
-                            }
-                            return SizedBox(
-                              height: 240,
-                              child: ListView.builder(
-                                  itemCount: list.length,
-                                  itemBuilder: (_, i) {
-                                    final c = list[i];
-                                    // In route mode the label is the true stop
-                                    // position (unaffected by search/group filter).
-                                    final stopNo = _selectedRouteId != null
-                                        ? _routeStops.indexOf(c) + 1
-                                        : i + 1;
-                                    return InkWell(
-                                      onTap: () => _focusCust(c, stopNo: _selectedRouteId != null ? stopNo : null),
-                                      borderRadius: BorderRadius.circular(6),
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                                        child: Row(children: [
-                                          SizedBox(width: 22, child: Text('$stopNo.', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
-                                          Container(width: 9, height: 9, decoration: BoxDecoration(color: _groupColor(c.group), shape: BoxShape.circle)),
-                                          const SizedBox(width: 8),
-                                          Expanded(child: Text(c.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
-                                        ]),
-                                      ),
-                                    );
-                                  },
-                                ),
-                            );
-                          }),
-                        ],
-                      ],
-                    ],
+          // People + customer list (right).
+          if (_users.isNotEmpty || _hasListableCustomers)
+            Positioned(
+              right: 16,
+              top: 72,
+              child: Card(
+                elevation: 4,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 260, maxHeight: (box.maxHeight - 180).clamp(200.0, 900.0).toDouble()),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(10),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                      _usersList(refresh: () => setState(() {})),
+                      _customerList(refresh: () => setState(() {})),
+                    ]),
                   ),
                 ),
               ),
             ),
-          ),
-        // zoom_controls
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+          // Zoom controls.
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
                 IconButton(
                   icon: const Icon(Icons.add, size: 20),
                   tooltip: 'Zoom in',
@@ -1611,10 +2037,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     _mapController.move(cam.center, cam.zoom + 1);
                   },
                 ),
-                const SizedBox(
-                  width: 32,
-                  child: Divider(height: 1),
-                ),
+                const SizedBox(width: 32, child: Divider(height: 1)),
                 IconButton(
                   icon: const Icon(Icons.remove, size: 20),
                   tooltip: 'Zoom out',
@@ -1623,20 +2046,11 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     _mapController.move(cam.center, cam.zoom - 1);
                   },
                 ),
-              ],
+              ]),
             ),
           ),
-        ),
-        if (_users.isEmpty && !_loading)
-          const Center(
-            child: Card(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('No location data yet — drivers and salespeople appear here once they sync visits.'),
-              ),
-            ),
-          ),
-      ]),
+        ]);
+      }),
     );
   }
 
@@ -1654,8 +2068,29 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   /// Clickable MAIN GROUPS legend. Tapping a group filters the map (and the
   /// customer list) to only that group; tapping the selected group again — or
   /// the "All groups" row — clears the filter.
-  Widget _groupsLegendCard() {
+  Widget _groupsLegendCard({VoidCallback? onChange, bool flat = false}) {
     final entries = _groupColors.entries.toList();
+    if (flat) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          const Text('MAIN GROUPS',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary, letterSpacing: 0.6)),
+          if (_selectedGroup != null) ...[
+            const Spacer(),
+            InkWell(
+              onTap: () { setState(() => _selectedGroup = null); onChange?.call(); },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Text('Clear', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+              ),
+            ),
+          ],
+        ]),
+        const SizedBox(height: 6),
+        _groupLegendRow(null, AppTheme.textSecondary, 'All groups', onChange: onChange),
+        for (final e in entries) _groupLegendRow(e.key, e.value, e.key, onChange: onChange),
+      ]);
+    }
     return Card(
       elevation: 4,
       child: ConstrainedBox(
@@ -1694,13 +2129,16 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     );
   }
 
-  Widget _groupLegendRow(String? group, Color color, String label) {
+  Widget _groupLegendRow(String? group, Color color, String label, {VoidCallback? onChange}) {
     final selected = _selectedGroup == group;
     return InkWell(
-      onTap: () => setState(() {
-        // Tapping the active group clears; "All groups" (group == null) always clears.
-        _selectedGroup = (group == null || _selectedGroup == group) ? null : group;
-      }),
+      onTap: () {
+        setState(() {
+          // Tapping the active group clears; "All groups" (group == null) always clears.
+          _selectedGroup = (group == null || _selectedGroup == group) ? null : group;
+        });
+        onChange?.call();
+      },
       borderRadius: BorderRadius.circular(6),
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 1),
@@ -1732,7 +2170,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   Widget _buildMarker(_UserLoc u) {
-    final color = _freshnessColor(u.timestamp);
+    final color = _isToday ? _freshnessColor(u.timestamp) : _userColor(u.userId);
     final icon = u.role == 'driver' ? Icons.local_shipping : Icons.person;
     return Container(
       decoration: BoxDecoration(
@@ -1948,4 +2386,17 @@ List<List<_FocusVisit>> _groupFocusVisits(List<_FocusVisit> vs) {
     }
   }
   return groups;
+}
+
+/// A visit to check on the Live Map: outside the geofence, not verified or
+/// skipped. [point] is where the salesperson's phone was (may be missing).
+class _FlagVisit {
+  final String tripId, userId, userName, shop, code, status, notes;
+  final DateTime? at;
+  final LatLng? point;
+  final double? distance;
+  final num amount;
+  const _FlagVisit({required this.tripId, required this.userId, required this.userName,
+      required this.shop, required this.code, required this.status, this.at, this.point,
+      this.distance, required this.amount, required this.notes});
 }
