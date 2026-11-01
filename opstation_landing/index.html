@@ -6,9 +6,9 @@
   <title>Opstation ERP — The operating system for distribution in cash-run economies</title>
   <meta name="description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
 
-  <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png" />
-  <link rel="icon" href="/favicon.ico" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png?v=2" />
+  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
   <link rel="canonical" href="https://opstationerp.com/" />
 
   <meta property="og:type" content="website" />
@@ -139,6 +139,101 @@
       .reveal { opacity: 1 !important; transform: none !important; transition: none; }
       html { scroll-behavior: auto; }
     }
+    /* ── Lower sections (match the hero) ───────────────────────────── */
+    .bg-hero { background: #0E1E40; }
+    .text-hl { color: #8DB8FF; }
+    .flow { position: relative; }
+    .flow-line { display: none; }
+    @media (min-width: 768px) {
+      .flow-line { display: block; position: absolute; left: 10%; right: 10%; top: 2.55rem; height: 2px; background: #E6EAF2; border-radius: 2px; }
+      .flow-line span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2F6FED 0%, #2F6FED 80%, #059669 100%); border-radius: 2px; transition: width 2.4s cubic-bezier(.4,.1,.2,1) .2s; }
+      .flow.in .flow-line span { width: 100%; }
+    }
+    .flow-card { position: relative; background: #fff; border: 1px solid #E6EAF2; border-radius: 16px; padding: 1.4rem 1.3rem 1.3rem;
+                 transition: border-color .5s ease, box-shadow .5s ease, transform .5s ease; transition-delay: calc(var(--i) * .45s + .2s); }
+    .flow-num { width: 2.4rem; height: 2.4rem; border-radius: 9999px; display: grid; place-items: center; font: 600 .8rem 'JetBrains Mono', monospace;
+                color: #2257C8; background: #EEF3FF; border: 1px solid #D9E4FF; position: relative; z-index: 1;
+                transition: background .5s ease, color .5s ease, box-shadow .5s ease, border-color .5s ease; transition-delay: inherit; }
+    .flow.in .flow-card { border-color: #C9D6F2; box-shadow: 0 20px 40px -28px rgba(15,23,41,.28); }
+    .flow.in .flow-num { background: #2F6FED; color: #fff; border-color: #2F6FED; box-shadow: 0 0 0 5px rgba(47,111,237,.14); }
+    .flow.in .flow-card.cash .flow-num { background: #059669; border-color: #059669; box-shadow: 0 0 0 5px rgba(5,150,105,.14); }
+    .flow-tags { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: 1rem; }
+    .flow-tags span { font: 500 .66rem 'JetBrains Mono', monospace; letter-spacing: .02em; color: #3B4658; background: #F6F8FC; border: 1px solid #E6EAF2; border-radius: 6px; padding: .2rem .45rem; }
+    .books { background: #0E1E40; border-radius: 16px; padding: 1.25rem 1.4rem; display: flex; flex-direction: column; gap: 1rem; }
+    @media (min-width: 1024px) { .books { flex-direction: row; align-items: center; justify-content: space-between; } }
+    .books-tag { font-size: .74rem; font-weight: 600; color: #DCE7FF; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14); border-radius: 9999px; padding: .3rem .7rem; }
+
+    .phone { width: 300px; max-width: 100%; border-radius: 38px; background: #0B1220; padding: 12px; box-shadow: 0 50px 90px -40px rgba(14,30,64,.55), 0 0 0 1px rgba(15,23,41,.08); position: relative; }
+    .phone-notch { position: absolute; top: 18px; left: 50%; width: 84px; height: 22px; margin-left: -42px; background: #0B1220; border-radius: 9999px; z-index: 2; }
+    .phone-head { background: #0E1E40; border-radius: 28px 28px 0 0; padding: 48px 18px 18px; }
+    .phone-bar { height: 6px; border-radius: 9999px; background: rgba(255,255,255,.12); overflow: hidden; }
+    .phone-bar span { display: block; height: 100%; background: #8DB8FF; border-radius: 9999px; }
+    .phone-list { background: #F6F8FC; padding: 10px; display: flex; flex-direction: column; gap: 7px; }
+    .shop { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #E6EAF2; border-radius: 12px; padding: 9px 10px; }
+    .shop.active { border-color: #2F6FED; box-shadow: 0 0 0 3px rgba(47,111,237,.12); }
+    .s-dot { width: 26px; height: 26px; border-radius: 9999px; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; background: #E6EAF2; flex-shrink: 0; }
+    .s-dot.ok { background: #059669; } .s-dot.warn { background: #EA580C; } .s-dot.now { background: #2F6FED; animation: nowPulse 1.6s ease-in-out infinite; }
+    @keyframes nowPulse { 50% { box-shadow: 0 0 0 6px rgba(47,111,237,.18); } }
+    .s-name { font-size: 12.5px; font-weight: 600; color: #0F1729; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .s-sub { font-size: 11px; color: #5B6473; }
+    .s-tag { font-size: 10px; font-weight: 700; border-radius: 6px; padding: 2px 6px; }
+    .s-tag.ok { color: #047857; background: #D1FAE5; } .s-tag.cash { color: #047857; background: #D1FAE5; }
+    .s-tag.warn { color: #C2410C; background: #FFEDD5; } .s-tag.now { color: #1B45A0; background: #D9E4FF; }
+    .phone-cta { background: #F6F8FC; border-radius: 0 0 28px 28px; padding: 4px 10px 14px; }
+    .phone-cta span { display: block; text-align: center; background: #2F6FED; color: #fff; font-weight: 700; font-size: 13px; border-radius: 12px; padding: 11px; }
+    .feat { display: flex; gap: .85rem; }
+    .feat-ico { width: 2.25rem; height: 2.25rem; flex-shrink: 0; border-radius: 10px; display: grid; place-items: center; background: #EEF3FF; color: #2257C8; }
+
+    .browser { border-radius: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,.12); background: #0B1630; box-shadow: 0 50px 100px -50px rgba(0,0,0,.7); }
+    .browser-top { display: flex; align-items: center; gap: 6px; padding: 11px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.08); }
+    .browser-top > span { width: 10px; height: 10px; border-radius: 9999px; background: rgba(255,255,255,.18); }
+    .browser-url { margin-left: 12px; font: 500 .7rem 'JetBrains Mono', monospace; color: rgba(255,255,255,.5); background: rgba(255,255,255,.06); border-radius: 6px; padding: 3px 10px; }
+    .browser-body { padding: 14px; }
+    .kpi { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 14px; }
+    .kpi-l { font-size: .72rem; color: rgba(255,255,255,.55); font-weight: 500; }
+    .kpi-v { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 1.35rem; margin-top: 4px; }
+    .kpi-d { font-size: .7rem; color: rgba(255,255,255,.5); margin-top: 3px; }
+    .kpi-d.up { color: #6EE7B7; }
+    .stage { display: grid; grid-template-columns: 7.5rem 1fr 1.6rem; align-items: center; gap: 10px; font-size: .75rem; color: rgba(255,255,255,.75); padding: 5px 0; }
+    .stage > div { height: 7px; background: rgba(255,255,255,.08); border-radius: 9999px; overflow: hidden; }
+    .stage i { display: block; height: 100%; background: #2F6FED; border-radius: 9999px; transform-origin: left; transform: scaleX(0); transition: transform 1.2s cubic-bezier(.3,.1,.2,1) .4s; }
+    .browser.in .stage i { transform: scaleX(1); }
+    .stage b { text-align: right; font-weight: 700; color: #fff; }
+    .appr { display: flex; align-items: center; gap: 10px; font-size: .78rem; color: rgba(255,255,255,.85); padding: 7px 0; border-top: 1px solid rgba(255,255,255,.06); }
+    .appr:first-of-type { border-top: 0; }
+    .appr-dot { width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
+    .appr-btn { font-size: .68rem; font-weight: 700; color: #8DB8FF; border: 1px solid rgba(141,184,255,.35); border-radius: 6px; padding: 2px 8px; }
+    .ctl-grid { background: rgba(255,255,255,.08); border-radius: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); }
+    .ctl { background: #0E1E40; padding: 1.4rem 1.3rem; transition: background .3s ease; }
+    .ctl:hover { background: #12264F; }
+    .ctl h3 { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 700; font-size: 1rem; color: #fff; }
+    .ctl h3::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 9999px; background: #8DB8FF; margin-right: 8px; vertical-align: middle; position: relative; top: -2px; }
+    .ctl p { font-size: .84rem; line-height: 1.55; color: rgba(255,255,255,.62); margin-top: .45rem; }
+
+    .role { border: 1px solid #E6EAF2; border-radius: 14px; padding: 1rem 1.1rem; background: #fff; }
+    .role-k { font: 500 .66rem 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .14em; color: #2257C8; }
+    .role-t { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 700; font-size: 1.05rem; margin-top: .35rem; }
+    .role-d { font-size: .8rem; color: #5B6473; margin-top: .2rem; }
+
+    .price { position: relative; border-radius: 18px; border: 1px solid #E6EAF2; background: #fff; padding: 1.75rem; display: flex; flex-direction: column; }
+    .price.featured { background: #0E1E40; color: #fff; border: 2px solid #2F6FED; box-shadow: 0 40px 80px -40px rgba(14,30,64,.6); }
+    .price-badge { position: absolute; top: -.8rem; left: 50%; transform: translateX(-50%); white-space: nowrap; border-radius: 9999px; background: #2F6FED; color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: .25rem 1rem; }
+    .price-list { margin-top: 1.5rem; flex: 1; display: flex; flex-direction: column; gap: .7rem; font-size: .875rem; }
+    .price-list li { display: flex; gap: .55rem; }
+    .price-list li::before { content: '✓'; color: #2F6FED; font-weight: 700; }
+    .price.featured .price-list li::before { color: #8DB8FF; }
+    .price-btn { margin-top: 1.75rem; display: inline-flex; justify-content: center; border-radius: 12px; border: 1px solid #2F6FED; color: #2257C8; font-weight: 600; padding: .75rem; transition: background .2s ease; }
+    .price-btn:hover { background: #EEF3FF; }
+    .price.featured .price-btn { background: #2F6FED; color: #fff; }
+    .price.featured .price-btn:hover { background: #2257C8; }
+    .faq-plus { color: #2F6FED; font-size: 1.25rem; line-height: 1; transition: transform .25s ease; flex-shrink: 0; }
+    details[open] .faq-plus { transform: rotate(45deg); }
+    .cta-logo { filter: drop-shadow(0 0 22px rgba(47,111,237,.6)); }
+    @media (prefers-reduced-motion: reduce) {
+      .flow-line span, .flow-card, .flow-num, .stage i { transition: none !important; }
+      .s-dot.now { animation: none; }
+    }
+
     *:focus-visible { outline: 2px solid #2F6FED; outline-offset: 2px; border-radius: 4px; }
   </style>
 </head>
@@ -148,14 +243,13 @@
   <header id="nav" class="nav nav-solid fixed top-0 inset-x-0 z-50">
     <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
       <a href="#top" class="flex items-center gap-2.5">
-        <span class="grid place-items-center w-8 h-8 rounded-lg bg-brand-500 text-white font-display font-extrabold text-lg">O</span>
+        <img src="/logo.png?v=2" alt="" width="32" height="32" class="w-8 h-8" />
         <span class="brandword display font-extrabold text-[1.05rem] text-white tracking-tightish">Opstation</span>
       </a>
       <nav class="hidden md:flex items-center gap-8">
-        <a href="#modules"  class="nav-link link-u text-sm text-white/85">Modules</a>
-        <a href="#field"    class="nav-link link-u text-sm text-white/85">Field ops</a>
-        <a href="#apps"     class="nav-link link-u text-sm text-white/85">Apps</a>
-        <a href="#how"      class="nav-link link-u text-sm text-white/85">How it works</a>
+        <a href="#flow"     class="nav-link link-u text-sm text-white/85">How it works</a>
+        <a href="#field"    class="nav-link link-u text-sm text-white/85">Field team</a>
+        <a href="#control"  class="nav-link link-u text-sm text-white/85">Web panel</a>
         <a href="#industries" class="nav-link link-u text-sm text-white/85">Industries</a>
         <a href="#pricing"  class="nav-link link-u text-sm text-white/85">Pricing</a>
         <a href="#faq"      class="nav-link link-u text-sm text-white/85">FAQ</a>
@@ -290,201 +384,185 @@
   <!-- TRUST / CAPABILITY BAND -->
   <section class="border-b border-line bg-surface">
     <div class="max-w-6xl mx-auto px-6 py-10 grid grid-cols-2 md:grid-cols-4 gap-8">
-      <div><div class="display font-extrabold text-2xl text-ink">One</div><div class="text-sm text-muted mt-1">system behind every branch and module</div></div>
+      <div><div class="display font-extrabold text-2xl text-ink">One</div><div class="text-sm text-muted mt-1">system behind every branch and team</div></div>
       <div><div class="display font-extrabold text-2xl text-ink">Real-time</div><div class="text-sm text-muted mt-1">stock, ledgers and collections</div></div>
-      <div><div class="display font-extrabold text-2xl text-ink">Accrual GL</div><div class="text-sm text-muted mt-1">posting behind every document</div></div>
+      <div><div class="display font-extrabold text-2xl text-ink">Auto-posting</div><div class="text-sm text-muted mt-1">every document lands in the books</div></div>
       <div><div class="display font-extrabold text-2xl text-ink">Audited</div><div class="text-sm text-muted mt-1">role-based access, full trail</div></div>
     </div>
   </section>
 
-  <!-- MODULES -->
-  <section id="modules" class="max-w-6xl mx-auto px-6 py-24 md:py-32 reveal">
-    <p class="eyebrow text-muted">— One platform</p>
-    <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[3rem] leading-[1.04] mt-4 max-w-3xl">Every part of the business, in one connected system.</h2>
-    <p class="mt-5 text-muted text-lg max-w-2xl">Each module shares the same products, branches, customers and ledger — so a sale, a receipt or a production batch updates everything at once.</p>
+  <!-- HOW IT WORKS: the same five steps as the hero, explained -->
+  <section id="flow" class="max-w-6xl mx-auto px-6 py-24 md:py-32">
+    <div class="reveal">
+      <p class="eyebrow text-brand-600">— How it works</p>
+      <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4 max-w-3xl">One flow, from the supplier to <span class="text-brand-500">cash in hand.</span></h2>
+      <p class="mt-5 text-muted text-lg max-w-2xl">Each step hands over to the next on its own, and every one of them posts to your books.</p>
+    </div>
 
-    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-14">
-      <!-- Inventory -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Inventory &amp; stock</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">Multi-branch stock, transfers, opening balances, valuation and adjustments — with a live inventory ledger.</p>
+    <div class="flow reveal mt-14">
+      <div class="flow-line" aria-hidden="true"><span></span></div>
+      <div class="grid gap-4 md:grid-cols-5 relative">
+        <div class="flow-card" style="--i:0">
+          <div class="flow-num">01</div>
+          <h3 class="display font-bold text-lg mt-4">Purchase</h3>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Raise orders, receive goods against them and bill suppliers. Costs land on stock as goods arrive.</p>
+          <div class="flow-tags"><span>PO</span><span>GRN</span><span>Purchase invoice</span></div>
+        </div>
+        <div class="flow-card" style="--i:1">
+          <div class="flow-num">02</div>
+          <h3 class="display font-bold text-lg mt-4">Stock</h3>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Live stock in every branch and warehouse, with transfers, adjustments and valuation.</p>
+          <div class="flow-tags"><span>Transfers</span><span>Valuation</span><span>Stock ledger</span></div>
+        </div>
+        <div class="flow-card" style="--i:2">
+          <div class="flow-num">03</div>
+          <h3 class="display font-bold text-lg mt-4">Field orders</h3>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Salesmen visit shops and book orders from the app, with the right prices and discounts.</p>
+          <div class="flow-tags"><span>Shop visits</span><span>Sales order</span><span>Discounts</span></div>
+        </div>
+        <div class="flow-card" style="--i:3">
+          <div class="flow-num">04</div>
+          <h3 class="display font-bold text-lg mt-4">Deliver</h3>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Orders become delivery runs. Drivers confirm each drop and the invoice follows.</p>
+          <div class="flow-tags"><span>Delivery order</span><span>Routes</span><span>Invoice</span></div>
+        </div>
+        <div class="flow-card cash" style="--i:4">
+          <div class="flow-num">05</div>
+          <h3 class="display font-bold text-lg mt-4">Collect</h3>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Cash and cheques are recorded on the spot and show in the customer's ledger straight away.</p>
+          <div class="flow-tags"><span>Receipts</span><span>Recovery</span><span>Returns</span></div>
+        </div>
       </div>
-      <!-- Purchase -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16l-1.5 9H6.5L5 4H2"/><circle cx="9" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Purchasing</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">The full PO → GRN → Purchase Invoice flow with suppliers, bulk import and a pending-stage dashboard.</p>
-      </div>
-      <!-- Sales -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v4H4z"/><path d="M5 8v12h14V8"/><path d="M9 12h6"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Sales</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">Sales Order → Delivery Order → Sales Invoice, returns, promoter commissions and a sales report with drill-down.</p>
-      </div>
-      <!-- POS -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h4"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Point of sale</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">A branch-isolated POS with its own catalog, held bills, expenses and customer history — posting straight to the GL.</p>
-      </div>
-      <!-- Manufacturing -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18"/><path d="M5 21V9l5 3V9l5 3V9l4 2v10"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Manufacturing</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">Bills of material, job cards, QC checkpoints and a live production floor with per-batch costing.</p>
-      </div>
-      <!-- Financials -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18M5 21V8l7-4 7 4v13"/><path d="M9 21v-6h6v6"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Financials</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">Accrual general ledger, vouchers, customer &amp; supplier ledgers, aging, trial balance, P&amp;L and balance sheet.</p>
-      </div>
-      <!-- Assets & Facility -->
-      <div class="card p-6 bg-white">
-        <div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Assets &amp; facility</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">An asset register with QR datasheets, plus scheduled facility maintenance, areas and reminders.</p>
-      </div>
-      <!-- Field ops (highlighted) -->
-      <div class="card p-6 bg-brand-700 text-white border-brand-700 sm:col-span-2 lg:col-span-1">
-        <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/15"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-7-5.6-7-11a7 7 0 1114 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></div>
-        <h3 class="display font-bold text-lg mt-4">Field operations <span class="eyebrow align-middle ml-1 text-sky">built in</span></h3>
-        <p class="text-white/80 text-sm mt-2 leading-relaxed">Orders captured in the field, routes planned at the desk, deliveries confirmed on the road — all on the same ledger.</p>
+
+      <div class="books mt-4">
+        <div class="flex items-center gap-3">
+          <span class="w-9 h-9 shrink-0 grid place-items-center rounded-lg bg-white/10 text-hl"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19V5M4 19h16"/><path d="M8 16l3-4 3 2 4-6"/></svg></span>
+          <div><div class="font-semibold text-white">Accounting runs underneath every step</div><div class="text-white/60 text-sm">No re-entry. Statements stay current as documents post.</div></div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <span class="books-tag">General ledger</span><span class="books-tag">Customer &amp; supplier ledgers</span><span class="books-tag">Aging</span><span class="books-tag">Trial balance</span><span class="books-tag">P&amp;L</span><span class="books-tag">Balance sheet</span>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- MANAGERIAL CONTROLS -->
-  <section id="controls" class="bg-navy text-white relative overflow-hidden">
-    <div class="orb orb-b" style="opacity:.45"></div>
-    <div class="relative max-w-6xl mx-auto px-6 py-24 md:py-32 reveal">
-      <p class="eyebrow text-sky">— Control &amp; oversight</p>
-      <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[3rem] leading-[1.04] mt-4 max-w-3xl">Tight control over every branch, down to the voucher.</h2>
-      <p class="mt-5 text-white/75 text-lg max-w-2xl">Hand each person exactly the access they need, watch every change as it happens, and keep a tight grip on the books — across every branch.</p>
-
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-14">
-        <div class="chip rounded-2xl p-6">
-          <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9.5 12l1.8 1.8L15 10"/></svg></div>
-          <h3 class="display font-bold text-lg mt-4">Granular role-based access</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">Grant permissions module by module, and scope what each user sees down to the branch.</p>
-        </div>
-        <div class="chip rounded-2xl p-6">
-          <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 109-9 9 9 0 00-7 3.3M3 4v4h4"/><path d="M12 8v4l3 2"/></svg></div>
-          <h3 class="display font-bold text-lg mt-4">Full audit trail</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">Every create, edit and void is logged with who did it and when — nothing changes off the record.</p>
-        </div>
-        <div class="chip rounded-2xl p-6">
-          <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></div>
-          <h3 class="display font-bold text-lg mt-4">Approvals &amp; locking</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">Finalize a document to lock it; after that, only authorized roles can reopen or reverse it.</p>
-        </div>
-        <div class="chip rounded-2xl p-6">
-          <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg></div>
-          <h3 class="display font-bold text-lg mt-4">Live pending dashboards</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">See exactly what's stuck at each stage of sales and purchasing, and how old it is, at a glance.</p>
-        </div>
-        <div class="chip rounded-2xl p-6">
-          <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h16"/><path d="M8 16l3-4 3 2 4-6"/></svg></div>
-          <h3 class="display font-bold text-lg mt-4">Real-time financial visibility</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">Ledgers, aging, trial balance, P&amp;L and balance sheet stay current as documents post.</p>
-        </div>
-        <div class="chip rounded-2xl p-6">
-          <div class="w-11 h-11 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>
-          <h3 class="display font-bold text-lg mt-4">Permission-aware search</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">Jump to any document from one search box — scoped so people only find what they're allowed to.</p>
+  <!-- FIELD TEAM: the mobile app -->
+  <section id="field" class="bg-surface border-y border-line overflow-hidden">
+    <div class="max-w-6xl mx-auto px-6 py-24 md:py-32 grid lg:grid-cols-[0.9fr_1.1fr] gap-14 lg:gap-20 items-center">
+      <!-- phone -->
+      <div class="reveal order-2 lg:order-1 flex justify-center">
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-head">
+            <div class="text-[11px] text-white/60">Today's route</div>
+            <div class="flex items-end justify-between mt-0.5">
+              <div class="display font-extrabold text-white text-lg">Gulberg · 18 shops</div>
+              <div class="text-[11px] text-hl font-semibold">11 done</div>
+            </div>
+            <div class="phone-bar mt-3"><span style="width:61%"></span></div>
+          </div>
+          <div class="phone-list">
+            <div class="shop"><span class="s-dot ok">✓</span><div class="flex-1 min-w-0"><div class="s-name">Al-Madina Store</div><div class="s-sub">Order booked · Rs 12,400</div></div><span class="s-tag ok">Visited</span></div>
+            <div class="shop"><span class="s-dot ok">✓</span><div class="flex-1 min-w-0"><div class="s-name">Bismillah Traders</div><div class="s-sub">Collected · Rs 48,500</div></div><span class="s-tag cash">Cash</span></div>
+            <div class="shop"><span class="s-dot warn">!</span><div class="flex-1 min-w-0"><div class="s-name">Rehman General Store</div><div class="s-sub">Checked in 600 m away</div></div><span class="s-tag warn">Outside</span></div>
+            <div class="shop active"><span class="s-dot now">●</span><div class="flex-1 min-w-0"><div class="s-name">City Mart</div><div class="s-sub">You are here</div></div><span class="s-tag now">Now</span></div>
+            <div class="shop"><span class="s-dot"></span><div class="flex-1 min-w-0"><div class="s-name">Khan Brothers</div><div class="s-sub">Next stop</div></div></div>
+          </div>
+          <div class="phone-cta"><span>Book order</span></div>
         </div>
       </div>
-      <div class="chip rounded-2xl p-6 mt-5 flex items-start gap-4">
-        <div class="w-11 h-11 shrink-0 grid place-items-center rounded-xl bg-white/10 text-sky"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 18a4 4 0 01-.5-7.97A5.5 5.5 0 0117.5 9 4.5 4.5 0 0117 18"/><path d="M12 12v6M9.5 15.5L12 18l2.5-2.5"/></svg></div>
+      <!-- copy -->
+      <div class="reveal order-1 lg:order-2">
+        <p class="eyebrow text-brand-600">— Opstation App</p>
+        <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Your field team, <span class="text-brand-500">on one app.</span></h2>
+        <p class="mt-5 text-muted text-lg leading-relaxed max-w-xl">Salesmen, order bookers and drivers work from their phones. Everything they capture reaches the office the moment it lands.</p>
+        <div class="inline-flex items-center gap-2 mt-6 rounded-lg bg-white border border-line text-ink px-3 py-1.5 text-xs font-semibold"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#3DDC84" stroke-width="2" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg> Available on Android</div>
+        <div class="grid sm:grid-cols-2 gap-x-8 gap-y-6 mt-10">
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 21s-7-5.6-7-11a7 7 0 1114 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></span><div><div class="font-semibold">Verified shop visits</div><div class="text-sm text-muted mt-0.5">Each check-in is matched to the shop's location.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 4h16v4H4z"/><path d="M5 8v12h14V8"/><path d="M9 12h6"/></svg></span><div><div class="font-semibold">Orders, online or off</div><div class="text-sm text-muted mt-0.5">Saved on the phone and synced when signal returns.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/></svg></span><div><div class="font-semibold">Collections on the spot</div><div class="text-sm text-muted mt-0.5">Cash recorded at the counter, straight to the ledger.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M2 8h12v10H2z"/><path d="M14 11h5l3 3v4h-8"/><circle cx="6" cy="19" r="1.6"/><circle cx="18" cy="19" r="1.6"/></svg></span><div><div class="font-semibold">Delivery runs</div><div class="text-sm text-muted mt-0.5">Drivers confirm every drop at the doorstep.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg></span><div><div class="font-semibold">Live map</div><div class="text-sm text-muted mt-0.5">See where the team is, and where they've been.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span><div><div class="font-semibold">Expenses &amp; returns</div><div class="text-sm text-muted mt-0.5">Field expenses and shop returns logged in place.</div></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTROL ROOM: the web panel -->
+  <section id="control" class="bg-hero text-white overflow-hidden">
+    <div class="max-w-6xl mx-auto px-6 py-24 md:py-32">
+      <div class="reveal grid lg:grid-cols-2 gap-8 items-end">
         <div>
-          <h3 class="display font-bold text-lg">Automated daily backup</h3>
-          <p class="text-white/70 text-sm mt-2 leading-relaxed">Every night, Opstation exports your whole organization&rsquo;s data and emails a ready-to-download backup file to the address you designate &mdash; so a clean copy is always off the system and sitting in your inbox, with no one having to remember.</p>
+          <p class="eyebrow text-hl">— Web panel</p>
+          <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Run every branch <span class="text-hl">from one screen.</span></h2>
         </div>
+        <p class="text-white/70 text-lg leading-relaxed lg:pb-1">The office works in the browser, with nothing to install. Give each person exactly the access they need, and see what's stuck before it costs you.</p>
       </div>
-    </div>
-  </section>
 
-  <!-- FIELD OPS HIGHLIGHT -->
-  <section id="field" class="bg-surface border-y border-line">
-    <div class="max-w-6xl mx-auto px-6 py-24 md:py-32 grid lg:grid-cols-2 gap-14 items-center">
-      <div class="reveal">
-        <p class="eyebrow text-brand-600">— Field operations</p>
-        <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[2.9rem] leading-[1.04] mt-4">From the order in the field to the doorstep.</h2>
-        <p class="mt-5 text-muted text-lg leading-relaxed">Opstation started on the road, and it still runs there. The sales team books orders on mobile, dispatch turns them into routed delivery runs, and drivers confirm drops as they happen — every step landing in the same system the office is watching.</p>
-        <div class="mt-8 space-y-4">
-          <div class="flex gap-4"><span class="mono text-brand-600 font-mono text-sm pt-0.5">01</span><div><div class="font-semibold">Capture</div><div class="text-sm text-muted">Salespeople record orders on the spot, online or off.</div></div></div>
-          <div class="flex gap-4"><span class="mono text-brand-600 font-mono text-sm pt-0.5">02</span><div><div class="font-semibold">Dispatch</div><div class="text-sm text-muted">Desk teams plan routes and assign delivery orders.</div></div></div>
-          <div class="flex gap-4"><span class="mono text-brand-600 font-mono text-sm pt-0.5">03</span><div><div class="font-semibold">Deliver</div><div class="text-sm text-muted">Drivers mark deliveries done; invoices follow automatically.</div></div></div>
-        </div>
-      </div>
-      <div class="reveal">
-        <div class="rounded-2xl border border-line bg-white p-6 shadow-[0_30px_60px_-30px_rgba(15,23,41,0.2)]">
-          <div class="flex items-center justify-between">
-            <span class="eyebrow text-faint">Live map · today</span>
-            <span class="text-xs text-brand-600 font-semibold">8 runs active</span>
+      <!-- browser mock -->
+      <div class="reveal mt-12 browser">
+        <div class="browser-top"><span></span><span></span><span></span><div class="browser-url">app.opstationerp.com</div></div>
+        <div class="browser-body">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="kpi"><div class="kpi-l">Sales today</div><div class="kpi-v">Rs 3.24M</div><div class="kpi-d up">▲ 12% vs last week</div></div>
+            <div class="kpi"><div class="kpi-l">Collected today</div><div class="kpi-v">Rs 1.86M</div><div class="kpi-d up">▲ 214 receipts</div></div>
+            <div class="kpi"><div class="kpi-l">Receivables</div><div class="kpi-v">Rs 18.7M</div><div class="kpi-d">32 customers over 30 days</div></div>
+            <div class="kpi"><div class="kpi-l">Stock value</div><div class="kpi-v">Rs 41.2M</div><div class="kpi-d">3 branches</div></div>
           </div>
-          <div class="mt-4 grid grid-cols-2 gap-3">
-            <div class="rounded-xl bg-surface p-4"><div class="text-2xl display font-extrabold text-ink">142</div><div class="text-xs text-muted mt-1">orders captured</div></div>
-            <div class="rounded-xl bg-surface p-4"><div class="text-2xl display font-extrabold text-ink">96%</div><div class="text-xs text-muted mt-1">delivered on first attempt</div></div>
-            <div class="rounded-xl bg-surface p-4"><div class="text-2xl display font-extrabold text-ink">0</div><div class="text-xs text-muted mt-1">paper delivery slips</div></div>
-            <div class="rounded-xl bg-surface p-4"><div class="text-2xl display font-extrabold text-ink">Live</div><div class="text-xs text-muted mt-1">status from the road</div></div>
+          <div class="grid md:grid-cols-[1.3fr_1fr] gap-3 mt-3">
+            <div class="kpi">
+              <div class="kpi-l">Waiting at each stage</div>
+              <div class="stage mt-3"><span>Sales orders</span><div><i style="width:70%"></i></div><b>21</b></div>
+              <div class="stage"><span>Delivery orders</span><div><i style="width:47%"></i></div><b>14</b></div>
+              <div class="stage"><span>To invoice</span><div><i style="width:20%"></i></div><b>6</b></div>
+              <div class="stage"><span>Purchase invoices</span><div><i style="width:13%"></i></div><b>4</b></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-l">Needs your approval</div>
+              <div class="appr mt-3"><span class="appr-dot" style="background:#7C3AED"></span><div class="flex-1">Discount policy · Group A</div><span class="appr-btn">Review</span></div>
+              <div class="appr"><span class="appr-dot" style="background:#EA580C"></span><div class="flex-1">Reopen DO-0443</div><span class="appr-btn">Review</span></div>
+              <div class="appr"><span class="appr-dot" style="background:#059669"></span><div class="flex-1">Discount policy · City Mart</div><span class="appr-btn">Review</span></div>
+            </div>
           </div>
         </div>
       </div>
+
+      <div class="reveal grid sm:grid-cols-2 lg:grid-cols-4 gap-px mt-12 ctl-grid">
+        <div class="ctl"><h3>Role-based access</h3><p>Permissions by module, scoped down to the branch.</p></div>
+        <div class="ctl"><h3>Full audit trail</h3><p>Every create, edit and void, with who and when.</p></div>
+        <div class="ctl"><h3>Approvals &amp; locking</h3><p>Finalised documents lock. Only the right roles reopen them.</p></div>
+        <div class="ctl"><h3>Pending dashboards</h3><p>What's stuck at each stage of sales and purchasing, and for how long.</p></div>
+        <div class="ctl"><h3>Live financials</h3><p>Ledgers, aging, P&amp;L and balance sheet, current as documents post.</p></div>
+        <div class="ctl"><h3>Discount policies</h3><p>Customer and group discounts, applied automatically after approval.</p></div>
+        <div class="ctl"><h3>One search box</h3><p>Find any document, limited to what each person may see.</p></div>
+        <div class="ctl"><h3>Nightly backup</h3><p>A full copy of your data emailed to you every night.</p></div>
+      </div>
     </div>
   </section>
 
-  <!-- APPS: WEB PANEL + MOBILE APP -->
-  <section id="apps" class="max-w-6xl mx-auto px-6 py-24 md:py-32 reveal">
-    <p class="eyebrow text-muted">&mdash; Anywhere access</p>
-    <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[3rem] leading-[1.04] mt-4 max-w-3xl">One system, two ways in.</h2>
-    <p class="mt-5 text-muted text-lg max-w-2xl">The same data and the same ledger, whether you&rsquo;re at a desk or on the road. Run the whole business from the Web Panel in your browser, and put the field team in the Opstation App.</p>
-
-    <div class="grid lg:grid-cols-2 gap-6 mt-14">
-      <!-- Web Panel -->
-      <div class="card p-7 sm:p-8 bg-white">
-        <div class="flex items-center justify-between">
-          <div class="icon-tile w-12 h-12 grid place-items-center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
-          <span class="eyebrow text-faint">In your browser</span>
-        </div>
-        <h3 class="display font-bold text-xl mt-5">Web Panel</h3>
-        <p class="text-muted text-sm mt-2 leading-relaxed">The full control surface for the office. Every module, report, voucher and setting in one place &mdash; inventory, sales, purchasing, POS, manufacturing, financials, facilities and admin &mdash; on any computer, with nothing to install.</p>
-        <div class="mt-6 space-y-2.5">
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Complete ERP &mdash; all modules, reports and vouchers</span></div>
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Role-based access, branch scoping and a full audit trail</span></div>
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Works on any modern browser &mdash; desktop or tablet</span></div>
-        </div>
-      </div>
-      <!-- Opstation App -->
-      <div class="card p-7 sm:p-8 bg-white">
-        <div class="flex items-center justify-between">
-          <div class="icon-tile w-12 h-12 grid place-items-center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/></svg></div>
-          <span class="eyebrow text-faint">On the road</span>
-        </div>
-        <h3 class="display font-bold text-xl mt-5">Opstation App</h3><div class="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-100 text-ink px-3 py-1.5 text-xs font-semibold"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#3DDC84" stroke-width="2" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg> Available on Android</div>
-        <p class="text-muted text-sm mt-2 leading-relaxed">Built for the field team on the road. Mark shop visits, book orders on the spot, record collections at the counter, run delivery routes and log reimbursements &mdash; all on mobile, online or off. Everything captured flows straight back to the office in real time.</p>
-        <div class="mt-6 space-y-2.5">
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Shop visits, order capture and collections &mdash; online or offline</span></div>
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Delivery runs with at-the-doorstep confirmation</span></div>
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Collections, reimbursements and field expenses logged on the spot</span></div>
-          <div class="flex items-start gap-2.5 text-sm"><svg class="mt-0.5 text-brand-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="text-ink/80">Syncs straight into the same system the office uses</span></div>
-        </div>
-      </div>
+  <!-- ALSO INCLUDED + WHO USES IT -->
+  <section id="modules" class="max-w-6xl mx-auto px-6 py-24 md:py-32">
+    <div class="reveal">
+      <p class="eyebrow text-brand-600">— Also included</p>
+      <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4 max-w-3xl">Everything around the flow, <span class="text-brand-500">on the same books.</span></h2>
+    </div>
+    <div class="reveal grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-12">
+      <div class="card p-6 bg-white"><div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h4"/></svg></div><h3 class="display font-bold text-lg mt-4">Point of sale</h3><p class="text-muted text-sm mt-2 leading-relaxed">A counter POS for each branch with held bills and expenses, posting to the books.</p></div>
+      <div class="card p-6 bg-white"><div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 4.5a3 3 0 010 6M21 20c0-2.6-1.6-4.8-4-5.6"/></svg></div><h3 class="display font-bold text-lg mt-4">HR &amp; attendance</h3><p class="text-muted text-sm mt-2 leading-relaxed">Staff records and attendance, alongside the field team's day.</p></div>
+      <div class="card p-6 bg-white"><div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div><h3 class="display font-bold text-lg mt-4">Assets &amp; facility</h3><p class="text-muted text-sm mt-2 leading-relaxed">An asset register with QR datasheets and scheduled maintenance.</p></div>
+      <div class="card p-6 bg-white"><div class="icon-tile w-11 h-11 grid place-items-center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18"/><path d="M5 21V9l5 3V9l5 3V9l4 2v10"/></svg></div><h3 class="display font-bold text-lg mt-4">Production</h3><p class="text-muted text-sm mt-2 leading-relaxed">For distributors who also pack or make their own goods.</p></div>
     </div>
 
-    <p class="mt-8 text-sm text-muted max-w-2xl">Both run on one Opstation backend in real time &mdash; an order booked on the app appears in the panel the moment it lands, and a change made in the office shows up in the field.</p>
-  </section>
-
-  <!-- WHO IT'S FOR -->
-  <section id="how" class="max-w-6xl mx-auto px-6 py-24 md:py-32 reveal">
-    <p class="eyebrow text-muted">— Built for the whole floor</p>
-    <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[3rem] leading-[1.04] mt-4 max-w-3xl">Everyone works in the same place, with the access that fits their role.</h2>
-    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 mt-14">
-      <div class="card p-6 bg-white"><div class="eyebrow text-brand-600">Field</div><h3 class="display font-bold text-lg mt-3">Salespeople</h3><p class="text-muted text-sm mt-2 leading-relaxed">Book orders and check stock and prices from their phone.</p></div>
-      <div class="card p-6 bg-white"><div class="eyebrow text-brand-600">Desk</div><h3 class="display font-bold text-lg mt-3">Dispatchers</h3><p class="text-muted text-sm mt-2 leading-relaxed">Turn orders into routed deliveries and keep the day moving.</p></div>
-      <div class="card p-6 bg-white"><div class="eyebrow text-brand-600">Road</div><h3 class="display font-bold text-lg mt-3">Drivers</h3><p class="text-muted text-sm mt-2 leading-relaxed">See their runs and confirm each drop as it happens.</p></div>
-      <div class="card p-6 bg-white"><div class="eyebrow text-brand-600">Office</div><h3 class="display font-bold text-lg mt-3">Owners</h3><p class="text-muted text-sm mt-2 leading-relaxed">Watch the whole operation — stock, cash and production — in real time.</p></div>
+    <div id="how" class="reveal mt-20">
+      <p class="eyebrow text-muted">— Who uses it</p>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6">
+        <div class="role"><div class="role-k">Field</div><div class="role-t">Salesmen</div><div class="role-d">Visits, orders and collections</div></div>
+        <div class="role"><div class="role-k">Desk</div><div class="role-t">Dispatch</div><div class="role-d">Delivery runs and routes</div></div>
+        <div class="role"><div class="role-k">Road</div><div class="role-t">Drivers</div><div class="role-d">Drops confirmed on the spot</div></div>
+        <div class="role"><div class="role-k">Office</div><div class="role-t">Accounts</div><div class="role-d">Books that are already posted</div></div>
+        <div class="role col-span-2 md:col-span-1"><div class="role-k">Top</div><div class="role-t">Owners</div><div class="role-d">Stock and cash, live</div></div>
+      </div>
     </div>
   </section>
 
@@ -608,128 +686,131 @@
   </script>
 
   <!-- INDUSTRIES -->
-  <section id="industries" class="max-w-6xl mx-auto px-6 py-24 md:py-32 reveal">
-    <p class="eyebrow text-muted">— For your industry</p>
-    <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[3rem] leading-[1.04] mt-4 max-w-3xl">Built for the way your industry runs.</h2>
-    <p class="mt-5 text-muted text-lg max-w-2xl">From the factory floor to the delivery route, Opstation fits the businesses that move real goods — and the teams that run them.</p>
-    <div class="mt-12 flex flex-wrap gap-3">
-      <span class="industry-pill"><span class="dot"></span>Manufacturing</span>
-      <span class="industry-pill"><span class="dot"></span>Retail</span>
-      <span class="industry-pill"><span class="dot"></span>Wholesale &amp; Distribution</span>
-      <span class="industry-pill"><span class="dot"></span>Automotive &amp; Parts</span>
-      <span class="industry-pill"><span class="dot"></span>Textiles &amp; Apparel</span>
-      <span class="industry-pill"><span class="dot"></span>Food &amp; Beverage</span>
-      <span class="industry-pill"><span class="dot"></span>Pharmaceuticals &amp; Healthcare</span>
-      <span class="industry-pill"><span class="dot"></span>Construction &amp; Building Materials</span>
-      <span class="industry-pill"><span class="dot"></span>Electronics &amp; Hardware</span>
-      <span class="industry-pill"><span class="dot"></span>Chemicals</span>
-      <span class="industry-pill"><span class="dot"></span>Logistics &amp; Transport</span>
-      <span class="industry-pill"><span class="dot"></span>Agriculture</span>
-      <span class="industry-pill"><span class="dot"></span>Energy &amp; Utilities</span>
-      <span class="industry-pill"><span class="dot"></span>Services</span>
-      <span class="industry-pill industry-more">…and more</span>
+  <section id="industries" class="max-w-6xl mx-auto px-6 py-24 md:py-32">
+    <div class="reveal grid lg:grid-cols-[1fr_1.4fr] gap-10 items-start">
+      <div>
+        <p class="eyebrow text-brand-600">— Who it's for</p>
+        <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Built for distributors <span class="text-brand-500">of every kind.</span></h2>
+        <p class="mt-5 text-muted text-lg leading-relaxed">If you buy in bulk, keep stock and sell to shops through a field team, Opstation fits.</p>
+      </div>
+      <div class="flex flex-wrap gap-2.5 lg:pt-10">
+        <span class="industry-pill"><span class="dot"></span>FMCG &amp; consumer goods</span>
+        <span class="industry-pill"><span class="dot"></span>Food &amp; beverage</span>
+        <span class="industry-pill"><span class="dot"></span>Pharmaceuticals</span>
+        <span class="industry-pill"><span class="dot"></span>Building materials</span>
+        <span class="industry-pill"><span class="dot"></span>Auto parts</span>
+        <span class="industry-pill"><span class="dot"></span>Electronics &amp; hardware</span>
+        <span class="industry-pill"><span class="dot"></span>Textiles &amp; apparel</span>
+        <span class="industry-pill"><span class="dot"></span>Chemicals</span>
+        <span class="industry-pill"><span class="dot"></span>Agri inputs</span>
+        <span class="industry-pill"><span class="dot"></span>Wholesale &amp; trading</span>
+        <span class="industry-pill industry-more">…and more</span>
+      </div>
     </div>
   </section>
 
   <!-- PRICING -->
-  <section id="pricing" class="py-20 md:py-28 bg-white">
-  <div class="max-w-6xl mx-auto px-6">
-    <div class="text-center mb-14">
-      <span class="inline-block text-xs font-bold tracking-widest text-brand-600 uppercase mb-3">Pricing</span>
-      <h2 class="font-display text-3xl md:text-4xl font-extrabold text-ink">Simple pricing that scales with you</h2>
-      <p class="mt-3 text-muted text-lg">Every plan starts with a <span class="font-semibold text-ink">14-day free trial</span> — no credit card required.</p>
+  <section id="pricing" class="bg-surface border-y border-line">
+  <div class="max-w-6xl mx-auto px-6 py-24 md:py-32">
+    <div class="reveal text-center mb-14">
+      <p class="eyebrow text-brand-600">— Pricing</p>
+      <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Simple pricing that <span class="text-brand-500">scales with you.</span></h2>
+      <p class="mt-4 text-muted text-lg">Every plan starts with a <span class="font-semibold text-ink">14-day free trial</span>, no credit card required.</p>
     </div>
-    <div class="grid md:grid-cols-3 gap-6 items-stretch">
-      <div class="rounded-2xl border border-slate-200 bg-white p-7 flex flex-col">
-        <h3 class="font-display text-xl font-extrabold text-ink">Starter Pack</h3>
+    <div class="reveal grid md:grid-cols-3 gap-6 items-stretch">
+      <div class="price">
+        <h3 class="display text-xl font-extrabold text-ink">Starter Pack</h3>
         <p class="text-sm text-muted mt-1">For field sales teams getting started</p>
-        <div class="mt-5 flex items-baseline gap-1"><span class="font-display text-4xl font-extrabold text-ink">PKR&nbsp;9,900</span><span class="text-muted text-sm">/mo</span></div>
-        <ul class="mt-6 space-y-3 text-sm text-ink flex-1">
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Operations — manage your entire sales team</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Field sales, routes &amp; dispatch</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> CRM &amp; customer follow-ups</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Live map &amp; team tracking</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Core reports</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Android app included</li>
+        <div class="mt-5 flex items-baseline gap-1"><span class="display text-4xl font-extrabold text-ink">PKR&nbsp;9,900</span><span class="text-muted text-sm">/mo</span></div>
+        <ul class="price-list">
+          <li>Operations: manage your entire sales team</li>
+          <li>Field sales, routes &amp; dispatch</li>
+          <li>CRM &amp; customer follow-ups</li>
+          <li>Live map &amp; team tracking</li>
+          <li>Core reports</li>
+          <li>Android app included</li>
         </ul>
-        <a href="https://app.opstationerp.com/signup" class="mt-7 inline-flex justify-center rounded-xl border border-brand-500 text-brand-600 font-semibold py-3 hover:bg-slate-50 transition">Start free trial</a>
+        <a href="https://app.opstationerp.com/signup" class="price-btn">Start free trial</a>
       </div>
-      <div class="rounded-2xl border border-slate-200 bg-white p-7 flex flex-col">
-        <h3 class="font-display text-xl font-extrabold text-ink">Scale Up</h3>
+      <div class="price">
+        <h3 class="display text-xl font-extrabold text-ink">Scale Up</h3>
         <p class="text-sm text-muted mt-1">For growing distribution businesses</p>
-        <div class="mt-5 flex items-baseline gap-1"><span class="font-display text-4xl font-extrabold text-ink">PKR&nbsp;24,900</span><span class="text-muted text-sm">/mo</span></div>
-        <ul class="mt-6 space-y-3 text-sm text-ink flex-1">
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Everything in Starter Pack</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Inventory management</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Purchase management</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Sales &amp; invoicing</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Market Intelligence</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Full reports suite</li>
-          <li class="flex gap-2"><span class="text-brand-500">&#10003;</span> Android app included</li>
+        <div class="mt-5 flex items-baseline gap-1"><span class="display text-4xl font-extrabold text-ink">PKR&nbsp;24,900</span><span class="text-muted text-sm">/mo</span></div>
+        <ul class="price-list">
+          <li>Everything in Starter Pack</li>
+          <li>Inventory management</li>
+          <li>Purchase management</li>
+          <li>Sales &amp; invoicing</li>
+          <li>Market Intelligence</li>
+          <li>Full reports suite</li>
+          <li>Android app included</li>
         </ul>
-        <a href="https://app.opstationerp.com/signup" class="mt-7 inline-flex justify-center rounded-xl border border-brand-500 text-brand-600 font-semibold py-3 hover:bg-slate-50 transition">Start free trial</a>
+        <a href="https://app.opstationerp.com/signup" class="price-btn">Start free trial</a>
       </div>
-      <div class="relative rounded-2xl border-2 border-brand-500 bg-navy text-white p-7 flex flex-col shadow-xl md:-mt-4">
-        <span class="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-brand-500 text-white text-[11px] font-bold tracking-wide px-4 py-1">MOST POPULAR &middot; BEST VALUE</span>
-        <h3 class="font-display text-xl font-extrabold">Power House</h3>
-        <p class="text-sm text-slate-300 mt-1">Everything included — the complete platform</p>
-        <div class="mt-5 flex items-baseline gap-1"><span class="font-display text-4xl font-extrabold">PKR&nbsp;39,900</span><span class="text-slate-300 text-sm">/mo</span></div>
-        <ul class="mt-6 space-y-3 text-sm flex-1">
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Everything in Scale Up</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> POS (point of sale)</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Production &amp; manufacturing</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> HR &amp; attendance</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Financial reporting</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Asset &amp; facility management</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Unlimited users</li>
-          <li class="flex gap-2"><span class="text-white/80">&#10003;</span> Android app included</li>
+      <div class="price featured md:-mt-4">
+        <span class="price-badge">MOST POPULAR &middot; BEST VALUE</span>
+        <h3 class="display text-xl font-extrabold">Power House</h3>
+        <p class="text-sm text-white/65 mt-1">Everything included, the complete platform</p>
+        <div class="mt-5 flex items-baseline gap-1"><span class="display text-4xl font-extrabold">PKR&nbsp;39,900</span><span class="text-white/65 text-sm">/mo</span></div>
+        <ul class="price-list">
+          <li>Everything in Scale Up</li>
+          <li>POS (point of sale)</li>
+          <li>Production &amp; manufacturing</li>
+          <li>HR &amp; attendance</li>
+          <li>Financial reporting</li>
+          <li>Asset &amp; facility management</li>
+          <li>Unlimited users</li>
+          <li>Android app included</li>
         </ul>
-        <a href="https://app.opstationerp.com/signup" class="mt-7 inline-flex justify-center rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-semibold py-3 transition">Start free trial</a>
+        <a href="https://app.opstationerp.com/signup" class="price-btn">Start free trial</a>
       </div>
     </div>
     <p class="text-center text-muted text-sm mt-10">All plans include a 14-day free trial and the Opstation Android app. Upgrade, downgrade or cancel anytime.</p>
   </div>
-</section>
+  </section>
 
   <!-- FAQ -->
-  <section id="faq" class="bg-surface border-t border-line">
-    <div class="max-w-3xl mx-auto px-6 py-24 md:py-32 reveal">
-      <p class="eyebrow text-muted text-center">— Good to know</p>
-      <h2 class="display font-extrabold tracking-tighter2 text-[2rem] md:text-[2.6rem] leading-[1.05] mt-4 text-center">Questions, answered.</h2>
-      <div class="mt-12 divide-y divide-line border-y border-line">
-        <details class="group py-5"><summary class="flex justify-between items-center cursor-pointer list-none font-semibold">Is Opstation built for more than one branch?<span class="text-brand-500 group-open:rotate-45 transition">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Yes. Branches are first-class — stock, POS, deliveries and reporting are all branch-aware, while the ledger consolidates at the organization level.</p></details>
-        <details class="group py-5"><summary class="flex justify-between items-center cursor-pointer list-none font-semibold">Does it handle accounting, or just operations?<span class="text-brand-500 group-open:rotate-45 transition">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Both. Every document — sales, purchases, POS, production, adjustments — posts to a real accrual general ledger, so financial statements stay live.</p></details>
-        <details class="group py-5"><summary class="flex justify-between items-center cursor-pointer list-none font-semibold">Can I control who sees what?<span class="text-brand-500 group-open:rotate-45 transition">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Access is role-based and scoped by branch, and a full audit trail records who changed what, and when.</p></details>
-        <details class="group py-5"><summary class="flex justify-between items-center cursor-pointer list-none font-semibold">How do I get started?<span class="text-brand-500 group-open:rotate-45 transition">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Tap <em>Sign up</em>, tell us about your business, and we'll set up your organization. Existing users sign in at the top.</p></details>
+  <section id="faq">
+    <div class="max-w-6xl mx-auto px-6 py-24 md:py-32 grid lg:grid-cols-[1fr_1.6fr] gap-10 reveal">
+      <div>
+        <p class="eyebrow text-brand-600">— Good to know</p>
+        <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Questions, <span class="text-brand-500">answered.</span></h2>
+      </div>
+      <div class="divide-y divide-line border-y border-line">
+        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does it work with more than one branch?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Yes. Stock, POS, deliveries and reports all work branch by branch, while the books come together for the whole business.</p></details>
+        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does it handle accounting, or just operations?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Both. Every purchase, sale, delivery, receipt and adjustment posts to a full general ledger, so your statements are always current.</p></details>
+        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does the app work without internet?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Yes. Visits, orders and collections are saved on the phone and sync on their own when the connection is back.</p></details>
+        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Can I control who sees what?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Access is set by role and branch, and a full audit trail records who changed what, and when.</p></details>
+        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">How do I get started?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Tap <em>Sign up</em>, tell us about your business and we'll set up your organization. Every plan starts with a 14-day free trial.</p></details>
       </div>
     </div>
   </section>
 
   <!-- CTA -->
-  <section class="hero-grad relative overflow-hidden text-white">
-    <div class="grain"></div>
-    <div class="relative max-w-3xl mx-auto px-6 py-24 md:py-28 text-center">
-      <h2 class="display font-extrabold tracking-tighter2 text-[2.2rem] md:text-[3rem] leading-[1.04]">Ready to run everything from one panel?</h2>
-      <p class="mt-5 text-white/80 text-lg">Bring your branches, your team and your books into a single system.</p>
+  <section class="bg-hero text-white">
+    <div class="max-w-3xl mx-auto px-6 py-24 md:py-28 text-center reveal">
+      <img src="/logo.png?v=2" alt="" width="56" height="56" class="mx-auto mb-7 cta-logo" />
+      <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05]">Run your distribution <span class="text-hl">on one system.</span></h2>
+      <p class="mt-5 text-white/70 text-lg">Bring your branches, your field team and your books together.</p>
       <div class="mt-9 flex flex-wrap justify-center gap-3">
-        <a href="https://opstation-f06c7.web.app/#/signup" class="inline-flex items-center gap-2 bg-white text-ink font-semibold rounded-xl px-7 py-3.5 hover:bg-white/90 transition">Sign up</a>
-        <a href="https://opstation-f06c7.web.app" class="inline-flex items-center gap-2 border border-white/35 text-white font-semibold rounded-xl px-7 py-3.5 hover:bg-white/10 transition">Sign in</a>
+        <a href="https://opstation-f06c7.web.app/#/signup" class="inline-flex items-center gap-2 bg-brand-500 text-white font-semibold rounded-xl px-6 py-3.5 hover:bg-brand-600 transition shadow-lg shadow-brand-500/40">Start free
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a href="https://opstation-f06c7.web.app" class="inline-flex items-center gap-2 border border-white/25 text-white font-semibold rounded-xl px-6 py-3.5 hover:bg-white/10 transition">Sign in</a>
       </div>
     </div>
   </section>
 
   <!-- FOOTER -->
-  <footer class="bg-navy text-white/70">
+  <footer class="bg-hero text-white/70 border-t border-white/10">
     <div class="max-w-6xl mx-auto px-6 py-12 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
       <div class="flex items-center gap-2.5">
-        <span class="grid place-items-center w-8 h-8 rounded-lg bg-brand-500 text-white font-display font-extrabold text-lg">O</span>
+        <img src="/logo.png?v=2" alt="Opstation" width="32" height="32" class="w-8 h-8" />
         <span class="display font-extrabold text-white">Opstation</span>
       </div>
       <nav class="flex flex-wrap gap-x-7 gap-y-2 text-sm">
-        <a href="#modules" class="link-u hover:text-white">Modules</a>
-        <a href="#field" class="link-u hover:text-white">Field ops</a>
-        <a href="#how" class="link-u hover:text-white">How it works</a>
-        <a href="#industries" class="link-u hover:text-white">Industries</a>
+        <a href="#flow" class="link-u hover:text-white">How it works</a>
+        <a href="#field" class="link-u hover:text-white">Field team</a>
+        <a href="#control" class="link-u hover:text-white">Web panel</a>
         <a href="#pricing" class="link-u hover:text-white">Pricing</a>
         <a href="#faq" class="link-u hover:text-white">FAQ</a>
         <a href="https://opstation-f06c7.web.app" class="link-u hover:text-white">Sign in</a>
