@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../billing/presentation/plan_cards.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Full-screen, self-guiding organisation sign-up.
@@ -123,13 +122,6 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       return;
     }
     setState(() { _error = null; _step = 1; });
-  }
-
-  // A plan card's "Start free trial" was tapped: remember the plan and submit.
-  Future<void> _startTrialWith(Map<String, dynamic> p) async {
-    if (_submitting) return;
-    _planId = p['id'] as String;
-    await _submit();
   }
 
   Future<void> _submit() async {
@@ -459,23 +451,8 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       child: Text('This sets how stock cost is calculated. It is fixed once you start transacting, so choose carefully.',
           style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
     ),
-    const SizedBox(height: 22),
-    const Text('Pick a plan to start', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _ink)),
-    const SizedBox(height: 2),
-    const Text('Tap "Start free trial" on the plan you want. It\'s free for 14 days — no card needed, and you can switch anytime.',
-        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-    const SizedBox(height: 12),
-    if (_plans.isEmpty)
-      const Padding(padding: EdgeInsets.all(12), child: Center(child: Text('Loading plans…', style: TextStyle(color: AppTheme.textSecondary))))
-    else
-      PlanCards(
-        plans: _plans,
-        activeId: _planId,
-        // Each plan's button starts the trial on that plan — no separate step.
-        onSelect: (p) => _startTrialWith(p),
-        ctaLabel: (p) => 'Start free trial',
-        ctaDisabled: (p) => _submitting,
-      ),
+    // Plans and prices are not shown for now: the trial starts on the default
+    // (recommended) plan, and our team talks pricing with each business.
     const SizedBox(height: 18),
     _field(controller: _note, label: 'Anything we should know?', hint: 'Optional — branches, users, what you need first',
         icon: Icons.notes_outlined, maxLines: 3),
@@ -524,23 +501,41 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       );
 
   Widget _actions() {
-    // Step 2 has no bottom submit — each plan card's "Start free trial" button is
-    // the action. We only offer a Back link there.
+    // Step 2: Back + Start free trial (on the default plan).
     if (_step == 1) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: OutlinedButton.icon(
-          onPressed: _submitting ? null : () => setState(() { _step = 0; _error = null; }),
-          icon: const Icon(Icons.arrow_back, size: 16),
-          label: const Text('Back'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: _ink,
-            side: const BorderSide(color: AppTheme.border),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          OutlinedButton.icon(
+            onPressed: _submitting ? null : () => setState(() { _step = 0; _error = null; }),
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: const Text('Back'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _ink,
+              side: const BorderSide(color: AppTheme.border),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+            ),
           ),
-        ),
-      );
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton(
+              onPressed: (!_step2Valid || _submitting) ? null : _submit,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: AppTheme.primary.withOpacity(0.35),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+                elevation: 0,
+              ),
+              child: const Text('Start free trial', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        const Text('Free for 14 days. No card needed.',
+            textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      ]);
     }
     // Step 1: Continue.
     return SizedBox(

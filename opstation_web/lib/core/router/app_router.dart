@@ -161,6 +161,7 @@ import '../../features/erp/presentation/erp_production_report_screen.dart' defer
 import '../../features/hr/presentation/hr_setup_screen.dart' deferred as _s150;
 import '../../features/operations/presentation/route_roster_screen.dart' deferred as _s151;
 import '../../features/superadmin/presentation/org_profile_screen.dart' deferred as _s152;
+import '../../features/superadmin/presentation/enquiries_screen.dart' deferred as _s165;
 import '../../features/erp/presentation/erp_pending_po_items_screen.dart' deferred as _s153;
 import '../../features/erp/presentation/erp_label_printing_screen.dart' deferred as _s154;
 import '../../features/erp/presentation/erp_fulfillment_screen.dart' deferred as _s155;
@@ -276,7 +277,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
         if (loc == '/subscription-expired') return home();
         bool allowed() {
           if (role == WebUserRole.superAdmin) {
-            return loc == '/orgs' || loc == '/orgs/profile' || loc == '/subscriptions' || loc == '/account-linking';
+            return loc == '/orgs' || loc == '/orgs/profile' || loc == '/subscriptions' || loc == '/account-linking' || loc == '/enquiries';
           }
           if (role == WebUserRole.dispatchManager) {
             return loc == '/deliveries' ||
@@ -348,7 +349,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             return access.canAccessRouteAt(permLoc, branchId);
           }
           // admin / masterAdmin — everything except super admin's /orgs
-          return loc != '/orgs' && loc != '/orgs/profile';
+          return loc != '/orgs' && loc != '/orgs/profile' && loc != '/enquiries';
         }
         if (onLogin) {
           final from = state.uri.queryParameters['from'];
@@ -475,6 +476,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/orgs/profile', builder: (_, st) => _deferred(_s152.loadLibrary(),
               () => _s152.OrgProfileScreen(key: ValueKey(st.uri.queryParameters['id']), orgId: st.uri.queryParameters['id'] ?? ''))),
           GoRoute(path: '/subscriptions', builder: (_, __) => _deferred(_s065.loadLibrary(), () => _s065.SubscriptionsScreen())),
+          GoRoute(path: '/enquiries', builder: (_, __) => _deferred(_s165.loadLibrary(), () => _s165.EnquiriesScreen())),
           GoRoute(path: '/billing', builder: (_, __) => _deferred(_s067.loadLibrary(), () => _s067.BillingScreen())),
           GoRoute(path: '/erp/products',  builder: (_, state) => _deferred(_s081.loadLibrary(), () => _s081.ErpProductsScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/low-stock-report', builder: (_, __) => _deferred(_s082.loadLibrary(), () => _s082.ErpLowStockReportScreen())),

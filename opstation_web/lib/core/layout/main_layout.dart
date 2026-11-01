@@ -1759,6 +1759,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (user?.role == WebUserRole.superAdmin) ...[
           _navButton(context, 'Organizations', Icons.business, '/orgs', location),
           _navButton(context, 'Subscriptions', Icons.workspace_premium_outlined, '/subscriptions', location),
+          _navButton(context, 'Enquiries', Icons.support_agent_outlined, '/enquiries', location),
           _navButton(context, 'Account Linking', Icons.hub_outlined, '/account-linking', location),
         ],
 
