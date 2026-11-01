@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/permissions/access_control.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 // Onboarding / reference guide for the ERP. Static content (generated from a
 // single source shared with the PDF). Visible to all orgs; no permission gate.
@@ -608,21 +609,7 @@ class _ErpOnboardingScreenState extends ConsumerState<ErpOnboardingScreen> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.16),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.35)),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('O',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800)),
-                  ),
+                  const BrandLogo(size: 44, ring: true),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(

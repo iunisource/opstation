@@ -8,6 +8,7 @@ import '../auth_controller.dart';
 import '../../../core/auth/session_diagnostics.dart';
 import '../../../core/theme/app_theme.dart';
 import 'signup_wizard_screen.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Destination for the "Partner Retailer Portal" button.
 /// Opened in the same tab; swap for any URL (in-app hash route or external).
@@ -328,29 +329,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [AppTheme.primary, Color(0xFF4B84F5)]),
-                borderRadius: BorderRadius.circular(11),
-                boxShadow: [
-                  BoxShadow(
-                      color: AppTheme.primary.withOpacity(0.45),
-                      blurRadius: 18,
-                      offset: const Offset(0, 5)),
-                ],
-              ),
-              alignment: Alignment.center,
-              child: const Text('O',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 20)),
-            ),
+            const BrandLogo(size: 40, glow: true),
             const SizedBox(width: 12),
             const Text('Opstation',
                 style: TextStyle(
@@ -462,26 +441,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [AppTheme.primary, Color(0xFF4B84F5)]),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                            color: AppTheme.primary.withOpacity(0.45),
-                            blurRadius: 22,
-                            offset: const Offset(0, 6)),
-                      ],
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('O',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
-                  ),
+                  const BrandLogo(size: 44, glow: true),
                   const SizedBox(width: 12),
                   const Text('Opstation',
                       style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
@@ -641,21 +601,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             children: [
               if (showLogo) ...[
                 Row(children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [AppTheme.primary, AppTheme.primary.withOpacity(0.78)],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('O',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
-                  ),
+                  const BrandLogo(size: 44),
                   const SizedBox(width: 12),
                   const Text('Opstation',
                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _ink)),

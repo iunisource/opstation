@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/app_theme.dart';
 import '../../features/auth/auth_controller.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Bump this to replay the tour on demand (user menu → "Replay welcome tour").
 final tourReplayProvider = StateProvider<int>((ref) => 0);
@@ -202,12 +203,7 @@ class _FirstLoginTourState extends ConsumerState<FirstLoginTour> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(children: [
-                    Container(
-                      width: 26, height: 26,
-                      decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(7)),
-                      alignment: Alignment.center,
-                      child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
-                    ),
+                    const BrandLogo(size: 26),
                     const SizedBox(width: 10),
                     Text('WELCOME TOUR',
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.6,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Public, no-login page reached by scanning the QR on a printed job order:
 ///   https://<app>/#/f/<floor_token>
@@ -114,11 +115,7 @@ class _FloorScanScreenState extends State<FloorScanScreen> {
   }
 
   Widget _brandHeader() => Column(children: [
-    Container(
-      width: 54, height: 54, alignment: Alignment.center,
-      decoration: BoxDecoration(color: _brand, borderRadius: BorderRadius.circular(14)),
-      child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 26)),
-    ),
+    const BrandLogo(size: 54),
     const SizedBox(height: 10),
     const Text('Opstation · Production', style: TextStyle(fontSize: 13, color: _ink, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
     const SizedBox(height: 18),

@@ -9,6 +9,7 @@ import '../../../core/widgets/org_switch_overlay.dart';
 import '../../auth/auth_controller.dart';
 import '../../support/presentation/request_callback_button.dart';
 import 'plan_cards.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Full-screen wall shown to a master admin / admin when their trial or
 /// subscription has lapsed. The router routes here and blocks the rest of the
@@ -145,11 +146,7 @@ class _State extends ConsumerState<SubscriptionExpiredScreen> {
               constraints: const BoxConstraints(maxWidth: 860),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  Container(
-                    height: 40, width: 40, alignment: Alignment.center,
-                    decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(10)),
-                    child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 20)),
-                  ),
+                  const BrandLogo(size: 40),
                   const SizedBox(width: 10),
                   const Text('Opstation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   const Spacer(),

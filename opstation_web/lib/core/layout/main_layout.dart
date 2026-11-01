@@ -26,6 +26,7 @@ import '../../features/support/presentation/request_callback_button.dart';
 import '../../features/support/presentation/support_buttons.dart';
 import '../../features/billing/presentation/trial_banner.dart';
 import 'erp_global_search.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
 
@@ -1211,9 +1212,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           title: InkWell(
             onTap: () => GoRouter.of(context).go('/dashboard'),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Container(width: 26, height: 26, alignment: Alignment.center,
-                decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
-                child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14))),
+              const BrandLogo(size: 26),
               const SizedBox(width: 8),
               const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
             ]),
@@ -2440,12 +2439,7 @@ class _TopNav extends ConsumerWidget {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                 child: Row(children: [
-                  Container(
-                    width: 28, height: 28,
-                    decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
-                    alignment: Alignment.center,
-                    child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-                  ),
+                  const BrandLogo(size: 28),
                   const SizedBox(width: 8),
                   const Text('Opstation', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
                 ]),
@@ -2606,12 +2600,7 @@ class _SideNav extends ConsumerWidget {
                   onTap: () => GoRouter.of(context).go('/dashboard'),
                   borderRadius: BorderRadius.circular(6),
                   child: Row(children: [
-                    Container(
-                      width: 28, height: 28,
-                      decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(6)),
-                      alignment: Alignment.center,
-                      child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-                    ),
+                    const BrandLogo(size: 28),
                     const SizedBox(width: 8),
                     const Flexible(child: Text('Opstation', maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14))),

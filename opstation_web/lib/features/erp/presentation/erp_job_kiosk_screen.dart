@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Shop-floor Job Kiosk. A worker holds a printed job card up to the tablet's
 /// camera (or scans it with a hardware QR/barcode scanner). Each scan TOGGLES
@@ -373,9 +374,7 @@ class _ErpJobKioskScreenState extends ConsumerState<ErpJobKioskScreen> {
           constraints: const BoxConstraints(maxWidth: 720),
           child: Padding(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, children: [
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(width: 40, height: 40, alignment: Alignment.center,
-                decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(11)),
-                child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 20))),
+              const BrandLogo(size: 40),
               const SizedBox(width: 12),
               const Text('Job Kiosk', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
             ]),

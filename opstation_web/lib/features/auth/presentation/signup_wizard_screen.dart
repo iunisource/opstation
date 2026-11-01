@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../billing/presentation/plan_cards.dart';
+import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 /// Full-screen, self-guiding organisation sign-up.
 ///
@@ -235,11 +236,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
                   width: 72, height: 72,
                   child: CircularProgressIndicator(strokeWidth: 3, color: AppTheme.primary),
                 ),
-                Container(
-                  width: 48, height: 48, alignment: Alignment.center,
-                  decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(13)),
-                  child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 22)),
-                ),
+                const BrandLogo(size: 48),
               ]),
             ),
             const SizedBox(height: 26),
@@ -281,15 +278,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
                 child: Tooltip(
                   message: 'Back to sign in',
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Container(
-                      width: 42, height: 42, alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.14),
-                        borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: Colors.white.withOpacity(0.22)),
-                      ),
-                      child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 20)),
-                    ),
+                    const BrandLogo(size: 42, ring: true),
                     const SizedBox(width: 12),
                     const Text('Opstation', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
                   ]),
@@ -340,11 +329,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
             child: Tooltip(
               message: 'Back to sign in',
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Container(
-                  width: 34, height: 34, alignment: Alignment.center,
-                  decoration: BoxDecoration(color: AppTheme.primary, borderRadius: BorderRadius.circular(9)),
-                  child: const Text('O', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
-                ),
+                const BrandLogo(size: 34),
                 const SizedBox(width: 10),
                 const Text('Opstation', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _ink)),
               ]),
