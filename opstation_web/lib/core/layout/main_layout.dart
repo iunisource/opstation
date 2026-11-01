@@ -26,6 +26,7 @@ import '../../features/support/presentation/request_callback_button.dart';
 import '../../features/support/presentation/support_buttons.dart';
 import '../../features/billing/presentation/trial_banner.dart';
 import 'erp_global_search.dart';
+import 'screen_settings_gear.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
@@ -1219,6 +1220,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ),
           actions: [
             _searchButton(context, user, _showFn(ref, user)),
+            const ScreenSettingsGear(),
             const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
             const SizedBox(width: 6),
           ],
@@ -2462,6 +2464,7 @@ class _TopNav extends ConsumerWidget {
         const SizedBox(width: 4),
         _branchSelector(ref, modules),
         Container(width: 1, height: 28, color: Colors.white12),
+        const ScreenSettingsGear(),
         const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 52)),
       ]),
     );
@@ -2637,6 +2640,7 @@ class _SideNav extends ConsumerWidget {
           child: Row(children: [
             _searchButton(context, user, show),
             const Spacer(),
+            const ScreenSettingsGear(),
             const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
           ]),
         ),

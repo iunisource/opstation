@@ -877,13 +877,27 @@ const Map<String, String> _exclusiveToggles = {
   'org.doc_review_flow_pi': 'org.pi_supervise_flow',
 };
 
+/// Bumped whenever any setting on this page (or an on-screen settings modal
+/// built from it) is saved, so the modal knows whether something changed.
+final ValueNotifier<int> adminSettingsChangeTick = ValueNotifier<int>(0);
+
 String _toggleTitle(String key) {
   for (final t in _toggles) { if (t.key == key) return t.title; }
   return key;
 }
 
 class ErpAdminSettingsScreen extends ConsumerStatefulWidget {
-  const ErpAdminSettingsScreen({super.key});
+  /// Full page when null. When set, renders only these settings (same cards,
+  /// same saving and rules) for an on-screen settings modal.
+  final List<String>? onlyKeys;
+
+  /// Extra non-toggle items for the modal:
+  ///   'serious.block_negative_stock', 'serious.block_zero_cost_receipt',
+  ///   'footer.<app_config key>', 'ledger.customer', 'ledger.supplier',
+  ///   'payroll', 'hidden_groups'.
+  final List<String> extras;
+
+  const ErpAdminSettingsScreen({super.key, this.onlyKeys, this.extras = const []});
 
   @override
   ConsumerState<ErpAdminSettingsScreen> createState() =>
@@ -1079,6 +1093,7 @@ class _ErpAdminSettingsScreenState
       'org_id': orgId,
     }, onConflict: 'key,org_id,branch_id');
     if (key == 'org.batch_tracking') ref.invalidate(batchTrackingEnabledProvider);
+    adminSettingsChangeTick.value++;
   }
 
   Future<void> _setSeriousFlag(String column, bool v) async {
@@ -1093,6 +1108,7 @@ class _ErpAdminSettingsScreenState
       await Supabase.instance.client
           .from('inventory_settings')
           .update({column: v}).eq('org_id', orgId);
+      adminSettingsChangeTick.value++;
     } catch (e) {
       if (!mounted) return;
       setState(() { if (neg) _blockNegStock = !v; else _blockZeroCostReceipt = !v; });
@@ -1127,7 +1143,9 @@ class _ErpAdminSettingsScreenState
     );
   }
 
-  Widget _seriousZone() {
+  Widget _seriousZone({Set<String>? only}) {
+    final showNeg = only == null || only.contains('block_negative_stock');
+    final showZero = only == null || only.contains('block_zero_cost_receipt');
     return Container(
       constraints: const BoxConstraints(maxWidth: 760),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1148,7 +1166,7 @@ class _ErpAdminSettingsScreenState
             border: Border.all(color: AppTheme.danger.withOpacity(0.35)),
           ),
           child: Column(children: [
-            _seriousToggle(
+            if (showNeg) _seriousToggle(
               'Block negative stock',
               'When ON, the system refuses any sale, issue, or production that would '
               'drive a product below zero stock at a branch — it asks you to post the '
@@ -1159,8 +1177,8 @@ class _ErpAdminSettingsScreenState
               _blockNegStock, _savingSerious,
               (v) => _setSeriousFlag('block_negative_stock', v),
             ),
-            const Divider(height: 1, color: AppTheme.border),
-            _seriousToggle(
+            if (showNeg && showZero) const Divider(height: 1, color: AppTheme.border),
+            if (showZero) _seriousToggle(
               'Block zero-cost receipts (GRN)',
               'When ON, a Goods Receipt refuses any non-consignment line that has no '
               'unit cost on the purchase order or the product — the buyer must enter a '
@@ -1884,8 +1902,85 @@ class _ErpAdminSettingsScreenState
     );
   }
 
+  // On-screen settings modal: only the chosen settings, same cards and rules.
+  Widget _embeddedBody() {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    final orgId = ref.read(currentUserProvider)?.orgId ?? '';
+    final mfgOn =
+        ref.watch(orgModulesProvider).valueOrNull?.contains('production') ?? false;
+    final byKey = {for (final t in _toggles) t.key: t};
+    final items = <_AdminToggle>[
+      for (final k in widget.onlyKeys ?? const <String>[])
+        if (byKey[k] != null && (mfgOn || k != 'org.processor_overdue_reminder')) byKey[k]!,
+    ];
+    final ex = widget.extras;
+    final serious = {
+      for (final e in ex)
+        if (e.startsWith('serious.')) e.substring('serious.'.length)
+    };
+    final footers = {
+      for (final e in ex)
+        if (e.startsWith('footer.')) e.substring('footer.'.length)
+    };
+    final ledger = ex.contains('ledger.customer')
+        ? 'customer'
+        : (ex.contains('ledger.supplier') ? 'supplier' : null);
+    final children = <Widget>[];
+    if (items.isNotEmpty) {
+      children.add(LayoutBuilder(builder: (ctx, c) {
+        const spacing = 12.0;
+        final cols = c.maxWidth >= 640 ? 2 : 1;
+        final itemW = cols == 1
+            ? c.maxWidth
+            : ((c.maxWidth - spacing * (cols - 1)) / cols) - 0.5;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final t in items) SizedBox(width: itemW, child: _toggleCard(t)),
+          ],
+        );
+      }));
+    }
+    void gap() { if (children.isNotEmpty) children.add(const SizedBox(height: 16)); }
+    if (ex.contains('hidden_groups') && (_values['org.hide_main_groups_by_branch'] ?? false)) {
+      gap();
+      children.add(_HiddenGroupsPanel(orgId: orgId));
+    }
+    if (footers.isNotEmpty) {
+      gap();
+      children.add(_FooterNotesPanel(orgId: orgId, only: footers));
+    }
+    if (ledger != null) {
+      gap();
+      children.add(_LedgerMessagesPanel(orgId: orgId, only: ledger));
+    }
+    if (ex.contains('payroll')) {
+      gap();
+      children.add(_PayrollNotesPanel(orgId: orgId));
+    }
+    if (serious.isNotEmpty) {
+      gap();
+      children.add(_seriousZone(only: serious));
+    }
+    if (children.isEmpty) {
+      children.add(const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(child: Text('No settings for this screen.',
+            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+      ));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: children);
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.onlyKeys != null) return _embeddedBody();
     return Container(
       color: AppTheme.background,
       child: _loading
@@ -2544,6 +2639,7 @@ class _HiddenGroupsPanelState extends State<_HiddenGroupsPanel> {
             .eq('branch_id', branchId)
             .eq('main_group', group);
       }
+      adminSettingsChangeTick.value++;
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -2678,7 +2774,8 @@ const List<_FooterNoteDef> _footerNoteDefs = [
 
 class _FooterNotesPanel extends StatefulWidget {
   final String orgId;
-  const _FooterNotesPanel({required this.orgId});
+  final Set<String>? only; // show just these footer keys (on-screen modal)
+  const _FooterNotesPanel({required this.orgId, this.only});
   @override
   State<_FooterNotesPanel> createState() => _FooterNotesPanelState();
 }
@@ -2741,6 +2838,7 @@ class _FooterNotesPanelState extends State<_FooterNotesPanel> {
         'value': val,
         'org_id': widget.orgId,
       }, onConflict: 'key,org_id,branch_id');
+      adminSettingsChangeTick.value++;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -2781,6 +2879,7 @@ class _FooterNotesPanelState extends State<_FooterNotesPanel> {
             )
           else
             for (final d in _footerNoteDefs)
+              if (widget.only == null || widget.only!.contains(d.key))
               Padding(
                 padding: const EdgeInsets.only(bottom: 14),
                 child: Column(
@@ -2840,7 +2939,8 @@ class _FooterNotesPanelState extends State<_FooterNotesPanel> {
 ///   Supplier → org.ledger_msg_supplier_enabled / org.ledger_msg_supplier_text
 class _LedgerMessagesPanel extends StatefulWidget {
   final String orgId;
-  const _LedgerMessagesPanel({required this.orgId});
+  final String? only; // 'customer' or 'supplier' (on-screen modal); null = both
+  const _LedgerMessagesPanel({required this.orgId, this.only});
   @override
   State<_LedgerMessagesPanel> createState() => _LedgerMessagesPanelState();
 }
@@ -2881,6 +2981,7 @@ class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
     try {
       await Supabase.instance.client.from('app_config').upsert(
         {'key': key, 'value': value, 'org_id': widget.orgId}, onConflict: 'key,org_id,branch_id');
+      adminSettingsChangeTick.value++;
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
     }
@@ -2935,18 +3036,22 @@ class _LedgerMessagesPanelState extends State<_LedgerMessagesPanel> {
         const SizedBox(height: 14),
         if (_loading) const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Center(child: CircularProgressIndicator()))
         else ...[
+          if (widget.only == null || widget.only == 'customer')
           _toggleRow('Show company name — Customer ledger',
             'When on, the company name prints at the top of the customer ledger PDF / print.',
             _custShowName,
             (v) { setState(() => _custShowName = v); _set('org.ledger_show_name_customer', v ? 'true' : 'false'); }),
+          if (widget.only == null || widget.only == 'supplier')
           _toggleRow('Show company name — Supplier ledger',
             'When on, the company name prints at the top of the supplier ledger PDF / print.',
             _supShowName,
             (v) { setState(() => _supShowName = v); _set('org.ledger_show_name_supplier', v ? 'true' : 'false'); }),
           const Divider(height: 20),
+          if (widget.only == null || widget.only == 'customer')
           _row('Customer ledger message', _custOn,
             (v) { setState(() => _custOn = v); _set('org.ledger_msg_customer_enabled', v ? 'true' : 'false'); },
             _custCtrl, () => _set('org.ledger_msg_customer_text', _custCtrl.text.trim())),
+          if (widget.only == null || widget.only == 'supplier')
           _row('Supplier ledger message', _supOn,
             (v) { setState(() => _supOn = v); _set('org.ledger_msg_supplier_enabled', v ? 'true' : 'false'); },
             _supCtrl, () => _set('org.ledger_msg_supplier_text', _supCtrl.text.trim())),
@@ -3277,6 +3382,7 @@ class _PayrollNotesPanelState extends State<_PayrollNotesPanel> {
     try {
       await Supabase.instance.client.from('app_config').upsert(
         {'key': key, 'value': value, 'org_id': widget.orgId}, onConflict: 'key,org_id,branch_id');
+      adminSettingsChangeTick.value++;
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
     }
