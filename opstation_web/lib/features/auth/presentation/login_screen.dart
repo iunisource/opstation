@@ -441,10 +441,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  const BrandLogo(size: 44, glow: true),
-                  const SizedBox(width: 12),
-                  const Text('Opstation',
-                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                  _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                    BrandLogo(size: 44, glow: true),
+                    SizedBox(width: 12),
+                    Text('Opstation',
+                        style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                  ])),
                   const SizedBox(width: 10),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -601,10 +603,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             children: [
               if (showLogo) ...[
                 Row(children: [
-                  const BrandLogo(size: 44),
-                  const SizedBox(width: 12),
-                  const Text('Opstation',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _ink)),
+                  _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                    BrandLogo(size: 44),
+                    SizedBox(width: 12),
+                    Text('Opstation',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _ink)),
+                  ])),
                 ]),
                 const SizedBox(height: 36),
               ],
@@ -891,6 +895,27 @@ class _OrgPickCardState extends State<_OrgPickCard>
               ]),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// The logo + name on the sign-in page: opens the Opstation website.
+class _HomeLink extends StatelessWidget {
+  final Widget child;
+  const _HomeLink({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Go to opstationerp.com',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => html.window.location.assign('https://opstationerp.com'),
+          child: child,
         ),
       ),
     );
