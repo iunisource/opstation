@@ -256,6 +256,20 @@
       .ptoast { display: none; }
     }
 
+    .enq-card { background: #fff; border: 1px solid #E6EAF2; border-radius: 20px; padding: 1.75rem; box-shadow: 0 40px 80px -50px rgba(14,30,64,.45); }
+    .enq-row + .enq-row { margin-top: 1rem; }
+    .enq-label { display: block; font-size: .82rem; font-weight: 600; color: #0F1729; margin-bottom: .4rem; }
+    .enq-label b { color: #DC2626; font-weight: 700; }
+    .enq-input { width: 100%; font: inherit; font-size: .95rem; color: #0F1729; background: #FAFBFD; border: 1px solid #DCE3EE; border-radius: 12px; padding: .8rem .9rem; outline: none; transition: border-color .2s ease, box-shadow .2s ease; appearance: none; }
+    select.enq-input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%235B6473' stroke-width='2.4'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .9rem center; padding-right: 2.4rem; }
+    .enq-input:focus { border-color: #2F6FED; box-shadow: 0 0 0 4px rgba(47,111,237,.12); background: #fff; }
+    .enq-input.bad { border-color: #DC2626; box-shadow: 0 0 0 4px rgba(220,38,38,.10); }
+    .enq-hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+    .enq-err { margin-top: 1rem; font-size: .85rem; color: #B91C1C; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: .6rem .8rem; }
+    .enq-btn { margin-top: 1.4rem; width: 100%; background: #2F6FED; color: #fff; font-weight: 700; font-size: .98rem; border-radius: 12px; padding: .95rem; box-shadow: 0 14px 30px -12px rgba(47,111,237,.7); transition: background .2s ease, transform .1s ease; }
+    .enq-btn:hover { background: #2257C8; } .enq-btn:active { transform: scale(.99); }
+    .enq-btn:disabled { opacity: .65; cursor: default; }
+
     *:focus-visible { outline: 2px solid #2F6FED; outline-offset: 2px; border-radius: 4px; }
   </style>
 </head>
@@ -273,7 +287,7 @@
         <a href="#field"    class="nav-link link-u text-sm text-white/85">Field team</a>
         <a href="#control"  class="nav-link link-u text-sm text-white/85">Web panel</a>
         <a href="#industries" class="nav-link link-u text-sm text-white/85">Industries</a>
-        <a href="#pricing"  class="nav-link link-u text-sm text-white/85">Pricing</a>
+        <a href="#contact"  class="nav-link link-u text-sm text-white/85">Talk to us</a>
         <a href="#faq"      class="nav-link link-u text-sm text-white/85">FAQ</a>
       </nav>
       <div class="flex items-center gap-3">
@@ -732,65 +746,119 @@
     </div>
   </section>
 
-  <!-- PRICING -->
-  <section id="pricing" class="bg-surface border-y border-line">
-  <div class="max-w-6xl mx-auto px-6 py-24 md:py-32">
-    <div class="reveal text-center mb-14">
-      <p class="eyebrow text-brand-600">— Pricing</p>
-      <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Simple pricing that <span class="text-brand-500">scales with you.</span></h2>
-      <p class="mt-4 text-muted text-lg">Every plan starts with a <span class="font-semibold text-ink">14-day free trial</span>, no credit card required.</p>
+  <!-- TALK TO OUR TEAM (replaces pricing for now) -->
+  <section id="contact" class="bg-surface border-y border-line">
+    <div class="max-w-6xl mx-auto px-6 py-24 md:py-32 grid lg:grid-cols-[1fr_1.05fr] gap-12 lg:gap-16 items-center">
+      <div class="reveal">
+        <p class="eyebrow text-brand-600">— Talk to our team</p>
+        <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Let's find the <span class="text-brand-500">right setup for you.</span></h2>
+        <p class="mt-5 text-muted text-lg leading-relaxed max-w-lg">Leave your number and we'll call you back. We'll walk you through Opstation and share a plan that fits your business.</p>
+        <div class="mt-8 space-y-3 text-sm">
+          <div class="flex items-center gap-3"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3.1 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.2 2 2 0 014.1 2h3a2 2 0 012 1.7c.1 1 .4 1.9.7 2.8a2 2 0 01-.5 2.1L8 9.9a16 16 0 006 6l1.3-1.3a2 2 0 012.1-.4c.9.3 1.8.6 2.8.7a2 2 0 011.7 2z"/></svg></span><span class="text-ink/80">A quick call, at a time that suits you</span></div>
+          <div class="flex items-center gap-3"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span><span class="text-ink/80">A walkthrough with your own kind of business in mind</span></div>
+          <div class="flex items-center gap-3"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 6L9 17l-5-5"/></svg></span><span class="text-ink/80">No obligation</span></div>
+        </div>
+      </div>
+
+      <div class="reveal">
+        <form id="enq-form" class="enq-card" novalidate>
+          <div id="enq-fields">
+            <div class="enq-row">
+              <label class="enq-label" for="enq-name">Your name <b>*</b></label>
+              <input id="enq-name" name="name" class="enq-input" autocomplete="name" maxlength="80" required placeholder="e.g. Ahmed Raza" />
+            </div>
+            <div class="enq-row">
+              <label class="enq-label" for="enq-phone">Contact number <b>*</b></label>
+              <input id="enq-phone" name="phone" class="enq-input" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" required placeholder="e.g. 0300 1234567" />
+            </div>
+            <div class="enq-row">
+              <label class="enq-label" for="enq-biz">Business name</label>
+              <input id="enq-biz" name="business" class="enq-input" autocomplete="organization" maxlength="120" placeholder="Optional" />
+            </div>
+            <div class="enq-row">
+              <label class="enq-label" for="enq-ind">Industry</label>
+              <select id="enq-ind" name="industry" class="enq-input">
+                <option value="">Optional</option>
+                <option>FMCG &amp; consumer goods</option>
+                <option>Food &amp; beverage</option>
+                <option>Pharmaceuticals</option>
+                <option>Building materials</option>
+                <option>Auto parts</option>
+                <option>Electronics &amp; hardware</option>
+                <option>Textiles &amp; apparel</option>
+                <option>Chemicals</option>
+                <option>Agri inputs</option>
+                <option>Wholesale &amp; trading</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <!-- leave empty: catches bots -->
+            <input type="text" name="website" id="enq-hp" tabindex="-1" autocomplete="off" aria-hidden="true" class="enq-hp" />
+            <p id="enq-err" class="enq-err" role="alert" hidden></p>
+            <button id="enq-btn" type="submit" class="enq-btn">Request a call back</button>
+            <p class="text-xs text-faint text-center mt-3">We only use your details to get in touch about Opstation.</p>
+          </div>
+          <div id="enq-done" class="text-center py-6" hidden>
+            <div class="mx-auto w-14 h-14 rounded-full grid place-items-center bg-emerald-100 text-emerald-700"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></div>
+            <h3 class="display font-extrabold text-2xl mt-5">Thanks, <span id="enq-who"></span>.</h3>
+            <p class="text-muted mt-2">We've got your details and will call you shortly.</p>
+          </div>
+        </form>
+      </div>
     </div>
-    <div class="reveal grid md:grid-cols-3 gap-6 items-stretch">
-      <div class="price">
-        <h3 class="display text-xl font-extrabold text-ink">Starter Pack</h3>
-        <p class="text-sm text-muted mt-1">For field sales teams getting started</p>
-        <div class="mt-5 flex items-baseline gap-1"><span class="display text-4xl font-extrabold text-ink">PKR&nbsp;9,900</span><span class="text-muted text-sm">/mo</span></div>
-        <ul class="price-list">
-          <li>Operations: manage your entire sales team</li>
-          <li>Field sales, routes &amp; dispatch</li>
-          <li>CRM &amp; customer follow-ups</li>
-          <li>Live map &amp; team tracking</li>
-          <li>Core reports</li>
-          <li>Android app included</li>
-        </ul>
-        <a href="https://app.opstationerp.com/signup" class="price-btn">Start free trial</a>
-      </div>
-      <div class="price">
-        <h3 class="display text-xl font-extrabold text-ink">Scale Up</h3>
-        <p class="text-sm text-muted mt-1">For growing distribution businesses</p>
-        <div class="mt-5 flex items-baseline gap-1"><span class="display text-4xl font-extrabold text-ink">PKR&nbsp;24,900</span><span class="text-muted text-sm">/mo</span></div>
-        <ul class="price-list">
-          <li>Everything in Starter Pack</li>
-          <li>Inventory management</li>
-          <li>Purchase management</li>
-          <li>Sales &amp; invoicing</li>
-          <li>Market Intelligence</li>
-          <li>Full reports suite</li>
-          <li>Android app included</li>
-        </ul>
-        <a href="https://app.opstationerp.com/signup" class="price-btn">Start free trial</a>
-      </div>
-      <div class="price featured md:-mt-4">
-        <span class="price-badge">MOST POPULAR &middot; BEST VALUE</span>
-        <h3 class="display text-xl font-extrabold">Power House</h3>
-        <p class="text-sm text-white/65 mt-1">Everything included, the complete platform</p>
-        <div class="mt-5 flex items-baseline gap-1"><span class="display text-4xl font-extrabold">PKR&nbsp;39,900</span><span class="text-white/65 text-sm">/mo</span></div>
-        <ul class="price-list">
-          <li>Everything in Scale Up</li>
-          <li>POS (point of sale)</li>
-          <li>Production &amp; manufacturing</li>
-          <li>HR &amp; attendance</li>
-          <li>Financial reporting</li>
-          <li>Asset &amp; facility management</li>
-          <li>Unlimited users</li>
-          <li>Android app included</li>
-        </ul>
-        <a href="https://app.opstationerp.com/signup" class="price-btn">Start free trial</a>
-      </div>
-    </div>
-    <p class="text-center text-muted text-sm mt-10">All plans include a 14-day free trial and the Opstation Android app. Upgrade, downgrade or cancel anytime.</p>
-  </div>
   </section>
+  <script>
+    (function () {
+      var URL = 'https://xgptodkasmytddmdnbtb.supabase.co/rest/v1/rpc/submit_enquiry';
+      var KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncHRvZGthc215dGRkbWRuYnRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NzA5MjUsImV4cCI6MjA5MjI0NjkyNX0.pc1VsvsvtnkBHyRzuXzzuspSTJRqU_BQgQulMQ9UCac';
+      var form = document.getElementById('enq-form');
+      if (!form) return;
+      var $ = function (id) { return document.getElementById(id); };
+      var err = $('enq-err'), btn = $('enq-btn');
+      function showErr(msg, field) {
+        err.textContent = msg; err.hidden = false;
+        ['enq-name', 'enq-phone'].forEach(function (id) { $(id).classList.remove('bad'); });
+        if (field) { $(field).classList.add('bad'); $(field).focus(); }
+      }
+      function done(name) {
+        $('enq-who').textContent = name.split(' ')[0];
+        $('enq-fields').hidden = true; $('enq-done').hidden = false;
+      }
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var name = $('enq-name').value.trim();
+        var phone = $('enq-phone').value.trim();
+        var digits = phone.replace(/\D/g, '');
+        if (name.length < 2) return showErr('Please enter your name.', 'enq-name');
+        if (digits.length < 7 || digits.length > 15 || !/^[0-9+()\-\s.]+$/.test(phone)) return showErr('Please enter a valid contact number.', 'enq-phone');
+        err.hidden = true;
+        if ($('enq-hp').value) return done(name);
+        btn.disabled = true; btn.textContent = 'Sending…';
+        fetch(URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': KEY, 'Authorization': 'Bearer ' + KEY },
+          body: JSON.stringify({
+            p_name: name, p_phone: phone,
+            p_business: $('enq-biz').value.trim() || null,
+            p_industry: $('enq-ind').value || null,
+            p_source: 'website'
+          })
+        }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (res.ok && res.j && res.j.ok) return done(name);
+            var code = res.j && res.j.error;
+            btn.disabled = false; btn.textContent = 'Request a call back';
+            if (code === 'name') return showErr('Please enter your name.', 'enq-name');
+            if (code === 'phone') return showErr('Please enter a valid contact number.', 'enq-phone');
+            showErr('Something went wrong. Please try again in a minute.');
+          })
+          .catch(function () {
+            btn.disabled = false; btn.textContent = 'Request a call back';
+            showErr('Could not send. Please check your connection and try again.');
+          });
+      });
+    })();
+  </script>
 
   <!-- FAQ -->
   <section id="faq">
@@ -834,7 +902,7 @@
         <a href="#flow" class="link-u hover:text-white">How it works</a>
         <a href="#field" class="link-u hover:text-white">Field team</a>
         <a href="#control" class="link-u hover:text-white">Web panel</a>
-        <a href="#pricing" class="link-u hover:text-white">Pricing</a>
+        <a href="#contact" class="link-u hover:text-white">Talk to us</a>
         <a href="#faq" class="link-u hover:text-white">FAQ</a>
         <a href="https://opstation-f06c7.web.app" class="link-u hover:text-white">Sign in</a>
       </nav>
