@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Opstation ERP — The operating system for distribution in cash-run economies</title>
-  <meta name="description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
+  <title>Opstation ERP — The operating system for the distribution industry</title>
+  <meta name="description" content="The operating system for the distribution industry. Purchase, inventory, field sales, deliveries and accounting, all in one connected system." />
 
   <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png?v=2" />
   <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -14,7 +14,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Opstation ERP" />
   <meta property="og:title" content="Opstation ERP" />
-  <meta property="og:description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
+  <meta property="og:description" content="The operating system for the distribution industry. Purchase, inventory, field sales, deliveries and accounting, all in one connected system." />
   <meta property="og:url" content="https://opstationerp.com/" />
   <meta property="og:image" content="https://opstationerp.com/og-image.png" />
   <meta property="og:image:width" content="1200" />
@@ -22,7 +22,7 @@
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Opstation ERP" />
-  <meta name="twitter:description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
+  <meta name="twitter:description" content="The operating system for the distribution industry. Purchase, inventory, field sales, deliveries and accounting, all in one connected system." />
   <meta name="twitter:image" content="https://opstationerp.com/og-image.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -180,7 +180,26 @@
     .s-tag.ok { color: #047857; background: #D1FAE5; } .s-tag.cash { color: #047857; background: #D1FAE5; }
     .s-tag.warn { color: #C2410C; background: #FFEDD5; } .s-tag.now { color: #1B45A0; background: #D9E4FF; }
     .phone-cta { background: #F6F8FC; border-radius: 0 0 28px 28px; padding: 4px 10px 14px; }
-    .phone-cta span { display: block; text-align: center; background: #2F6FED; color: #fff; font-weight: 700; font-size: 13px; border-radius: 12px; padding: 11px; }
+    .phone-cta > span { display: block; text-align: center; background: #2F6FED; color: #fff; font-weight: 700; font-size: 13px; border-radius: 12px; padding: 11px; }
+    /* App mock: visit → order → cash, 9s loop, one step every 3s */
+    .cyc { position: relative; display: block; height: 1.4em; }
+    .cyc > span, .cyc > b { position: absolute; left: 0; top: 0; white-space: nowrap; opacity: 0; animation: cyc 9s ease-in-out infinite; }
+    .cyc > :nth-child(2) { animation-delay: 3s; }
+    .cyc > :nth-child(3) { animation-delay: 6s; }
+    @keyframes cyc { 0% { opacity: 0; transform: translateY(6px); } 4%, 30% { opacity: 1; transform: none; } 35%, 100% { opacity: 0; transform: translateY(-6px); } }
+    .cyc-tag { width: 3.4rem; height: 1.25rem; flex-shrink: 0; }
+    .cyc-tag > span { left: auto; right: 0; }
+    .phone-cta .cyc-btn { height: auto; }
+    .cyc-btn > b { position: absolute; left: 0; right: 0; top: 50%; margin-top: -.6em; font-weight: 700; }
+    .cyc-btn::before { content: 'x'; visibility: hidden; }
+    .cyc-btn { animation: tap 3s ease-in-out infinite; }
+    @keyframes tap { 0%, 70%, 100% { transform: none; filter: none; } 80% { transform: scale(.96); filter: brightness(1.15); } }
+    .ptoast { position: absolute; left: 22px; right: 22px; top: 128px; height: 40px; z-index: 3; pointer-events: none; }
+    .ptoast > span { left: 0; right: 0; display: flex; align-items: center; gap: 8px; background: #fff; color: #0F1729; font-size: 12px; font-weight: 600;
+                     border-radius: 12px; padding: 8px 10px; box-shadow: 0 14px 30px -10px rgba(15,23,41,.45); }
+    .ptoast i { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-style: normal; font-size: 10px; flex-shrink: 0; }
+    .ptoast > span { animation-name: toast; }
+    @keyframes toast { 0% { opacity: 0; transform: translateY(-10px) scale(.97); } 4%, 22% { opacity: 1; transform: none; } 27%, 100% { opacity: 0; transform: translateY(-8px); } }
     .feat { display: flex; gap: .85rem; }
     .feat-ico { width: 2.25rem; height: 2.25rem; flex-shrink: 0; border-radius: 10px; display: grid; place-items: center; background: #EEF3FF; color: #2257C8; }
 
@@ -231,7 +250,10 @@
     .cta-logo { filter: drop-shadow(0 0 22px rgba(47,111,237,.6)); }
     @media (prefers-reduced-motion: reduce) {
       .flow-line span, .flow-card, .flow-num, .stage i { transition: none !important; }
-      .s-dot.now { animation: none; }
+      .s-dot.now, .cyc-btn { animation: none; }
+      .cyc > * { animation: none !important; }
+      .cyc > :first-child { opacity: 1; }
+      .ptoast { display: none; }
     }
 
     *:focus-visible { outline: 2px solid #2F6FED; outline-offset: 2px; border-radius: 4px; }
@@ -376,7 +398,7 @@
         <div class="float-card" style="left:20%; top:38%; animation-delay:2.15s"><span class="dot" style="background:#2F6FED">⇄</span>Stock synced · 3 branches</div>
         <div class="float-card" style="left:34%; top:22%; animation-delay:4.15s"><span class="dot" style="background:#7C3AED">●</span>Order booked · Shop 34</div>
         <div class="float-card" style="right:2%; top:44%; animation-delay:6.15s"><span class="dot" style="background:#EA580C">▸</span>DO-0443 delivered</div>
-        <div class="float-card" style="right:16%; top:2%; animation-delay:8.15s"><span class="dot" style="background:#059669">Rs</span>48,500 collected · receipted</div>
+        <div class="float-card" style="right:16%; top:2%; animation-delay:8.15s"><span class="dot" style="background:#059669">Rs</span>48,500 collected · CR 32284</div>
       </div>
     </div>
   </section>
@@ -386,7 +408,7 @@
     <div class="max-w-6xl mx-auto px-6 py-10 grid grid-cols-2 md:grid-cols-4 gap-8">
       <div><div class="display font-extrabold text-2xl text-ink">One</div><div class="text-sm text-muted mt-1">system behind every branch and team</div></div>
       <div><div class="display font-extrabold text-2xl text-ink">Real-time</div><div class="text-sm text-muted mt-1">stock, ledgers and collections</div></div>
-      <div><div class="display font-extrabold text-2xl text-ink">Auto-posting</div><div class="text-sm text-muted mt-1">every document lands in the books</div></div>
+      <div><div class="display font-extrabold text-2xl text-ink">Auto-posting</div><div class="text-sm text-muted mt-1">invoices and vouchers post to the ledger</div></div>
       <div><div class="display font-extrabold text-2xl text-ink">Audited</div><div class="text-sm text-muted mt-1">role-based access, full trail</div></div>
     </div>
   </section>
@@ -396,7 +418,7 @@
     <div class="reveal">
       <p class="eyebrow text-brand-600">— How it works</p>
       <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4 max-w-3xl">One flow, from the supplier to <span class="text-brand-500">cash in hand.</span></h2>
-      <p class="mt-5 text-muted text-lg max-w-2xl">Each step hands over to the next on its own, and every one of them posts to your books.</p>
+      <p class="mt-5 text-muted text-lg max-w-2xl">Each step picks up where the last one left off, so nothing is typed in twice.</p>
     </div>
 
     <div class="flow reveal mt-14">
@@ -405,7 +427,7 @@
         <div class="flow-card" style="--i:0">
           <div class="flow-num">01</div>
           <h3 class="display font-bold text-lg mt-4">Purchase</h3>
-          <p class="text-muted text-sm mt-2 leading-relaxed">Raise orders, receive goods against them and bill suppliers. Costs land on stock as goods arrive.</p>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Raise purchase orders, receive goods against them and match the supplier's bill.</p>
           <div class="flow-tags"><span>PO</span><span>GRN</span><span>Purchase invoice</span></div>
         </div>
         <div class="flow-card" style="--i:1">
@@ -417,27 +439,27 @@
         <div class="flow-card" style="--i:2">
           <div class="flow-num">03</div>
           <h3 class="display font-bold text-lg mt-4">Field orders</h3>
-          <p class="text-muted text-sm mt-2 leading-relaxed">Salesmen visit shops and book orders from the app, with the right prices and discounts.</p>
-          <div class="flow-tags"><span>Shop visits</span><span>Sales order</span><span>Discounts</span></div>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Salesmen visit shops and book orders on the app, even without signal.</p>
+          <div class="flow-tags"><span>Shop visits</span><span>Order booking</span><span>Field returns</span></div>
         </div>
         <div class="flow-card" style="--i:3">
           <div class="flow-num">04</div>
           <h3 class="display font-bold text-lg mt-4">Deliver</h3>
-          <p class="text-muted text-sm mt-2 leading-relaxed">Orders become delivery runs. Drivers confirm each drop and the invoice follows.</p>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Orders are dispatched as delivery runs, drivers confirm each drop, and invoices are raised from what was delivered.</p>
           <div class="flow-tags"><span>Delivery order</span><span>Routes</span><span>Invoice</span></div>
         </div>
         <div class="flow-card cash" style="--i:4">
           <div class="flow-num">05</div>
           <h3 class="display font-bold text-lg mt-4">Collect</h3>
-          <p class="text-muted text-sm mt-2 leading-relaxed">Cash and cheques are recorded on the spot and show in the customer's ledger straight away.</p>
-          <div class="flow-tags"><span>Receipts</span><span>Recovery</span><span>Returns</span></div>
+          <p class="text-muted text-sm mt-2 leading-relaxed">Salesmen record what they collect against their receipt book. The office books the receipt and sees any gap.</p>
+          <div class="flow-tags"><span>Receipt books</span><span>Receipts</span><span>Collection report</span></div>
         </div>
       </div>
 
       <div class="books mt-4">
         <div class="flex items-center gap-3">
           <span class="w-9 h-9 shrink-0 grid place-items-center rounded-lg bg-white/10 text-hl"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 19V5M4 19h16"/><path d="M8 16l3-4 3 2 4-6"/></svg></span>
-          <div><div class="font-semibold text-white">Accounting runs underneath every step</div><div class="text-white/60 text-sm">No re-entry. Statements stay current as documents post.</div></div>
+          <div><div class="font-semibold text-white">Accounting is built in</div><div class="text-white/60 text-sm">Invoices, vouchers and stock movements post to the general ledger automatically.</div></div>
         </div>
         <div class="flex flex-wrap gap-2">
           <span class="books-tag">General ledger</span><span class="books-tag">Customer &amp; supplier ledgers</span><span class="books-tag">Aging</span><span class="books-tag">Trial balance</span><span class="books-tag">P&amp;L</span><span class="books-tag">Balance sheet</span>
@@ -465,25 +487,26 @@
             <div class="shop"><span class="s-dot ok">✓</span><div class="flex-1 min-w-0"><div class="s-name">Al-Madina Store</div><div class="s-sub">Order booked · Rs 12,400</div></div><span class="s-tag ok">Visited</span></div>
             <div class="shop"><span class="s-dot ok">✓</span><div class="flex-1 min-w-0"><div class="s-name">Bismillah Traders</div><div class="s-sub">Collected · Rs 48,500</div></div><span class="s-tag cash">Cash</span></div>
             <div class="shop"><span class="s-dot warn">!</span><div class="flex-1 min-w-0"><div class="s-name">Rehman General Store</div><div class="s-sub">Checked in 600 m away</div></div><span class="s-tag warn">Outside</span></div>
-            <div class="shop active"><span class="s-dot now">●</span><div class="flex-1 min-w-0"><div class="s-name">City Mart</div><div class="s-sub">You are here</div></div><span class="s-tag now">Now</span></div>
+            <div class="shop active"><span class="s-dot now">●</span><div class="flex-1 min-w-0"><div class="s-name">City Mart</div><div class="cyc s-sub"><span>Shop visited · checked in</span><span>Order booked · Rs 18,200</span><span>Cash collected · Rs 25,000</span></div></div><div class="cyc cyc-tag"><span class="s-tag ok">Visited</span><span class="s-tag now">Order</span><span class="s-tag cash">Cash</span></div></div>
             <div class="shop"><span class="s-dot"></span><div class="flex-1 min-w-0"><div class="s-name">Khan Brothers</div><div class="s-sub">Next stop</div></div></div>
           </div>
-          <div class="phone-cta"><span>Book order</span></div>
+          <div class="phone-cta"><span class="cyc cyc-btn"><b>Mark visit</b><b>Book order</b><b>Record collection</b></span></div>
+          <div class="ptoast cyc"><span><i style="background:#059669">✓</i>Shop visited · City Mart</span><span><i style="background:#2F6FED">●</i>Order booked · Rs 18,200</span><span><i style="background:#059669">Rs</i>Cash collected · Rs 25,000</span></div>
         </div>
       </div>
       <!-- copy -->
       <div class="reveal order-1 lg:order-2">
         <p class="eyebrow text-brand-600">— Opstation App</p>
         <h2 class="display font-extrabold tracking-tighter2 text-[2.1rem] md:text-[2.9rem] leading-[1.05] mt-4">Your field team, <span class="text-brand-500">on one app.</span></h2>
-        <p class="mt-5 text-muted text-lg leading-relaxed max-w-xl">Salesmen, order bookers and drivers work from their phones. Everything they capture reaches the office the moment it lands.</p>
+        <p class="mt-5 text-muted text-lg leading-relaxed max-w-xl">Salesmen, order bookers and drivers work from their phones. Everything they capture reaches the office as soon as they're online.</p>
         <div class="inline-flex items-center gap-2 mt-6 rounded-lg bg-white border border-line text-ink px-3 py-1.5 text-xs font-semibold"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#3DDC84" stroke-width="2" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg> Available on Android</div>
         <div class="grid sm:grid-cols-2 gap-x-8 gap-y-6 mt-10">
           <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 21s-7-5.6-7-11a7 7 0 1114 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></span><div><div class="font-semibold">Verified shop visits</div><div class="text-sm text-muted mt-0.5">Each check-in is matched to the shop's location.</div></div></div>
           <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 4h16v4H4z"/><path d="M5 8v12h14V8"/><path d="M9 12h6"/></svg></span><div><div class="font-semibold">Orders, online or off</div><div class="text-sm text-muted mt-0.5">Saved on the phone and synced when signal returns.</div></div></div>
-          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/></svg></span><div><div class="font-semibold">Collections on the spot</div><div class="text-sm text-muted mt-0.5">Cash recorded at the counter, straight to the ledger.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/></svg></span><div><div class="font-semibold">Collections with slip numbers</div><div class="text-sm text-muted mt-0.5">Recorded on the visit against the salesman's receipt book.</div></div></div>
           <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M2 8h12v10H2z"/><path d="M14 11h5l3 3v4h-8"/><circle cx="6" cy="19" r="1.6"/><circle cx="18" cy="19" r="1.6"/></svg></span><div><div class="font-semibold">Delivery runs</div><div class="text-sm text-muted mt-0.5">Drivers confirm every drop at the doorstep.</div></div></div>
-          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg></span><div><div class="font-semibold">Live map</div><div class="text-sm text-muted mt-0.5">See where the team is, and where they've been.</div></div></div>
-          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span><div><div class="font-semibold">Expenses &amp; returns</div><div class="text-sm text-muted mt-0.5">Field expenses and shop returns logged in place.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 12a9 9 0 109-9"/><path d="M3 4v5h5"/></svg></span><div><div class="font-semibold">Shop returns</div><div class="text-sm text-muted mt-0.5">Returned goods picked up and recorded at the shop.</div></div></div>
+          <div class="feat"><span class="feat-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span><div><div class="font-semibold">Expenses &amp; reimbursements</div><div class="text-sm text-muted mt-0.5">Field expenses logged on the day they happen.</div></div></div>
         </div>
       </div>
     </div>
@@ -519,10 +542,10 @@
               <div class="stage"><span>Purchase invoices</span><div><i style="width:13%"></i></div><b>4</b></div>
             </div>
             <div class="kpi">
-              <div class="kpi-l">Needs your approval</div>
-              <div class="appr mt-3"><span class="appr-dot" style="background:#7C3AED"></span><div class="flex-1">Discount policy · Group A</div><span class="appr-btn">Review</span></div>
-              <div class="appr"><span class="appr-dot" style="background:#EA580C"></span><div class="flex-1">Reopen DO-0443</div><span class="appr-btn">Review</span></div>
-              <div class="appr"><span class="appr-dot" style="background:#059669"></span><div class="flex-1">Discount policy · City Mart</div><span class="appr-btn">Review</span></div>
+              <div class="kpi-l">Discount policies to approve</div>
+              <div class="appr mt-3"><span class="appr-dot" style="background:#7C3AED"></span><div class="flex-1">Group A · 5% on 12 SKUs</div><span class="appr-btn">Review</span></div>
+              <div class="appr"><span class="appr-dot" style="background:#EA580C"></span><div class="flex-1">City Mart · Rs 20 off per carton</div><span class="appr-btn">Review</span></div>
+              <div class="appr"><span class="appr-dot" style="background:#059669"></span><div class="flex-1">Wholesale group · 3% on 4 SKUs</div><span class="appr-btn">Review</span></div>
             </div>
           </div>
         </div>
@@ -534,7 +557,7 @@
         <div class="ctl"><h3>Approvals &amp; locking</h3><p>Finalised documents lock. Only the right roles reopen them.</p></div>
         <div class="ctl"><h3>Pending dashboards</h3><p>What's stuck at each stage of sales and purchasing, and for how long.</p></div>
         <div class="ctl"><h3>Live financials</h3><p>Ledgers, aging, P&amp;L and balance sheet, current as documents post.</p></div>
-        <div class="ctl"><h3>Discount policies</h3><p>Customer and group discounts, applied automatically after approval.</p></div>
+        <div class="ctl"><h3>Discount policies</h3><p>Customer and group discounts, picked up on invoices once approved.</p></div>
         <div class="ctl"><h3>One search box</h3><p>Find any document, limited to what each person may see.</p></div>
         <div class="ctl"><h3>Nightly backup</h3><p>A full copy of your data emailed to you every night.</p></div>
       </div>
@@ -560,7 +583,7 @@
         <div class="role"><div class="role-k">Field</div><div class="role-t">Salesmen</div><div class="role-d">Visits, orders and collections</div></div>
         <div class="role"><div class="role-k">Desk</div><div class="role-t">Dispatch</div><div class="role-d">Delivery runs and routes</div></div>
         <div class="role"><div class="role-k">Road</div><div class="role-t">Drivers</div><div class="role-d">Drops confirmed on the spot</div></div>
-        <div class="role"><div class="role-k">Office</div><div class="role-t">Accounts</div><div class="role-d">Books that are already posted</div></div>
+        <div class="role"><div class="role-k">Office</div><div class="role-t">Accounts</div><div class="role-d">Receipts, ledgers and reports</div></div>
         <div class="role col-span-2 md:col-span-1"><div class="role-k">Top</div><div class="role-t">Owners</div><div class="role-d">Stock and cash, live</div></div>
       </div>
     </div>
@@ -778,7 +801,7 @@
       </div>
       <div class="divide-y divide-line border-y border-line">
         <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does it work with more than one branch?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Yes. Stock, POS, deliveries and reports all work branch by branch, while the books come together for the whole business.</p></details>
-        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does it handle accounting, or just operations?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Both. Every purchase, sale, delivery, receipt and adjustment posts to a full general ledger, so your statements are always current.</p></details>
+        <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does it handle accounting, or just operations?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Both. Purchases, invoices, deliveries, receipts and adjustments post to a full general ledger, so your statements stay current.</p></details>
         <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Does the app work without internet?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Yes. Visits, orders and collections are saved on the phone and sync on their own when the connection is back.</p></details>
         <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">Can I control who sees what?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Access is set by role and branch, and a full audit trail records who changed what, and when.</p></details>
         <details class="group py-5"><summary class="flex justify-between items-center gap-4 cursor-pointer list-none font-semibold">How do I get started?<span class="faq-plus">+</span></summary><p class="text-muted text-sm mt-3 leading-relaxed">Tap <em>Sign up</em>, tell us about your business and we'll set up your organization. Every plan starts with a 14-day free trial.</p></details>
