@@ -1220,7 +1220,6 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ),
           actions: [
             _searchButton(context, user, _showFn(ref, user)),
-            const ScreenSettingsGear(),
             const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
             const SizedBox(width: 6),
           ],
@@ -1229,7 +1228,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: widget.child)]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: _withScreenGear(widget.child))]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
       );
     }
 
@@ -1239,7 +1238,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         body: Stack(children: [
           Row(children: [
             _SideNav(user: user),
-            Expanded(child: Column(children: [const TrialBanner(), Expanded(child: widget.child)])),
+            Expanded(child: Column(children: [const TrialBanner(), Expanded(child: _withScreenGear(widget.child))])),
           ]),
           const GlobalJobAlert(),
           const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
@@ -1255,7 +1254,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         Column(children: [
           _TopNav(user: user),
           const TrialBanner(),
-          Expanded(child: widget.child),
+          Expanded(child: _withScreenGear(widget.child)),
         ]),
         const GlobalJobAlert(),
         const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
@@ -1266,6 +1265,13 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
       ]),
     );
   }
+
+  // The screen's own settings gear (master admins, screens with settings),
+  // floating in the bottom-left corner of the content area.
+  Widget _withScreenGear(Widget child) => Stack(fit: StackFit.expand, children: [
+        child,
+        const Positioned(left: 16, bottom: 16, child: ScreenSettingsGear()),
+      ]);
 
   // Drawer body — reuses the shared nav builder, so there is a single source of
   // truth for routes/permissions across top-bar, sidebar and mobile drawer.
@@ -2465,7 +2471,6 @@ class _TopNav extends ConsumerWidget {
         const SizedBox(width: 4),
         _branchSelector(ref, modules),
         Container(width: 1, height: 28, color: Colors.white12),
-        const ScreenSettingsGear(),
         const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 52)),
       ]),
     );
@@ -2641,7 +2646,6 @@ class _SideNav extends ConsumerWidget {
           child: Row(children: [
             _searchButton(context, user, show),
             const Spacer(),
-            const ScreenSettingsGear(),
             const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
           ]),
         ),

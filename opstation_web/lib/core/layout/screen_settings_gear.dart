@@ -121,7 +121,7 @@ const Map<String, _ScreenSettings> _screenSettings = {
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
 };
 
-/// Gear in the app bar: opens this screen's settings. Shown only to master
+/// Floating gear on the screen (bottom-left): opens this screen's settings. Shown only to master
 /// admins, and only on screens that have settings.
 class ScreenSettingsGear extends ConsumerWidget {
   const ScreenSettingsGear({super.key});
@@ -139,10 +139,23 @@ class ScreenSettingsGear extends ConsumerWidget {
     }
     final cfg = _screenSettings[loc];
     if (cfg == null) return const SizedBox.shrink();
-    return IconButton(
-      tooltip: '${cfg.title} settings',
-      icon: const Icon(Icons.settings_outlined, color: Colors.white70, size: 20),
-      onPressed: () => _open(context, cfg),
+    return Tooltip(
+      message: '${cfg.title} settings',
+      child: Material(
+        color: Colors.white,
+        shape: const CircleBorder(side: BorderSide(color: AppTheme.border)),
+        elevation: 3,
+        shadowColor: Colors.black26,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => _open(context, cfg),
+          child: const SizedBox(
+            width: 42,
+            height: 42,
+            child: Icon(Icons.settings_outlined, color: AppTheme.primary, size: 21),
+          ),
+        ),
+      ),
     );
   }
 
