@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Opstation ERP — Planet's best ERP for trading &amp; distribution industry</title>
-  <meta name="description" content="Planet's best ERP for trading &amp; distribution industry. Run every business from purchase to profit on one platform." />
+  <title>Opstation ERP — The operating system for distribution in cash-run economies</title>
+  <meta name="description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
 
   <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -14,7 +14,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Opstation ERP" />
   <meta property="og:title" content="Opstation ERP" />
-  <meta property="og:description" content="Planet's best ERP for trading &amp; distribution industry. Run every business from purchase to profit on one platform." />
+  <meta property="og:description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
   <meta property="og:url" content="https://opstationerp.com/" />
   <meta property="og:image" content="https://opstationerp.com/og-image.png" />
   <meta property="og:image:width" content="1200" />
@@ -22,7 +22,7 @@
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Opstation ERP" />
-  <meta name="twitter:description" content="Planet's best ERP for trading &amp; distribution industry. Run every business from purchase to profit on one platform." />
+  <meta name="twitter:description" content="The operating system for distribution in cash-run economies. Purchase, stock, field sales, delivery and cash recovery on one platform, with books that post themselves." />
   <meta name="twitter:image" content="https://opstationerp.com/og-image.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -87,6 +87,41 @@
     .chip { border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.05); }
     .bar { background: linear-gradient(180deg, #6EA0FF, #2F6FED); border-radius: 4px 4px 0 0; }
 
+    /* Hero: distribution scene */
+    .hero-dark { background: #0E1E40; }
+    .hero-dark .grain { display: none; }
+    .hl { color: #8DB8FF; }
+    /* One journey, 10s loop: each step lights up for 2s, in order (delays 0/2/4/6/8s). */
+    .step-pill { display:inline-flex; align-items:center; gap:.4rem; font-size:.8rem; font-weight:600; color:#DCE7FF;
+                 padding:.35rem .7rem; border-radius:9999px; background: rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.14);
+                 animation: stepOn 10s ease-in-out infinite; }
+    .step-pill.last { animation-name: stepOnCash; }
+    @keyframes stepOn {
+      0%, 22%, 100% { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.14); color:#DCE7FF; box-shadow: none; transform: none; }
+      3%, 17%       { background: #2F6FED; border-color: #7EB0FF; color:#fff; box-shadow: 0 0 0 4px rgba(47,111,237,.25), 0 0 22px rgba(79,139,255,.75); transform: translateY(-1px); } }
+    @keyframes stepOnCash {
+      0%, 22%, 100% { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.14); color:#DCE7FF; box-shadow: none; transform: none; }
+      3%, 17%       { background: #059669; border-color: #6EE7B7; color:#fff; box-shadow: 0 0 0 4px rgba(5,150,105,.25), 0 0 22px rgba(52,211,153,.75); transform: translateY(-1px); } }
+    .step-arrow { color: rgba(255,255,255,0.35); animation: arrowOn 10s ease-in-out infinite; }
+    @keyframes arrowOn { 0%, 14%, 100% { color: rgba(255,255,255,0.35); } 17%, 22% { color: #8DB8FF; } }
+    .scene { position: relative; }
+    .scene svg { width: 100%; height: auto; display: block; overflow: visible; }
+    .road-dash { stroke-dasharray: 10 12; animation: roadmove 1.2s linear infinite; }
+    @keyframes roadmove { to { stroke-dashoffset: -22; } }
+    .node-ring { transform-box: fill-box; transform-origin: center; opacity: 0; animation: ping 10s ease-out infinite; }
+    @keyframes ping { 0% { transform: scale(.8); opacity: .0; } 2% { opacity: .9; } 14% { transform: scale(2); opacity: 0; } 100% { opacity: 0; } }
+    .float-card { position: absolute; display:flex; align-items:center; gap:.5rem; padding:.45rem .7rem; border-radius:.75rem;
+                  background: rgba(255,255,255,0.96); color:#0F1729; font-size:.74rem; font-weight:600; white-space:nowrap;
+                  box-shadow: 0 14px 30px -12px rgba(0,0,0,0.55); opacity:0; animation: pop 10s ease-in-out infinite; }
+    .float-card .dot { width:22px; height:22px; border-radius:7px; display:grid; place-items:center; color:#fff; font-size:11px; }
+    @keyframes pop { 0%,100% { opacity:0; transform: translateY(8px) scale(.96); } 3%,16% { opacity:1; transform: translateY(0) scale(1); } 20% { opacity:0; transform: translateY(-6px) scale(.98); } }
+    @media (prefers-reduced-motion: reduce) {
+      .road-dash, .step-pill, .step-arrow { animation: none; }
+      .node-ring { display: none; }
+      .float-card { animation: none; opacity: 1; }
+      .van { display: none; }
+    }
+
     .card { border: 1px solid #E6EAF2; border-radius: 16px; transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
     .card:hover { transform: translateY(-3px); box-shadow: 0 20px 40px -24px rgba(15,23,41,0.22); border-color: #C9D6F2; }
     .icon-tile { background: #EEF3FF; color: #2257C8; border-radius: 12px; }
@@ -133,67 +168,121 @@
   </header>
 
   <!-- HERO -->
-  <section id="top" class="hero-light relative overflow-hidden text-ink">
+  <section id="top" class="hero-dark relative overflow-hidden text-white">
     <div class="grain"></div>
-    <div class="relative max-w-6xl mx-auto px-6 pt-32 pb-20 md:pt-40 md:pb-28 grid lg:grid-cols-[1.2fr_0.8fr] gap-14 items-center">
+    <div class="relative max-w-6xl mx-auto px-6 pt-28 pb-16 md:pt-36 md:pb-24 grid lg:grid-cols-[1fr_1.05fr] gap-10 lg:gap-6 items-center">
       <div>
-        <p class="eyebrow text-brand-600">Multi-branch ERP · Operations software</p>
-        <h1 class="display font-extrabold tracking-tighter2 leading-[1.05] text-[2.15rem] sm:text-[2.7rem] md:text-[3.05rem] lg:text-[3.4rem] mt-5">
-          The planet’s best ERP<br class="hidden lg:block"> for trading and<br class="hidden lg:block"> distribution industry.
+        <h1 class="display font-extrabold tracking-tighter2 leading-[1.04] text-[2.4rem] sm:text-[3rem] lg:text-[3.4rem]">
+          The operating system for the <span class="hl">distribution industry.</span>
         </h1>
-        <p class="mt-6 text-muted text-lg leading-relaxed max-w-xl">
-          A single platform connecting inventory, sales, POS, manufacturing, financials, facilities, and field operations across every branch, with real-time visibility at every stage.
+        <p class="mt-6 text-white/70 text-lg md:text-xl leading-relaxed max-w-lg">
+          Purchase, inventory, field sales, deliveries and accounting, all in one connected system.
         </p>
+        <div class="mt-6 flex flex-wrap items-center gap-2">
+          <span class="step-pill" style="animation-delay:0s">Purchase</span><span class="step-arrow" style="animation-delay:0s">→</span>
+          <span class="step-pill" style="animation-delay:2s">Stock</span><span class="step-arrow" style="animation-delay:2s">→</span>
+          <span class="step-pill" style="animation-delay:4s">Field orders</span><span class="step-arrow" style="animation-delay:4s">→</span>
+          <span class="step-pill" style="animation-delay:6s">Deliver</span><span class="step-arrow" style="animation-delay:6s">→</span>
+          <span class="step-pill last" style="animation-delay:8s">Collect</span>
+        </div>
         <div class="mt-9 flex flex-wrap items-center gap-3">
-          <a href="https://opstation-f06c7.web.app/#/signup" class="inline-flex items-center gap-2 bg-brand-500 text-white font-semibold rounded-xl px-6 py-3.5 hover:bg-brand-600 transition shadow-lg shadow-brand-500/25">
-            Sign up
+          <a href="https://opstation-f06c7.web.app/#/signup" class="inline-flex items-center gap-2 bg-brand-500 text-white font-semibold rounded-xl px-6 py-3.5 hover:bg-brand-600 transition shadow-lg shadow-brand-500/40">
+            Start free
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </a>
-          <a href="https://opstation-f06c7.web.app" class="inline-flex items-center gap-2 border border-line text-ink font-semibold rounded-xl px-6 py-3.5 hover:bg-surface transition">Sign in</a>
+          <a href="https://opstation-f06c7.web.app" class="inline-flex items-center gap-2 border border-white/25 text-white font-semibold rounded-xl px-6 py-3.5 hover:bg-white/10 transition">Sign in</a>
         </div>
       </div>
 
-      <!-- SIGNATURE: the single panel -->
-      <div class="relative">
-        <div class="panel rounded-2xl p-3 sm:p-4">
-          <div class="flex items-center gap-1.5 px-1 pb-3">
-            <span class="w-2.5 h-2.5 rounded-full bg-white/25"></span>
-            <span class="w-2.5 h-2.5 rounded-full bg-white/25"></span>
-            <span class="w-2.5 h-2.5 rounded-full bg-white/25"></span>
-            <span class="ml-3 text-xs text-white/55 font-mono">opstation</span>
-          </div>
-          <div class="grid grid-cols-[112px_1fr] gap-3">
-            <!-- mini sidebar -->
-            <div class="space-y-1">
-              <div class="panel-row flex items-center gap-2 rounded-lg px-2.5 py-1.5 bg-white/10 text-white text-xs font-semibold">Dashboard</div>
-              <div class="panel-row flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-white/70 text-xs">Inventory</div>
-              <div class="panel-row flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-white/70 text-xs">Sales</div>
-              <div class="panel-row flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-white/70 text-xs">POS</div>
-              <div class="panel-row flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-white/70 text-xs">Manufacturing</div>
-              <div class="panel-row flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-white/70 text-xs">Financials</div>
-            </div>
-            <!-- main -->
-            <div class="space-y-3">
-              <div class="grid grid-cols-3 gap-2.5">
-                <div class="chip rounded-lg p-2.5"><div class="text-[10px] text-white/55">Today's sales</div><div class="text-white font-bold text-sm mt-0.5">915,365</div></div>
-                <div class="chip rounded-lg p-2.5"><div class="text-[10px] text-white/55">Open jobs</div><div class="text-white font-bold text-sm mt-0.5">12</div></div>
-                <div class="chip rounded-lg p-2.5"><div class="text-[10px] text-white/55">Pending PIs</div><div class="text-white font-bold text-sm mt-0.5">7</div></div>
-              </div>
-              <div class="chip rounded-lg p-3">
-                <div class="flex items-center justify-between"><span class="text-[10px] text-white/55">Sales · last 7 days</span><span class="text-[10px] text-sky font-semibold">+18%</span></div>
-                <div class="flex items-end gap-1.5 h-16 mt-2">
-                  <div class="bar w-full" style="height:38%"></div>
-                  <div class="bar w-full" style="height:55%"></div>
-                  <div class="bar w-full" style="height:47%"></div>
-                  <div class="bar w-full" style="height:72%"></div>
-                  <div class="bar w-full" style="height:61%"></div>
-                  <div class="bar w-full" style="height:84%"></div>
-                  <div class="bar w-full" style="height:69%"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      <!-- SIGNATURE: a live distribution route — supplier → warehouse → salesman → shops → cash -->
+      <div class="scene" aria-label="Goods move from supplier to warehouse, salesmen book orders, vans deliver to shops, cash is collected">
+        <svg viewBox="0 0 560 440" fill="none">
+          <defs>
+            <linearGradient id="nodeG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4F8BFF"/><stop offset="1" stop-color="#2257C8"/></linearGradient>
+            <linearGradient id="cashG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34D399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+            <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          </defs>
+
+          <!-- road -->
+          <path id="road" d="M60,370 C120,370 140,290 200,290 C262,290 262,205 320,205 C384,205 392,148 452,148 C500,148 506,78 516,70" stroke="rgba(255,255,255,0.10)" stroke-width="18" stroke-linecap="round"/>
+          <path d="M60,370 C120,370 140,290 200,290 C262,290 262,205 320,205 C384,205 392,148 452,148 C500,148 506,78 516,70" class="road-dash" stroke="rgba(185,211,255,0.55)" stroke-width="2" stroke-linecap="round"/>
+
+          <!-- shops scattered around the delivery stop -->
+          <g opacity=".9">
+            <g transform="translate(372 250)"><rect width="34" height="24" rx="4" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.25)"/><path d="M0 7h34" stroke="rgba(255,255,255,0.25)"/><rect x="12" y="12" width="10" height="12" fill="rgba(255,255,255,0.18)"/></g>
+            <g transform="translate(470 220)"><rect width="34" height="24" rx="4" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.25)"/><path d="M0 7h34" stroke="rgba(255,255,255,0.25)"/><rect x="12" y="12" width="10" height="12" fill="rgba(255,255,255,0.18)"/></g>
+            <g transform="translate(395 92)"><rect width="34" height="24" rx="4" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.25)"/><path d="M0 7h34" stroke="rgba(255,255,255,0.25)"/><rect x="12" y="12" width="10" height="12" fill="rgba(255,255,255,0.18)"/></g>
+          </g>
+
+          <!-- the van driving the route -->
+          <g class="van">
+            <g>
+              <rect x="-13" y="-8" width="17" height="14" rx="2.5" fill="#fff"/>
+              <path d="M4 -4h6l4 4v6H4z" fill="#DCE7FF"/>
+              <circle cx="-7" cy="7" r="2.6" fill="#0F1729"/><circle cx="8" cy="7" r="2.6" fill="#0F1729"/>
+            </g>
+            <!-- stops at each node for its step, in step with the pills (10s loop) -->
+            <animateMotion dur="10s" repeatCount="indefinite" rotate="auto" calcMode="linear"
+                           keyPoints="0;0;0.288;0.288;0.556;0.556;0.812;0.812;1;1"
+                           keyTimes="0;0.08;0.2;0.28;0.4;0.48;0.6;0.68;0.8;1">
+              <mpath href="#road"/>
+            </animateMotion>
+            <animate attributeName="opacity" dur="10s" repeatCount="indefinite" values="0;1;1;0;0" keyTimes="0;0.03;0.93;0.97;1"/>
+          </g>
+          <!-- nodes: ring pulses as the van passes -->
+          <g>
+            <circle cx="60" cy="370" r="27" class="node-ring" stroke="#7EB0FF" stroke-width="2" style="animation-delay:0s"/>
+            <circle cx="60" cy="370" r="27" fill="url(#nodeG)" filter="url(#glow)"/>
+            <path transform="translate(48 358)" d="M2 7l10-5 10 5v10l-10 5-10-5z M2 7l10 5 10-5 M12 12v10" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <text x="60" y="418" text-anchor="middle" fill="rgba(255,255,255,0.75)" font-size="12" font-weight="600" font-family="Inter, sans-serif">Supplier</text>
+          </g>
+          <g>
+            <circle cx="200" cy="290" r="27" class="node-ring" stroke="#7EB0FF" stroke-width="2" style="animation-delay:2s"/>
+            <circle cx="200" cy="290" r="27" fill="url(#nodeG)" filter="url(#glow)"/>
+            <path transform="translate(188 278)" d="M1 9l11-7 11 7v13H1z M7 22v-8h10v8" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <text x="200" y="338" text-anchor="middle" fill="rgba(255,255,255,0.75)" font-size="12" font-weight="600" font-family="Inter, sans-serif">Warehouse</text>
+          </g>
+          <g>
+            <circle cx="320" cy="205" r="27" class="node-ring" stroke="#7EB0FF" stroke-width="2" style="animation-delay:4s"/>
+            <circle cx="320" cy="205" r="27" fill="url(#nodeG)" filter="url(#glow)"/>
+            <path transform="translate(308 193)" d="M12 2a4 4 0 110 8 4 4 0 010-8z M4 22c0-4.5 3.6-8 8-8s8 3.5 8 8" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+            <text x="320" y="253" text-anchor="middle" fill="rgba(255,255,255,0.75)" font-size="12" font-weight="600" font-family="Inter, sans-serif">Salesman</text>
+          </g>
+          <g>
+            <circle cx="452" cy="148" r="27" class="node-ring" stroke="#7EB0FF" stroke-width="2" style="animation-delay:6s"/>
+            <circle cx="452" cy="148" r="27" fill="url(#nodeG)" filter="url(#glow)"/>
+            <path transform="translate(440 136)" d="M2 8h12v10H2z M14 11h5l3 3v4h-8 M6 21a2 2 0 100-.1 M18 21a2 2 0 100-.1" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <text x="452" y="196" text-anchor="middle" fill="rgba(255,255,255,0.75)" font-size="12" font-weight="600" font-family="Inter, sans-serif">Shops</text>
+          </g>
+          <g>
+            <circle cx="516" cy="70" r="27" class="node-ring" stroke="#6EE7B7" stroke-width="2" style="animation-delay:8s"/>
+            <circle cx="516" cy="70" r="27" fill="url(#cashG)" filter="url(#glow)"/>
+            <path transform="translate(504 58)" d="M2 6h20v12H2z M12 9a3 3 0 110 6 3 3 0 010-6z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+            <text x="516" y="22" text-anchor="middle" fill="rgba(255,255,255,0.75)" font-size="12" font-weight="600" font-family="Inter, sans-serif">Cash</text>
+          </g>
+
+        </svg>
+
+        <script>
+          // Line the CSS steps up with the van, in case they started at different moments.
+          window.addEventListener('load', function () {
+            try {
+              var svg = document.querySelector('.scene svg');
+              var t = svg && svg.getCurrentTime ? svg.getCurrentTime() * 1000 : null;
+              if (t == null || !document.getAnimations) return;
+              document.getAnimations().forEach(function (a) {
+                var n = a.animationName;
+                if (n === 'stepOn' || n === 'stepOnCash' || n === 'arrowOn' || n === 'ping' || n === 'pop') a.currentTime = t;
+              });
+            } catch (e) {}
+          });
+        </script>
+        <!-- live events popping along the route -->
+        <div class="float-card" style="left:4%; top:58%; animation-delay:0.15s"><span class="dot" style="background:#2F6FED">✓</span>GRN-0162 received · 120 ctn</div>
+        <div class="float-card" style="left:20%; top:38%; animation-delay:2.15s"><span class="dot" style="background:#2F6FED">⇄</span>Stock synced · 3 branches</div>
+        <div class="float-card" style="left:34%; top:22%; animation-delay:4.15s"><span class="dot" style="background:#7C3AED">●</span>Order booked · Shop 34</div>
+        <div class="float-card" style="right:2%; top:44%; animation-delay:6.15s"><span class="dot" style="background:#EA580C">▸</span>DO-0443 delivered</div>
+        <div class="float-card" style="right:16%; top:2%; animation-delay:8.15s"><span class="dot" style="background:#059669">Rs</span>48,500 collected · receipted</div>
       </div>
     </div>
   </section>
@@ -202,7 +291,7 @@
   <section class="border-b border-line bg-surface">
     <div class="max-w-6xl mx-auto px-6 py-10 grid grid-cols-2 md:grid-cols-4 gap-8">
       <div><div class="display font-extrabold text-2xl text-ink">One</div><div class="text-sm text-muted mt-1">system behind every branch and module</div></div>
-      <div><div class="display font-extrabold text-2xl text-ink">Real-time</div><div class="text-sm text-muted mt-1">stock, ledgers and production</div></div>
+      <div><div class="display font-extrabold text-2xl text-ink">Real-time</div><div class="text-sm text-muted mt-1">stock, ledgers and collections</div></div>
       <div><div class="display font-extrabold text-2xl text-ink">Accrual GL</div><div class="text-sm text-muted mt-1">posting behind every document</div></div>
       <div><div class="display font-extrabold text-2xl text-ink">Audited</div><div class="text-sm text-muted mt-1">role-based access, full trail</div></div>
     </div>
