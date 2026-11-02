@@ -257,6 +257,18 @@ class _DashboardStatsState extends State<_DashboardStats> {
       final m = (res is Map) ? Map<String, dynamic>.from(res) : null;
       if (m != null && m.isNotEmpty) {
         int gi(String k) => (m[k] as num?)?.toInt() ?? 0;
+        // Shops = visited & verified, or money collected — the same figure the
+        // app's dashboard shows (field_dashboard_day). Falls back to the
+        // summary's own count if that function isn't reachable.
+        int shops = gi('shops_visited');
+        try {
+          final f = await client.rpc('field_dashboard_day', params: {
+            'p_org': widget.orgId,
+            'p_from': dayStart,
+            'p_to': dayEnd,
+          });
+          if (f is Map && f['shops'] is num) shops = (f['shops'] as num).round();
+        } catch (_) {}
         if (!mounted) return;
         setState(() {
           _stats = {
@@ -264,7 +276,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
             'customers': gi('customers'),
             'routes': gi('routes'),
             'activeRoutes': _isToday ? gi('active') : 0,
-            'shopsVisited': gi('shops_visited'),
+            'shopsVisited': shops,
             'collection': gi('collection'),
             'completedToday': gi('completed'),
             'auditedShops': gi('audited_shops'),
@@ -337,7 +349,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
       // trips that span midnight don't double-count.
       ql(client
           .from('visits')
-          .select('amount, customer_id')
+          .select('amount, customer_id, status')
           .gte('timestamp', dayStart)
           .lt('timestamp', dayEnd)),
       // Intelligence rollups.
@@ -364,12 +376,12 @@ class _DashboardStatsState extends State<_DashboardStats> {
 
       int totalCollection = 0;
       // Shops visited — matches the app's admin_dashboard_stats formula:
-      // unique customers collected from today (amount > 0), by visit timestamp.
+      // unique customers visited & verified, or collected from (amount > 0).
       final shopsSet = <String>{};
       for (final v in todayVisits) {
         final amt = (v['amount'] as int? ?? 0);
         totalCollection += amt;
-        if (amt > 0) {
+        if (amt > 0 || v['status'] == 'verified') {
           final cid = v['customer_id'] as String?;
           if (cid != null) shopsSet.add(cid);
         }
