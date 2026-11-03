@@ -53,6 +53,16 @@ class SurveyorHomeScreen extends ConsumerWidget {
           // "Customers without location" and "Recent edits" tiles are
           // hidden until they have real implementations. Better to ship
           // one working entry point than three that go nowhere.
+          if (isAuditor) ...[
+            const SectionLabel('Audit'),
+            const SizedBox(height: 10),
+            ManagementTile(
+              icon: Icons.fact_check_outlined,
+              title: 'Audit surveys',
+              subtitle: 'Re-check surveyed shops, correct and comment',
+              onTap: () => context.push('/survey-audit'),
+            ),
+          ],
           const SizedBox(height: 24),
           const SectionLabel('Intelligence'),
           const SizedBox(height: 10),

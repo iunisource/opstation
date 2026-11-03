@@ -49,6 +49,7 @@ import '../../features/surveyor/presentation/surveyor_home_screen.dart';
 import '../../features/surveyor/presentation/placement_audit_screen.dart';
 import '../../features/surveyor/presentation/surveyed_shops_screen.dart';
 import '../../features/surveyor/presentation/competitor_spotting_screen.dart';
+import '../../features/surveyor/presentation/survey_audit_screen.dart';
 import '../../features/team/presentation/change_password_screen.dart';
 import '../../features/team/presentation/team_list_screen.dart';
 import '../../features/team/presentation/user_detail_screen.dart';
@@ -166,6 +167,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/surveyed-shops',
         builder: (_, __) => const SurveyedShopsScreen(),
+      ),
+      GoRoute(
+        path: '/survey-audit',
+        builder: (_, __) => const SurveyAuditScreen(),
       ),
       GoRoute(
         path: '/dispatch',

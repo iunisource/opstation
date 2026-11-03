@@ -14,6 +14,7 @@ import '../database/app_database_provider.dart';
 import '../supabase/supabase_pull_service.dart';
 import '../supabase/supabase_sync_service.dart';
 import 'connectivity_service.dart';
+import '../../features/surveyor/services/survey_audit_service.dart';
 
 enum SyncState { synced, syncing, error, offline }
 
@@ -930,6 +931,13 @@ class SyncController extends Notifier<SyncStatus> {
         SmsService.note('sync: placement_audit push FAILED — $e');
         await Sentry.captureException(e, stackTrace: st);
       }
+    }
+
+    // Auditor: send survey audits saved while offline.
+    try {
+      await SurveyAuditService(_db).flush();
+    } catch (e) {
+      print('survey audit flush failed: $e');
     }
   }
 }
