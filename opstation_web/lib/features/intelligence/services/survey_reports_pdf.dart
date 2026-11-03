@@ -96,10 +96,14 @@ class SurveyReportsPdf {
     required String orgName,
     required DateTime from, // first day (local)
     required DateTime to, // last day (local), inclusive
+    Set<String>? shopIds, // only these shops (route / salesperson filter)
+    String? scope, // e.g. "Route: North" — printed under the title
   }) async {
+    if (scope != null) orgName = '$orgName  ·  $scope';
     final end = DateTime(to.year, to.month, to.day).add(const Duration(days: 1));
     final start = DateTime(from.year, from.month, from.day);
     final audits = await _paged('survey_audits', '*', orgId, tsCol: 'audited_at', from: start, to: end);
+    if (shopIds != null) audits.removeWhere((a) => !shopIds.contains('${a['customer_id']}'));
     audits.sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
     final shops = await _shops(orgId);
     final ok = audits.where((a) => a['result'] == 'ok').length;
@@ -192,7 +196,11 @@ class SurveyReportsPdf {
     required String orgName,
     required DateTime from,
     required DateTime to,
+    Set<String>? shopIds,
+    String? scope,
   }) async {
+    if (scope != null) orgName = '$orgName  ·  $scope';
+    bool inScope(Map<String, dynamic> r) => shopIds == null || shopIds.contains('${r['customer_id']}');
     final end = DateTime(to.year, to.month, to.day).add(const Duration(days: 1));
     final start = DateTime(from.year, from.month, from.day);
     final results = await Future.wait([
@@ -211,9 +219,9 @@ class SurveyReportsPdf {
         r['voided_at'] != null ||
         '${r['id']}'.startsWith('pa_aud_') ||
         '${r['id']}'.startsWith('cs_aud_');
-    final pa = results[0].where((r) => !fromAudit(r)).toList();
-    final cs = results[1].where((r) => !fromAudit(r)).toList();
-    final audits = results[2]..sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
+    final pa = results[0].where((r) => !fromAudit(r) && inScope(r)).toList();
+    final cs = results[1].where((r) => !fromAudit(r) && inScope(r)).toList();
+    final audits = results[2].where(inScope).toList()..sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
     final auditsByShop = <String, List<Map<String, dynamic>>>{};
     for (final a in audits) {
       if (a['result'] == 'feedback') continue;
