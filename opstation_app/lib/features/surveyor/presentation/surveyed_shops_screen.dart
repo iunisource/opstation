@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../auth/models/user_role.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import 'survey_view_sheet.dart';
 
@@ -145,7 +146,8 @@ class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
                                 'Last ${DateFormat('d MMM yyyy').format(r.last)}',
                               ].join(' · ')),
                               trailing: const Icon(Icons.chevron_right),
-                              onTap: () => SurveyViewSheet.show(context, r.shop),
+                              onTap: () => SurveyViewSheet.show(context, r.shop,
+                                  showAudit: ref.read(authControllerProvider).valueOrNull?.role == UserRole.auditor),
                             );
                           },
                         ),

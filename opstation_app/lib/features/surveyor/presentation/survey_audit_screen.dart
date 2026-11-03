@@ -8,6 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
@@ -31,6 +34,12 @@ class SurveyAuditScreen extends ConsumerStatefulWidget {
 
 enum _St { notAudited, ok, issue, resurveyed }
 
+String _resultLabel(dynamic r) => switch ('$r') {
+      'issue' => 'Issue found',
+      'feedback' => 'Feedback',
+      _ => 'Matches survey',
+    };
+
 class _Shop {
   final CustomersData shop;
   final DateTime lastSurvey;
@@ -39,8 +48,8 @@ class _Shop {
 
 String _stLabel(_St s) => switch (s) {
       _St.notAudited => 'Not audited',
-      _St.ok => 'Audited ✓',
-      _St.issue => 'Issue found',
+      _St.ok => 'Audited',
+      _St.issue => 'Audited',
       _St.resurveyed => 'Re-surveyed since audit',
     };
 
@@ -57,8 +66,10 @@ DateTime? _ts(dynamic v) => v == null ? null : DateTime.tryParse('$v')?.toLocal(
 /// correction saved by the audit carries the audit's own time, so it does not
 /// count as a newer survey.
 _St _statusFor(List<Map<String, dynamic>> audits, DateTime lastSurvey) {
-  if (audits.isEmpty) return _St.notAudited;
-  final a = audits.first;
+  // Feedback is a note only — the status comes from the latest Matches / Issue.
+  final verdicts = audits.where((x) => x['result'] != 'feedback');
+  if (verdicts.isEmpty) return _St.notAudited;
+  final a = verdicts.first;
   final at = _ts(a['audited_at']);
   if (at != null && lastSurvey.isAfter(at.add(const Duration(seconds: 2)))) return _St.resurveyed;
   return a['result'] == 'issue' ? _St.issue : _St.ok;
@@ -70,7 +81,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
   Map<String, List<Map<String, dynamic>>> _audits = {};
   int _pending = 0;
   String _q = '';
-  String _filter = 'all'; // all | todo | ok | issue
+  String _filter = 'all'; // all | todo | ok
 
   @override
   void initState() {
@@ -134,6 +145,112 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
 
   _St _st(_Shop s) => _statusFor(_audits[s.shop.id] ?? const [], s.lastSurvey);
 
+  // ── Audit report (PDF) for a date range ──
+  Future<void> _export() async {
+    final now = DateTime.now();
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2024),
+      lastDate: now,
+      initialDateRange: DateTimeRange(start: DateTime(now.year, now.month, 1), end: now),
+      helpText: 'Audit report — date range',
+    );
+    if (range == null || !mounted) return;
+    final from = DateTime(range.start.year, range.start.month, range.start.day);
+    final to = DateTime(range.end.year, range.end.month, range.end.day).add(const Duration(days: 1));
+    final shops = {for (final s in _shops) s.shop.id: s.shop};
+    final rows = <Map<String, dynamic>>[
+      for (final l in _audits.values)
+        for (final a in l)
+          if (_ts(a['audited_at']) != null &&
+              !_ts(a['audited_at'])!.isBefore(from) &&
+              _ts(a['audited_at'])!.isBefore(to))
+            a
+    ]..sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
+    if (rows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No audits in that date range.')));
+      return;
+    }
+    final df = DateFormat('d MMM yyyy');
+    final tf = DateFormat('d MMM yyyy, h:mm a');
+    String loc(Map<String, dynamic> a) {
+      final d = (a['distance_m'] as num?)?.round();
+      return switch ('${a['location_status']}') {
+        'inside' => 'At shop${d == null ? '' : ' (${d}m)'}',
+        'outside' => 'Outside${d == null ? '' : ' (${d}m)'}',
+        'no_shop_location' => 'No shop location',
+        _ => 'No GPS',
+      };
+    }
+    String corr(Map<String, dynamic> a) {
+      final c = a['corrections'];
+      if (c is! List || c.isEmpty) return '';
+      return [
+        for (final x in c)
+          if (x is Map) '${x['type'] == 'placement' ? x['product'] : x['category']}: ${x['from'] ?? '-'} -> ${x['to'] ?? '-'}'
+      ].join('\n');
+    }
+    final user = ref.read(authControllerProvider).valueOrNull;
+    final ok = rows.where((a) => a['result'] == 'ok').length;
+    final issues = rows.where((a) => a['result'] == 'issue').length;
+    final fb = rows.where((a) => a['result'] == 'feedback').length;
+    final doc = pw.Document();
+    const head = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold);
+    const cell = pw.TextStyle(fontSize: 7.5);
+    doc.addPage(pw.MultiPage(
+      pageFormat: PdfPageFormat.a4.landscape,
+      margin: const pw.EdgeInsets.all(24),
+      maxPages: 500,
+      build: (_) => [
+        pw.Text('Survey audit report', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 2),
+        pw.Text('${user?.organizationName ?? ''}  ·  ${df.format(range.start)} to ${df.format(range.end)}  ·  '
+            '${rows.length} audits: $ok matches, $issues issues, $fb feedback',
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+        pw.SizedBox(height: 10),
+        pw.Table(
+          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.5),
+            1: pw.FlexColumnWidth(2.2),
+            2: pw.FlexColumnWidth(1.3),
+            3: pw.FlexColumnWidth(1.1),
+            4: pw.FlexColumnWidth(1.3),
+            5: pw.FlexColumnWidth(2.6),
+            6: pw.FlexColumnWidth(2.6),
+          },
+          children: [
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+              children: [
+                for (final h in ['Date', 'Shop', 'Auditor', 'Result', 'Location', 'Comment', 'Corrections'])
+                  pw.Padding(padding: const pw.EdgeInsets.all(3), child: pw.Text(h, style: head)),
+              ],
+            ),
+            for (final a in rows)
+              pw.TableRow(children: [
+                for (final v in [
+                  _ts(a['audited_at']) == null ? '' : tf.format(_ts(a['audited_at'])!),
+                  '${shops[a['customer_id']]?.shopName ?? a['customer_id']}${shops[a['customer_id']] == null ? '' : '\n${shops[a['customer_id']]!.code}'}',
+                  '${a['auditor_name'] ?? ''}',
+                  _resultLabel(a['result']),
+                  loc(a),
+                  '${a['comment'] ?? ''}${(a['photo_path'] ?? a['local_photo']) != null ? '\n(photo attached)' : ''}',
+                  corr(a),
+                ])
+                  pw.Padding(padding: const pw.EdgeInsets.all(3), child: pw.Text(v, style: cell)),
+              ]),
+          ],
+        ),
+      ],
+    ));
+    final bytes = await doc.save();
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: 'audit_report_${DateFormat('yyyyMMdd').format(range.start)}_${DateFormat('yyyyMMdd').format(range.end)}.pdf',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final q = _q.trim().toLowerCase();
@@ -146,13 +263,13 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
       final st = _st(s);
       return switch (_filter) {
         'todo' => st == _St.notAudited || st == _St.resurveyed,
-        'ok' => st == _St.ok,
-        'issue' => st == _St.issue,
+        'ok' => st == _St.ok || st == _St.issue,
         _ => true,
       };
     }).toList();
     return Scaffold(
       appBar: AppBar(title: const Text('Audit surveys'), actions: [
+        IconButton(tooltip: 'Export audit report', icon: const Icon(Icons.picture_as_pdf_outlined), onPressed: _export),
         IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: () => _load(refresh: true)),
       ]),
       body: _loading
@@ -177,7 +294,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Wrap(spacing: 8, runSpacing: 6, children: [
-                  for (final f in const [('all', 'All'), ('todo', 'To audit'), ('ok', 'Audited'), ('issue', 'Issues')])
+                  for (final f in const [('all', 'All'), ('todo', 'To audit'), ('ok', 'Audited')])
                     ChoiceChip(
                       label: Text(f.$2),
                       selected: _filter == f.$1,
@@ -224,7 +341,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
                               ),
                               onTap: () async {
                                 final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(
-                                  builder: (_) => _ShopAuditPage(shop: s.shop, audits: _audits[s.shop.id] ?? const []),
+                                  builder: (_) => ShopAuditPage(shop: s.shop, audits: _audits[s.shop.id] ?? const []),
                                 ));
                                 if (saved == true) _load();
                               },
@@ -266,15 +383,18 @@ class _SpotEdit {
   }
 }
 
-class _ShopAuditPage extends ConsumerStatefulWidget {
+/// One shop's audit page. Opened from Audit surveys, and from Surveyed shops
+/// (then [audits] is null and the shop's audits are loaded here).
+class ShopAuditPage extends ConsumerStatefulWidget {
   final CustomersData shop;
-  final List<Map<String, dynamic>> audits;
-  const _ShopAuditPage({required this.shop, required this.audits});
+  final List<Map<String, dynamic>>? audits;
+  const ShopAuditPage({super.key, required this.shop, this.audits});
   @override
-  ConsumerState<_ShopAuditPage> createState() => _ShopAuditPageState();
+  ConsumerState<ShopAuditPage> createState() => _ShopAuditPageState();
 }
 
-class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
+class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
+  late List<Map<String, dynamic>> _trailList = widget.audits ?? const [];
   bool _loading = true;
   bool _saving = false;
   List<ProductRow> _products = [];
@@ -320,6 +440,17 @@ class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
           ..where((s) => s.customerId.equals(cid))
           ..orderBy([(s) => OrderingTerm.desc(s.surveyedAt)]))
         .get();
+    if (widget.audits == null) {
+      final svc = SurveyAuditService(db);
+      final server = orgId == null ? <Map<String, dynamic>>[] : await svc.fetchShop(orgId, cid);
+      final queued = [for (final q in await svc.queued()) if (q['customer_id'] == cid) {...q, '_pending': true}];
+      final all = <String, Map<String, dynamic>>{
+        for (final a in server) '${a['id']}': a,
+        for (final a in queued) '${a['id']}': a,
+      };
+      _trailList = all.values.toList()
+        ..sort((a, b) => '${b['audited_at']}'.compareTo('${a['audited_at']}'));
+    }
     DateTime? last;
     for (final a in pa) {
       _latestP.putIfAbsent(a.productId, () => a);
@@ -387,7 +518,7 @@ class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
 
   // ── submit ──
   Future<void> _start(String result) async {
-    if (result == 'ok' && _hasChanges) {
+    if (result != 'issue' && _hasChanges) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('You changed the survey — save it as "Issue found" with a comment.')));
       return;
@@ -534,7 +665,7 @@ class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
   }
 
   Widget _trail() {
-    final list = widget.audits;
+    final list = _trailList;
     if (list.isEmpty) {
       return const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('Not audited yet.'));
     }
@@ -546,12 +677,18 @@ class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
             padding: const EdgeInsets.all(12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                Icon(a['result'] == 'issue' ? Icons.error_outline : Icons.verified_outlined,
-                    size: 18, color: a['result'] == 'issue' ? const Color(0xFFDC2626) : const Color(0xFF059669)),
+                Icon(
+                    a['result'] == 'issue'
+                        ? Icons.error_outline
+                        : (a['result'] == 'feedback' ? Icons.chat_bubble_outline : Icons.verified_outlined),
+                    size: 18,
+                    color: a['result'] == 'issue'
+                        ? const Color(0xFFDC2626)
+                        : (a['result'] == 'feedback' ? const Color(0xFF2563EB) : const Color(0xFF059669))),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '${a['result'] == 'issue' ? 'Issue found' : 'Matches survey'} · ${a['auditor_name'] ?? ''}',
+                    '${_resultLabel(a['result'])} · ${a['auditor_name'] ?? ''}',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
@@ -675,7 +812,7 @@ class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
                     ]),
                   ),
               const Divider(height: 24),
-              _section('Audit history', '${widget.audits.length} audit${widget.audits.length == 1 ? '' : 's'}'),
+              _section('Audit history', '${_trailList.length} audit${_trailList.length == 1 ? '' : 's'}'),
               _trail(),
             ]),
       bottomNavigationBar: _loading
@@ -695,14 +832,26 @@ class _ShopAuditPageState extends ConsumerState<_ShopAuditPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _saving || _hasChanges ? null : () => _start('feedback'),
+                      icon: const Icon(Icons.chat_bubble_outline),
+                      label: const Text('Feedback'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF2563EB),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton.icon(
                       onPressed: _saving ? null : () => _start('issue'),
                       icon: _saving
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.report_outlined),
-                      label: Text(_hasChanges ? 'Issue + corrections' : 'Issue found'),
+                      label: Text(_hasChanges ? 'Issue + fix' : 'Issue'),
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFFDC2626),
                         padding: const EdgeInsets.symmetric(vertical: 14),
@@ -772,6 +921,8 @@ class _AuditSheetState extends State<_AuditSheet> {
   @override
   Widget build(BuildContext context) {
     final issue = widget.result == 'issue';
+    final feedback = widget.result == 'feedback';
+    final needComment = issue || feedback;
     final st = '${widget.location['location_status']}';
     final d = (widget.location['distance_m'] as num?)?.round();
     final locText = switch (st) {
@@ -783,7 +934,7 @@ class _AuditSheetState extends State<_AuditSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(context).viewInsets.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(issue ? 'Issue found' : 'Matches the survey',
+        Text(issue ? 'Issue found' : (feedback ? 'Feedback' : 'Matches the survey'),
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
         Row(children: [
@@ -796,10 +947,10 @@ class _AuditSheetState extends State<_AuditSheet> {
         TextField(
           controller: _comment,
           maxLines: 3,
-          autofocus: issue,
+          autofocus: needComment,
           decoration: InputDecoration(
-            labelText: issue ? 'Comment *' : 'Comment (optional)',
-            hintText: issue ? 'What was wrong?' : 'Anything to note',
+            labelText: needComment ? 'Comment *' : 'Comment (optional)',
+            hintText: issue ? 'What was wrong?' : (feedback ? 'Your feedback on this shop' : 'Anything to note'),
             border: const OutlineInputBorder(),
           ),
         ),
@@ -832,8 +983,8 @@ class _AuditSheetState extends State<_AuditSheet> {
                 ? null
                 : () {
                     final c = _comment.text.trim();
-                    if (issue && c.isEmpty) {
-                      setState(() => _err = 'Please add a comment for the issue.');
+                    if (needComment && c.isEmpty) {
+                      setState(() => _err = issue ? 'Please add a comment for the issue.' : 'Please write your feedback.');
                       return;
                     }
                     Navigator.pop(context, (c, _photo));

@@ -5,12 +5,14 @@ import 'package:intl/intl.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
+import 'survey_audit_screen.dart';
 
 /// Read-only view of a shop's latest survey: Placement Audit (✓ / ✗ per
 /// product) and Competitor Spotting (brand, price, specs per category), with
 /// when and by whom. Opened from the survey lists and from "Surveyed shops".
 class SurveyViewSheet {
-  static Future<void> show(BuildContext context, CustomersData shop) {
+  /// [showAudit]: adds an "Audit" button at the end (auditors, from Surveyed shops).
+  static Future<void> show(BuildContext context, CustomersData shop, {bool showAudit = false}) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -21,7 +23,7 @@ class SurveyViewSheet {
         initialChildSize: 0.85,
         minChildSize: 0.5,
         maxChildSize: 0.95,
-        builder: (ctx, scroll) => _SurveyView(shop: shop, scroll: scroll),
+        builder: (ctx, scroll) => _SurveyView(shop: shop, scroll: scroll, showAudit: showAudit),
       ),
     );
   }
@@ -39,7 +41,8 @@ class _Data {
 class _SurveyView extends ConsumerStatefulWidget {
   final CustomersData shop;
   final ScrollController scroll;
-  const _SurveyView({required this.shop, required this.scroll});
+  final bool showAudit;
+  const _SurveyView({required this.shop, required this.scroll, this.showAudit = false});
   @override
   ConsumerState<_SurveyView> createState() => _SurveyViewState();
 }
@@ -185,6 +188,23 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
                     DateFormat('d MMM yyyy').format(s.$5),
                   ].join(' · ')),
                 ),
+            if (widget.showAudit)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.fact_check_outlined),
+                    label: const Text('Audit'),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+                    onPressed: () {
+                      final nav = Navigator.of(context);
+                      nav.pop();
+                      nav.push(MaterialPageRoute(builder: (_) => ShopAuditPage(shop: widget.shop)));
+                    },
+                  ),
+                ),
+              ),
             const SizedBox(height: 24),
           ],
         ]);

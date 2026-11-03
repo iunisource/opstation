@@ -86,6 +86,21 @@ class SurveyAuditService {
     }
   }
 
+  /// One shop's audits from the server, newest first; [] when offline.
+  Future<List<Map<String, dynamic>>> fetchShop(String orgId, String customerId) async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('survey_audits')
+          .select()
+          .eq('org_id', orgId)
+          .eq('customer_id', customerId)
+          .order('audited_at', ascending: false);
+      return List<Map<String, dynamic>>.from(rows);
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// All audits of the org from the server, newest first; [] when offline.
   Future<List<Map<String, dynamic>>> fetchOrg(String orgId) async {
     try {
