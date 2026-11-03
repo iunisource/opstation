@@ -208,8 +208,6 @@ class SurveyReportsPdf {
           tsCol: 'surveyed_at', from: start, to: end),
       _paged('competitor_spotting', 'id, customer_id, category_id, brand_name, surveyed_by_user_id, surveyed_at, source, voided_at', orgId,
           tsCol: 'surveyed_at', from: start, to: end),
-      // All audits from the start of the range on (an audit can come after the period).
-      _paged('survey_audits', 'customer_id, result, audited_at', orgId, tsCol: 'audited_at', from: start),
     ]);
     final shops = await _shops(orgId);
     final users = await _users(orgId);
@@ -221,13 +219,6 @@ class SurveyReportsPdf {
         '${r['id']}'.startsWith('cs_aud_');
     final pa = results[0].where((r) => !fromAudit(r) && inScope(r)).toList();
     final cs = results[1].where((r) => !fromAudit(r) && inScope(r)).toList();
-    final audits = results[2].where(inScope).toList()..sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
-    final auditsByShop = <String, List<Map<String, dynamic>>>{};
-    for (final a in audits) {
-      if (a['result'] == 'feedback') continue;
-      auditsByShop.putIfAbsent('${a['customer_id']}', () => []).add(a);
-    }
-
     // One survey visit = surveyor + shop + day.
     final visits = <String, _Visit>{};
     String dayKey(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
@@ -249,31 +240,44 @@ class SurveyReportsPdf {
       v.note(at);
       v.categories.add('${r['category_id']}');
     }
-    // Audit verdict of a visit: the first Matches / Issue after it.
-    String verdict(_Visit v) {
-      for (final a in auditsByShop[v.shop] ?? const <Map<String, dynamic>>[]) {
-        final at = _t(a['audited_at']);
-        if (at != null && !at.isBefore(v.last.subtract(const Duration(seconds: 2)))) {
-          return a['result'] == 'issue' ? 'Issue found' : 'Matches';
-        }
+    // Where the surveyor was when saving (SQL 445). Best reading of the visit
+    // wins: at the shop > away from the shop > no location.
+    List<Map<String, dynamic>> locs = [];
+    try {
+      locs = await _paged('survey_locations', 'customer_id, user_id, surveyed_at, distance_m, location_status', orgId,
+          tsCol: 'surveyed_at', from: start, to: end);
+    } catch (_) {} // not set up yet: column shows "-"
+    const rank = {'inside': 3, 'outside': 2, 'no_gps': 1, 'no_shop_location': 1};
+    for (final l in locs) {
+      final at = _t(l['surveyed_at']);
+      if (at == null) continue;
+      final v = visits['${l['user_id']}|${l['customer_id']}|${dayKey(at)}'];
+      if (v == null) continue;
+      final st = '${l['location_status']}';
+      if ((rank[st] ?? 0) > (rank[v.location] ?? 0)) {
+        v.location = st;
+        v.distance = (l['distance_m'] as num?)?.round();
       }
-      return 'Not audited';
     }
+    String locText(_Visit v) => switch (v.location) {
+          'inside' => 'Visited',
+          'outside' => 'Not visited${v.distance == null ? '' : ' (${v.distance}m away)'}',
+          'no_gps' || 'no_shop_location' => 'No location',
+          _ => '-',
+        };
+    bool isNoLoc(_Visit v) => v.location == 'no_gps' || v.location == 'no_shop_location';
 
     final list = visits.values.toList()..sort((a, b) => a.first.compareTo(b.first));
     final bySurveyor = <String, List<_Visit>>{};
     for (final v in list) {
       bySurveyor.putIfAbsent(v.user, () => []).add(v);
     }
-    final verdicts = {for (final v in list) v: verdict(v)};
     String name(String uid) => uid.isEmpty ? '(unknown)' : (users[uid] ?? uid);
 
     final summary = [
       for (final e in bySurveyor.entries)
         () {
           final vs = e.value;
-          final audited = vs.where((v) => verdicts[v] != 'Not audited').length;
-          final issues = vs.where((v) => verdicts[v] == 'Issue found').length;
           return [
             name(e.key),
             '${vs.map((v) => dayKey(v.first)).toSet().length}',
@@ -281,9 +285,9 @@ class SurveyReportsPdf {
             '${vs.map((v) => v.shop).toSet().length}',
             '${vs.where((v) => v.products.isNotEmpty).length}',
             '${vs.fold<int>(0, (s, v) => s + v.categories.length)}',
-            '$audited',
-            '$issues',
-            audited == 0 ? '-' : '${(100 * issues / audited).round()}%',
+            '${vs.where((v) => v.location == 'inside').length}',
+            '${vs.where((v) => v.location == 'outside').length}',
+            '${vs.where(isNoLoc).length}',
           ];
         }(),
     ]..sort((a, b) => int.parse(b[2]).compareTo(int.parse(a[2])));
@@ -304,18 +308,20 @@ class SurveyReportsPdf {
           pw.SizedBox(height: 4),
           _table(
             ['Surveyor', 'Days active', 'Survey visits', 'Shops', 'Placement surveys', 'Competitor entries',
-              'Audited', 'Issues found', 'Issue rate'],
+              'Visited', 'Not visited', 'No location'],
             summary,
             const {0: pw.FlexColumnWidth(2.4)},
           ),
           pw.SizedBox(height: 4),
-          pw.Text('Audited / Issues: visits later checked by an auditor, and how many of those had an issue.',
+          pw.Text(
+              'Location: where the surveyor was when saving, compared with the shop\'s saved location. '
+              'No location = phone GPS off or the shop has no saved location. "-" = not recorded.',
               style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
           pw.SizedBox(height: 14),
           pw.Text('All survey visits', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
           _table(
-            ['Date', 'Surveyor', 'Shop', 'Placement (displayed)', 'Competitor categories', 'Audit'],
+            ['Date', 'Surveyor', 'Shop', 'Placement (displayed)', 'Competitor categories', 'Location'],
             [
               for (final v in list)
                 [
@@ -324,7 +330,7 @@ class SurveyReportsPdf {
                   '${shops[v.shop]?['shop_name'] ?? v.shop}\n${shops[v.shop]?['code'] ?? ''}',
                   v.products.isEmpty ? '-' : '${v.products.values.where((x) => x).length} of ${v.products.length}',
                   v.categories.isEmpty ? '-' : '${v.categories.length}',
-                  verdicts[v]!,
+                  locText(v),
                 ]
             ],
             const {
@@ -333,7 +339,7 @@ class SurveyReportsPdf {
               2: pw.FlexColumnWidth(2.6),
               3: pw.FlexColumnWidth(1.3),
               4: pw.FlexColumnWidth(1.3),
-              5: pw.FlexColumnWidth(1.1),
+              5: pw.FlexColumnWidth(1.4),
             },
           ),
         ],
@@ -350,6 +356,8 @@ class _Visit {
   DateTime last;
   final Map<String, bool> products = {};
   final Set<String> categories = {};
+  String? location; // inside | outside | no_gps | no_shop_location (SQL 445)
+  int? distance; // metres from the shop when away
   _Visit(this.user, this.shop, DateTime at)
       : first = at,
         last = at;

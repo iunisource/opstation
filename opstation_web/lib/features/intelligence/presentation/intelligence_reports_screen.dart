@@ -39,7 +39,7 @@ const _reports = [
     'surveyor',
     'Surveyor Report',
     'What each surveyor surveyed in the period — days active, shops visited, '
-        'placement and competitor entries — and how their surveys held up in audits.',
+        'placement surveys and competitor entries.',
     Icons.badge_outlined,
   ),
 ];
