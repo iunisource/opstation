@@ -15,6 +15,7 @@ import '../supabase/supabase_pull_service.dart';
 import '../supabase/supabase_sync_service.dart';
 import 'connectivity_service.dart';
 import '../../features/surveyor/services/survey_audit_service.dart';
+import '../../features/surveyor/services/survey_location_service.dart';
 
 enum SyncState { synced, syncing, error, offline }
 
@@ -938,6 +939,12 @@ class SyncController extends Notifier<SyncStatus> {
       await SurveyAuditService(_db).flush();
     } catch (e) {
       print('survey audit flush failed: $e');
+    }
+    // Surveyor: send survey locations saved while offline.
+    try {
+      await SurveyLocationService(_db).flush();
+    } catch (e) {
+      print('survey location flush failed: $e');
     }
   }
 }

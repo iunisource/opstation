@@ -165,6 +165,17 @@ class SurveyAuditService {
     return const {'can_fix': false, 'needs_approval': false};
   }
 
+  /// Customer groups this auditor is limited to (SQL 446), lower-case;
+  /// null = all shops.
+  Future<Set<String>?> shopGroups(String orgId) async {
+    final g = (await permissions(orgId))['groups'];
+    if (g is! List) return null;
+    return {for (final x in g) '$x'.trim().toLowerCase()};
+  }
+
+  static bool inGroups(Set<String>? groups, CustomersData c) =>
+      groups == null || groups.contains((c.groupName ?? '').trim().toLowerCase());
+
   /// One shop's audits from the server, newest first; [] when offline.
   Future<List<Map<String, dynamic>>> fetchShop(String orgId, String customerId) async {
     try {

@@ -6,6 +6,9 @@ import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
+import '../../../core/services/device_gps_service.dart';
+import '../../admin_settings/providers/org_settings_controller.dart';
+import '../services/survey_location_service.dart';
 import 'survey_customer_filter.dart';
 import 'survey_view_sheet.dart';
 
@@ -185,6 +188,18 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
         }
       });
       print('SURVEYOR SAVE [placement]: inserted ${_products.length} rows, triggering sync');
+      // Where the surveyor was (Visited / Not visited / No location) — read in
+      // the background so saving isn't held up.
+      SurveyLocationService.capture(
+        db: db,
+        gps: ref.read(deviceGpsServiceProvider),
+        radius: ref.read(orgSettingsProvider.future).then((s) => s.geofenceRadiusMeters),
+        id: 'sl_pa_${now.millisecondsSinceEpoch}_${user!.id}',
+        orgId: orgId,
+        shop: _selectedCustomer!,
+        kind: 'placement',
+        surveyedAt: now,
+      );
       ref.read(syncControllerProvider.notifier).noteNewPendingVisit();
       _auditedIds.add(_selectedCustomer!.id);
       _auditedIdsInitialized = true;

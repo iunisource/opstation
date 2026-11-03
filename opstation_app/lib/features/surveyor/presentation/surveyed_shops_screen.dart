@@ -8,6 +8,7 @@ import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/models/user_role.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
+import '../services/survey_audit_service.dart';
 import 'survey_view_sheet.dart';
 
 /// Shops that already have a Placement Audit or Competitor Spotting, newest
@@ -60,9 +61,12 @@ class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
           ..where((c) => c.isActive.equals(true))
           ..orderBy([(c) => OrderingTerm.asc(c.shopName)]))
         .get();
+    // Auditor limited to customer groups (Admin Settings): only those shops.
+    final isAuditor = ref.read(authControllerProvider).valueOrNull?.role == UserRole.auditor;
+    final groups = (orgId == null || !isAuditor) ? null : await SurveyAuditService(db).shopGroups(orgId);
     final byId = {
       for (final c in shops)
-        if (orgId == null || c.orgId == null || c.orgId == orgId) c.id: c,
+        if ((orgId == null || c.orgId == null || c.orgId == orgId) && SurveyAuditService.inGroups(groups, c)) c.id: c,
     };
     final last = <String, DateTime>{};
     final hasP = <String>{};

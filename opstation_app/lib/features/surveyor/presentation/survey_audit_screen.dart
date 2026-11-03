@@ -121,9 +121,11 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
       await _svc.flush();
     }
     final shops = await (db.select(db.customers)..where((c) => c.isActive.equals(true))).get();
+    // Auditor limited to customer groups (Admin Settings): only those shops.
+    final groups = orgId == null ? null : await _svc.shopGroups(orgId);
     final byId = {
       for (final c in shops)
-        if (orgId == null || c.orgId == null || c.orgId == orgId) c.id: c,
+        if ((orgId == null || c.orgId == null || c.orgId == orgId) && SurveyAuditService.inGroups(groups, c)) c.id: c,
     };
     final last = <String, DateTime>{};
     void note(String cid, DateTime at) {
