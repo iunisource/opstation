@@ -13,6 +13,7 @@ import '../services/intel_delete_access.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../widgets/survey_audit_status.dart';
+import '../widgets/survey_reports_button.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -577,7 +578,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           const SizedBox(height: 10),
           auditDropdown,
           const SizedBox(height: 6),
-          Wrap(spacing: 4, children: [chartBtn, excelBtn, pdfBtn]),
+          Wrap(spacing: 4, children: [chartBtn, excelBtn, pdfBtn, const SurveyReportsButton(compact: true)]),
         ] else ...[
           Row(children: [
             Expanded(child: spDropdown),
@@ -597,6 +598,8 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
             excelBtn,
             const SizedBox(width: 8),
             pdfBtn,
+            const SizedBox(width: 8),
+            const SurveyReportsButton(),
           ]),
         ],
         const SizedBox(height: 16),
