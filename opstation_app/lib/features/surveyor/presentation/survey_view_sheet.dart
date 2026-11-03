@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import 'survey_audit_screen.dart';
+import '../services/survey_audit_service.dart';
 
 /// Read-only view of a shop's latest survey: Placement Audit (✓ / ✗ per
 /// product) and Competitor Spotting (brand, price, specs per category), with
@@ -49,6 +50,60 @@ class _SurveyView extends ConsumerStatefulWidget {
 
 class _SurveyViewState extends ConsumerState<_SurveyView> {
   late final Future<_Data> _future = _load();
+  late final Future<List<Map<String, dynamic>>> _audits = _loadAudits();
+
+  /// This shop's audits (server + any still waiting on this phone).
+  Future<List<Map<String, dynamic>>> _loadAudits() async {
+    final orgId = widget.shop.orgId;
+    final svc = SurveyAuditService(ref.read(appDatabaseProvider));
+    final server = orgId == null ? <Map<String, dynamic>>[] : await svc.fetchShop(orgId, widget.shop.id);
+    final queued = [for (final q in await svc.queued()) if (q['customer_id'] == widget.shop.id) {...q, '_pending': true}];
+    final all = <String, Map<String, dynamic>>{
+      for (final a in server) '${a['id']}': a,
+      for (final a in queued) '${a['id']}': a,
+    };
+    return all.values.toList()..sort((a, b) => '${b['audited_at']}'.compareTo('${a['audited_at']}'));
+  }
+
+  Widget _auditTile(Map<String, dynamic> a) {
+    final r = '${a['result']}';
+    final color = r == 'issue' ? const Color(0xFFDC2626) : (r == 'feedback' ? const Color(0xFF2563EB) : const Color(0xFF059669));
+    final at = DateTime.tryParse('${a['audited_at'] ?? ''}')?.toLocal();
+    final outside = a['location_status'] != null && a['location_status'] != 'inside';
+    final corr = a['corrections'] is List ? a['corrections'] as List : const [];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(r == 'issue' ? Icons.error_outline : (r == 'feedback' ? Icons.chat_bubble_outline : Icons.verified_outlined),
+              size: 18, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '${r == 'issue' ? 'Issue found' : (r == 'feedback' ? 'Feedback' : 'Matches survey')} · ${a['auditor_name'] ?? ''}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ]),
+        Text(
+          [
+            if (at != null) _df.format(at),
+            if (outside) 'away from the shop',
+            if (a['_pending'] == true) 'not sent yet',
+          ].join(' · '),
+          style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+        ),
+        if ('${a['comment'] ?? ''}'.trim().isNotEmpty)
+          Padding(padding: const EdgeInsets.only(top: 4), child: Text('${a['comment']}')),
+        for (final c in corr)
+          if (c is Map)
+            Text('• ${c['type'] == 'placement' ? c['product'] : c['category']}: ${c['from'] ?? '—'} → ${c['to'] ?? '—'}',
+                style: const TextStyle(fontSize: 12.5)),
+        if (fixStatusText(a).isNotEmpty)
+          Text(fixStatusText(a), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fixStatusColor(a))),
+      ]),
+    );
+  }
   final _df = DateFormat('d MMM yyyy, h:mm a');
 
   Future<_Data> _load() async {
@@ -188,6 +243,21 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
                     DateFormat('d MMM yyyy').format(s.$5),
                   ].join(' · ')),
                 ),
+            const Divider(height: 24),
+            _section('Audits', ''),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: _audits,
+              builder: (context, snap) {
+                if (!snap.hasData) {
+                  return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator()));
+                }
+                final list = snap.data!;
+                if (list.isEmpty) {
+                  return const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('Not audited yet.'));
+                }
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [for (final a in list) _auditTile(a)]);
+              },
+            ),
             if (widget.showAudit)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),

@@ -17,7 +17,6 @@ import '../../../core/database/app_database_provider.dart';
 import '../../../core/photo/photo_watermark.dart';
 import '../../../core/services/device_gps_service.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
-import '../../../core/sync/sync_controller.dart';
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../services/survey_audit_service.dart';
@@ -42,7 +41,7 @@ String _resultLabel(dynamic r) => switch ('$r') {
 
 class _Shop {
   final CustomersData shop;
-  final DateTime lastSurvey;
+  final DateTime? lastSurvey; // null: never surveyed (All shops)
   _Shop(this.shop, this.lastSurvey);
 }
 
@@ -60,28 +59,47 @@ Color _stColor(_St s) => switch (s) {
       _St.resurveyed => const Color(0xFFD97706),
     };
 
+/// Status of an auditor's correction (SQL 444) in plain words.
+String fixStatusText(Map<String, dynamic> a) {
+  final by = '${a['fix_decided_by_name'] ?? ''}'.trim();
+  final reason = '${a['fix_reject_reason'] ?? ''}'.trim();
+  return switch ('${a['fix_status'] ?? ''}') {
+    'pending' => 'Correction waiting for approval',
+    'approved' => 'Correction approved${by.isEmpty ? '' : ' by $by'}',
+    'rejected' => 'Correction rejected${by.isEmpty ? '' : ' by $by'}${reason.isEmpty ? '' : ': $reason'}',
+    _ => '',
+  };
+}
+
+Color fixStatusColor(Map<String, dynamic> a) => switch ('${a['fix_status'] ?? ''}') {
+      'pending' => const Color(0xFFD97706),
+      'rejected' => const Color(0xFFDC2626),
+      _ => const Color(0xFF059669),
+    };
+
 DateTime? _ts(dynamic v) => v == null ? null : DateTime.tryParse('$v')?.toLocal();
 
 /// Status of a shop: compares its latest audit with its latest survey. A
 /// correction saved by the audit carries the audit's own time, so it does not
 /// count as a newer survey.
-_St _statusFor(List<Map<String, dynamic>> audits, DateTime lastSurvey) {
+_St _statusFor(List<Map<String, dynamic>> audits, DateTime? lastSurvey) {
   // Feedback is a note only — the status comes from the latest Matches / Issue.
   final verdicts = audits.where((x) => x['result'] != 'feedback');
   if (verdicts.isEmpty) return _St.notAudited;
   final a = verdicts.first;
   final at = _ts(a['audited_at']);
-  if (at != null && lastSurvey.isAfter(at.add(const Duration(seconds: 2)))) return _St.resurveyed;
+  if (at != null && lastSurvey != null && lastSurvey.isAfter(at.add(const Duration(seconds: 2)))) return _St.resurveyed;
   return a['result'] == 'issue' ? _St.issue : _St.ok;
 }
 
 class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
   bool _loading = true;
   List<_Shop> _shops = [];
+  List<_Shop> _everyShop = []; // all active shops, for feedback
   Map<String, List<Map<String, dynamic>>> _audits = {};
   int _pending = 0;
   String _q = '';
-  String _filter = 'all'; // all | todo | ok
+  String _filter = 'all'; // all (surveyed) | todo | ok | every (all shops)
 
   @override
   void initState() {
@@ -133,10 +151,13 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
       l.sort((a, b) => '${b['audited_at']}'.compareTo('${a['audited_at']}'));
     }
     final list = [for (final e in last.entries) _Shop(byId[e.key]!, e.value)]
-      ..sort((a, b) => b.lastSurvey.compareTo(a.lastSurvey));
+      ..sort((a, b) => b.lastSurvey!.compareTo(a.lastSurvey!));
+    final every = [for (final c in byId.values) _Shop(c, last[c.id])]
+      ..sort((a, b) => a.shop.shopName.toLowerCase().compareTo(b.shop.shopName.toLowerCase()));
     if (!mounted) return;
     setState(() {
       _shops = list;
+      _everyShop = every;
       _audits = byShop;
       _pending = queued.length;
       _loading = false;
@@ -158,7 +179,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
     if (range == null || !mounted) return;
     final from = DateTime(range.start.year, range.start.month, range.start.day);
     final to = DateTime(range.end.year, range.end.month, range.end.day).add(const Duration(days: 1));
-    final shops = {for (final s in _shops) s.shop.id: s.shop};
+    final shops = {for (final s in _everyShop) s.shop.id: s.shop};
     final rows = <Map<String, dynamic>>[
       for (final l in _audits.values)
         for (final a in l)
@@ -187,7 +208,8 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
       if (c is! List || c.isEmpty) return '';
       return [
         for (final x in c)
-          if (x is Map) '${x['type'] == 'placement' ? x['product'] : x['category']}: ${x['from'] ?? '-'} -> ${x['to'] ?? '-'}'
+          if (x is Map) '${x['type'] == 'placement' ? x['product'] : x['category']}: ${x['from'] ?? '-'} -> ${x['to'] ?? '-'}',
+        if (fixStatusText(a).isNotEmpty) '(${fixStatusText(a)})',
       ].join('\n');
     }
     final user = ref.read(authControllerProvider).valueOrNull;
@@ -254,7 +276,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
   @override
   Widget build(BuildContext context) {
     final q = _q.trim().toLowerCase();
-    final shown = _shops.where((s) {
+    final shown = (_filter == 'every' ? _everyShop : _shops).where((s) {
       if (q.isNotEmpty &&
           !s.shop.shopName.toLowerCase().contains(q) &&
           !s.shop.code.toLowerCase().contains(q)) {
@@ -264,7 +286,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
       return switch (_filter) {
         'todo' => st == _St.notAudited || st == _St.resurveyed,
         'ok' => st == _St.ok || st == _St.issue,
-        _ => true,
+        _ => true, // all surveyed / all shops
       };
     }).toList();
     return Scaffold(
@@ -294,7 +316,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Wrap(spacing: 8, runSpacing: 6, children: [
-                  for (final f in const [('all', 'All'), ('todo', 'To audit'), ('ok', 'Audited')])
+                  for (final f in const [('all', 'Surveyed'), ('todo', 'To audit'), ('ok', 'Audited'), ('every', 'All shops')])
                     ChoiceChip(
                       label: Text(f.$2),
                       selected: _filter == f.$1,
@@ -318,7 +340,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
                   onRefresh: () => _load(refresh: true),
                   child: shown.isEmpty
                       ? ListView(children: const [
-                          Padding(padding: EdgeInsets.all(40), child: Center(child: Text('No surveyed shops here.'))),
+                          Padding(padding: EdgeInsets.all(40), child: Center(child: Text('No shops here.'))),
                         ])
                       : ListView.separated(
                           physics: const AlwaysScrollableScrollPhysics(),
@@ -327,10 +349,13 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
                           itemBuilder: (_, i) {
                             final s = shown[i];
                             final st = _st(s);
+                            final fb = (_audits[s.shop.id] ?? const []).where((a) => a['result'] == 'feedback').length;
                             return ListTile(
                               title: Text(s.shop.shopName),
-                              subtitle: Text('${s.shop.code} · surveyed ${DateFormat('d MMM yyyy').format(s.lastSurvey)}'),
-                              trailing: Container(
+                              subtitle: Text(s.lastSurvey == null
+                                  ? '${s.shop.code} · not surveyed${fb == 0 ? '' : ' · $fb feedback'}'
+                                  : '${s.shop.code} · surveyed ${DateFormat('d MMM yyyy').format(s.lastSurvey!)}'),
+                              trailing: s.lastSurvey == null ? null : Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
                                   color: _stColor(st).withOpacity(0.12),
@@ -403,7 +428,12 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
   final List<_SpotEdit> _spots = [];
   Map<String, String> _users = {};
   DateTime? _lastSurvey;
+  bool _canFix = false; // may correct the survey (Admin Settings, SQL 444)
+  bool _needsApproval = false; // corrections wait for approval
   final _df = DateFormat('d MMM yyyy, h:mm a');
+
+  /// The shop has a survey to check. Without one only Feedback is possible.
+  bool get _surveyed => _lastSurvey != null;
 
   @override
   void initState() {
@@ -440,6 +470,9 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
           ..where((s) => s.customerId.equals(cid))
           ..orderBy([(s) => OrderingTerm.desc(s.surveyedAt)]))
         .get();
+    final perms = orgId == null
+        ? const <String, dynamic>{}
+        : await SurveyAuditService(db).permissions(orgId);
     if (widget.audits == null) {
       final svc = SurveyAuditService(db);
       final server = orgId == null ? <Map<String, dynamic>>[] : await svc.fetchShop(orgId, cid);
@@ -473,6 +506,8 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
         _spots.add(_SpotEdit(c, byCat[c.id]));
       }
       _lastSurvey = last;
+      _canFix = perms['can_fix'] == true;
+      _needsApproval = perms['needs_approval'] == true;
       _loading = false;
     });
   }
@@ -484,7 +519,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
             p
       ];
 
-  bool get _hasChanges => _changedProducts.isNotEmpty || _spots.any((s) => s.changed);
+  bool get _hasChanges => _canFix && _surveyed && (_changedProducts.isNotEmpty || _spots.any((s) => s.changed));
 
   // ── location ──
   double _distance(double lat1, double lng1, double lat2, double lng2) {
@@ -553,12 +588,18 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
       final now = DateTime.now();
       final ms = now.millisecondsSinceEpoch;
       final corrections = <Map<String, dynamic>>[];
+      final fixes = <Map<String, dynamic>>[];
+      // With approval ON the correction is not part of the survey until
+      // approved, so it is not written into the phone's survey either.
+      final writeLocal = !_needsApproval;
+      final changedProducts = _hasChanges ? _changedProducts : const <ProductRow>[];
+      final changedSpots = _hasChanges ? _spots.where((s) => s.changed).toList() : const <_SpotEdit>[];
       await db.transaction(() async {
         var i = 0;
-        for (final p in _changedProducts) {
+        for (final p in changedProducts) {
           final id = 'pa_aud_${ms}_$i';
           i++;
-          await db.into(db.placementAudits).insert(PlacementAuditsCompanion.insert(
+          if (writeLocal) await db.into(db.placementAudits).insert(PlacementAuditsCompanion.insert(
                 id: id,
                 orgId: orgId,
                 customerId: widget.shop.id,
@@ -567,8 +608,11 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                 surveyedByUserId: Value(user.id),
                 surveyedAt: now,
                 createdAt: now,
-                syncStatus: const Value('pending'),
+                // Saved on the server by submit_survey_audit together with the
+                // audit — not pushed by the normal survey sync.
+                syncStatus: const Value('synced'),
               ));
+          fixes.add({'type': 'placement', 'id': id, 'product_id': p.id, 'is_present': _present[p.id] ?? false});
           corrections.add({
             'type': 'placement',
             'product_id': p.id,
@@ -579,12 +623,12 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
           });
         }
         var j = 0;
-        for (final s in _spots.where((s) => s.changed)) {
+        for (final s in changedSpots) {
           final id = 'cs_aud_${ms}_$j';
           j++;
           final priceTxt = s.price.text.trim();
           final specsTxt = s.specs.text.trim();
-          await db.into(db.competitorSpottings).insert(CompetitorSpottingsCompanion.insert(
+          if (writeLocal) await db.into(db.competitorSpottings).insert(CompetitorSpottingsCompanion.insert(
                 id: id,
                 orgId: orgId,
                 customerId: widget.shop.id,
@@ -595,8 +639,16 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                 surveyedByUserId: Value(user.id),
                 surveyedAt: now,
                 createdAt: now,
-                syncStatus: const Value('pending'),
+                syncStatus: const Value('synced'),
               ));
+          fixes.add({
+            'type': 'competitor',
+            'id': id,
+            'category_id': s.cat.id,
+            'brand_name': s.brand.text.trim(),
+            'price': priceTxt,
+            'specs': specsTxt,
+          });
           String fmt(String? b, int? p, String? sp) =>
               [if ((b ?? '').isNotEmpty) b, if (p != null) 'Rs $p', if ((sp ?? '').isNotEmpty) sp].join(' · ');
           corrections.add({
@@ -625,16 +677,17 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
         'location_status': loc['location_status'],
         'survey_at': _lastSurvey?.toUtc().toIso8601String(),
         'corrections': corrections,
+        'fixes': fixes,
         'audited_at': now.toUtc().toIso8601String(),
         if (localPhoto != null) 'local_photo': localPhoto,
       });
-      if (corrections.isNotEmpty) ref.read(syncControllerProvider.notifier).noteNewPendingVisit();
       final left = await svc.flush();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(left == 0
-            ? 'Audit saved for ${widget.shop.shopName}'
-            : 'Audit saved on this phone — it will be sent when online'),
+        content: Text([
+          left == 0 ? 'Audit saved for ${widget.shop.shopName}' : 'Audit saved on this phone — it will be sent when online',
+          if (fixes.isNotEmpty && _needsApproval) 'Your correction will apply once approved',
+        ].join('. ')),
       ));
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -713,6 +766,12 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                       style: const TextStyle(fontSize: 12.5),
                     ),
               ],
+              if (fixStatusText(a).isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(fixStatusText(a),
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fixStatusColor(a))),
+                ),
               if ((a['photo_path'] ?? a['local_photo']) != null)
                 const Padding(
                   padding: EdgeInsets.only(top: 4),
@@ -741,11 +800,20 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 child: Text(
-                  'Check the survey below at the shop. Change anything that is wrong — '
-                  'the change is saved as your correction and the original stays in the history.',
+                  !_surveyed
+                      ? 'This shop has not been surveyed yet. You can leave feedback about it.'
+                      : !_canFix
+                          ? 'View only — check the survey below at the shop and mark it as Matches, '
+                              'Issue or Feedback. You are not allowed to correct surveys.'
+                          : _needsApproval
+                              ? 'Check the survey below at the shop. Change anything that is wrong — '
+                                  'your correction needs approval before it applies. The original stays in the history.'
+                              : 'Check the survey below at the shop. Change anything that is wrong — '
+                                  'the change is saved as your correction and the original stays in the history.',
                   style: TextStyle(fontSize: 12.5, color: Theme.of(context).hintColor),
                 ),
               ),
+              if (_surveyed) ...[
               _section('Placement', pBy),
               if (_products.isEmpty)
                 const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('No products set up.'))
@@ -761,7 +829,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                             ? Text('Survey said: ${_latestP[p.id]!.isPresent ? 'Displayed' : 'Not displayed'}',
                                 style: const TextStyle(color: Color(0xFFD97706)))
                             : null),
-                    onChanged: (v) => setState(() => _present[p.id] = v ?? false),
+                    onChanged: _canFix ? (v) => setState(() => _present[p.id] = v ?? false) : null,
                   ),
               const Divider(height: 24),
               _section('Competitor Spotting', ''),
@@ -782,6 +850,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                           flex: 3,
                           child: TextField(
                             controller: s.brand,
+                            readOnly: !_canFix,
                             onChanged: (_) => setState(() {}),
                             decoration: const InputDecoration(labelText: 'Brand', isDense: true, border: OutlineInputBorder()),
                           ),
@@ -791,6 +860,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                           flex: 2,
                           child: TextField(
                             controller: s.price,
+                            readOnly: !_canFix,
                             keyboardType: TextInputType.number,
                             onChanged: (_) => setState(() {}),
                             decoration: const InputDecoration(labelText: 'Price', isDense: true, border: OutlineInputBorder()),
@@ -800,17 +870,22 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                       const SizedBox(height: 6),
                       TextField(
                         controller: s.specs,
+                        readOnly: !_canFix,
                         onChanged: (_) => setState(() {}),
                         decoration: const InputDecoration(labelText: 'Specs', isDense: true, border: OutlineInputBorder()),
                       ),
-                      if (s.changed)
-                        const Padding(
+                      if (_canFix && s.changed)
+                        Padding(
                           padding: EdgeInsets.only(top: 4),
-                          child: Text('Changed — will be saved as your correction',
-                              style: TextStyle(fontSize: 12, color: Color(0xFFD97706))),
+                          child: Text(
+                              _needsApproval
+                                  ? 'Changed — will be sent for approval as your correction'
+                                  : 'Changed — will be saved as your correction',
+                              style: const TextStyle(fontSize: 12, color: Color(0xFFD97706))),
                         ),
                     ]),
                   ),
+              ],
               const Divider(height: 24),
               _section('Audit history', '${_trailList.length} audit${_trailList.length == 1 ? '' : 's'}'),
               _trail(),
@@ -823,7 +898,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                 child: Row(children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: _saving || _hasChanges ? null : () => _start('ok'),
+                      onPressed: _saving || _hasChanges || !_surveyed ? null : () => _start('ok'),
                       icon: const Icon(Icons.check_circle_outline),
                       label: const Text('Matches'),
                       style: OutlinedButton.styleFrom(
@@ -847,7 +922,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton.icon(
-                      onPressed: _saving ? null : () => _start('issue'),
+                      onPressed: _saving || !_surveyed ? null : () => _start('issue'),
                       icon: _saving
                           ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.report_outlined),

@@ -14,6 +14,19 @@ class SurveyAuditService {
   SurveyAuditService(this.db);
 
   static const _queueKey = 'survey_audit_queue';
+  static const _rejectedKey = 'survey_audit_rejected';
+
+  /// Audits the server refused (kept on the phone for reference).
+  Future<List<Map<String, dynamic>>> rejected() async {
+    final raw = await db.getConfig(_rejectedKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw);
+      return list is List ? [for (final x in list) if (x is Map) Map<String, dynamic>.from(x)] : [];
+    } catch (_) {
+      return [];
+    }
+  }
   static bool _flushing = false;
 
   Future<List<Map<String, dynamic>>> queued() async {
@@ -64,10 +77,38 @@ class SurveyAuditService {
           }
         }
         try {
-          await client.from('survey_audits').insert(row);
+          // Saved by the server in one step: the audit and its fixes together,
+          // with the auditor taken from the login (SQL 443 / 444).
+          dynamic res;
+          try {
+            res = await client.rpc('submit_survey_audit', params: {'p': row});
+          } on PostgrestException catch (e) {
+            final hasFixes = row['fixes'] is List && (row['fixes'] as List).isNotEmpty;
+            if (e.code != 'P0001' || !hasFixes || !('${e.message}').contains('not allowed to correct')) rethrow;
+            // Correcting was switched off for this auditor: keep the audit
+            // (issue + comment) and drop the correction.
+            await _dropLocalFixes(row['fixes'] as List);
+            row['fixes'] = <dynamic>[];
+            row['corrections'] = <dynamic>[];
+            res = await client.rpc('submit_survey_audit', params: {'p': row});
+          }
+          // Correction waiting for approval: it is not part of the survey yet,
+          // so the phone must not show it either. It arrives with the normal
+          // survey refresh once approved.
+          if (res is Map && res['pending'] == true && row['fixes'] is List) {
+            await _dropLocalFixes(row['fixes'] as List);
+          }
         } on PostgrestException catch (e) {
-          // Already sent earlier (retry after a lost response) — treat as done.
-          if (e.code != '23505') break;
+          if (e.code == 'P0001') {
+            if (row['fixes'] is List) await _dropLocalFixes(row['fixes'] as List);
+            // Refused by the server (e.g. not an Auditor) — it will never go
+            // through, so take it out of the queue and keep a note of it.
+            final rej = await rejected();
+            rej.add({...rec, 'error': e.message});
+            await db.setConfig(_rejectedKey, jsonEncode(rej));
+          } else {
+            break; // keep it queued, try later
+          }
         } catch (_) {
           break; // offline: stop, keep the rest queued
         }
@@ -84,6 +125,44 @@ class SurveyAuditService {
     } finally {
       _flushing = false;
     }
+  }
+
+  /// Removes corrected survey rows the phone saved for an audit whose
+  /// correction did not go into the survey (refused, or waiting for approval).
+  Future<void> _dropLocalFixes(List fixes) async {
+    final pa = <String>[], cs = <String>[];
+    for (final f in fixes) {
+      if (f is! Map || f['id'] == null) continue;
+      (f['type'] == 'placement' ? pa : cs).add('${f['id']}');
+    }
+    try {
+      if (pa.isNotEmpty) await (db.delete(db.placementAudits)..where((t) => t.id.isIn(pa))).go();
+      if (cs.isNotEmpty) await (db.delete(db.competitorSpottings)..where((t) => t.id.isIn(cs))).go();
+    } catch (_) {}
+  }
+
+  static const _permKey = 'survey_audit_perms';
+
+  /// What this auditor may do (SQL 444): {can_fix, needs_approval}. Read from
+  /// the server and kept on the phone for offline use. Without either, the
+  /// survey is view-only.
+  Future<Map<String, dynamic>> permissions(String orgId) async {
+    try {
+      final res = await Supabase.instance.client.rpc('my_audit_permissions', params: {'p_org': orgId});
+      if (res is Map) {
+        final m = Map<String, dynamic>.from(res);
+        await db.setConfig('${_permKey}_$orgId', jsonEncode(m));
+        return m;
+      }
+    } catch (_) {}
+    try {
+      final raw = await db.getConfig('${_permKey}_$orgId');
+      if (raw != null && raw.isNotEmpty) {
+        final m = jsonDecode(raw);
+        if (m is Map) return Map<String, dynamic>.from(m);
+      }
+    } catch (_) {}
+    return const {'can_fix': false, 'needs_approval': false};
   }
 
   /// One shop's audits from the server, newest first; [] when offline.
