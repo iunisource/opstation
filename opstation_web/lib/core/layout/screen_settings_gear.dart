@@ -28,7 +28,7 @@ const _customerKeys = [
   'org.customer_deactivate_access',
   'org.field_location_capture',
 ];
-const _intelKeys = ['org.intel_delete_access'];
+const _intelKeys = ['org.intel_delete_access', 'org.audit_fix_access', 'org.audit_fix_approval'];
 
 const Map<String, _ScreenSettings> _screenSettings = {
   // ── Sales ──

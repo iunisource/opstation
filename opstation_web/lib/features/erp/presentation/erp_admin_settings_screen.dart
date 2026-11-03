@@ -679,6 +679,25 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.audit_fix_access',
+    'Auditors can correct surveys',
+    'Auditors can always mark a surveyed shop as Matches, Issue or Feedback. When '
+        'ON, the auditors picked below can also correct the survey itself while '
+        'auditing. When OFF, no auditor can change survey data.',
+    users: _UsersField('org.audit_fix_users', 'Auditors allowed to correct surveys'),
+  ),
+
+  _AdminToggle(
+    'org.audit_fix_approval',
+    'Approval for auditor corrections',
+    'When ON, a correction made by an auditor is not applied straight away — it '
+        'waits under "Pending corrections" on the Placement Audit and Competitor '
+        'Spotting screens until approved. Master admins can always approve; add '
+        'more users below. When OFF, corrections apply immediately.',
+    users: _UsersField('org.audit_fix_approvers', 'Also allowed to approve corrections'),
+  ),
+
+  _AdminToggle(
     'org.customer_edit_supervise_flow',
     'Supervision for customer edits',
     'When ON, every change to an existing customer — from the web, the app or an '
@@ -862,6 +881,11 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Schemes & Offers', Icons.local_offer_outlined, [
     'org.schemes_enabled',
+  ]),
+  _ToggleGroup('Intelligence & Surveys', Icons.travel_explore_outlined, [
+    'org.intel_delete_access',
+    'org.audit_fix_access',
+    'org.audit_fix_approval',
   ]),
 ];
 

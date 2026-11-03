@@ -18,6 +18,19 @@ const surveyAuditFilterLabels = <String, String>{
   'resurveyed': 'Re-surveyed since audit',
 };
 
+/// Status of an auditor's correction (SQL 444) in plain words; '' when the
+/// audit has no correction waiting / decided.
+String fixStatusText(Map<String, dynamic> a) {
+  final by = '${a['fix_decided_by_name'] ?? ''}'.trim();
+  final reason = '${a['fix_reject_reason'] ?? ''}'.trim();
+  return switch ('${a['fix_status'] ?? ''}') {
+    'pending' => 'Correction waiting for approval',
+    'approved' => 'Correction approved${by.isEmpty ? '' : ' by $by'}',
+    'rejected' => 'Correction rejected${by.isEmpty ? '' : ' by $by'}${reason.isEmpty ? '' : ': $reason'}',
+    _ => '',
+  };
+}
+
 class SurveyAuditIndex {
   /// customer_id → audits, newest first.
   final Map<String, List<Map<String, dynamic>>> byShop;
@@ -170,13 +183,35 @@ class SurveyAuditIndex {
                 ],
                 if (corr.isNotEmpty) ...[
                   const SizedBox(height: 6),
-                  const Text('Corrected', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+                  Text(
+                    switch ('${a['fix_status'] ?? ''}') {
+                      'pending' => 'Proposed correction',
+                      'rejected' => 'Proposed correction (not applied)',
+                      _ => 'Corrected',
+                    },
+                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
+                  ),
                   for (final c in corr)
                     if (c is Map)
                       Text(
                         '• ${c['type'] == 'placement' ? c['product'] : c['category']}: ${c['from'] ?? '—'}  →  ${c['to'] ?? '—'}',
                         style: const TextStyle(fontSize: 12.5),
                       ),
+                ],
+                if (fixStatusText(a).isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    fixStatusText(a),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: switch ('${a['fix_status']}') {
+                        'pending' => const Color(0xFFD97706),
+                        'rejected' => AppTheme.danger,
+                        _ => const Color(0xFF059669),
+                      },
+                    ),
+                  ),
                 ],
                 if ('${a['photo_path'] ?? ''}'.isNotEmpty)
                   TextButton.icon(

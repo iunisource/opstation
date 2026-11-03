@@ -5,6 +5,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../widgets/survey_audit_status.dart';
+
 /// Date-range PDF reports for the survey team:
 ///  • Audit report — every audit (Matches / Issue / Feedback) in the range.
 ///  • Surveyor report — what each surveyor surveyed in the range and how it
@@ -116,7 +118,8 @@ class SurveyReportsPdf {
       if (c is! List || c.isEmpty) return '';
       return [
         for (final x in c)
-          if (x is Map) '${x['type'] == 'placement' ? x['product'] : x['category']}: ${x['from'] ?? '-'} -> ${x['to'] ?? '-'}'
+          if (x is Map) '${x['type'] == 'placement' ? x['product'] : x['category']}: ${x['from'] ?? '-'} -> ${x['to'] ?? '-'}',
+        if (fixStatusText(a).isNotEmpty) '(${fixStatusText(a)})',
       ].join('\n');
     }
 
