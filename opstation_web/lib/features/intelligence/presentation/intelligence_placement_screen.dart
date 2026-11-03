@@ -14,6 +14,7 @@ import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../widgets/survey_audit_status.dart';
 import '../widgets/survey_reports_button.dart';
+import '../services/survey_remove.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -142,6 +143,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           .from('placement_audit')
           .select('customer_id, product_id, surveyed_by_user_id, surveyed_at')
           .eq('org_id', orgId)
+          .isFilter('voided_at', null)
           .order('surveyed_at', ascending: false);
       final latestUserId = <String, Map<String, String?>>{};
       for (final r in auditRows) {
@@ -181,8 +183,9 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       final client = Supabase.instance.client;
       final auditRows = await client
           .from('placement_audit')
-          .select('customer_id, product_id, is_present, surveyed_at, surveyed_by_user_id')
+          .select('customer_id, product_id, is_present, surveyed_at, surveyed_by_user_id, source')
           .eq('org_id', orgId)
+          .isFilter('voided_at', null)
           .order('surveyed_at', ascending: false);
       final audits = List<Map<String, dynamic>>.from(auditRows);
 
@@ -273,40 +276,12 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
   /// Delete every survey row for one shop, after a confirm.
   Future<void> _removeShopSurvey(Map<String, dynamic> c) async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
+    final user = ref.read(currentUserProvider);
+    final orgId = user?.orgId;
     if (orgId == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove survey?'),
-        content: SizedBox(
-          width: 400,
-          child: Text('This deletes the whole placement survey of ${c['shop_name']} '
-              '(${c['code'] ?? ''}), including its history. The shop will leave this '
-              'report until it is surveyed again. This can\'t be undone.'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
-            onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    try {
-      await Supabase.instance.client.rpc('placement_audit_remove_shop',
-          params: {'p_org': orgId, 'p_customer': c['id']});
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Survey removed for ${c['shop_name']}')));
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(intelDeleteError(e))));
-    }
+    final changed = await removeShopSurvey(context,
+        orgId: orgId, shop: c, kind: 'placement', superAdmin: user?.role == WebUserRole.superAdmin);
+    if (changed && mounted) await _load();
   }
 
   void _showCellDetail(Map<String, dynamic> customer, Map<String, dynamic> product, Map<String, dynamic>? audit) {
@@ -324,6 +299,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                   children: [
                     _kv('Status', (audit['is_present'] as bool) ? 'Displayed' : 'Not displayed'),
                     _kv('Surveyed by', _surveyorNameFor(customer['id'] as String, product['id'] as String)),
+                    if (audit['source'] == 'audit_fix') _kv('Type', 'Auditor correction'),
                     _kv('Last survey', _fmt(audit['surveyed_at'] as String?)),
                   ],
                 ),
@@ -735,6 +711,7 @@ class _PlacementTrendChartState extends State<_PlacementTrendChart> {
       final rows = await client.from('placement_audit')
           .select('customer_id, surveyed_at')
           .eq('org_id', widget.orgId)
+          .isFilter('voided_at', null)
           .gte('surveyed_at', start.toUtc().toIso8601String());
       final perDay = <int, Set<String>>{};
       for (final r in rows) {

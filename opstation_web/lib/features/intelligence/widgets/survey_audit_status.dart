@@ -158,6 +158,9 @@ class SurveyAuditIndex {
                     if (at != null) df.format(at),
                     _locText(a),
                     if (sAt != null) 'checked survey of ${DateFormat('d MMM yyyy').format(sAt)}',
+                    if (_t(a['received_at']) != null && at != null &&
+                        _t(a['received_at'])!.toLocal().difference(at).inMinutes.abs() > 30)
+                      'sent ${df.format(_t(a['received_at'])!.toLocal())}',
                   ].join(' · '),
                   style: TextStyle(fontSize: 12, color: outside ? const Color(0xFFD97706) : AppTheme.textSecondary),
                 ),

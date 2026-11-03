@@ -14,6 +14,7 @@ import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../widgets/survey_audit_status.dart';
 import '../widgets/survey_reports_button.dart';
+import '../services/survey_remove.dart';
 
 class IntelligenceCompetitorsScreen extends ConsumerStatefulWidget {
   const IntelligenceCompetitorsScreen({super.key});
@@ -67,41 +68,14 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
 
   /// Delete every competitor spotting of one shop, after a confirm.
   Future<void> _removeShopSpottings(Map<String, dynamic> c) async {
-    final orgId = ref.read(currentUserProvider)?.orgId;
+    final user = ref.read(currentUserProvider);
+    final orgId = user?.orgId;
     if (orgId == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove spottings?'),
-        content: SizedBox(
-          width: 400,
-          child: Text('This deletes all competitor spottings of ${c['shop_name']} '
-              '(${c['code'] ?? ''}), including their history. The shop will leave this '
-              'report until it is surveyed again. This can\'t be undone.'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger, foregroundColor: Colors.white),
-            onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    try {
-      await Supabase.instance.client.rpc('competitor_spotting_remove_shop',
-          params: {'p_org': orgId, 'p_customer': c['id']});
-      if (!mounted) return;
-      _selectedIds.remove(c['id']);
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Spottings removed for ${c['shop_name']}')));
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(intelDeleteError(e))));
-    }
+    final changed = await removeShopSurvey(context,
+        orgId: orgId, shop: c, kind: 'competitor', superAdmin: user?.role == WebUserRole.superAdmin);
+    if (!changed || !mounted) return;
+    _selectedIds.remove(c['id']);
+    await _load();
   }
 
   @override
@@ -209,6 +183,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           .from('competitor_spotting')
           .select()
           .eq('org_id', orgId)
+          .isFilter('voided_at', null)
           .order('surveyed_at', ascending: false);
       final spottings = List<Map<String, dynamic>>.from(spottingRows);
       try {
@@ -361,6 +336,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
               _kv('Price', spotting['price'] == null ? '—' : 'PKR ${spotting['price']}'),
               _kv('Specs', (spotting['specs'] as String?)?.isEmpty ?? true ? '—' : spotting['specs'] as String),
               _kv('Surveyed', _fmt(spotting['surveyed_at'] as String?)),
+              if (spotting['source'] == 'audit_fix') _kv('Type', 'Auditor correction'),
             ],
           ),
         ),
@@ -870,7 +846,8 @@ class _CompetitorTrendChartState extends State<_CompetitorTrendChart> {
       final spottings = await client
           .from('competitor_spotting')
           .select('category_id')
-          .eq('org_id', widget.orgId);
+          .eq('org_id', widget.orgId)
+          .isFilter('voided_at', null);
       final counts = <String, int>{};
       for (final r in spottings) {
         final cid = r['category_id'] as String?;
@@ -929,6 +906,7 @@ class _CompetitorTrendChartState extends State<_CompetitorTrendChart> {
           .from('competitor_spotting')
           .select('customer_id, brand_name, surveyed_at')
           .eq('org_id', widget.orgId)
+          .isFilter('voided_at', null)
           .eq('category_id', _selectedCategoryId!)
           .gte('surveyed_at', windowStart.toUtc().toIso8601String());
 

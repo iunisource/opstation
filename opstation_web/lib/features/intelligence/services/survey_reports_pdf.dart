@@ -193,16 +193,21 @@ class SurveyReportsPdf {
     final end = DateTime(to.year, to.month, to.day).add(const Duration(days: 1));
     final start = DateTime(from.year, from.month, from.day);
     final results = await Future.wait([
-      _paged('placement_audit', 'id, customer_id, product_id, is_present, surveyed_by_user_id, surveyed_at', orgId,
+      _paged('placement_audit', 'id, customer_id, product_id, is_present, surveyed_by_user_id, surveyed_at, source, voided_at', orgId,
           tsCol: 'surveyed_at', from: start, to: end),
-      _paged('competitor_spotting', 'id, customer_id, category_id, brand_name, surveyed_by_user_id, surveyed_at', orgId,
+      _paged('competitor_spotting', 'id, customer_id, category_id, brand_name, surveyed_by_user_id, surveyed_at, source, voided_at', orgId,
           tsCol: 'surveyed_at', from: start, to: end),
       // All audits from the start of the range on (an audit can come after the period).
       _paged('survey_audits', 'customer_id, result, audited_at', orgId, tsCol: 'audited_at', from: start),
     ]);
     final shops = await _shops(orgId);
     final users = await _users(orgId);
-    bool fromAudit(Map<String, dynamic> r) => '${r['id']}'.startsWith('pa_aud_') || '${r['id']}'.startsWith('cs_aud_');
+    // Auditor corrections and removed (voided) rows are not surveyor work.
+    bool fromAudit(Map<String, dynamic> r) =>
+        r['source'] == 'audit_fix' ||
+        r['voided_at'] != null ||
+        '${r['id']}'.startsWith('pa_aud_') ||
+        '${r['id']}'.startsWith('cs_aud_');
     final pa = results[0].where((r) => !fromAudit(r)).toList();
     final cs = results[1].where((r) => !fromAudit(r)).toList();
     final audits = results[2]..sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
