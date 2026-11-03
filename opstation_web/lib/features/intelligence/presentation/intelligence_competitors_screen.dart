@@ -12,6 +12,7 @@ import '../services/intelligence_excel_service.dart';
 import '../services/intel_delete_access.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import '../widgets/survey_audit_status.dart';
 
 class IntelligenceCompetitorsScreen extends ConsumerStatefulWidget {
   const IntelligenceCompetitorsScreen({super.key});
@@ -36,6 +37,18 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
   final Map<String, Set<String>> _customerToRoutes = {};
   final Map<String, Set<String>> _salespersonToRoutes = {};
   final Set<String> _selectedIds = {};
+  SurveyAuditIndex _auditIdx = SurveyAuditIndex.empty;
+  String _auditFilter = 'all';
+
+  /// Latest competitor survey time of a shop (for its audit status).
+  DateTime? _lastSurvey(String cid) {
+    DateTime? last;
+    for (final s in (_latest[cid] ?? const <String, Map<String, dynamic>>{}).values) {
+      final t = DateTime.tryParse('${s['surveyed_at'] ?? ''}');
+      if (t != null && (last == null || t.isAfter(last))) last = t;
+    }
+    return last;
+  }
 
   @override
   void initState() {
@@ -235,11 +248,13 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           .eq('org_id', orgId)
           .eq('is_active', true)
           .order('position');
+      final auditIdx = await SurveyAuditIndex.load(orgId);
 
       setState(() {
         _customers = customers;
         _categories = List<Map<String, dynamic>>.from(catRows);
         _latest = latest;
+        _auditIdx = auditIdx;
         _loading = false;
       });
     } catch (e) {
@@ -320,6 +335,10 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
         final crs = _customerToRoutes[c['id']] ?? const <String>{};
         return crs.any(spRoutes.contains);
       });
+    }
+    if (_auditFilter != 'all') {
+      result = result.where((c) =>
+          _auditIdx.matchesFilter(_auditFilter, c['id'] as String, _lastSurvey(c['id'] as String)));
     }
     return result.toList();
   }
@@ -566,6 +585,18 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
       ],
       onChanged: (v) => setState(() => _selectedBrand = v),
     );
+    final auditDropdown = InputDecorator(
+      decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.fact_check_outlined, size: 18)),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _auditFilter,
+          isDense: true,
+          isExpanded: true,
+          items: [for (final e in surveyAuditFilterLabels.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+          onChanged: (v) => setState(() => _auditFilter = v ?? 'all'),
+        ),
+      ),
+    );
     final searchField = TextField(
       controller: _customerSearchCtrl,
       decoration: const InputDecoration(hintText: 'Search shops or brands...', prefixIcon: Icon(Icons.search), isDense: true),
@@ -619,6 +650,8 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           const SizedBox(height: 10),
           brandDropdown,
           const SizedBox(height: 10),
+          auditDropdown,
+          const SizedBox(height: 10),
           searchField,
           const SizedBox(height: 6),
           Wrap(spacing: 4, runSpacing: 0, children: [chartBtn, selectBtn, excelBtn, pdfBtn]),
@@ -633,6 +666,8 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
           const SizedBox(height: 12),
           Row(children: [
             Expanded(child: searchField),
+            const SizedBox(width: 12),
+            SizedBox(width: 240, child: auditDropdown),
             const SizedBox(width: 12),
             chartBtn,
             const SizedBox(width: 8),
@@ -721,6 +756,7 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                                           maxLines: _expandedShops.contains(cid) ? 4 : 1,
                                           overflow: TextOverflow.ellipsis),
                                       Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                                      _auditIdx.badge(context, cid, c['shop_name'] as String, _lastSurvey(cid)),
                                     ],
                                   ),
                                 ),

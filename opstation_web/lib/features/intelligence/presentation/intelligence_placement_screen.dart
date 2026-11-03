@@ -12,6 +12,7 @@ import '../services/intelligence_excel_service.dart';
 import '../services/intel_delete_access.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import '../widgets/survey_audit_status.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -37,6 +38,18 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
   final Map<String, Set<String>> _customerToRoutes = {};
   final Map<String, Set<String>> _salespersonToRoutes = {};
   final Map<String, Map<String, String?>> _latestUserId = {};
+  SurveyAuditIndex _auditIdx = SurveyAuditIndex.empty;
+  String _auditFilter = 'all';
+
+  /// Latest placement survey time of a shop (for its audit status).
+  DateTime? _lastSurvey(String cid) {
+    DateTime? last;
+    for (final a in (_latest[cid] ?? const <String, Map<String, dynamic>>{}).values) {
+      final t = DateTime.tryParse('${a['surveyed_at'] ?? ''}');
+      if (t != null && (last == null || t.isAfter(last))) last = t;
+    }
+    return last;
+  }
 
   @override
   void initState() {
@@ -201,11 +214,13 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           .eq('org_id', orgId)
           .eq('is_active', true)
           .order('position');
+      final auditIdx = await SurveyAuditIndex.load(orgId);
 
       setState(() {
         _customers = customers;
         _products = List<Map<String, dynamic>>.from(productRows);
         _latest = latest;
+        _auditIdx = auditIdx;
         _loading = false;
       });
     } catch (e) {
@@ -233,6 +248,10 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         final crs = _customerToRoutes[c['id']] ?? const <String>{};
         return crs.any(spRoutes.contains);
       });
+    }
+    if (_auditFilter != 'all') {
+      result = result.where((c) =>
+          _auditIdx.matchesFilter(_auditFilter, c['id'] as String, _lastSurvey(c['id'] as String)));
     }
     return result.toList();
   }
@@ -509,6 +528,18 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       decoration: const InputDecoration(hintText: 'Filter products...', prefixIcon: Icon(Icons.search), isDense: true),
       onChanged: (_) => setState(() {}),
     );
+    final auditDropdown = InputDecorator(
+      decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.fact_check_outlined, size: 18)),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _auditFilter,
+          isDense: true,
+          isExpanded: true,
+          items: [for (final e in surveyAuditFilterLabels.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+          onChanged: (v) => setState(() => _auditFilter = v ?? 'all'),
+        ),
+      ),
+    );
     final chartBtn = TextButton.icon(
       onPressed: _showChart,
       icon: const Icon(Icons.show_chart, size: 18),
@@ -543,6 +574,8 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           shopSearch,
           const SizedBox(height: 10),
           productSearch,
+          const SizedBox(height: 10),
+          auditDropdown,
           const SizedBox(height: 6),
           Wrap(spacing: 4, children: [chartBtn, excelBtn, pdfBtn]),
         ] else ...[
@@ -550,6 +583,8 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
             Expanded(child: spDropdown),
             const SizedBox(width: 12),
             Expanded(child: routeDropdown),
+            const SizedBox(width: 12),
+            Expanded(child: auditDropdown),
           ]),
           const SizedBox(height: 12),
           Row(children: [
@@ -625,6 +660,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                                       maxLines: _expandedShops.contains(cid) ? 4 : 1,
                                       overflow: TextOverflow.ellipsis),
                                   Text(c['code'] as String? ?? '', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+                                  _auditIdx.badge(context, cid, c['shop_name'] as String, _lastSurvey(cid)),
                                 ],
                               ),
                                 ),
