@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../../core/supabase/supabase_pull_service.dart';
 import 'survey_view_sheet.dart';
 
 /// Shops that already have a Placement Audit or Competitor Spotting, newest
@@ -27,12 +28,28 @@ class _Row {
 class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
   List<_Row> _rows = [];
   bool _loading = true;
+  bool _fetching = false;
   String _q = '';
 
   @override
   void initState() {
     super.initState();
-    _load();
+    // Show what the phone has straight away, then fetch the latest surveys
+    // from the server — a fresh install may not have pulled them yet.
+    _load().then((_) => _fetch());
+  }
+
+  Future<void> _fetch() async {
+    final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
+    if (orgId == null || _fetching) return;
+    if (mounted) setState(() => _fetching = true);
+    try {
+      await ref.read(supabasePullServiceProvider).refreshSurveyReference(orgId);
+      await ref.read(supabasePullServiceProvider).refreshSurveyHistory(orgId);
+    } catch (_) {}
+    if (!mounted) return;
+    await _load();
+    if (mounted) setState(() => _fetching = false);
   }
 
   Future<void> _load() async {
@@ -79,7 +96,13 @@ class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
         ? _rows
         : _rows.where((r) => r.shop.shopName.toLowerCase().contains(q) || r.shop.code.toLowerCase().contains(q)).toList();
     return Scaffold(
-      appBar: AppBar(title: const Text('Surveyed shops')),
+      appBar: AppBar(title: const Text('Surveyed shops'), actions: [
+        _fetching
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14),
+                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+            : IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: _fetch),
+      ]),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Column(children: [
@@ -104,9 +127,9 @@ class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
               ),
               Expanded(
                 child: shown.isEmpty
-                    ? const Center(child: Text('No surveyed shops yet.'))
+                    ? Center(child: Text(_fetching ? 'Fetching surveys…' : 'No surveyed shops yet.'))
                     : RefreshIndicator(
-                        onRefresh: _load,
+                        onRefresh: _fetch,
                         child: ListView.separated(
                           physics: const AlwaysScrollableScrollPhysics(),
                           itemCount: shown.length,

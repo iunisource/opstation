@@ -87,6 +87,7 @@ class _SurveyAuditScreenState extends ConsumerState<SurveyAuditScreen> {
       // Latest surveys from the server, and send any audits saved offline.
       try {
         await ref.read(supabasePullServiceProvider).refreshSurveyReference(orgId);
+        await ref.read(supabasePullServiceProvider).refreshSurveyHistory(orgId);
       } catch (_) {}
       await _svc.flush();
     }

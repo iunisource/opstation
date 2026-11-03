@@ -680,6 +680,11 @@ class SupabasePullService {
   /// pull-to-refresh) instead of waiting for the slow background history pull.
   /// Categories / SKUs removed on the server are removed here too.
   /// Returns false when the device could not reach the server.
+  /// Survey history (Placement Audit + Competitor Spotting rows) for the
+  /// survey list screens, so they don't depend on the background pull having
+  /// finished. Errors are swallowed inside (offline keeps the phone's copy).
+  Future<void> refreshSurveyHistory(String orgId) => _pullIntelligenceTables(orgId);
+
   Future<bool> refreshSurveyReference(String orgId) async {
     try {
       final client = Supabase.instance.client;
