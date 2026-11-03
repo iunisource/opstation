@@ -50,7 +50,8 @@ class SurveyAuditIndex {
   static DateTime? _t(dynamic v) => v == null ? null : DateTime.tryParse('$v');
 
   SurveyAuditState stateFor(String customerId, DateTime? lastSurvey) {
-    final list = byShop[customerId];
+    // Feedback is a note only — the status comes from the latest Matches / Issue.
+    final list = byShop[customerId]?.where((x) => x['result'] != 'feedback').toList();
     if (list == null || list.isEmpty) return SurveyAuditState.notAudited;
     final a = list.first;
     final at = _t(a['audited_at']);
@@ -136,17 +137,18 @@ class SurveyAuditIndex {
             itemBuilder: (_, i) {
               final a = audits[i];
               final issue = a['result'] == 'issue';
+              final feedback = a['result'] == 'feedback';
               final at = _t(a['audited_at'])?.toLocal();
               final sAt = _t(a['survey_at'])?.toLocal();
               final corr = a['corrections'] is List ? a['corrections'] as List : const [];
               final outside = a['location_status'] != 'inside';
               return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  Icon(issue ? Icons.error_outline : Icons.verified_outlined,
-                      size: 18, color: issue ? AppTheme.danger : const Color(0xFF059669)),
+                  Icon(issue ? Icons.error_outline : (feedback ? Icons.chat_bubble_outline : Icons.verified_outlined),
+                      size: 18, color: issue ? AppTheme.danger : (feedback ? AppTheme.primary : const Color(0xFF059669))),
                   const SizedBox(width: 6),
                   Expanded(
-                    child: Text('${issue ? 'Issue found' : 'Matches survey'} · ${a['auditor_name'] ?? ''}',
+                    child: Text('${issue ? 'Issue found' : (feedback ? 'Feedback' : 'Matches survey')} · ${a['auditor_name'] ?? ''}',
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                   ),
                 ]),
