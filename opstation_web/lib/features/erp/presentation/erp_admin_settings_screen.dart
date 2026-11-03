@@ -50,7 +50,8 @@ class _UsersField {
   final String key; // app_config key, e.g. 'org.sri_price_edit_users'
   final String label;
   final bool accounts; // pick chart-of-accounts entries instead of users
-  const _UsersField(this.key, this.label, {this.accounts = false});
+  final List<String>? roles; // only users with these roles (null = everyone)
+  const _UsersField(this.key, this.label, {this.accounts = false, this.roles});
 }
 
 /// An optional one-of-several choice attached to a toggle (e.g. Off /
@@ -684,7 +685,7 @@ const List<_AdminToggle> _toggles = [
     'Auditors can always mark a surveyed shop as Matches, Issue or Feedback. When '
         'ON, the auditors picked below can also correct the survey itself while '
         'auditing. When OFF, no auditor can change survey data.',
-    users: _UsersField('org.audit_fix_users', 'Auditors allowed to correct surveys'),
+    users: _UsersField('org.audit_fix_users', 'Auditors allowed to correct surveys', roles: ['auditor']),
   ),
 
   _AdminToggle(
@@ -695,6 +696,14 @@ const List<_AdminToggle> _toggles = [
         'Spotting screens until approved. Master admins can always approve; add '
         'more users below. When OFF, corrections apply immediately.',
     users: _UsersField('org.audit_fix_approvers', 'Also allowed to approve corrections'),
+  ),
+
+  _AdminToggle(
+    'org.auditor_group_scope',
+    'Limit auditors to customer groups',
+    'When ON, each auditor sees and audits only the shops in the customer groups '
+        'ticked for them below (e.g. Paklite, Popular) — surveyed or not. An auditor '
+        'with no group ticked still sees all shops.',
   ),
 
   _AdminToggle(
@@ -886,6 +895,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.intel_delete_access',
     'org.audit_fix_access',
     'org.audit_fix_approval',
+    'org.auditor_group_scope',
   ]),
 ];
 
@@ -939,7 +949,9 @@ class _ErpAdminSettingsScreenState
   List<Map<String, dynamic>> _branches = [];
   List<Map<String, dynamic>> _orgUsers = [];
   List<Map<String, dynamic>> _orgAccounts = []; // {id, name: 'code · name', role: ''}
-  List<Map<String, dynamic>> _roster(_UsersField u) => u.accounts ? _orgAccounts : _orgUsers;
+  List<Map<String, dynamic>> _roster(_UsersField u) => u.accounts
+      ? _orgAccounts
+      : (u.roles == null ? _orgUsers : _orgUsers.where((x) => u.roles!.contains('${x['role']}')).toList());
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
@@ -1976,6 +1988,10 @@ class _ErpAdminSettingsScreenState
       gap();
       children.add(_HiddenGroupsPanel(orgId: orgId));
     }
+    if (ex.contains('auditor_groups') && (_values['org.auditor_group_scope'] ?? false)) {
+      gap();
+      children.add(_AuditorGroupsPanel(orgId: orgId));
+    }
     if (footers.isNotEmpty) {
       gap();
       children.add(_FooterNotesPanel(orgId: orgId, only: footers));
@@ -2167,6 +2183,11 @@ class _ErpAdminSettingsScreenState
                   if (_values['org.hide_main_groups_by_branch'] ?? false) ...[
                     const SizedBox(height: 16),
                     _HiddenGroupsPanel(
+                        orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  ],
+                  if (_values['org.auditor_group_scope'] ?? false) ...[
+                    const SizedBox(height: 16),
+                    _AuditorGroupsPanel(
                         orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   ],
                   if (_values['org.backup_enabled'] ?? false) ...[
@@ -2765,6 +2786,198 @@ class _HiddenGroupsPanelState extends State<_HiddenGroupsPanel> {
   }
 }
 
+
+/// Customer groups each auditor may work on ('org.auditor_group_scope', SQL
+/// 446). Pick an auditor, tick groups. Saved in auditor_customer_groups.
+class _AuditorGroupsPanel extends StatefulWidget {
+  final String orgId;
+  const _AuditorGroupsPanel({required this.orgId});
+  @override
+  State<_AuditorGroupsPanel> createState() => _AuditorGroupsPanelState();
+}
+
+class _AuditorGroupsPanelState extends State<_AuditorGroupsPanel> {
+  List<Map<String, dynamic>> _auditors = [];
+  List<String> _groups = [];
+  final Map<String, Set<String>> _ticked = {}; // auditor -> groups
+  String? _auditorId;
+  bool _loading = true;
+  final Set<String> _busy = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (widget.orgId.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+    final client = Supabase.instance.client;
+    try {
+      final auditors = await client
+          .from('users')
+          .select('id, name')
+          .eq('org_id', widget.orgId)
+          .eq('role', 'auditor')
+          .order('name');
+      final groups = <String>{};
+      for (var from = 0;; from += 1000) {
+        final page = await client
+            .from('customers')
+            .select('group_name')
+            .eq('org_id', widget.orgId)
+            .eq('is_active', true)
+            .order('id')
+            .range(from, from + 999);
+        for (final c in page) {
+          final g = (c['group_name'] as String?)?.trim();
+          if (g != null && g.isNotEmpty) groups.add(g);
+        }
+        if ((page as List).length < 1000) break;
+      }
+      final rows = await client
+          .from('auditor_customer_groups')
+          .select('user_id, group_name')
+          .eq('org_id', widget.orgId);
+      _ticked.clear();
+      for (final r in rows as List) {
+        (_ticked['${r['user_id']}'] ??= <String>{}).add('${r['group_name']}');
+      }
+      // Groups saved earlier but no longer on any customer stay visible.
+      for (final s in _ticked.values) {
+        groups.addAll(s);
+      }
+      if (!mounted) return;
+      setState(() {
+        _auditors = List<Map<String, dynamic>>.from(auditors);
+        _groups = groups.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        _auditorId = _auditors.isNotEmpty ? '${_auditors.first['id']}' : null;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _set(String auditor, String group, bool on) async {
+    final k = '$auditor|$group';
+    setState(() {
+      _busy.add(k);
+      if (on) {
+        (_ticked[auditor] ??= <String>{}).add(group);
+      } else {
+        _ticked[auditor]?.remove(group);
+      }
+    });
+    final client = Supabase.instance.client;
+    try {
+      if (on) {
+        await client.from('auditor_customer_groups').upsert({
+          'org_id': widget.orgId,
+          'user_id': auditor,
+          'group_name': group,
+        }, onConflict: 'org_id,user_id,group_name');
+      } else {
+        await client
+            .from('auditor_customer_groups')
+            .delete()
+            .eq('org_id', widget.orgId)
+            .eq('user_id', auditor)
+            .eq('group_name', group);
+      }
+      adminSettingsChangeTick.value++;
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          if (on) {
+            _ticked[auditor]?.remove(group);
+          } else {
+            (_ticked[auditor] ??= <String>{}).add(group);
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(k));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ticked = _auditorId == null ? const <String>{} : (_ticked[_auditorId] ?? const <String>{});
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Auditor customer groups', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          const Text(
+            'Pick an auditor, then tick the customer groups they work on. They will see '
+            'only shops in these groups. No group ticked = all shops.',
+            style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_auditors.isEmpty)
+            const Text('No auditors found. Add a user with the Auditor role first.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+          else if (_groups.isEmpty)
+            const Text('No customer groups found. Set the Group on your customers first.',
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary))
+          else ...[
+            Row(children: [
+              const Text('Auditor', style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+              const SizedBox(width: 12),
+              DropdownButton<String>(
+                value: _auditorId,
+                onChanged: (v) => setState(() => _auditorId = v),
+                items: [
+                  for (final a in _auditors)
+                    DropdownMenuItem(
+                      value: '${a['id']}',
+                      child: Text(
+                        '${a['name'] ?? '-'}'
+                        '${(_ticked['${a['id']}'] ?? const <String>{}).isEmpty ? '  (all shops)' : '  (${_ticked['${a['id']}']!.length})'}',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                ],
+              ),
+            ]),
+            const SizedBox(height: 4),
+            for (final g in _groups)
+              CheckboxListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: AppTheme.primary,
+                title: Text(g, style: const TextStyle(fontSize: 13)),
+                secondary: _busy.contains('$_auditorId|$g')
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : null,
+                value: ticked.contains(g),
+                onChanged: _auditorId == null ? null : (v) => _set(_auditorId!, g, v ?? false),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 /// Footer notes for vouchers, moved here from Operations → Settings and split
 /// per voucher type. Each field is stored in app_config (org-scoped):

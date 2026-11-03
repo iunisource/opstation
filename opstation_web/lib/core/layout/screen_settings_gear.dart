@@ -28,7 +28,7 @@ const _customerKeys = [
   'org.customer_deactivate_access',
   'org.field_location_capture',
 ];
-const _intelKeys = ['org.intel_delete_access', 'org.audit_fix_access', 'org.audit_fix_approval'];
+const _intelKeys = ['org.intel_delete_access', 'org.audit_fix_access', 'org.audit_fix_approval', 'org.auditor_group_scope'];
 
 const Map<String, _ScreenSettings> _screenSettings = {
   // ── Sales ──
@@ -116,8 +116,8 @@ const Map<String, _ScreenSettings> _screenSettings = {
     'org.asset_supervise_flow', 'org.asset_suggest_flow',
     'org.asset_maintenance_reminder', 'org.asset_custodian_reminder',
   ]),
-  '/intelligence/placement': _ScreenSettings('Placement Audit', _intelKeys),
-  '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys),
+  '/intelligence/placement': _ScreenSettings('Placement Audit', _intelKeys, ['auditor_groups']),
+  '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys, ['auditor_groups']),
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
 };
 
