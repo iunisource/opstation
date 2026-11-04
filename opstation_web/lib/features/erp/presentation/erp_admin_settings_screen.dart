@@ -680,28 +680,9 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
-    'org.audit_fix_access',
-    'Auditors can correct surveys',
-    'Auditors can always mark a surveyed shop as Matches, Issue or Feedback. When '
-        'ON, the auditors picked below can also correct the survey itself while '
-        'auditing. When OFF, no auditor can change survey data.',
-    users: _UsersField('org.audit_fix_users', 'Auditors allowed to correct surveys', roles: ['auditor']),
-  ),
-
-  _AdminToggle(
-    'org.audit_fix_approval',
-    'Approval for auditor corrections',
-    'When ON, a correction made by an auditor is not applied straight away — it '
-        'waits under "Pending corrections" on the Placement Audit and Competitor '
-        'Spotting screens until approved. Master admins can always approve; add '
-        'more users below. When OFF, corrections apply immediately.',
-    users: _UsersField('org.audit_fix_approvers', 'Also allowed to approve corrections'),
-  ),
-
-  _AdminToggle(
     'org.auditor_group_scope',
     'Limit auditors to customer groups',
-    'When ON, each auditor sees and audits only the shops in the customer groups '
+    'When ON, each auditor sees and gives feedback on only the shops in the customer groups '
         'ticked for them below (e.g. Paklite, Popular) — surveyed or not. An auditor '
         'with no group ticked still sees all shops.',
   ),
@@ -893,8 +874,6 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Intelligence & Surveys', Icons.travel_explore_outlined, [
     'org.intel_delete_access',
-    'org.audit_fix_access',
-    'org.audit_fix_approval',
     'org.auditor_group_scope',
   ]),
 ];
