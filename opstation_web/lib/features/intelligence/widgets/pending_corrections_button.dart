@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
+import 'survey_audit_status.dart' show photoBucket, photoName;
 
 /// "Pending corrections (n)" on the Placement Audit and Competitor Spotting
 /// screens (SQL 444). Shown only to users who may approve auditor corrections,
@@ -168,9 +169,9 @@ class _PendingDialogState extends State<_PendingDialog> {
   Future<void> _photo(String path) async {
     String url;
     try {
-      url = await Supabase.instance.client.storage.from('opstation-photos').createSignedUrl(path, 3600);
+      url = await Supabase.instance.client.storage.from(photoBucket(path)).createSignedUrl(photoName(path), 3600);
     } catch (_) {
-      url = Supabase.instance.client.storage.from('opstation-photos').getPublicUrl(path);
+      url = Supabase.instance.client.storage.from(photoBucket(path)).getPublicUrl(photoName(path));
     }
     await launchUrl(Uri.parse(url), webOnlyWindowName: '_blank');
   }

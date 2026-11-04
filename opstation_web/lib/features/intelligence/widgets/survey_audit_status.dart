@@ -18,6 +18,12 @@ const surveyAuditFilterLabels = <String, String>{
   'resurveyed': 'Re-surveyed since audit',
 };
 
+/// Feedback photos (SQL 447) are in the private bucket "survey-feedback" and
+/// stored as "survey-feedback/<org>/<id>.jpg"; older ones in opstation-photos.
+String photoBucket(String path) => path.startsWith('survey-feedback/') ? 'survey-feedback' : 'opstation-photos';
+String photoName(String path) =>
+    path.startsWith('survey-feedback/') ? path.substring('survey-feedback/'.length) : path;
+
 /// Status of an auditor's correction (SQL 444) in plain words; '' when the
 /// audit has no correction waiting / decided.
 String fixStatusText(Map<String, dynamic> a) {
@@ -220,9 +226,9 @@ class SurveyAuditIndex {
                       final path = '${a['photo_path']}';
                       String url;
                       try {
-                        url = await Supabase.instance.client.storage.from('opstation-photos').createSignedUrl(path, 3600);
+                        url = await Supabase.instance.client.storage.from(photoBucket(path)).createSignedUrl(photoName(path), 3600);
                       } catch (_) {
-                        url = Supabase.instance.client.storage.from('opstation-photos').getPublicUrl(path);
+                        url = Supabase.instance.client.storage.from(photoBucket(path)).getPublicUrl(photoName(path));
                       }
                       await launchUrl(Uri.parse(url), webOnlyWindowName: '_blank');
                     },
