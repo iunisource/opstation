@@ -50,6 +50,7 @@ import '../../features/surveyor/presentation/placement_audit_screen.dart';
 import '../../features/surveyor/presentation/surveyed_shops_screen.dart';
 import '../../features/surveyor/presentation/competitor_spotting_screen.dart';
 import '../../features/surveyor/presentation/survey_audit_screen.dart';
+import '../../features/surveyor/presentation/non_surveyed_shops_screen.dart';
 import '../../features/team/presentation/change_password_screen.dart';
 import '../../features/team/presentation/team_list_screen.dart';
 import '../../features/team/presentation/user_detail_screen.dart';
@@ -110,7 +111,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         }
         // Auditors check surveys; they don't record them.
         if (staff.role == UserRole.auditor &&
-            (loc == '/placement-audit' || loc == '/competitor-spotting')) {
+            (loc == '/placement-audit' || loc == '/competitor-spotting' || loc == '/survey-audit')) {
           return staff.role.homeRoute;
         }
         return null;
@@ -176,6 +177,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/survey-audit',
         builder: (_, __) => const SurveyAuditScreen(),
+      ),
+      GoRoute(
+        path: '/non-surveyed-shops',
+        builder: (_, __) => const NonSurveyedShopsScreen(),
       ),
       GoRoute(
         path: '/dispatch',

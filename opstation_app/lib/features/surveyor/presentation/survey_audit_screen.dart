@@ -785,6 +785,97 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
     ]);
   }
 
+  // ── View-only survey (auditor not allowed to correct): compact, easy to
+  // scan at the shop. ──
+  List<Widget> _readOnlySurvey(String pBy) {
+    final hint = Theme.of(context).hintColor;
+    const green = Color(0xFF059669), red = Color(0xFFDC2626);
+    final shown = [for (final p in _products) if (_latestP[p.id] != null) p];
+    final missingP = [for (final p in _products) if (_latestP[p.id] == null) p.name];
+    final displayed = shown.where((p) => _latestP[p.id]!.isPresent).length;
+    final spotted = [for (final s in _spots) if (s.latest != null) s];
+    final missingC = [for (final s in _spots) if (s.latest == null) s.cat.name];
+    final whoC = {for (final s in spotted) _users[s.latest!.surveyedByUserId] ?? ''}..remove('');
+    DateTime? lastC;
+    for (final s in spotted) {
+      if (lastC == null || s.latest!.surveyedAt.isAfter(lastC)) lastC = s.latest!.surveyedAt;
+    }
+
+    Widget chip(String name, bool on) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: (on ? green : red).withOpacity(0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: (on ? green : red).withOpacity(0.30)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(on ? Icons.check : Icons.close, size: 15, color: on ? green : red),
+            const SizedBox(width: 4),
+            Text(name, style: const TextStyle(fontSize: 13)),
+          ]),
+        );
+
+    Widget notSurveyed(List<String> names) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Text('Not surveyed: ${names.join(', ')}', style: TextStyle(fontSize: 12, color: hint)),
+        );
+
+    return [
+      _section(
+        'Placement',
+        shown.isEmpty ? 'Not surveyed' : '$displayed of ${shown.length} displayed${pBy.isEmpty ? '' : ' · $pBy'}',
+      ),
+      if (shown.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final p in shown) chip(p.name, _latestP[p.id]!.isPresent),
+          ]),
+        ),
+      if (shown.isNotEmpty && missingP.isNotEmpty) notSurveyed(missingP),
+      const Divider(height: 28),
+      _section(
+        'Competitor Spotting',
+        spotted.isEmpty
+            ? 'Not surveyed'
+            : [
+                if (lastC != null) _df.format(lastC),
+                if (whoC.isNotEmpty) whoC.join(', '),
+              ].join(' · '),
+      ),
+      for (final s in spotted)
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor))),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              flex: 4,
+              child: Text(s.cat.name, style: TextStyle(fontSize: 13, color: hint)),
+            ),
+            Expanded(
+              flex: 6,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(
+                    child: Text(s.latest!.brandName,
+                        style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
+                  ),
+                  if (s.latest!.price != null) ...[
+                    const SizedBox(width: 8),
+                    Text('Rs ${s.latest!.price}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  ],
+                ]),
+                if ((s.latest!.specs ?? '').trim().isNotEmpty)
+                  Text(s.latest!.specs!.trim(), style: TextStyle(fontSize: 12, color: hint)),
+              ]),
+            ),
+          ]),
+        ),
+      if (missingC.isNotEmpty) notSurveyed(missingC),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final pBy = _latestP.values.isEmpty
@@ -815,7 +906,8 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
                   style: TextStyle(fontSize: 12.5, color: Theme.of(context).hintColor),
                 ),
               ),
-              if (_surveyed) ...[
+              if (_surveyed && !_canFix) ..._readOnlySurvey(pBy),
+              if (_surveyed && _canFix) ...[
               _section('Placement', pBy),
               if (_products.isEmpty)
                 const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('No products set up.'))

@@ -63,10 +63,12 @@ class SurveyAuditService {
         if (local != null && local.isNotEmpty && (row['photo_path'] == null || '${row['photo_path']}'.isEmpty)) {
           final f = File(local);
           if (await f.exists()) {
-            final path = 'survey-audits/${row['org_id']}/${row['id']}.jpg';
+            // Private, org-only bucket (SQL 447).
+            final name = '${row['org_id']}/${row['id']}.jpg';
+            final path = 'survey-feedback/$name';
             try {
-              await client.storage.from('opstation-photos').uploadBinary(
-                    path,
+              await client.storage.from('survey-feedback').uploadBinary(
+                    name,
                     await f.readAsBytes(),
                     fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: true),
                   );

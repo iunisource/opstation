@@ -1,163 +1,221 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:intl/intl.dart';
 
-import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
-import '../../auth/providers/auth_controller.dart';
 import '../../auth/models/user_role.dart';
-import '../../../core/supabase/supabase_pull_service.dart';
+import '../../auth/providers/auth_controller.dart';
 import '../services/survey_audit_service.dart';
+import 'feedbacks_tab.dart';
+import 'shop_lists_data.dart';
 import 'survey_view_sheet.dart';
 
-/// Shops that already have a Placement Audit or Competitor Spotting, newest
-/// first. Tap one to see its survey (read-only).
+/// Shops that have a Placement Audit or Competitor Spotting, newest survey
+/// first. Tap one to see its survey. Auditors also get feedback filters, a
+/// Feedback button on each shop and a "Feedbacks" tab.
 class SurveyedShopsScreen extends ConsumerStatefulWidget {
   const SurveyedShopsScreen({super.key});
   @override
   ConsumerState<SurveyedShopsScreen> createState() => _SurveyedShopsScreenState();
 }
 
-class _Row {
-  final CustomersData shop;
-  final DateTime last;
-  final bool placement;
-  final bool spotting;
-  _Row(this.shop, this.last, this.placement, this.spotting);
-}
-
 class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
-  List<_Row> _rows = [];
-  bool _loading = true;
+  ShopListData? _data;
   bool _fetching = false;
   String _q = '';
+  String _filter = 'all'; // all | none | with
+
+  bool get _auditor => ref.read(authControllerProvider).valueOrNull?.role == UserRole.auditor;
 
   @override
   void initState() {
     super.initState();
-    // Show what the phone has straight away, then fetch the latest surveys
-    // from the server — a fresh install may not have pulled them yet.
+    // What the phone has straight away, then the latest from the server.
     _load().then((_) => _fetch());
   }
 
   Future<void> _fetch() async {
-    final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
-    if (orgId == null || _fetching) return;
+    if (_fetching) return;
     if (mounted) setState(() => _fetching = true);
-    try {
-      await ref.read(supabasePullServiceProvider).refreshSurveyReference(orgId);
-      await ref.read(supabasePullServiceProvider).refreshSurveyHistory(orgId);
-    } catch (_) {}
-    if (!mounted) return;
+    await refreshSurveys(ref);
+    if (_auditor) {
+      try {
+        await SurveyAuditService(ref.read(appDatabaseProvider)).flush();
+      } catch (_) {}
+    }
     await _load();
     if (mounted) setState(() => _fetching = false);
   }
 
   Future<void> _load() async {
-    final db = ref.read(appDatabaseProvider);
-    final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
-    final shops = await (db.select(db.customers)
-          ..where((c) => c.isActive.equals(true))
-          ..orderBy([(c) => OrderingTerm.asc(c.shopName)]))
-        .get();
-    // Auditor limited to customer groups (Admin Settings): only those shops.
-    final isAuditor = ref.read(authControllerProvider).valueOrNull?.role == UserRole.auditor;
-    final groups = (orgId == null || !isAuditor) ? null : await SurveyAuditService(db).shopGroups(orgId);
-    final byId = {
-      for (final c in shops)
-        if ((orgId == null || c.orgId == null || c.orgId == orgId) && SurveyAuditService.inGroups(groups, c)) c.id: c,
-    };
-    final last = <String, DateTime>{};
-    final hasP = <String>{};
-    final hasS = <String>{};
-    for (final a in await db.select(db.placementAudits).get()) {
-      if (!byId.containsKey(a.customerId)) continue;
-      hasP.add(a.customerId);
-      final cur = last[a.customerId];
-      if (cur == null || a.surveyedAt.isAfter(cur)) last[a.customerId] = a.surveyedAt;
-    }
-    for (final s in await db.select(db.competitorSpottings).get()) {
-      if (!byId.containsKey(s.customerId)) continue;
-      hasS.add(s.customerId);
-      final cur = last[s.customerId];
-      if (cur == null || s.surveyedAt.isAfter(cur)) last[s.customerId] = s.surveyedAt;
-    }
-    final rows = [
-      for (final e in last.entries)
-        _Row(byId[e.key]!, e.value, hasP.contains(e.key), hasS.contains(e.key)),
-    ]..sort((a, b) => b.last.compareTo(a.last));
-    if (!mounted) return;
-    setState(() {
-      _rows = rows;
-      _loading = false;
-    });
+    final d = await loadShopLists(ref, withAudits: _auditor);
+    if (mounted) setState(() => _data = d);
+  }
+
+  Widget _badge(String text, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: c.withOpacity(0.10), borderRadius: BorderRadius.circular(6)),
+        child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: c)),
+      );
+
+  Widget _shops(ShopListData d) {
+    final hint = Theme.of(context).hintColor;
+    final q = _q.trim().toLowerCase();
+    final ids = d.lastSurvey.keys.toList()..sort((a, b) => d.lastSurvey[b]!.compareTo(d.lastSurvey[a]!));
+    final shown = [
+      for (final id in ids)
+        if ((q.isEmpty || d.shops[id]!.shopName.toLowerCase().contains(q) || d.shops[id]!.code.toLowerCase().contains(q)) &&
+            switch (_filter) {
+              'none' => (d.feedbackCount[id] ?? 0) == 0,
+              'with' => (d.feedbackCount[id] ?? 0) > 0,
+              _ => true,
+            })
+          d.shops[id]!
+    ];
+    const green = Color(0xFF047857), red = Color(0xFFB91C1C), amber = Color(0xFFB45309), grey = Color(0xFF475569);
+    const blue = Color(0xFF1D4ED8);
+    final df = DateFormat('d MMM');
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: TextField(
+          onChanged: (v) => setState(() => _q = v),
+          decoration: InputDecoration(
+            hintText: 'Search shop or code',
+            prefixIcon: const Icon(Icons.search),
+            isDense: true,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      ),
+      if (_auditor)
+        SizedBox(
+          height: 40,
+          child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 16), children: [
+            for (final f in const [('all', 'All'), ('none', 'No feedback'), ('with', 'With feedback')]) ...[
+              ChoiceChip(label: Text(f.$2), selected: _filter == f.$1, onSelected: (_) => setState(() => _filter = f.$1)),
+              const SizedBox(width: 6),
+            ],
+          ]),
+        ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text('${shown.length} shop${shown.length == 1 ? '' : 's'} · newest survey first',
+              style: TextStyle(fontSize: 12.5, color: hint)),
+        ),
+      ),
+      Expanded(
+        child: RefreshIndicator(
+          onRefresh: _fetch,
+          child: shown.isEmpty
+              ? ListView(children: [
+                  Padding(
+                    padding: const EdgeInsets.all(40),
+                    child: Center(child: Text(_fetching ? 'Fetching surveys…' : 'No surveyed shops here.')),
+                  ),
+                ])
+              : ListView.builder(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(bottom: 24),
+                  itemCount: shown.length,
+                  itemBuilder: (_, i) {
+                    final s = shown[i];
+                    final p = d.placement[s.id];
+                    final c = d.competitor[s.id] ?? 0;
+                    final fb = d.feedbackCount[s.id] ?? 0;
+                    final by = d.lastBy[s.id] ?? '';
+                    return Card(
+                      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: Theme.of(context).dividerColor),
+                      ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () async {
+                          await SurveyViewSheet.show(context, s, showFeedback: _auditor);
+                          if (_auditor) _load();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Expanded(
+                                child: Text(s.shopName,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
+                              ),
+                              if (_auditor && fb > 0) ...[
+                                const SizedBox(width: 8),
+                                _badge('$fb 💬', blue),
+                              ],
+                            ]),
+                            const SizedBox(height: 2),
+                            Text(
+                              [s.code, 'surveyed ${df.format(d.lastSurvey[s.id]!)}', if (by.isNotEmpty) by].join(' · '),
+                              style: TextStyle(fontSize: 12, color: hint),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(spacing: 6, runSpacing: 4, children: [
+                              if (p == null)
+                                _badge('No placement', amber)
+                              else
+                                _badge('Placement ${p.$1}/${p.$2}', p.$2 > 0 && p.$1 * 2 >= p.$2 ? green : red),
+                              c == 0 ? _badge('No competitor', amber) : _badge('Competitor $c', grey),
+                            ]),
+                          ]),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ),
+    ]);
   }
 
   @override
   Widget build(BuildContext context) {
-    final q = _q.trim().toLowerCase();
-    final shown = q.isEmpty
-        ? _rows
-        : _rows.where((r) => r.shop.shopName.toLowerCase().contains(q) || r.shop.code.toLowerCase().contains(q)).toList();
-    return Scaffold(
-      appBar: AppBar(title: const Text('Surveyed shops'), actions: [
-        _fetching
-            ? const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 14),
-                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
-            : IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: _fetch),
-      ]),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: TextField(
-                  onChanged: (v) => setState(() => _q = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Search shop by name or code',
-                    prefixIcon: Icon(Icons.search),
-                    border: OutlineInputBorder(),
-                  ),
+    final d = _data;
+    final user = ref.read(authControllerProvider).valueOrNull;
+    final refreshBtn = _fetching
+        ? const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 14),
+            child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+        : IconButton(tooltip: 'Refresh', icon: const Icon(Icons.refresh), onPressed: _fetch);
+    if (!_auditor) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Surveyed shops'), actions: [refreshBtn]),
+        body: d == null ? const Center(child: CircularProgressIndicator()) : _shops(d),
+      );
+    }
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Surveyed shops'),
+          actions: [refreshBtn],
+          bottom: const TabBar(tabs: [Tab(text: 'Shops'), Tab(text: 'Feedbacks')]),
+        ),
+        body: d == null
+            ? const Center(child: CircularProgressIndicator())
+            : TabBarView(children: [
+                _shops(d),
+                FeedbacksTab(
+                  audits: d.audits,
+                  shops: {for (final id in d.surveyed) id: d.shops[id]!},
+                  surveyed: d.surveyed,
+                  myId: user?.id,
+                  orgName: user?.organizationName ?? '',
+                  title: 'Surveyed shops',
+                  onRefresh: _fetch,
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('${shown.length} shop${shown.length == 1 ? '' : 's'}',
-                      style: TextStyle(color: Theme.of(context).hintColor, fontSize: 12.5)),
-                ),
-              ),
-              Expanded(
-                child: shown.isEmpty
-                    ? Center(child: Text(_fetching ? 'Fetching surveys…' : 'No surveyed shops yet.'))
-                    : RefreshIndicator(
-                        onRefresh: _fetch,
-                        child: ListView.separated(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: shown.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
-                            final r = shown[i];
-                            return ListTile(
-                              title: Text(r.shop.shopName),
-                              subtitle: Text([
-                                r.shop.code,
-                                if (r.placement) 'Placement',
-                                if (r.spotting) 'Competitor',
-                                'Last ${DateFormat('d MMM yyyy').format(r.last)}',
-                              ].join(' · ')),
-                              trailing: const Icon(Icons.chevron_right),
-                              onTap: () => SurveyViewSheet.show(context, r.shop,
-                                  showAudit: ref.read(authControllerProvider).valueOrNull?.role == UserRole.auditor),
-                            );
-                          },
-                        ),
-                      ),
-              ),
-            ]),
+              ]),
+      ),
     );
   }
 }

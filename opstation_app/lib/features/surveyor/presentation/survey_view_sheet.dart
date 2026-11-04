@@ -5,15 +5,16 @@ import 'package:intl/intl.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
-import 'survey_audit_screen.dart';
+import 'survey_audit_screen.dart' show fixStatusText, fixStatusColor;
 import '../services/survey_audit_service.dart';
+import '../services/survey_feedback.dart';
 
 /// Read-only view of a shop's latest survey: Placement Audit (✓ / ✗ per
 /// product) and Competitor Spotting (brand, price, specs per category), with
 /// when and by whom. Opened from the survey lists and from "Surveyed shops".
 class SurveyViewSheet {
-  /// [showAudit]: adds an "Audit" button at the end (auditors, from Surveyed shops).
-  static Future<void> show(BuildContext context, CustomersData shop, {bool showAudit = false}) {
+  /// [showFeedback]: adds a "Feedback" button (auditors, from Surveyed shops).
+  static Future<void> show(BuildContext context, CustomersData shop, {bool showFeedback = false}) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -24,7 +25,7 @@ class SurveyViewSheet {
         initialChildSize: 0.85,
         minChildSize: 0.5,
         maxChildSize: 0.95,
-        builder: (ctx, scroll) => _SurveyView(shop: shop, scroll: scroll, showAudit: showAudit),
+        builder: (ctx, scroll) => _SurveyView(shop: shop, scroll: scroll, showFeedback: showFeedback),
       ),
     );
   }
@@ -42,15 +43,15 @@ class _Data {
 class _SurveyView extends ConsumerStatefulWidget {
   final CustomersData shop;
   final ScrollController scroll;
-  final bool showAudit;
-  const _SurveyView({required this.shop, required this.scroll, this.showAudit = false});
+  final bool showFeedback;
+  const _SurveyView({required this.shop, required this.scroll, this.showFeedback = false});
   @override
   ConsumerState<_SurveyView> createState() => _SurveyViewState();
 }
 
 class _SurveyViewState extends ConsumerState<_SurveyView> {
   late final Future<_Data> _future = _load();
-  late final Future<List<Map<String, dynamic>>> _audits = _loadAudits();
+  late Future<List<Map<String, dynamic>>> _audits = _loadAudits();
 
   /// This shop's audits (server + any still waiting on this phone).
   Future<List<Map<String, dynamic>>> _loadAudits() async {
@@ -101,6 +102,13 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
                 style: const TextStyle(fontSize: 12.5)),
         if (fixStatusText(a).isNotEmpty)
           Text(fixStatusText(a), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fixStatusColor(a))),
+        if ((a['photo_path'] ?? a['local_photo']) != null)
+          TextButton.icon(
+            style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+            onPressed: () => showFeedbackPhoto(context, a),
+            icon: const Icon(Icons.photo_outlined, size: 16),
+            label: const Text('View photo'),
+          ),
       ]),
     );
   }
@@ -213,38 +221,73 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
                       '${d.placementBy.isEmpty ? '' : ' · ${d.placementBy}'}',
             ),
             if (d.placement.isEmpty)
-              const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('Not audited yet.'))
+              const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('Not surveyed yet.'))
             else
-              for (final p in d.placement)
-                ListTile(
-                  dense: true,
-                  leading: Icon(p.$2 ? Icons.check_circle : Icons.cancel,
-                      color: p.$2 ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
-                  title: Text(p.$1),
-                  trailing: Text(p.$2 ? 'Displayed' : 'Not displayed',
-                      style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
-                ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Wrap(spacing: 6, runSpacing: 6, children: [
+                  for (final p in d.placement)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: (p.$2 ? const Color(0xFF059669) : const Color(0xFFDC2626)).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: (p.$2 ? const Color(0xFF059669) : const Color(0xFFDC2626)).withOpacity(0.30)),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(p.$2 ? Icons.check : Icons.close,
+                            size: 15, color: p.$2 ? const Color(0xFF059669) : const Color(0xFFDC2626)),
+                        const SizedBox(width: 4),
+                        Text(p.$1, style: const TextStyle(fontSize: 13)),
+                      ]),
+                    ),
+                ]),
+              ),
             const Divider(height: 24),
             _section(
               'Competitor Spotting',
-              d.spotting.isEmpty ? '' : (d.spottingBy.isEmpty ? '' : 'Last by ${d.spottingBy}'),
+              d.spotting.isEmpty
+                  ? ''
+                  : [
+                      _df.format(d.spotting.map((s) => s.$5).reduce((a, b) => a.isAfter(b) ? a : b)),
+                      if (d.spottingBy.isNotEmpty) d.spottingBy,
+                    ].join(' · '),
             ),
             if (d.spotting.isEmpty)
               const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('No competitor spotted yet.'))
             else
               for (final s in d.spotting)
-                ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.flag_outlined),
-                  title: Text('${s.$1}: ${s.$2}', style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text([
-                    if (s.$3 != null) 'Rs ${NumberFormat.decimalPattern().format(s.$3)}',
-                    if (s.$4.trim().isNotEmpty) s.$4.trim(),
-                    DateFormat('d MMM yyyy').format(s.$5),
-                  ].join(' · ')),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor))),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(
+                      flex: 4,
+                      child: Text(s.$1, style: TextStyle(fontSize: 13, color: Theme.of(context).hintColor)),
+                    ),
+                    Expanded(
+                      flex: 6,
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Flexible(
+                            child: Text(s.$2, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
+                          ),
+                          if (s.$3 != null) ...[
+                            const SizedBox(width: 8),
+                            Text('Rs ${NumberFormat.decimalPattern().format(s.$3)}',
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                          ],
+                        ]),
+                        if (s.$4.trim().isNotEmpty)
+                          Text(s.$4.trim(), style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
+                      ]),
+                    ),
+                  ]),
                 ),
             const Divider(height: 24),
-            _section('Audits', ''),
+            _section('Feedback', ''),
             FutureBuilder<List<Map<String, dynamic>>>(
               future: _audits,
               builder: (context, snap) {
@@ -253,24 +296,23 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
                 }
                 final list = snap.data!;
                 if (list.isEmpty) {
-                  return const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('Not audited yet.'));
+                  return const Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Text('No feedback yet.'));
                 }
                 return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [for (final a in list) _auditTile(a)]);
               },
             ),
-            if (widget.showAudit)
+            if (widget.showFeedback)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                 child: SizedBox(
                   width: double.infinity,
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.fact_check_outlined),
-                    label: const Text('Audit'),
-                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
-                    onPressed: () {
-                      final nav = Navigator.of(context);
-                      nav.pop();
-                      nav.push(MaterialPageRoute(builder: (_) => ShopAuditPage(shop: widget.shop)));
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.chat_bubble_outline),
+                    label: const Text('Feedback'),
+                    style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+                    onPressed: () async {
+                      final ok = await giveFeedback(context, ref, widget.shop);
+                      if (ok && mounted) setState(() => _audits = _loadAudits());
                     },
                   ),
                 ),

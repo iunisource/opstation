@@ -53,17 +53,7 @@ class SurveyorHomeScreen extends ConsumerWidget {
           // "Customers without location" and "Recent edits" tiles are
           // hidden until they have real implementations. Better to ship
           // one working entry point than three that go nowhere.
-          if (isAuditor) ...[
-            const SectionLabel('Audit'),
-            const SizedBox(height: 10),
-            ManagementTile(
-              icon: Icons.fact_check_outlined,
-              title: 'Audit surveys',
-              subtitle: 'Re-check surveyed shops, correct and comment',
-              onTap: () => context.push('/survey-audit'),
-            ),
-          ],
-          const SizedBox(height: 24),
+          if (!isAuditor) const SizedBox(height: 24),
           const SectionLabel('Intelligence'),
           const SizedBox(height: 10),
           // Auditors check surveys; recording them is the surveyor's job.
@@ -84,9 +74,16 @@ class SurveyorHomeScreen extends ConsumerWidget {
           ManagementTile(
             icon: Icons.visibility_outlined,
             title: 'Surveyed shops',
-            subtitle: 'See the last survey of a shop',
+            subtitle: isAuditor ? 'View surveys, give feedback' : 'See the last survey of a shop',
             onTap: () => context.push('/surveyed-shops'),
           ),
+          if (isAuditor)
+            ManagementTile(
+              icon: Icons.location_searching,
+              title: 'Non-surveyed shops',
+              subtitle: 'Shops still waiting for a survey',
+              onTap: () => context.push('/non-surveyed-shops'),
+            ),
         ],
       ),
     );
