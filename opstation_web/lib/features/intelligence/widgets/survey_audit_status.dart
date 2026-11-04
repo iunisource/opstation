@@ -69,8 +69,9 @@ class SurveyAuditIndex {
   static DateTime? _t(dynamic v) => v == null ? null : DateTime.tryParse('$v');
 
   SurveyAuditState stateFor(String customerId, DateTime? lastSurvey) {
-    // Feedback is a note only — the status comes from the latest Matches / Issue.
-    final list = byShop[customerId]?.where((x) => x['result'] != 'feedback').toList();
+    // Any audit counts — feedback (the auditors' only action now), and the
+    // older Matches / Issue. Where the auditor stood is shown separately.
+    final list = byShop[customerId];
     if (list == null || list.isEmpty) return SurveyAuditState.notAudited;
     final a = list.first;
     final at = _t(a['audited_at']);
