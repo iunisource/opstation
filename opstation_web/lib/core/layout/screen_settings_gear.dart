@@ -116,19 +116,21 @@ const Map<String, _ScreenSettings> _screenSettings = {
     'org.asset_supervise_flow', 'org.asset_suggest_flow',
     'org.asset_maintenance_reminder', 'org.asset_custodian_reminder',
   ]),
-  '/intelligence/placement': _ScreenSettings('Placement Audit', _intelKeys, ['auditor_groups']),
-  '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys, ['auditor_groups']),
+  '/intelligence/placement': _ScreenSettings('Placement Audit', _intelKeys),
+  '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys),
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
 };
 
-/// Floating gear on the screen (bottom-left): opens this screen's settings. Shown only to master
-/// admins, and only on screens that have settings.
+/// Floating gear on the screen (bottom-left): opens this screen's settings. Shown to master
+/// admins and admins (who can open Admin Settings), only on screens that have settings.
 class ScreenSettingsGear extends ConsumerWidget {
   const ScreenSettingsGear({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (ref.watch(currentUserProvider)?.role != WebUserRole.masterAdmin) {
+    // Same people who can open Admin Settings.
+    final role = ref.watch(currentUserProvider)?.role;
+    if (role != WebUserRole.masterAdmin && role != WebUserRole.admin && role != WebUserRole.superAdmin) {
       return const SizedBox.shrink();
     }
     String loc;

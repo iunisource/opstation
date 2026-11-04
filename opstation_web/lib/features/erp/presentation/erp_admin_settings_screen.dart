@@ -1743,6 +1743,14 @@ class _ErpAdminSettingsScreenState
             if (t.users != null) _usersRow(t.users!),
             if (t.choice != null) _choiceRow(t.choice!),
           ],
+          // Auditor customer groups: picked right here, under the toggle.
+          if (on && t.key == 'org.auditor_group_scope') ...[
+            const Divider(height: 1, color: AppTheme.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+              child: _AuditorGroupsPanel(orgId: ref.read(currentUserProvider)?.orgId ?? '', embedded: true),
+            ),
+          ],
         ],
       ),
     );
@@ -1967,10 +1975,6 @@ class _ErpAdminSettingsScreenState
       gap();
       children.add(_HiddenGroupsPanel(orgId: orgId));
     }
-    if (ex.contains('auditor_groups') && (_values['org.auditor_group_scope'] ?? false)) {
-      gap();
-      children.add(_AuditorGroupsPanel(orgId: orgId));
-    }
     if (footers.isNotEmpty) {
       gap();
       children.add(_FooterNotesPanel(orgId: orgId, only: footers));
@@ -2162,11 +2166,6 @@ class _ErpAdminSettingsScreenState
                   if (_values['org.hide_main_groups_by_branch'] ?? false) ...[
                     const SizedBox(height: 16),
                     _HiddenGroupsPanel(
-                        orgId: ref.read(currentUserProvider)?.orgId ?? ''),
-                  ],
-                  if (_values['org.auditor_group_scope'] ?? false) ...[
-                    const SizedBox(height: 16),
-                    _AuditorGroupsPanel(
                         orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   ],
                   if (_values['org.backup_enabled'] ?? false) ...[
@@ -2770,7 +2769,8 @@ class _HiddenGroupsPanelState extends State<_HiddenGroupsPanel> {
 /// 446). Pick an auditor, tick groups. Saved in auditor_customer_groups.
 class _AuditorGroupsPanel extends StatefulWidget {
   final String orgId;
-  const _AuditorGroupsPanel({required this.orgId});
+  final bool embedded; // inside the toggle's card: no frame / heading
+  const _AuditorGroupsPanel({required this.orgId, this.embedded = false});
   @override
   State<_AuditorGroupsPanel> createState() => _AuditorGroupsPanelState();
 }
@@ -2889,23 +2889,27 @@ class _AuditorGroupsPanelState extends State<_AuditorGroupsPanel> {
     final ticked = _auditorId == null ? const <String>{} : (_ticked[_auditorId] ?? const <String>{});
     return Container(
       constraints: const BoxConstraints(maxWidth: 760),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border),
-      ),
+      padding: widget.embedded ? EdgeInsets.zero : const EdgeInsets.all(16),
+      decoration: widget.embedded
+          ? null
+          : BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppTheme.border),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Auditor customer groups', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
+          if (!widget.embedded) ...[
+            const Text('Auditor customer groups', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+          ],
           const Text(
             'Pick an auditor, then tick the customer groups they work on. They will see '
             'only shops in these groups. No group ticked = all shops.',
             style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.35),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           if (_loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
