@@ -108,6 +108,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         if (atSplash || atPicker || atStaffLogin || atRetailerLogin) {
           return staff.role.homeRoute;
         }
+        // Auditors check surveys; they don't record them.
+        if (staff.role == UserRole.auditor &&
+            (loc == '/placement-audit' || loc == '/competitor-spotting')) {
+          return staff.role.homeRoute;
+        }
         return null;
       }
 
