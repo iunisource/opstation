@@ -66,18 +66,21 @@ class SurveyorHomeScreen extends ConsumerWidget {
           const SizedBox(height: 24),
           const SectionLabel('Intelligence'),
           const SizedBox(height: 10),
-          ManagementTile(
-            icon: Icons.checklist_outlined,
-            title: 'Placement Audit',
-            subtitle: 'Record which products are displayed',
-            onTap: () => context.push('/placement-audit'),
-          ),
-          ManagementTile(
-            icon: Icons.flag_outlined,
-            title: 'Competitor Spotting',
-            subtitle: 'Tag brands by category at each shop',
-            onTap: () => context.push('/competitor-spotting'),
-          ),
+          // Auditors check surveys; recording them is the surveyor's job.
+          if (!isAuditor) ...[
+            ManagementTile(
+              icon: Icons.checklist_outlined,
+              title: 'Placement Audit',
+              subtitle: 'Record which products are displayed',
+              onTap: () => context.push('/placement-audit'),
+            ),
+            ManagementTile(
+              icon: Icons.flag_outlined,
+              title: 'Competitor Spotting',
+              subtitle: 'Tag brands by category at each shop',
+              onTap: () => context.push('/competitor-spotting'),
+            ),
+          ],
           ManagementTile(
             icon: Icons.visibility_outlined,
             title: 'Surveyed shops',
