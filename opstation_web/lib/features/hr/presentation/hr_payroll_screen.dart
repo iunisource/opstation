@@ -352,7 +352,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
           }
           if (st == 'present') { present++; }
           else if (st == 'half_day') { half++; used += 0.5; }
-          else if (st == 'leave') { leave++; }
+          // Leave = approved leave: deducted like any day off (no penalty).
+          // The monthly paid-leave allowance is paid separately.
+          else if (st == 'leave') { absent++; used++; apprLeave++; }
           else if (st == 'holiday') { holiday++; }
           else if (st == 'rest_day') { rest++; }
           else if (st == 'absent') {

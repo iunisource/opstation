@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 /// How a stored attendance day affects pay — the same rules payroll uses:
-///   • approved leave (absent, reviewed "excused") → 1 day deducted
+///   • leave, or approved leave (absent, reviewed "excused") → 1 day deducted
 ///   • unapproved absence → 2 days (the day itself + 1 extra). When attendance
 ///     review already placed the extra day on a later date, this day is 1 and
 ///     that later day is the "penalty day".
@@ -44,6 +44,7 @@ AttDeduction? attDeduction(Map? rec, {bool hasPenaltyRow = false}) {
     if (rv == 'excused') return const AttDeduction(1, 'Leave −1', 'Approved leave — 1 day deducted.');
     return const AttDeduction(1, 'Absent −1', 'Absent — 1 day deducted.');
   }
+  if (st == 'leave') return const AttDeduction(1, 'Leave −1', 'Leave — 1 day deducted (no penalty).');
   if (st == 'half_day') return const AttDeduction(0.5, '−½', 'Half day — ½ day deducted.');
   return null;
 }
