@@ -104,6 +104,7 @@ class SurveyReportsPdf {
     final start = DateTime(from.year, from.month, from.day);
     final audits = await _paged('survey_audits', '*', orgId, tsCol: 'audited_at', from: start, to: end);
     if (shopIds != null) audits.removeWhere((a) => !shopIds.contains('${a['customer_id']}'));
+    audits.removeWhere((a) => a['hidden_at'] != null); // hidden by an admin
     audits.sort((a, b) => '${a['audited_at']}'.compareTo('${b['audited_at']}'));
     final shops = await _shops(orgId);
     final ok = audits.where((a) => a['result'] == 'ok').length;
