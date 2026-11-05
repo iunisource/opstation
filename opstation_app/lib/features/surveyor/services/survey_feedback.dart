@@ -24,6 +24,14 @@ import 'survey_audit_service.dart';
 /// Older audit photos live in `opstation-photos` (`survey-audits/...`).
 const feedbackBucket = 'survey-feedback';
 
+/// Admin Settings → "Auditor location tracking" (org.audit_location_tracking).
+/// ON (default): the auditor's location is checked against the shop and
+/// shown. OFF: no location is taken or shown, in the app or in reports.
+final auditLocationOnProvider = FutureProvider<bool>((ref) async {
+  final v = (await ref.watch(appDatabaseProvider).getConfig('org.audit_location_tracking'))?.trim() ?? '';
+  return v != 'false';
+});
+
 /// (bucket, object path) of a stored audit / feedback photo.
 (String, String) photoRef(String path) {
   if (path.startsWith('$feedbackBucket/')) return (feedbackBucket, path.substring(feedbackBucket.length + 1));
@@ -75,11 +83,16 @@ Future<bool> giveFeedback(BuildContext context, WidgetRef ref, CustomersData sho
   final user = ref.read(authControllerProvider).valueOrNull;
   final orgId = user?.organizationId ?? shop.orgId;
   if (user == null || orgId == null) return false;
-  final locF = locateAtShop(ref, shop); // runs while the auditor types
+  bool track = true;
+  try {
+    track = await ref.read(auditLocationOnProvider.future);
+  } catch (_) {}
+  // Location runs while the auditor types (only when tracking is on).
+  final locF = track ? locateAtShop(ref, shop) : Future.value(<String, dynamic>{});
   final res = await showModalBottomSheet<(String, String?, Map<String, dynamic>)>(
     context: context,
     isScrollControlled: true,
-    builder: (_) => FeedbackSheet(shop: shop, location: locF),
+    builder: (_) => FeedbackSheet(shop: shop, location: locF, showLocation: track),
   );
   if (res == null) return false;
   final (comment, photo, loc) = res;
@@ -114,7 +127,8 @@ Future<bool> giveFeedback(BuildContext context, WidgetRef ref, CustomersData sho
 class FeedbackSheet extends StatefulWidget {
   final CustomersData shop;
   final Future<Map<String, dynamic>> location;
-  const FeedbackSheet({super.key, required this.shop, required this.location});
+  final bool showLocation;
+  const FeedbackSheet({super.key, required this.shop, required this.location, this.showLocation = true});
   @override
   State<FeedbackSheet> createState() => _FeedbackSheetState();
 }
@@ -189,12 +203,14 @@ class _FeedbackSheetState extends State<FeedbackSheet> {
         const Text('Feedback', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
         const SizedBox(height: 2),
         Text(widget.shop.shopName, style: TextStyle(fontSize: 12.5, color: hint), maxLines: 1, overflow: TextOverflow.ellipsis),
-        const SizedBox(height: 4),
-        Row(children: [
-          Icon(st == 'inside' ? Icons.location_on : Icons.location_searching, size: 15, color: locColor),
-          const SizedBox(width: 4),
-          Text(locText, style: TextStyle(fontSize: 12.5, color: locColor)),
-        ]),
+        if (widget.showLocation) ...[
+          const SizedBox(height: 4),
+          Row(children: [
+            Icon(st == 'inside' ? Icons.location_on : Icons.location_searching, size: 15, color: locColor),
+            const SizedBox(width: 4),
+            Text(locText, style: TextStyle(fontSize: 12.5, color: locColor)),
+          ]),
+        ],
         const SizedBox(height: 12),
         TextField(
           controller: _comment,

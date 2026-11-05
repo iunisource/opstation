@@ -18,7 +18,9 @@ class FeedbacksTab extends StatefulWidget {
   final String orgName;
   final String title; // e.g. "Surveyed shops"
   final Future<void> Function() onRefresh;
+  final bool showLocation; // Admin Settings → Auditor location tracking
   const FeedbacksTab({
+    this.showLocation = true,
     super.key,
     required this.audits,
     required this.shops,
@@ -163,7 +165,7 @@ class _FeedbacksTabState extends State<FeedbacksTab> with AutomaticKeepAliveClie
           pw.Text('By auditor', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
           table(
-            ['Auditor', 'Feedback', 'Shops', 'Days active', 'At shop', 'Away / no location', 'With photo'],
+            ['Auditor', 'Feedback', 'Shops', 'Days active', if (widget.showLocation) ...['At shop', 'Away / no location'], 'With photo'],
             [
               for (final e in byAuditor.entries)
                 [
@@ -171,8 +173,10 @@ class _FeedbacksTabState extends State<FeedbacksTab> with AutomaticKeepAliveClie
                   '${e.value.length}',
                   '${e.value.map((a) => a['customer_id']).toSet().length}',
                   '${e.value.map((a) => df.format(_ts(a['audited_at'])!)).toSet().length}',
-                  '${e.value.where((a) => a['location_status'] == 'inside').length}',
-                  '${e.value.where((a) => a['location_status'] != 'inside').length}',
+                  if (widget.showLocation) ...[
+                    '${e.value.where((a) => a['location_status'] == 'inside').length}',
+                    '${e.value.where((a) => a['location_status'] != 'inside').length}',
+                  ],
                   '${e.value.where((a) => (a['photo_path'] ?? a['local_photo']) != null).length}',
                 ]
             ],
@@ -182,7 +186,7 @@ class _FeedbacksTabState extends State<FeedbacksTab> with AutomaticKeepAliveClie
           pw.Text('All feedback', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
           table(
-            ['Date', 'Auditor', 'Shop', 'Location', 'Feedback'],
+            ['Date', 'Auditor', 'Shop', if (widget.showLocation) 'Location', 'Feedback'],
             [
               for (final a in list)
                 [
@@ -194,18 +198,25 @@ class _FeedbacksTabState extends State<FeedbacksTab> with AutomaticKeepAliveClie
                         ? '${a['customer_id']}'
                         : '${s.shopName}\n${s.code}${widget.surveyed.contains(s.id) ? '' : ' · not surveyed'}';
                   }(),
-                  _loc(a),
+                  if (widget.showLocation) _loc(a),
                   '${a['result'] == 'feedback' ? '' : '[${_result(a['result'])}] '}${a['comment'] ?? ''}'
                       '${(a['photo_path'] ?? a['local_photo']) != null ? '\n(photo attached)' : ''}',
                 ]
             ],
-            const {
-              0: pw.FlexColumnWidth(1.4),
-              1: pw.FlexColumnWidth(1.2),
-              2: pw.FlexColumnWidth(2.4),
-              3: pw.FlexColumnWidth(1.1),
-              4: pw.FlexColumnWidth(3.6),
-            },
+            widget.showLocation
+                ? const {
+                    0: pw.FlexColumnWidth(1.4),
+                    1: pw.FlexColumnWidth(1.2),
+                    2: pw.FlexColumnWidth(2.4),
+                    3: pw.FlexColumnWidth(1.1),
+                    4: pw.FlexColumnWidth(3.6),
+                  }
+                : const {
+                    0: pw.FlexColumnWidth(1.4),
+                    1: pw.FlexColumnWidth(1.2),
+                    2: pw.FlexColumnWidth(2.4),
+                    3: pw.FlexColumnWidth(4.0),
+                  },
           ),
         ],
       ));
@@ -321,7 +332,7 @@ class _FeedbacksTabState extends State<FeedbacksTab> with AutomaticKeepAliveClie
                           const SizedBox(height: 8),
                           Wrap(spacing: 6, runSpacing: 4, children: [
                             _badge('${a['auditor_name'] ?? ''}', grey),
-                            _badge(_loc(a), inside ? green : red),
+                            if (widget.showLocation) _badge(_loc(a), inside ? green : red),
                             if (a['result'] != 'feedback') _badge(_result(a['result']), a['result'] == 'issue' ? red : green),
                             if (!widget.surveyed.contains(s.id)) _badge('Not surveyed', amber),
                             if (a['_pending'] == true) _badge('Not sent yet', amber),

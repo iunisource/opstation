@@ -37,6 +37,10 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
 
   Future<void> _locate() async {
     if (_locating) return;
+    try {
+      if (!await ref.read(auditLocationOnProvider.future)) return; // tracking off
+    } catch (_) {}
+    if (!mounted) return;
     setState(() => _locating = true);
     try {
       final r = await ref.read(deviceGpsServiceProvider).getFixResult(timeout: const Duration(seconds: 15));
@@ -61,7 +65,10 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
     if (mounted) setState(() => _data = d);
   }
 
-  double? _dist(CustomersData s) => _here == null ? null : distanceTo(s, _here!.$1, _here!.$2);
+  /// Admin Settings → Auditor location tracking. OFF: no distances, A–Z only.
+  bool get _track => ref.watch(auditLocationOnProvider).valueOrNull ?? true;
+
+  double? _dist(CustomersData s) => (!_track || _here == null) ? null : distanceTo(s, _here!.$1, _here!.$2);
 
   String _distText(double m) => m < 1000 ? '${m.round()} m' : '${(m / 1000).toStringAsFixed(1)} km';
 
@@ -93,7 +100,7 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
     ];
     final noLoc = d.shops.values.where((s) => !d.lastSurvey.containsKey(s.id) && (s.latitude == null || s.longitude == null)).length;
     int az(CustomersData a, CustomersData b) => a.shopName.toLowerCase().compareTo(b.shopName.toLowerCase());
-    if (_sort == 'near' && _here != null) {
+    if (_track && _sort == 'near' && _here != null) {
       list.sort((a, b) {
         final da = _dist(a), db = _dist(b);
         if (da == null && db == null) return az(a, b);
@@ -121,16 +128,21 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
       SizedBox(
         height: 40,
         child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 16), children: [
+          if (_track) ...[
+            ChoiceChip(
+              label: const Text('Nearest first'),
+              selected: _sort == 'near',
+              onSelected: (_) {
+                setState(() => _sort = 'near');
+                if (_here == null) _locate();
+              },
+            ),
+            const SizedBox(width: 6),
+          ],
           ChoiceChip(
-            label: const Text('Nearest first'),
-            selected: _sort == 'near',
-            onSelected: (_) {
-              setState(() => _sort = 'near');
-              if (_here == null) _locate();
-            },
-          ),
-          const SizedBox(width: 6),
-          ChoiceChip(label: const Text('A–Z'), selected: _sort == 'az', onSelected: (_) => setState(() => _sort = 'az')),
+              label: const Text('A–Z'),
+              selected: _sort == 'az' || (!_track && _sort == 'near'),
+              onSelected: (_) => setState(() => _sort = 'az')),
           const SizedBox(width: 6),
           ChoiceChip(
               label: Text('No location $noLoc'),
@@ -144,7 +156,7 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
           alignment: Alignment.centerLeft,
           child: Text(
             '${list.length} shop${list.length == 1 ? '' : 's'} not surveyed yet'
-            '${_sort == 'near' && _here == null ? (_locating ? ' · finding your location…' : ' · location not available') : ''}',
+            '${_track && _sort == 'near' && _here == null ? (_locating ? ' · finding your location…' : ' · location not available') : ''}',
             style: TextStyle(fontSize: 12.5, color: hint),
           ),
         ),
@@ -192,7 +204,8 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
                                     style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
                               ),
                               const SizedBox(width: 8),
-                              Text(
+                              if (_track)
+                                Text(
                                 noShopLoc ? 'no location' : (dm == null ? '' : _distText(dm)),
                                 style: TextStyle(
                                     fontSize: 12, fontWeight: FontWeight.w700, color: noShopLoc ? hint : blue),
@@ -257,6 +270,7 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
                   orgName: user?.organizationName ?? '',
                   title: 'Non-surveyed shops',
                   onRefresh: _fetch,
+                  showLocation: ref.watch(auditLocationOnProvider).valueOrNull ?? true,
                 ),
               ]),
       ),

@@ -6,6 +6,7 @@ import '../../../core/database/app_database_provider.dart';
 import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../services/survey_audit_service.dart';
+import '../services/survey_feedback.dart' show auditLocationOnProvider;
 import 'feedbacks_tab.dart';
 import 'shop_lists_data.dart';
 import 'survey_view_sheet.dart';
@@ -213,6 +214,7 @@ class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
                   orgName: user?.organizationName ?? '',
                   title: 'Surveyed shops',
                   onRefresh: _fetch,
+                  showLocation: ref.watch(auditLocationOnProvider).valueOrNull ?? true,
                 ),
               ]),
       ),

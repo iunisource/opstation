@@ -89,7 +89,7 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
         Text(
           [
             if (at != null) _df.format(at),
-            if (outside) 'away from the shop',
+            if (outside && (ref.watch(auditLocationOnProvider).valueOrNull ?? true)) 'away from the shop',
             if (a['_pending'] == true) 'not sent yet',
           ].join(' · '),
           style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),

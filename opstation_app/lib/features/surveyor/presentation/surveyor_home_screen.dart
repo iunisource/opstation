@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/section_label.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
+import '../../../shared/widgets/org_logo.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/models/user_role.dart';
 
@@ -17,6 +18,7 @@ class SurveyorHomeScreen extends ConsumerWidget {
     final firstName = user?.name.split(' ').first ?? 'Surveyor';
     // Auditor: surveys only — no customer editing.
     final isAuditor = user?.role == UserRole.auditor;
+    final org = (user?.organizationName ?? '').trim();
 
     return RoleHomeScaffold(
       appBarTitle: 'Opstation',
@@ -24,18 +26,30 @@ class SurveyorHomeScreen extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         children: [
           const SizedBox(height: 8),
-          Text(
-            'Hi, $firstName',
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            isAuditor ? 'Shop surveys' : 'Customer data & location fixes',
-            style: TextStyle(
-              color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.65),
-              fontSize: 14,
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  'Hi, $firstName',
+                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+                ),
+                if (org.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(org, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                ],
+                const SizedBox(height: 4),
+                Text(
+                  isAuditor ? 'Shop surveys' : 'Customer data & location fixes',
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.65),
+                    fontSize: 14,
+                  ),
+                ),
+              ]),
             ),
-          ),
+            // Company logo, only when one is uploaded on the web.
+            const OrgLogo(size: 56),
+          ]),
           const SizedBox(height: 24),
 
           const TempPasswordBanner(),
