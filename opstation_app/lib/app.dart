@@ -13,6 +13,7 @@ import 'core/services/org_config_sync.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_controller.dart';
 import 'shared/widgets/startup_splash.dart';
+import 'core/update/update_prompter.dart';
 
 class OpstationApp extends ConsumerWidget {
   const OpstationApp({super.key});
@@ -38,7 +39,7 @@ class OpstationApp extends ConsumerWidget {
       darkTheme: AppTheme.dark(),
       themeMode: themeMode,
       builder: (context, child) =>
-          StartupSplash(child: child ?? const SizedBox.shrink()),
+          StartupSplash(child: UpdatePrompter(child: child ?? const SizedBox.shrink())),
       routerConfig: router,
     );
   }
