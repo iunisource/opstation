@@ -111,6 +111,8 @@ class SurveyReportsPdf {
     final issue = audits.where((a) => a['result'] == 'issue').length;
     final fb = audits.where((a) => a['result'] == 'feedback').length;
     final outside = audits.where((a) => a['location_status'] != 'inside').length;
+    // Admin Settings → Auditor location tracking: OFF leaves location out.
+    final showLoc = await SurveyAuditIndex.auditLocationOn(orgId);
 
     // Per auditor summary
     final byAuditor = <String, List<Map<String, dynamic>>>{};
@@ -135,14 +137,14 @@ class SurveyReportsPdf {
       maxPages: 1000,
       build: (_) => [
         _title('Survey Audit Report', orgName, start, to,
-            '${audits.length} audits: $ok matches, $issue issues, $fb feedback · $outside flagged location'),
+            '${audits.length} audits: $ok matches, $issue issues, $fb feedback${showLoc ? ' · $outside flagged location' : ''}'),
         if (audits.isEmpty)
           pw.Text('No audits in this period.')
         else ...[
           pw.Text('By auditor', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
           _table(
-            ['Auditor', 'Audits', 'Shops', 'Matches', 'Issues', 'Feedback', 'Corrections', 'Flagged location'],
+            ['Auditor', 'Audits', 'Shops', 'Matches', 'Issues', 'Feedback', 'Corrections', if (showLoc) 'Flagged location'],
             [
               for (final e in byAuditor.entries)
                 [
@@ -153,7 +155,7 @@ class SurveyReportsPdf {
                   '${e.value.where((a) => a['result'] == 'issue').length}',
                   '${e.value.where((a) => a['result'] == 'feedback').length}',
                   '${e.value.fold<int>(0, (s, a) => s + (a['corrections'] is List ? (a['corrections'] as List).length : 0))}',
-                  '${e.value.where((a) => a['location_status'] != 'inside').length}',
+                  if (showLoc) '${e.value.where((a) => a['location_status'] != 'inside').length}',
                 ]
             ],
             const {0: pw.FlexColumnWidth(2.4)},
@@ -162,7 +164,7 @@ class SurveyReportsPdf {
           pw.Text('All audits', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 4),
           _table(
-            ['Date', 'Shop', 'Auditor', 'Result', 'Location', 'Comment', 'Corrections'],
+            ['Date', 'Shop', 'Auditor', 'Result', if (showLoc) 'Location', 'Comment', 'Corrections'],
             [
               for (final a in audits)
                 [
@@ -170,20 +172,29 @@ class SurveyReportsPdf {
                   '${shops[a['customer_id']]?['shop_name'] ?? a['customer_id']}\n${shops[a['customer_id']]?['code'] ?? ''}',
                   '${a['auditor_name'] ?? ''}',
                   _result(a['result']),
-                  _loc(a),
+                  if (showLoc) _loc(a),
                   '${a['comment'] ?? ''}${'${a['photo_path'] ?? ''}'.isNotEmpty ? '\n(photo attached)' : ''}',
                   corr(a),
                 ]
             ],
-            const {
-              0: pw.FlexColumnWidth(1.5),
-              1: pw.FlexColumnWidth(2.2),
-              2: pw.FlexColumnWidth(1.3),
-              3: pw.FlexColumnWidth(1.0),
-              4: pw.FlexColumnWidth(1.2),
-              5: pw.FlexColumnWidth(2.6),
-              6: pw.FlexColumnWidth(2.6),
-            },
+            showLoc
+                ? const {
+                    0: pw.FlexColumnWidth(1.5),
+                    1: pw.FlexColumnWidth(2.2),
+                    2: pw.FlexColumnWidth(1.3),
+                    3: pw.FlexColumnWidth(1.0),
+                    4: pw.FlexColumnWidth(1.2),
+                    5: pw.FlexColumnWidth(2.6),
+                    6: pw.FlexColumnWidth(2.6),
+                  }
+                : const {
+                    0: pw.FlexColumnWidth(1.5),
+                    1: pw.FlexColumnWidth(2.2),
+                    2: pw.FlexColumnWidth(1.3),
+                    3: pw.FlexColumnWidth(1.0),
+                    4: pw.FlexColumnWidth(2.8),
+                    5: pw.FlexColumnWidth(2.6),
+                  },
           ),
         ],
       ],

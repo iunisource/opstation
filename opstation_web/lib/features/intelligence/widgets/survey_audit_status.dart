@@ -43,7 +43,9 @@ String fixStatusText(Map<String, dynamic> a) {
 class SurveyAuditIndex {
   /// customer_id → audits, newest first.
   final Map<String, List<Map<String, dynamic>>> byShop;
-  const SurveyAuditIndex(this.byShop);
+  /// Admin Settings → Auditor location tracking (default ON).
+  final bool showLocation;
+  const SurveyAuditIndex(this.byShop, {this.showLocation = true});
   static const empty = SurveyAuditIndex({});
 
   static Future<SurveyAuditIndex> load(String orgId) async {
@@ -63,13 +65,28 @@ class SurveyAuditIndex {
       for (final a in out) {
         m.putIfAbsent('${a['customer_id']}', () => []).add(a);
       }
-      return SurveyAuditIndex(m);
+      return SurveyAuditIndex(m, showLocation: await auditLocationOn(orgId));
     } catch (_) {
       return empty; // table not set up yet / offline: no badges
     }
   }
 
   static DateTime? _t(dynamic v) => v == null ? null : DateTime.tryParse('$v');
+
+  /// Admin Settings → "Auditor location tracking"; ON unless switched off.
+  static Future<bool> auditLocationOn(String orgId) async {
+    try {
+      final r = await Supabase.instance.client
+          .from('app_config')
+          .select('value')
+          .eq('org_id', orgId)
+          .eq('key', 'org.audit_location_tracking')
+          .maybeSingle();
+      return '${r?['value'] ?? ''}'.trim() != 'false';
+    } catch (_) {
+      return true;
+    }
+  }
 
   /// Entries that count (hidden ones are seen only by admins, in the trail).
   List<Map<String, dynamic>> visible(String customerId) =>
@@ -117,7 +134,10 @@ class SurveyAuditIndex {
     };
     final latest = list.isEmpty ? null : list.first;
     final when = latest == null ? null : _t(latest['audited_at'])?.toLocal();
-    final flagged = latest != null && latest['location_status'] != null && latest['location_status'] != 'inside';
+    final flagged = showLocation &&
+        latest != null &&
+        latest['location_status'] != null &&
+        latest['location_status'] != 'inside';
     return Tooltip(
       message: latest == null
           ? 'No audit yet'
@@ -125,7 +145,7 @@ class SurveyAuditIndex {
               '${flagged ? ' · location flagged' : ''}${list.length > 1 ? ' · ${list.length} audits' : ''}',
       child: InkWell(
         borderRadius: BorderRadius.circular(5),
-        onTap: all.isEmpty ? null : () => showTrail(context, shopName, all, role: role, onChanged: onChanged),
+        onTap: all.isEmpty ? null : () => showTrail(context, shopName, all, role: role, onChanged: onChanged, showLocation: showLocation),
         child: Container(
           margin: const EdgeInsets.only(top: 3),
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
@@ -143,10 +163,10 @@ class SurveyAuditIndex {
   }
 
   static Future<void> showTrail(BuildContext context, String shopName, List<Map<String, dynamic>> audits,
-      {WebUserRole? role, VoidCallback? onChanged}) async {
+      {WebUserRole? role, VoidCallback? onChanged, bool showLocation = true}) async {
     final changed = await showDialog<bool>(
       context: context,
-      builder: (_) => _TrailDialog(shopName: shopName, audits: audits, role: role),
+      builder: (_) => _TrailDialog(shopName: shopName, audits: audits, role: role, showLocation: showLocation),
     );
     if (changed == true) onChanged?.call();
   }
@@ -156,7 +176,8 @@ class _TrailDialog extends StatefulWidget {
   final String shopName;
   final List<Map<String, dynamic>> audits;
   final WebUserRole? role;
-  const _TrailDialog({required this.shopName, required this.audits, required this.role});
+  final bool showLocation;
+  const _TrailDialog({required this.shopName, required this.audits, required this.role, this.showLocation = true});
   @override
   State<_TrailDialog> createState() => _TrailDialogState();
 }
@@ -292,7 +313,7 @@ class _TrailDialogState extends State<_TrailDialog> {
                   final at = _t(a['audited_at'])?.toLocal();
                   final sAt = _t(a['survey_at'])?.toLocal();
                   final corr = a['corrections'] is List ? a['corrections'] as List : const [];
-                  final outside = a['location_status'] != 'inside';
+                  final outside = widget.showLocation && a['location_status'] != 'inside';
                   final hiddenBy = '${a['hidden_by_name'] ?? ''}'.trim();
                   final hideReason = '${a['hide_reason'] ?? ''}'.trim();
                   return Opacity(
@@ -341,7 +362,7 @@ class _TrailDialogState extends State<_TrailDialog> {
                       Text(
                         [
                           if (at != null) df.format(at),
-                          _locText(a),
+                          if (widget.showLocation) _locText(a),
                           if (sAt != null) 'checked survey of ${DateFormat('d MMM yyyy').format(sAt)}',
                           if (_t(a['received_at']) != null &&
                               at != null &&

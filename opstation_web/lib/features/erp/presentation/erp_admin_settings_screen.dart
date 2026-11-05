@@ -680,6 +680,16 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.audit_location_tracking',
+    'Auditor location tracking',
+    'When ON, the auditor\'s location is checked against the shop for every '
+        'feedback, and shown in the app, on the audit trail and in the reports '
+        '(At shop / away). When OFF, no location is taken or shown anywhere for '
+        'auditors, and the location columns are left out of the reports.',
+    defaultOn: true,
+  ),
+
+  _AdminToggle(
     'org.auditor_group_scope',
     'Limit auditors to customer groups',
     'When ON, each auditor sees and gives feedback on only the shops in the customer groups '
@@ -874,6 +884,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Intelligence & Surveys', Icons.travel_explore_outlined, [
     'org.intel_delete_access',
+    'org.audit_location_tracking',
     'org.auditor_group_scope',
   ]),
 ];
