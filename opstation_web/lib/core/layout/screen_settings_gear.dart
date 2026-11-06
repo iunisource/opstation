@@ -27,6 +27,8 @@ const _customerKeys = [
   'org.customer_edit_alert',
   'org.customer_deactivate_access',
   'org.field_location_capture',
+  'org.surveyor_location_supervise',
+  'org.loc_fix_warning',
 ];
 const _intelKeys = ['org.intel_delete_access', 'org.audit_location_tracking', 'org.auditor_group_scope'];
 

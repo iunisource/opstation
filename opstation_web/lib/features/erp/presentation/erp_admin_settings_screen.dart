@@ -725,6 +725,30 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.surveyor_location_supervise',
+    'Supervision for surveyor locations',
+    'Surveyors add and correct shop locations with a photo. When ON, each '
+        'location they save waits for a supervisor in Customer 360 → Overview → '
+        'Location, like the salespeople\'s. When OFF, it is applied straight away '
+        '(the photo is still kept in the shop\'s location history).',
+  ),
+
+  _AdminToggle(
+    'org.loc_fix_warning',
+    'Wrong-location warnings in the app',
+    'When ON, a stop whose saved location is shared with a different shop shows '
+        '"Saved location looks wrong — capture it at the shop", and the app warns '
+        'before anyone saves a location another shop already uses. Choose the '
+        'language the salespeople see. When OFF, neither warning shows.',
+    defaultOn: true,
+    choice: _ChoiceField('org.loc_fix_warning_lang', 'Language', [
+      ('en', 'English'),
+      ('ur', 'Urdu (اردو)'),
+      ('both', 'English + Urdu'),
+    ], 'en'),
+  ),
+
+  _AdminToggle(
     'org.product_supervise_flow',
     'Supervision for new products',
     'When ON, every newly-created product must be "Supervised" by an admin or '
@@ -821,6 +845,8 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.customer_supervise_flow',
     'org.customer_edit_supervise_flow',
     'org.field_location_capture',
+    'org.surveyor_location_supervise',
+    'org.loc_fix_warning',
     'org.customer_edit_alert',
     'org.quotation_custom_company',
     'org.cbr_collection_columns',
