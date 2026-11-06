@@ -245,11 +245,13 @@ class _BulkImportCustomersScreenState
     // exact triple (code + shop_name + phone). Key uses a delimiter that can't
     // appear inside the trimmed values colliding across fields.
     final Map<String, String> existingIdByKey = {}; // key -> existing customer id
+    var existingRows = <Map<String, dynamic>>[];
     try {
       final existing = await client
           .from('customers')
-          .select('id,code,shop_name,phone')
+          .select('id,code,shop_name,phone,latitude,longitude,is_active')
           .eq('org_id', orgId);
+      existingRows = List<Map<String, dynamic>>.from(existing as List);
       for (final e in (existing as List)) {
         final k = _dupeKey(
           (e['code'] ?? '').toString(),
@@ -262,13 +264,31 @@ class _BulkImportCustomersScreenState
       // If the pre-fetch fails we fall back to treating everything as new.
     }
 
+    // Locations another (different) shop already uses — in this file or
+    // already saved. A copied / default location in the file is how many
+    // shops ended up on one wrong spot, so ask before bringing those in.
+    final clash = _locationClashes(existingRows, existingIdByKey);
+    var dropClashing = false;
+    if (clash.isNotEmpty) {
+      final choice = await _askLocationClash(clash);
+      if (choice == null) {
+        setState(() => _importing = false);
+        return; // cancelled
+      }
+      dropClashing = choice;
+    }
+
     // Split rows into updates (exact code+name+phone match) and inserts.
     final inserts = <Map<String, dynamic>>[];
     final updates = <Map<String, dynamic>>[]; // each carries its existing 'id'
     for (int i = 0; i < _validRows.length; i++) {
       final r = _validRows[i];
-      final lat = (r['latitude'] ?? '').isEmpty ? null : double.tryParse(r['latitude']!);
-      final lng = (r['longitude'] ?? '').isEmpty ? null : double.tryParse(r['longitude']!);
+      var lat = (r['latitude'] ?? '').isEmpty ? null : double.tryParse(r['latitude']!);
+      var lng = (r['longitude'] ?? '').isEmpty ? null : double.tryParse(r['longitude']!);
+      if (dropClashing && clash.containsKey(i)) {
+        lat = null;
+        lng = null;
+      }
       final ntn = (r['ntn_gst'] ?? '').isEmpty ? null : r['ntn_gst'];
       final fields = <String, dynamic>{
         'code': r['code'],
@@ -288,6 +308,12 @@ class _BulkImportCustomersScreenState
       final key = _dupeKey(r['code'] ?? '', r['shop_name'] ?? '', r['phone'] ?? '');
       final existingId = existingIdByKey[key];
       if (existingId != null) {
+        // No location in the file: keep the one already saved (an import must
+        // never wipe a location captured at the shop).
+        if (lat == null || lng == null) {
+          fields.remove('latitude');
+          fields.remove('longitude');
+        }
         updates.add({...fields, 'id': existingId});
       } else {
         inserts.add({...fields, 'id': 'cust_${baseTs}_$i'});
@@ -323,6 +349,111 @@ class _BulkImportCustomersScreenState
     }
 
     setState(() => _importing = false);
+  }
+
+  // ── Same-location check (rules as SQL 449 / 449b) ──
+  static String? _phoneKey(String? p) {
+    final d = (p ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+    if (d.isEmpty) return null;
+    return d.length > 10 ? d.substring(d.length - 10) : d;
+  }
+
+  static String? _shopKey(String? name) {
+    var s = (name ?? '').replaceAll(RegExp(r'\([^)]*\)?'), ' ').replaceAll('.', '').toUpperCase();
+    s = s.replaceAll(RegExp(r'[^A-Z0-9]+'), ' ').trim();
+    if (s.isEmpty) return null;
+    return s.split(RegExp(r'\s+')).take(2).join(' ');
+  }
+
+  static bool _sameShop(String? pa, String? na, String? pb, String? nb) {
+    final a = _phoneKey(pa), b = _phoneKey(pb);
+    if (a != null && b != null && a == b) return true;
+    final x = _shopKey(na), y = _shopKey(nb);
+    return x != null && y != null && x == y;
+  }
+
+  static String _spot(double lat, double lng) =>
+      '${(lat * 100000).round()},${(lng * 100000).round()}';
+
+  /// Row index (in _validRows) → names of the different shops at its spot.
+  Map<int, List<String>> _locationClashes(
+      List<Map<String, dynamic>> existing, Map<String, String> existingIdByKey) {
+    final bySpot = <String, List<({String id, String name, String shop, String phone})>>{};
+    for (final e in existing) {
+      if (e['is_active'] == false || e['latitude'] == null || e['longitude'] == null) continue;
+      final k = _spot((e['latitude'] as num).toDouble(), (e['longitude'] as num).toDouble());
+      bySpot.putIfAbsent(k, () => []).add(
+          (id: '${e['id']}', name: '${e['code'] ?? ''} ${e['shop_name'] ?? ''}'.trim(), shop: '${e['shop_name'] ?? ''}', phone: '${e['phone'] ?? ''}'));
+    }
+    final rowSpot = <int, String>{};
+    for (var i = 0; i < _validRows.length; i++) {
+      final r = _validRows[i];
+      final lat = double.tryParse(r['latitude'] ?? ''), lng = double.tryParse(r['longitude'] ?? '');
+      if (lat == null || lng == null || (lat == 0 && lng == 0)) continue;
+      rowSpot[i] = _spot(lat, lng);
+    }
+    final out = <int, List<String>>{};
+    for (final e in rowSpot.entries) {
+      final r = _validRows[e.key];
+      final selfId = existingIdByKey[_dupeKey(r['code'] ?? '', r['shop_name'] ?? '', r['phone'] ?? '')];
+      final names = <String>[];
+      for (final x in bySpot[e.value] ?? const []) {
+        if (x.id == selfId) continue;
+        if (_sameShop(r['phone'], r['shop_name'], x.phone, x.shop)) continue;
+        names.add(x.name);
+      }
+      for (final o in rowSpot.entries) {
+        if (o.key == e.key || o.value != e.value) continue;
+        final other = _validRows[o.key];
+        if (_sameShop(r['phone'], r['shop_name'], other['phone'], other['shop_name'])) continue;
+        names.add('${other['code'] ?? ''} ${other['shop_name'] ?? ''}'.trim());
+      }
+      if (names.isNotEmpty) out[e.key] = names;
+    }
+    return out;
+  }
+
+  /// true = import those rows without a location, false = keep, null = cancel.
+  Future<bool?> _askLocationClash(Map<int, List<String>> clash) {
+    final sample = clash.entries.take(6).toList();
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.wrong_location_outlined, color: Colors.deepOrange),
+        title: Text('${clash.length} row${clash.length == 1 ? '' : 's'} use a location another shop already has'),
+        content: SizedBox(
+          width: 560,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text(
+              'Different shops cannot stand at the same spot, so these locations were most likely copied '
+              'or filled in by default. Importing them puts these shops on the wrong place on the map and '
+              'makes their visits show as outside the shop.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            for (final e in sample)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '• ${_validRows[e.key]['code']} ${_validRows[e.key]['shop_name']}  —  same spot as ${e.value.first}'
+                  '${e.value.length > 1 ? ' +${e.value.length - 1}' : ''}',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+              ),
+            if (clash.length > sample.length)
+              Text('and ${clash.length - sample.length} more', style: const TextStyle(fontSize: 12.5)),
+            const SizedBox(height: 12),
+            const Text('Recommended: import them without a location and capture it at the shop.',
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          OutlinedButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep the locations')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Import without location')),
+        ],
+      ),
+    );
   }
 
   @override
