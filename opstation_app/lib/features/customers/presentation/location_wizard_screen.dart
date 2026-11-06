@@ -6,7 +6,10 @@ import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:open_location_code/open_location_code.dart' as olc;
 
+import '../../../core/database/app_database_provider.dart';
 import '../../../core/services/device_gps_service.dart';
+import '../../../core/utils/location_check.dart';
+import '../../../shared/widgets/accuracy_meter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../providers/customers_controller.dart';
 
@@ -78,11 +81,25 @@ class _LocationWizardScreenState extends ConsumerState<LocationWizardScreen>
 
   Future<void> _save() async {
     if (_lat == null || _lng == null) return;
+    // Another shop already saved at this exact spot? Ask before saving.
+    final state = ref.read(customersControllerProvider).valueOrNull;
+    final me = state?.all.where((c) => c.id == widget.customerId).toList();
+    LocFixWarning warn = const LocFixWarning(true, 'en');
+    try {
+      warn = await ref.read(locFixWarningProvider.future);
+    } catch (_) {}
+    if (!mounted) return;
+    final ok = await confirmFreeSpot(context, ref.read(appDatabaseProvider),
+        lat: _lat!, lng: _lng!, customerId: widget.customerId,
+        shopName: (me == null || me.isEmpty) ? 'this shop' : me.first.shopName, warning: warn);
+    if (!ok || !mounted) return;
     setState(() => _saving = true);
     try {
       await ref
           .read(customersControllerProvider.notifier)
           .setLocation(widget.customerId, _lat!, _lng!);
+      await clearSuspect(ref.read(appDatabaseProvider), widget.customerId);
+      ref.invalidate(suspectLocationIdsProvider);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Location saved')),
@@ -334,7 +351,7 @@ class _GpsTabState extends ConsumerState<_GpsTab> {
                     style: const TextStyle(fontSize: 13),
                   ),
                   const SizedBox(height: 10),
-                  _AccuracyMeter(
+                  AccuracyMeter(
                     accuracyMeters: _fix!.accuracy,
                     stale: _stale,
                   ),
@@ -365,84 +382,6 @@ class _GpsTabState extends ConsumerState<_GpsTab> {
           ],
         ],
       ),
-    );
-  }
-}
-
-// ---- GPS accuracy health meter ----------------------------------------
-
-/// A 4-segment signal-strength-style meter that grades a captured fix's
-/// accuracy so a surveyor can tell at a glance whether the pin is trustworthy
-/// or worth re-capturing. Bands (radius in metres):
-///   <=10  Excellent (4)   <=25 Good (3)   <=50 Fair (2)   >50 Poor (1)
-/// A stale (last-known) fix is shown greyed at one bar regardless of radius.
-class _AccuracyMeter extends StatelessWidget {
-  final double accuracyMeters;
-  final bool stale;
-  const _AccuracyMeter({required this.accuracyMeters, this.stale = false});
-
-  int get _band {
-    if (accuracyMeters <= 10) return 4;
-    if (accuracyMeters <= 25) return 3;
-    if (accuracyMeters <= 50) return 2;
-    return 1;
-  }
-
-  String get _label {
-    if (stale) return 'Last known';
-    switch (_band) {
-      case 4:
-        return 'Excellent';
-      case 3:
-        return 'Good';
-      case 2:
-        return 'Fair';
-      default:
-        return 'Poor';
-    }
-  }
-
-  Color get _color {
-    if (stale) return const Color(0xFF6B7280); // grey
-    switch (_band) {
-      case 4:
-        return const Color(0xFF16A34A); // green
-      case 3:
-        return const Color(0xFF22C55E); // light green
-      case 2:
-        return const Color(0xFFF59E0B); // amber
-      default:
-        return const Color(0xFFDC2626); // red
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filled = stale ? 1 : _band;
-    return Row(
-      children: [
-        for (var i = 0; i < 4; i++)
-          Container(
-            margin: const EdgeInsets.only(right: 4),
-            width: 20,
-            height: 8,
-            decoration: BoxDecoration(
-              color: i < filled ? _color : const Color(0xFFE5E7EB),
-              borderRadius: BorderRadius.circular(3),
-            ),
-          ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            '$_label  ·  ±${accuracyMeters.round()}m',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: _color,
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

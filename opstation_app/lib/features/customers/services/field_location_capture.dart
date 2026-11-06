@@ -12,8 +12,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../../core/photo/photo_watermark.dart';
+import '../../../core/utils/location_check.dart';
+import '../../../shared/widgets/accuracy_meter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../auth/models/user_role.dart';
+import '../../../core/sync/sync_controller.dart';
+import '../../admin_settings/providers/org_settings_controller.dart';
 
 /// Admin Settings (web) → "Salesperson can add shop location":
 /// org.field_location_capture (on/off) + org.field_location_capture_scope
@@ -24,7 +29,10 @@ class FieldLocationConfig {
   const FieldLocationConfig(this.enabled, this.anyCustomer);
   static const off = FieldLocationConfig(false, false);
 
-  bool allows({required bool hasLocation}) => enabled && (anyCustomer || !hasLocation);
+  /// [suspect]: the saved location is shared with a different shop (wrong
+  /// / copied) — it can be recaptured even when only missing ones are allowed.
+  bool allows({required bool hasLocation, bool suspect = false}) =>
+      enabled && (anyCustomer || !hasLocation || suspect);
 }
 
 final fieldLocationConfigProvider = FutureProvider<FieldLocationConfig>((ref) async {
@@ -59,6 +67,20 @@ final fieldLocationConfigProvider = FutureProvider<FieldLocationConfig>((ref) as
 /// coordinates and saved to the customer — it then waits for a supervisor in
 /// Customer 360 (web).
 class FieldLocationCapture {
+  /// Surveyor: same capture (photo + GPS, stamped, sent for review), with the
+  /// org's GPS accuracy limit. Returns true when saved.
+  static Future<bool> runForShop(BuildContext context, WidgetRef ref,
+      {required String customerId, required String shopName, required String shopCode}) async {
+    int limit = 50;
+    try {
+      limit = (await ref.read(orgSettingsProvider.future)).accuracyWarnMeters;
+    } catch (_) {}
+    if (!context.mounted) return false;
+    final r = await run(context, ref,
+        customerId: customerId, shopName: shopName, shopCode: shopCode, accuracyLimitMeters: limit.toDouble());
+    return r != null;
+  }
+
   /// Returns the saved (lat, lng), or null if cancelled / failed (the reason is
   /// shown to the user).
   static Future<(double, double)?> run(
@@ -112,33 +134,65 @@ class FieldLocationCapture {
     }, onError: (_) {});
 
     try {
-      final file = await ImagePicker().pickImage(
-        source: ImageSource.camera,
-        maxWidth: 1600,
-        maxHeight: 1600,
-        imageQuality: 75,
-        preferredCameraDevice: CameraDevice.rear,
-      );
-      if (file == null) return null; // cancelled
-      final shotAt = DateTime.now();
-      final bytes = await File(file.path).readAsBytes();
-      if (!context.mounted) return null;
+      late Position pos;
+      late Uint8List bytes;
+      late DateTime shotAt;
+      // Photo → GPS → check screen (health meter). "Capture again" loops.
+      while (true) {
+        final file = await ImagePicker().pickImage(
+          source: ImageSource.camera,
+          maxWidth: 1600,
+          maxHeight: 1600,
+          imageQuality: 75,
+          preferredCameraDevice: CameraDevice.rear,
+        );
+        if (file == null) return null; // cancelled
+        shotAt = DateTime.now();
+        bytes = await File(file.path).readAsBytes();
+        if (!context.mounted) return null;
 
-      // Usually already good. If not, wait here (auto-continues).
-      if (best == null || best!.accuracy > accuracyLimitMeters) {
-        final ok = await _waitForFix(context, () => best, accuracyLimitMeters);
-        if (ok != true) return null;
+        // Usually already good. If not, wait here (auto-continues).
+        if (best == null || best!.accuracy > accuracyLimitMeters) {
+          final ok = await _waitForFix(context, () => best, accuracyLimitMeters);
+          if (ok != true) return null;
+        }
+        pos = best!;
+        if (!context.mounted) return null;
+        // Stamp now, so the check screen shows exactly the photo that is saved.
+        final u = ref.read(authControllerProvider).valueOrNull;
+        bytes = PhotoWatermark.addStampStrip(jpegBytes: bytes, lines: [
+          '${pos.latitude.toStringAsFixed(6)}, ${pos.longitude.toStringAsFixed(6)}   +/- ${pos.accuracy.round()} m',
+          PhotoWatermark.formatTs(shotAt),
+          '$shopName${shopCode.isEmpty ? '' : '  (#$shopCode)'}',
+          if ((u?.name ?? '').isNotEmpty) 'By ${u!.name}',
+        ]);
+        final choice = await showModalBottomSheet<String>(
+          context: context,
+          isScrollControlled: true,
+          isDismissible: false,
+          enableDrag: false,
+          builder: (_) => _CaptureCheck(photo: bytes, pos: pos, shopName: shopName),
+        );
+        if (choice == null || !context.mounted) return null; // cancelled
+        if (choice == 'save') break;
+        // Capture again: only readings from now on count.
+        best = null;
+        bestAt = null;
+        watch
+          ..reset()
+          ..start();
       }
-      final pos = best!;
+      // Another shop already saved at this exact spot? Ask before saving.
+      LocFixWarning warn = const LocFixWarning(true, 'en');
+      try {
+        warn = await ref.read(locFixWarningProvider.future);
+      } catch (_) {}
       if (!context.mounted) return null;
+      final okSpot = await confirmFreeSpot(context, ref.read(appDatabaseProvider),
+          lat: pos.latitude, lng: pos.longitude, customerId: customerId, shopName: shopName, warning: warn);
+      if (!okSpot || !context.mounted) return null;
 
-      final user = ref.read(authControllerProvider).valueOrNull;
-      final stamped = PhotoWatermark.addStampStrip(jpegBytes: bytes, lines: [
-        '${pos.latitude.toStringAsFixed(6)}, ${pos.longitude.toStringAsFixed(6)}   +/- ${pos.accuracy.round()} m',
-        PhotoWatermark.formatTs(shotAt),
-        '$shopName${shopCode.isEmpty ? '' : '  (#$shopCode)'}',
-        if ((user?.name ?? '').isNotEmpty) 'By ${user!.name}',
-      ]);
+      final stamped = bytes; // stamped above
 
       return await _save(context, ref,
           customerId: customerId, pos: pos, photo: stamped, onError: say);
@@ -181,6 +235,14 @@ class FieldLocationCapture {
       ),
     );
     try {
+      // A shop just added on this phone must reach the server first.
+      try {
+        final db = ref.read(appDatabaseProvider);
+        final local = await (db.select(db.customers)..where((c) => c.id.equals(customerId))).getSingleOrNull();
+        if (local != null && local.syncStatus == 'pending') {
+          await ref.read(syncControllerProvider.notifier).flushPending();
+        }
+      } catch (_) {}
       final path = 'customer_locations/$customerId/${DateTime.now().millisecondsSinceEpoch}.jpg';
       await client.storage.from('opstation-photos').uploadBinary(
             path,
@@ -201,9 +263,19 @@ class FieldLocationCapture {
         await (db.update(db.customers)..where((c) => c.id.equals(customerId))).write(
           CustomersCompanion(latitude: Value(pos.latitude), longitude: Value(pos.longitude)),
         );
+        await clearSuspect(db, customerId);
+        ref.invalidate(suspectLocationIdsProvider);
       } catch (_) {}
       nav.pop();
-      onError('Shop location saved — sent for review.');
+      // Surveyors' captures go for review only when Admin Settings says so.
+      var review = true;
+      try {
+        final role = ref.read(authControllerProvider).valueOrNull?.role;
+        if (role == UserRole.surveyor) {
+          review = (await ref.read(appDatabaseProvider).getConfig('org.surveyor_location_supervise')) == 'true';
+        }
+      } catch (_) {}
+      onError(review ? 'Shop location saved — sent for review.' : 'Shop location saved.');
       return (pos.latitude, pos.longitude);
     } on PostgrestException catch (e) {
       nav.pop();
@@ -219,6 +291,73 @@ class FieldLocationCapture {
           : 'Could not save the location. Please try again.');
       return null;
     }
+  }
+}
+
+/// After the photo: the photo, the reading and its health — Save or Capture again.
+class _CaptureCheck extends StatelessWidget {
+  final Uint8List photo;
+  final Position pos;
+  final String shopName;
+  const _CaptureCheck({required this.photo, required this.pos, required this.shopName});
+
+  @override
+  Widget build(BuildContext context) {
+    final poor = pos.accuracy > 50;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(shopName, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(photo, height: 210, width: double.infinity, fit: BoxFit.cover),
+          ),
+          const SizedBox(height: 12),
+          Text('${pos.latitude.toStringAsFixed(6)}, ${pos.longitude.toStringAsFixed(6)}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          AccuracyMeter(accuracyMeters: pos.accuracy),
+          if (pos.isMocked)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('This phone reports a fake (mock) location.',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.danger)),
+            )
+          else if (poor)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('Accuracy is low. Step out to the shop front or open sky and capture again.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
+            ),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.pop(context, 'again'),
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Capture again'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 46)),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () => Navigator.pop(context, 'save'),
+                icon: const Icon(Icons.check, size: 18),
+                label: const Text('Save'),
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 46)),
+              ),
+            ),
+          ]),
+          Center(
+            child: TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ),
+        ]),
+      ),
+    );
   }
 }
 
@@ -272,6 +411,10 @@ class _FixWaitDialogState extends State<_FixWaitDialog> {
               style: TextStyle(fontWeight: FontWeight.w600,
                   color: acc != null && acc <= widget.limit ? AppColors.success : null))),
         ]),
+        if (b != null) ...[
+          const SizedBox(height: 10),
+          AccuracyMeter(accuracyMeters: b.accuracy),
+        ],
         if (_secs > 30) ...[
           const SizedBox(height: 10),
           const Text('Step out to the shop front or open sky — it will continue by itself.',

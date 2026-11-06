@@ -18,6 +18,8 @@ import '../data/customer_repository.dart';
 import '../models/audit_entry.dart';
 import '../providers/customers_controller.dart';
 import 'widgets/other_locations_card.dart';
+import '../services/field_location_capture.dart';
+import '../../auth/models/user_role.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 /// Admin Settings (web) → "Customer deactivation access": when ON, the users
@@ -201,14 +203,17 @@ class _HeaderCard extends StatelessWidget {
   }
 }
 
-class _LocationCard extends StatelessWidget {
+class _LocationCard extends ConsumerWidget {
   final Customer customer;
   final bool canEdit;
 
   const _LocationCard({required this.customer, required this.canEdit});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Surveyors capture at the shop with a photo (sent for review), like
+    // salespeople; admins can still pin it on the map / type it in.
+    final surveyor = ref.watch(authControllerProvider).valueOrNull?.role == UserRole.surveyor;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -275,15 +280,22 @@ class _LocationCard extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () => GoRouter.of(context)
-                    .push('/customers/${customer.id}/location'),
+                onPressed: surveyor
+                    ? () async {
+                        final ok = await FieldLocationCapture.runForShop(context, ref,
+                            customerId: customer.id, shopName: customer.shopName, shopCode: customer.code);
+                        if (ok) await ref.read(customersControllerProvider.notifier).refresh();
+                      }
+                    : () => GoRouter.of(context).push('/customers/${customer.id}/location'),
                 icon: Icon(
-                  customer.hasLocation ? Icons.edit_location_alt : Icons.add_location_alt,
+                  surveyor
+                      ? Icons.add_a_photo_outlined
+                      : (customer.hasLocation ? Icons.edit_location_alt : Icons.add_location_alt),
                   size: 18,
                 ),
-                label: Text(customer.hasLocation
-                    ? 'Update location'
-                    : 'Set location'),
+                label: Text(surveyor
+                    ? (customer.hasLocation ? 'Update location (with photo)' : 'Add location (with photo)')
+                    : (customer.hasLocation ? 'Update location' : 'Set location')),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size(0, 44),
                 ),

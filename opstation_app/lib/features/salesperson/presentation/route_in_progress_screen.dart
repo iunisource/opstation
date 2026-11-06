@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../../core/utils/location_check.dart' show suspectLocationIdsProvider, locFixWarningProvider, LocFixWarning, BiText;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -514,6 +515,9 @@ class _StopsList extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locCfg = ref.watch(fieldLocationConfigProvider).valueOrNull ?? FieldLocationConfig.off;
+    // Admin Settings → Wrong-location warnings (OFF: no flag on stops).
+    final warn = ref.watch(locFixWarningProvider).valueOrNull ?? const LocFixWarning(true, 'en');
+    final suspect = warn.on ? (ref.watch(suspectLocationIdsProvider).valueOrNull ?? const <String>{}) : const <String>{};
     Future<void> capture(Customer c) async {
       final limit = ref.read(tripControllerProvider).valueOrNull?.accuracyWarnThresholdMeters ?? 50;
       final r = await FieldLocationCapture.run(context, ref,
@@ -550,7 +554,10 @@ class _StopsList extends ConsumerWidget {
             readOnly: readOnly,
             onMarkVisit: () => onMarkVisit(filtered[i]),
             onSkip: () => onSkip(filtered[i]),
-            onAddLocation: !readOnly && locCfg.allows(hasLocation: filtered[i].hasLocation)
+            locationSuspect: filtered[i].hasLocation && suspect.contains(filtered[i].id),
+            warning: warn,
+            onAddLocation: !readOnly &&
+                    locCfg.allows(hasLocation: filtered[i].hasLocation, suspect: suspect.contains(filtered[i].id))
                 ? () => capture(filtered[i])
                 : null,
           ),
@@ -579,6 +586,9 @@ class _StopCard extends StatefulWidget {
   final VoidCallback onSkip;
   /// Add / update the shop location from here (null = not allowed).
   final VoidCallback? onAddLocation;
+  /// Saved location is shared with a different shop — needs recapturing.
+  final bool locationSuspect;
+  final LocFixWarning warning;
 
   const _StopCard({
     required this.index,
@@ -590,6 +600,8 @@ class _StopCard extends StatefulWidget {
     required this.onMarkVisit,
     required this.onSkip,
     this.onAddLocation,
+    this.locationSuspect = false,
+    this.warning = const LocFixWarning(true, 'en'),
   });
 
   @override
@@ -804,6 +816,30 @@ class _StopCardState extends State<_StopCard> {
                         ),
                       ],
                     ]),
+                    if (widget.locationSuspect)
+                      InkWell(
+                        onTap: widget.onAddLocation,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          // Urdu only: icon on the right, text reading right-to-left.
+                          child: Row(
+                              textDirection: widget.warning.en ? TextDirection.ltr : TextDirection.rtl,
+                              crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            const Padding(
+                              padding: EdgeInsets.only(top: 1),
+                              child: Icon(Icons.wrong_location_outlined, size: 15, color: Color(0xFFD97706)),
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: BiText(widget.warning,
+                                  en: 'Saved location looks wrong — capture it at the shop',
+                                  ur: 'اس دکان کی محفوظ لوکیشن غلط لگ رہی ہے — دکان پر جا کر لوکیشن لیں',
+                                  style: const TextStyle(
+                                      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
+                            ),
+                          ]),
+                        ),
+                      ),
                     if (customer.address.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(
@@ -890,12 +926,12 @@ class _StopCardState extends State<_StopCard> {
                   Container(
                     decoration: BoxDecoration(
                       border: Border.all(
-                          color: customer.hasLocation ? AppColors.borderLight : AppColors.danger),
+                          color: customer.hasLocation && !widget.locationSuspect ? AppColors.borderLight : AppColors.danger),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: IconButton(
                       icon: const Icon(Icons.add_location_alt_outlined, size: 20),
-                      color: customer.hasLocation ? AppColors.textSecondaryLight : AppColors.danger,
+                      color: customer.hasLocation && !widget.locationSuspect ? AppColors.textSecondaryLight : AppColors.danger,
                       tooltip: customer.hasLocation ? 'Update shop location' : 'Add shop location',
                       onPressed: widget.onAddLocation,
                     ),

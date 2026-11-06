@@ -63,6 +63,12 @@ class SurveyorHomeScreen extends ConsumerWidget {
               subtitle: 'View and edit details',
               onTap: () => context.push('/customers'),
             ),
+            ManagementTile(
+              icon: Icons.wrong_location_outlined,
+              title: 'Location fixes',
+              subtitle: 'Shops with a wrong or missing location',
+              onTap: () => context.push('/location-fixes'),
+            ),
           ],
           // "Customers without location" and "Recent edits" tiles are
           // hidden until they have real implementations. Better to ship

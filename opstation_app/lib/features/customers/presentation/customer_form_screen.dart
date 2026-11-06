@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import '../services/field_location_capture.dart';
+import '../../auth/models/user_role.dart';
+import '../../auth/providers/auth_controller.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -111,6 +114,25 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
           ntnGst: ntn,
         );
         await ctrl.create(c);
+        // Surveyor adding a shop: take its location right away (photo + GPS).
+        if (mounted && ref.read(authControllerProvider).valueOrNull?.role == UserRole.surveyor) {
+          final now = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Add the shop location now?'),
+              content: const Text('If you are at the shop, take a photo — its location is saved with it.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Later')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Take photo')),
+              ],
+            ),
+          );
+          if (now == true && mounted) {
+            await FieldLocationCapture.runForShop(context, ref,
+                customerId: c.id, shopName: c.shopName, shopCode: c.code);
+            await ctrl.refresh();
+          }
+        }
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

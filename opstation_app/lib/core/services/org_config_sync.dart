@@ -15,6 +15,7 @@ import '../../features/surveyor/services/survey_feedback.dart' show auditLocatio
 import 'device_guard.dart';
 import '../utils/customer_locations.dart';
 import '../utils/receipt_books.dart';
+import '../utils/location_check.dart';
 
 /// Keeps organisation settings (Admin Settings on the web / app) current on
 /// the phone WITHOUT logging out: re-reads them when the app comes back to the
@@ -91,6 +92,10 @@ class OrgConfigSync with WidgetsBindingObserver {
       // Receipt books and extra customer locations change without a setting.
       await ReceiptBooks.refresh(db, orgId);
       await CustomerLocations.refresh(db, orgId);
+      // Shops whose saved location is shared with another shop (to fix).
+      await refreshSuspectLocations(db, orgId);
+      _ref.invalidate(suspectLocationIdsProvider);
+      if (changed.any((k) => k.startsWith('org.loc_fix_warning'))) _ref.invalidate(locFixWarningProvider);
     } catch (_) {
       // Offline — the phone keeps its last copy.
     } finally {
