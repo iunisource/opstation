@@ -73,6 +73,13 @@ class _ErpSkippedReceiptsReportScreenState
   List<_PersonGaps> _rows = []; // salespeople WITH gaps, worst first
   int _cleanCount = 0; // salespeople with receipts but no gaps
 
+  // Every use of each slip in a wider window (any salesperson): serial →
+  // [{user_name, at, shop, amount}], for "who else used it".
+  Map<int, List<Map<String, dynamic>>> _uses = {};
+  int _accountedElsewhere = 0; // gaps dropped: used by someone / outside the period
+  int _cancelledDropped = 0; // gaps dropped: cancelled in Receipt Books
+  Map<String, String> _names = {};
+
   // Cleared serials: userId -> serial -> {comment, cleared_by, cleared_at}.
   final Map<String, Map<int, Map<String, dynamic>>> _cleared = {};
 
@@ -209,6 +216,50 @@ class _ErpSkippedReceiptsReportScreenState
         }
       }
 
+      // Every collection in a wider window, by anyone: a "gap" slip that was
+      // used by another salesperson, or by the same one just before / after
+      // the period, is not skipped.
+      final wideFrom = _from.subtract(const Duration(days: 60));
+      final wideTo = _to.add(const Duration(days: 31));
+      final uses = <int, List<Map<String, dynamic>>>{};
+      for (var f = 0;; f += 1000) {
+        final page = List<Map<String, dynamic>>.from(await client
+            .from('visits')
+            .select('user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
+            .eq('org_id', orgId)
+            .gt('amount', 0)
+            .gte('timestamp', DateFormat('yyyy-MM-dd').format(wideFrom))
+            .lt('timestamp', DateFormat('yyyy-MM-dd').format(wideTo))
+            .order('timestamp')
+            .range(f, f + 999) as List);
+        for (final v in page) {
+          final slips = _receiptSlipNumbers('${v['receipt_number'] ?? ''}');
+          final cust = v['customers'];
+          for (final n in slips) {
+            (uses[n] ??= []).add({
+              'user_id': v['user_id'],
+              'user_name': '${v['user_name'] ?? ''}'.trim().isEmpty ? (names['${v['user_id']}'] ?? '') : v['user_name'],
+              'at': v['timestamp'],
+              'shop': cust is Map ? cust['shop_name'] : null,
+              'amount': v['amount'],
+            });
+          }
+        }
+        if (page.length < 1000 || f > 300000) break;
+      }
+      // Slips cancelled in Receipt Books (spoiled / torn) are accounted for.
+      final cancelled = <int>{};
+      try {
+        final res = await client.rpc('receipt_books_status', params: {'p_org': orgId});
+        for (final b in res as List) {
+          for (final c in ((b as Map)['cancelled'] as List?) ?? const []) {
+            final n = ((c as Map)['serial'] as num?)?.toInt();
+            if (n != null) cancelled.add(n);
+          }
+        }
+      } catch (_) {}
+      var droppedUsed = 0, droppedCancelled = 0;
+
       // Gap detection per user.
       final rows = <_PersonGaps>[];
       int clean = 0;
@@ -218,7 +269,15 @@ class _ErpSkippedReceiptsReportScreenState
         for (var i = 1; i < uniq.length; i++) {
           final gap = uniq[i] - uniq[i - 1];
           if (gap > 1 && gap <= 20) {
-            for (var n = uniq[i - 1] + 1; n < uniq[i]; n++) missing.add(n);
+            for (var n = uniq[i - 1] + 1; n < uniq[i]; n++) {
+              if (cancelled.contains(n)) {
+                droppedCancelled++;
+              } else if (uses.containsKey(n)) {
+                droppedUsed++; // used by someone else / outside this period
+              } else {
+                missing.add(n);
+              }
+            }
           }
         }
         // Repeated: the same slip on two collections.
@@ -261,6 +320,10 @@ class _ErpSkippedReceiptsReportScreenState
       } catch (_) {/* table may not exist yet — clearing is a no-op then */}
 
       setState(() {
+        _uses = uses;
+        _names = names;
+        _accountedElsewhere = droppedUsed;
+        _cancelledDropped = droppedCancelled;
         _rows = rows;
         _cleanCount = clean;
         _loaded = true;
@@ -552,6 +615,17 @@ class _ErpSkippedReceiptsReportScreenState
                       color: AppTheme.success)),
           ]),
         ),
+        if (_accountedElsewhere > 0 || _cancelledDropped > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Not counted as skipped: '
+              '${_accountedElsewhere > 0 ? '$_accountedElsewhere slip${_accountedElsewhere == 1 ? '' : 's'} used by another salesperson or just outside this period' : ''}'
+              '${_accountedElsewhere > 0 && _cancelledDropped > 0 ? ', ' : ''}'
+              '${_cancelledDropped > 0 ? '$_cancelledDropped cancelled in Receipt Books' : ''}.',
+              style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+            ),
+          ),
         const SizedBox(height: 14),
         for (final r in _rows) _personCard(r),
       ]),
@@ -601,11 +675,12 @@ class _ErpSkippedReceiptsReportScreenState
           ]),
         if (r.repeated.isNotEmpty) _flagLine(
             Icons.content_copy_outlined, AppTheme.danger, 'Used more than once',
-            'The same slip is on two or more collections — check for a typo or a slip entered twice.',
+            'The same slip is on two or more collections — tap a number to see who used it and when.',
             r.repeated),
         if (r.outOfOrder.isNotEmpty) _flagLine(
             Icons.swap_vert, Colors.deepOrange, 'Out of order',
-            'Used after a higher slip from the same book — the order of the book was broken.',
+            'Written after this salesperson had already used a higher slip (up to 50 higher) earlier in the '
+                'period — e.g. 40480 on Monday, then 40467 on Tuesday. Tap a number to see when each was used.',
             r.outOfOrder),
       ]),
     );
@@ -623,18 +698,65 @@ class _ErpSkippedReceiptsReportScreenState
           const SizedBox(height: 4),
           Wrap(spacing: 6, runSpacing: 6, children: [
             for (final n in nums)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(5),
-                  border: Border.all(color: color.withOpacity(0.35)),
+              InkWell(
+                borderRadius: BorderRadius.circular(5),
+                onTap: () => _showUses(n),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(color: color.withOpacity(0.35)),
+                  ),
+                  child: Text('$n', style: const TextStyle(fontSize: 12)),
                 ),
-                child: Text('$n', style: const TextStyle(fontSize: 12)),
               ),
           ]),
         ]),
       );
+
+  /// Every collection that used slip [n]: who, when, which shop, how much.
+  Future<void> _showUses(int n) {
+    final list = [...(_uses[n] ?? const <Map<String, dynamic>>[])]
+      ..sort((a, b) => '${a['at']}'.compareTo('${b['at']}'));
+    final df = DateFormat('d MMM yyyy, h:mm a');
+    final nf = NumberFormat('#,##0');
+    return showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Slip $n — used ${list.length} time${list.length == 1 ? '' : 's'}'),
+        content: SizedBox(
+          width: 520,
+          child: list.isEmpty
+              ? const Text('No collection found with this slip.')
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: list.length,
+                  separatorBuilder: (_, __) => const Divider(height: 16),
+                  itemBuilder: (_, i) {
+                    final u = list[i];
+                    final at = DateTime.tryParse('${u['at'] ?? ''}')?.toLocal();
+                    final who = '${u['user_name'] ?? ''}'.trim().isNotEmpty
+                        ? '${u['user_name']}'
+                        : (_names['${u['user_id']}'] ?? 'Unknown');
+                    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(who, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Text(
+                        [
+                          if (at != null) df.format(at),
+                          if ('${u['shop'] ?? ''}'.isNotEmpty) '${u['shop']}',
+                          if (u['amount'] != null) 'Rs ${nf.format(u['amount'])}',
+                        ].join(' · '),
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                      ),
+                    ]);
+                  },
+                ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+      ),
+    );
+  }
 
   Widget _serialPill(_PersonGaps r, int n) {
     final cleared = _isCleared(r.userId, n);
