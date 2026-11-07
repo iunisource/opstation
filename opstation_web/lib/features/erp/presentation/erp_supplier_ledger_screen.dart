@@ -939,6 +939,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     Map<String, dynamic>? voucher;
     List<dynamic> lines = [];
     String? err;
+    // A dropped connection ("Failed to fetch") is retried once before giving up.
+    for (var attempt = 0; attempt < 2; attempt++) {
+    err = null;
     try {
       final client = Supabase.instance.client;
       switch (type) {
@@ -960,10 +963,17 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           break;
       }
     } catch (e) { err = e.toString(); }
+    final network = err != null && (err.contains('Failed to fetch') || err.contains('ClientException') || err.contains('SocketException'));
+    if (!network) break;
+    await Future.delayed(const Duration(milliseconds: 800));
+    }
     if (!mounted) return;
     final v = voucher;
     if (v == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not load: ' + (err ?? 'not found'))));
+      final network = err != null && (err.contains('Failed to fetch') || err.contains('ClientException'));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(network
+          ? 'Could not open the voucher — the connection dropped. Please tap it again.'
+          : (err == null ? 'This voucher was not found.' : 'Could not open the voucher.'))));
       return;
     }
     // Related-document cross-refs + creator name.
