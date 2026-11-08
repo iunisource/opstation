@@ -621,6 +621,7 @@ class _NoAccessScreen extends StatelessWidget {
   const _NoAccessScreen();
   @override
   Widget build(BuildContext context) {
+    _appReady();
     return const Center(
       child: Padding(
         padding: EdgeInsets.all(40),
@@ -704,6 +705,7 @@ class _DeferredScreen extends StatelessWidget {
             // Recover automatically ONCE per minute with a clean reload
             // (drops the stale SW); if it happens again right away, fall back
             // to the manual button so we can never loop.
+            _appReady();
             if (_claimAutoReload()) {
               Future.microtask(_hardReload);
               return const Scaffold(
@@ -735,9 +737,24 @@ class _DeferredScreen extends StatelessWidget {
               ),
             );
           }
+          _appReady();
           return make();
         },
       );
+}
+
+/// Tells the loading screen in index.html that a real screen is on show, so
+/// it stays up until then instead of leaving a blank white page while the
+/// first screen's code is still downloading.
+bool _readySent = false;
+void _appReady() {
+  if (_readySent) return;
+  _readySent = true;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    try {
+      html.window.dispatchEvent(html.Event('opstation-ready'));
+    } catch (_) {}
+  });
 }
 
 /// True (and records the attempt) if no automatic chunk-recovery reload has

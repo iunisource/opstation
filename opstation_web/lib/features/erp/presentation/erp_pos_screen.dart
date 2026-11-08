@@ -187,7 +187,9 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
       }
       setState(() {
         _sessions = List<Map<String, dynamic>>.from(sessions);
-        _branches = List<Map<String, dynamic>>.from(branches);
+        // Only real branches can run a POS — processor / off-site locations
+        // hold stock sent out for processing and never sell.
+        _branches = List<Map<String, dynamic>>.from(branches).where((b) => b['is_virtual'] != true).toList();
         _activeSession = active;
         _sessionTotals
           ..clear()

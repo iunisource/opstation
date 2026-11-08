@@ -366,14 +366,16 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           .from('quotation_items')
           .select('*')
           .eq('quotation_id', row['id'] as String)
-          .order('sr_no');
-      // Keep the lines in the order they were entered: sort by line number as a
-      // NUMBER (text sorting would put line 10 before line 2).
-      final sorted = List<Map<String, dynamic>>.from(items as List)
+          .order('sr_no')
+          .order('id');
+      // Lines come back exactly as they were entered: by line number, and for
+      // any two with the same number, by the order they were saved in.
+      int lineNo(Map r) => (r['sr_no'] as num?)?.toInt() ?? 1 << 30;
+      int savedSeq(Map r) => int.tryParse('${r['id']}'.split('_').last) ?? 0;
+      final sortedItems = List<Map<String, dynamic>>.from(items)
         ..sort((a, b) {
-          final x = num.tryParse('${a['sr_no'] ?? ''}') ?? 1e9;
-          final y = num.tryParse('${b['sr_no'] ?? ''}') ?? 1e9;
-          return x.compareTo(y);
+          final c = lineNo(a).compareTo(lineNo(b));
+          return c != 0 ? c : savedSeq(a).compareTo(savedSeq(b));
         });
       if (!mounted) return;
       _clearAllLineCtl();
@@ -392,7 +394,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           'brand_id': row['brand_id'],
           '_saved_brand': row['brand_id'],
         };
-        _lines = sorted.map((it) => {
+        _lines = sortedItems.map((it) => {
               'product_id': it['product_id'],
               'item_name': it['item_name'],
               'uom_id': it['uom_id'],
@@ -605,6 +607,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
   // ── Save ─────────────────────────────────────────────────────────────────
   Future<void> _save() async {
     if (_doc == null || orgId == null) return;
+    if (_saving) return; // a second click while saving must not save twice
     if (_doc!['branch_id'] == null) { _toast('Select a branch'); return; }
     if (_lines.isEmpty) { _toast('Add at least one line'); return; }
     if (_lines.any((l) => l['product_id'] == null)) { _toast('Every line needs a product'); return; }
@@ -674,12 +677,21 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         await _client.from('quotations').insert(header);
       } else {
         await _client.from('quotations').update(header).eq('id', qid);
-        await _client.from('quotation_items').delete().eq('quotation_id', qid);
       }
 
+      // Lines keep the exact order on screen: line number 1..n, and the id
+      // carries the same position (one stamp for the whole save) so the
+      // order can never be read back differently.
+      final oldIds = isNew
+          ? <String>[]
+          : [
+              for (final r in await _client.from('quotation_items').select('id').eq('quotation_id', qid))
+                '${r['id']}'
+            ];
+      final stamp = DateTime.now().microsecondsSinceEpoch;
       int sr = 1;
       final itemRows = _lines.map((l) => {
-            'id': 'qti_${DateTime.now().microsecondsSinceEpoch}_${sr}',
+            'id': 'qti_${stamp}_${sr.toString().padLeft(4, '0')}',
             'quotation_id': qid,
             'org_id': orgId,
             'sr_no': sr++,
@@ -692,7 +704,21 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
             'discount_type': l['discount_type'] ?? 'fixed',
             'line_total': _lineTotal(l),
           }).toList();
-      await _client.from('quotation_items').insert(itemRows);
+      try {
+        await _client.from('quotation_items').insert(itemRows);
+      } on PostgrestException catch (e) {
+        // If the database allows each line number only once per quotation,
+        // clear the old lines first and then add the new ones.
+        if (e.code != '23505' || oldIds.isEmpty) rethrow;
+        await _client.from('quotation_items').delete().inFilter('id', oldIds);
+        oldIds.clear();
+        await _client.from('quotation_items').insert(itemRows);
+      }
+      // Remove the previous copy only after the new one is in, so a failed
+      // save never leaves the quotation empty or half-written.
+      if (oldIds.isNotEmpty) {
+        await _client.from('quotation_items').delete().inFilter('id', oldIds);
+      }
 
       _doc!['id'] = qid;
       _doc!['voucher_number'] = vnum;

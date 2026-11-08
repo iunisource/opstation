@@ -30,6 +30,8 @@ class _State extends ConsumerState<HrLeaveScreen> {
   Map<String, Map<String, dynamic>> _empById = {};
   Map<String, Map<String, dynamic>> _typeById = {};
 
+  final Map<String, String> _userNames = {};
+
   Map<String, dynamic>? _current;
   bool _saving = false;
   bool _canWrite = false;
@@ -115,7 +117,23 @@ class _State extends ConsumerState<HrLeaveScreen> {
   Future<void> _loadRequests() async {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_leave_requests').select().eq('org_id', orgId).order('from_date', ascending: false);
-    if (mounted) setState(() => _requests = List<Map<String, dynamic>>.from(rows));
+    final list = List<Map<String, dynamic>>.from(rows);
+    // Names of whoever posted / decided each request, for the trail.
+    final ids = <String>{
+      for (final r in list) ...[
+        if (r['applied_by'] != null) '${r['applied_by']}',
+        if (r['decided_by'] != null) '${r['decided_by']}',
+      ]
+    }..removeWhere(_userNames.containsKey);
+    if (ids.isNotEmpty) {
+      try {
+        final us = await Supabase.instance.client.from('users').select('id, name').inFilter('id', ids.toList());
+        for (final u in us as List) {
+          _userNames['${u['id']}'] = (u['name'] as String?)?.trim() ?? '';
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _requests = list);
     ref.invalidate(leavePendingCountProvider); // keep the menu badge in step
   }
 
@@ -407,6 +425,14 @@ class _State extends ConsumerState<HrLeaveScreen> {
                     const SizedBox(height: 2),
                     Text('$tp  \u00b7  ${_dStr((r['days'] as num?)?.toDouble() ?? 0)} day(s)', style: TextStyle(fontSize: 11, color: sel ? AppTheme.primary : AppTheme.textSecondary)),
                     Text('${r['from_date'] ?? ''}  \u2192  ${r['to_date'] ?? ''}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                    if (r['applied_by'] != null || r['applied_at'] != null)
+                      Text(
+                        [
+                          if (r['applied_by'] != null) 'Posted by ${_who(r['applied_by'])}' else 'Posted',
+                          if (DateTime.tryParse('${r['applied_at']}') != null) DateFormat('d MMM').format(DateTime.parse('${r['applied_at']}').toLocal()),
+                        ].join(' · '),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontStyle: FontStyle.italic)),
                   ]),
                 ));
               })),
@@ -467,10 +493,55 @@ class _State extends ConsumerState<HrLeaveScreen> {
               const SizedBox(height: 12),
               _labeled('Reason', _tf(_reason, lines: 2, hint: 'Optional')),
             ]),
+            if (_current != null) ...[
+              const SizedBox(height: 16),
+              _trailCard(),
+            ],
             const SizedBox(height: 16),
             if (_empId != null) _balancesCard(),
           ]))),
       ]);
+
+  String _who(dynamic id) {
+    if (id == null) return '';
+    final n = _userNames['$id'] ?? '';
+    return n.isEmpty ? 'a user' : n;
+  }
+
+  String _when(dynamic ts) {
+    final d = ts == null ? null : DateTime.tryParse('$ts');
+    return d == null ? '' : DateFormat('d MMM yyyy, h:mm a').format(d.toLocal());
+  }
+
+  /// Who posted the request and when, and who approved / rejected it.
+  Widget _trailCard() {
+    final r = _current!;
+    final st = r['status'] as String? ?? 'pending';
+    final postedAt = r['applied_at'] ?? r['created_at'];
+    final rows = <(IconData, Color, String, String)>[
+      (Icons.edit_note, AppTheme.primary, 'Posted',
+          [if (r['applied_by'] != null) 'by ${_who(r['applied_by'])}', _when(postedAt)].where((x) => x.isNotEmpty).join(' · ')),
+      if (st == 'approved' || st == 'rejected')
+        (st == 'approved' ? Icons.check_circle_outline : Icons.cancel_outlined,
+            st == 'approved' ? Colors.green : Colors.red,
+            st == 'approved' ? 'Approved' : 'Rejected',
+            [if (r['decided_by'] != null) 'by ${_who(r['decided_by'])}', _when(r['decided_at'])].where((x) => x.isNotEmpty).join(' · ')),
+      if (r['updated_at'] != null && _when(r['updated_at']) != _when(postedAt) && _when(r['updated_at']) != _when(r['decided_at']))
+        (Icons.history, AppTheme.textSecondary, 'Last changed', _when(r['updated_at'])),
+    ];
+    return _card('Trail', [
+      for (final x in rows)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(x.$1, size: 16, color: x.$2),
+            const SizedBox(width: 8),
+            SizedBox(width: 92, child: Text(x.$3, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
+            Expanded(child: Text(x.$4.isEmpty ? '—' : x.$4, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          ]),
+        ),
+    ]);
+  }
 
   /// Side-by-side on wide screens; stacked (full width) on phones.
   Widget _rowOrCol(bool narrow, List<Widget> children) {

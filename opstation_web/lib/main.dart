@@ -18,6 +18,8 @@ Future<void> main() async {
   // Scrollable or DefaultTextStyle), so it renders even when the failing widget
   // is at/above MaterialApp — otherwise the replacement itself double-faults.
   ErrorWidget.builder = (FlutterErrorDetails details) {
+    // Let the loading screen go so the error message is visible.
+    try { html.window.dispatchEvent(html.Event('opstation-ready')); } catch (_) {}
     return Directionality(
       textDirection: TextDirection.ltr,
       child: DefaultTextStyle(

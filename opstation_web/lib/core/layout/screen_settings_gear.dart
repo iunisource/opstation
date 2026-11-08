@@ -15,8 +15,12 @@ class _ScreenSettings {
   final String title;
   final List<String> keys; // Admin Settings toggle keys, in display order
   final List<String> extras; // see ErpAdminSettingsScreen.extras
-  const _ScreenSettings(this.title, this.keys, [this.extras = const []]);
+  final (String, String)? page; // (button label, route) for the screen's own setup page
+  const _ScreenSettings(this.title, this.keys, [this.extras = const [], this.page]);
 }
+
+const _posPage = ('Open POS Configuration', '/erp/pos-config');
+const _pos = _ScreenSettings('POS', ['org.batch_tracking'], ['serious.block_negative_stock'], _posPage);
 
 const _salesPrint = ['org.voucher_dates_editable', 'org.show_org_name_sales'];
 const _purchasePrint = ['org.voucher_dates_editable', 'org.show_org_name_purchase'];
@@ -51,7 +55,12 @@ const Map<String, _ScreenSettings> _screenSettings = {
   '/erp/sales-return-invoices': _ScreenSettings('Sales Return Invoice', [
     'org.sri_price_edit', 'org.sri_date_editable', 'org.sri_supervise_flow',
   ]),
-  '/erp/pos': _ScreenSettings('POS', ['org.batch_tracking'], ['serious.block_negative_stock']),
+  '/erp/pos': _pos,
+  '/erp/pos-config': _ScreenSettings('POS', ['org.batch_tracking'], ['serious.block_negative_stock']),
+  '/erp/pos-catalog': _pos,
+  '/erp/pos-customer-history': _pos,
+  '/erp/pos-held-bills': _pos,
+  '/erp/pos-expense-management': _pos,
   '/customers': _ScreenSettings('Customers', _customerKeys),
   '/crm/customers': _ScreenSettings('Customers', _customerKeys),
   '/operations/retailers': _ScreenSettings('Retailers', [
@@ -219,6 +228,28 @@ class ScreenSettingsGear extends ConsumerWidget {
                   ),
                 ]),
               ),
+              if (cfg.page != null)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                  child: Material(
+                    color: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: AppTheme.border),
+                    ),
+                    child: ListTile(
+                      leading: const Icon(Icons.tune, color: AppTheme.primary),
+                      title: Text(cfg.page!.$1, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: const Text('Payment methods, print size, receipt and more'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        GoRouter.of(context).go(cfg.page!.$2);
+                      },
+                    ),
+                  ),
+                ),
               Flexible(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
