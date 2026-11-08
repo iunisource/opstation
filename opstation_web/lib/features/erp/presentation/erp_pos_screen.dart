@@ -3329,6 +3329,69 @@ class _ReceiptDialog extends StatelessWidget {
     return '';
   }
 
+  static String _e(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+  /// Full A4 invoice (POS Configuration → Print size: A4).
+  String _a4Html({
+    required String company, required String branchLine, required String ntn, required String contact,
+    required String logo, required String ts, required String customer, required double subtotal,
+    required double discount, required double total, required String method, required String split,
+    required String footer, required String terms,
+  }) {
+    final ref = (transaction['transaction_number'] as String?) ?? '';
+    final isReturn = transaction['transaction_type'] == 'return';
+    final phone = (transaction['pos_customers']?['phone'] as String?) ?? '';
+    final rows = StringBuffer();
+    var i = 0;
+    for (final it in items) {
+      i++;
+      final q = it['quantity'] as double;
+      final p = it['unit_price'] as double;
+      final d = it['discount'] as double;
+      final dt = it['discount_type'] as String? ?? 'fixed';
+      final da = dt == 'percent' ? p * q * (d / 100) : d;
+      final lt = q * p - da;
+      rows.write('<tr><td class="c">$i</td><td>${_e(it['name'] as String? ?? '-')}</td>'
+          '<td class="r">${q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toString()}</td>'
+          '<td class="r">${money(p)}</td>'
+          '<td class="r">${da > 0 ? (dt == 'percent' ? '${d.toStringAsFixed(d == d.roundToDouble() ? 0 : 1)}%' : money(da)) : '-'}</td>'
+          '<td class="r b">${money(lt)}</td></tr>');
+    }
+    final ap = (transaction['amount_paid'] as num?)?.toDouble();
+    final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0;
+    final balLine = (ap == null || bc == 0)
+        ? ''
+        : '<tr><td>${bc < 0 ? 'Balance due' : 'Credit added'}</td><td class="r b">Rs. ${money(bc.abs())}</td></tr>';
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>${_e(isReturn ? 'Return' : 'Invoice')} ${_e(ref)}</title><style>'
+        '@page{size:A4;margin:14mm}*{box-sizing:border-box}'
+        'body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:12.5px;margin:0}'
+        '.hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:14px}'
+        '.co{display:flex;gap:14px;align-items:center}.co img{max-height:70px;max-width:180px}'
+        '.co h1{font-size:22px;margin:0}.co p{margin:2px 0;color:#555;font-size:11.5px}'
+        '.inv{text-align:right}.inv h2{font-size:24px;letter-spacing:3px;margin:0 0 6px}.inv p{margin:2px 0;font-size:12px}'
+        '.bill{display:flex;justify-content:space-between;margin-bottom:14px}.bill .lab{font-size:10.5px;color:#777;text-transform:uppercase;letter-spacing:1px}'
+        'table.items{width:100%;border-collapse:collapse}table.items th{background:#f1f3f5;text-align:left;font-size:11px;padding:8px;border-bottom:1px solid #ccc}'
+        'table.items td{padding:7px 8px;border-bottom:1px solid #e5e5e5}.r{text-align:right}.c{text-align:center}.b{font-weight:bold}'
+        '.tot{display:flex;justify-content:flex-end;margin-top:12px}.tot table{min-width:280px;border-collapse:collapse}'
+        '.tot td{padding:5px 8px}.tot .grand td{border-top:2px solid #111;font-size:15px;font-weight:bold}'
+        '.pay{margin-top:14px;font-size:12px;color:#333}.foot{margin-top:28px;border-top:1px dashed #bbb;padding-top:10px;text-align:center;color:#555;font-size:11.5px}'
+        '.terms{margin-top:8px;font-size:10px;color:#888;text-align:center}'
+        '</style></head><body>'
+        '<div class="hd"><div class="co">${logo.isNotEmpty ? '<img src="$logo">' : ''}<div><h1>${_e(company)}</h1>'
+        '${branchLine.isNotEmpty ? '<p>${_e(branchLine)}</p>' : ''}${ntn.isNotEmpty ? '<p>${_e(ntn)}</p>' : ''}${contact.isNotEmpty ? '<p>${_e(contact)}</p>' : ''}</div></div>'
+        '<div class="inv"><h2>${isReturn ? 'RETURN' : 'INVOICE'}</h2>${ref.isNotEmpty ? '<p><b>No:</b> ${_e(ref)}</p>' : ''}<p><b>Date:</b> ${_e(ts)}</p></div></div>'
+        '<div class="bill"><div><div class="lab">Bill to</div><div class="b" style="font-size:14px">${_e(customer)}</div>${phone.isNotEmpty ? '<div>${_e(phone)}</div>' : ''}</div>'
+        '<div style="text-align:right"><div class="lab">Cashier</div><div>${_e(cashierName.isEmpty ? '-' : cashierName)}</div></div></div>'
+        '<table class="items"><thead><tr><th class="c" style="width:36px">#</th><th>Item</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Discount</th><th class="r">Amount</th></tr></thead>'
+        '<tbody>$rows</tbody></table>'
+        '<div class="tot"><table><tr><td>Subtotal</td><td class="r">${money(subtotal)}</td></tr>'
+        '${discount > 0 ? '<tr><td>Discount</td><td class="r">-${money(discount)}</td></tr>' : ''}'
+        '<tr class="grand"><td>TOTAL</td><td class="r">Rs. ${money(total)}</td></tr>$balLine</table></div>'
+        '<div class="pay"><b>Payment:</b> ${_e(method)}${split.isNotEmpty ? ' &nbsp;·&nbsp; ${_e(split)}' : ''}</div>'
+        '${footer.isNotEmpty ? '<div class="foot">${_e(footer)}</div>' : ''}${terms.isNotEmpty ? '<div class="terms">${_e(terms)}</div>' : ''}'
+        '<script>window.onload=function(){window.print();}</script></body></html>';
+  }
+
   @override Widget build(BuildContext context) {
     final total = (transaction['total'] as num?)?.toDouble() ?? 0;
     final discount = (transaction['discount'] as num?)?.toDouble() ?? 0;
@@ -3441,7 +3504,13 @@ class _ReceiptDialog extends StatelessWidget {
           final discRow = discount > 0 ? '<tr><td colspan="4" style="color:#e67e22">Total Discount</td><td style="text-align:right;color:#e67e22">-${money(discount)}</td></tr>' : '';
           final footerHtml = (footerNote != null && footerNote!.isNotEmpty) ? '<p style="text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px">$footerNote</p>' : '';
           final content = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Receipt</title><style>@page{margin:0}body{font-family:Arial,sans-serif;padding:20px;max-width:320px;margin:0 auto;font-size:12px}h2,h3{text-align:center;margin:4px 0}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#f5f5f5;padding:5px 6px;font-size:11px;text-align:left}td{padding:5px 6px;border-bottom:1px solid #eee}.total-row td{font-weight:bold;font-size:13px;border-top:2px solid #333}hr{border:none;border-top:1px dashed #ccc;margin:8px 0}</style></head><body>${posLogo.isNotEmpty ? '<div style=\"text-align:center;margin-bottom:8px\"><img src=\"$posLogo\" style=\"max-height:60px;max-width:200px\"></div>' : ''}<h2>$posCompany</h2>$posBranchLine${posNtn.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posNtn</p>' : ''}${posContact.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#666;margin:2px 0">$posContact</p>' : ''}<p style="text-align:center;margin:4px 0">$ts</p><p style="text-align:center;margin:4px 0">Customer: $customer</p>${(transaction['transaction_number'] as String?)?.isNotEmpty == true ? '<p style="text-align:center;font-size:10px;color:#888;margin:2px 0">Ref: ' + (transaction['transaction_number'] as String) + '</p>' : ''}<hr><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Disc</th><th style="text-align:right">Total</th></tr></thead><tbody>$rows<tr><td colspan="4" style="color:#666">Subtotal</td><td style="text-align:right">${money(subtotal)}</td></tr>$discRow<tr class="total-row"><td colspan="4">TOTAL</td><td style="text-align:right">Rs. ${money(total)}</td></tr></tbody></table><p style="text-align:center">Payment: $method | Cashier: $cashierName</p>$splitHtml${(() { final ap = (transaction['amount_paid'] as num?)?.toDouble(); final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0; if (ap == null) return ''; if (bc == 0) return ''; return '<p style="text-align:center;font-size:11px;font-weight:bold">' + (bc < 0 ? 'Balance Due: Rs. ' + money(-bc) : 'Credit Added: Rs. ' + money(bc)) + '</p>'; })()}${posFooter.isNotEmpty ? '<p style=\"text-align:center;color:#888;font-size:11px;border-top:1px dashed #ccc;padding-top:8px;margin-top:8px\">$posFooter</p>' : ''}${posTerms.isNotEmpty ? '<p style=\"text-align:center;font-size:9px;color:#aaa;margin-top:6px\">$posTerms</p>' : ''}<script>window.print()</script></body></html>';
-          final blob = html.Blob([content], 'text/html;charset=utf-8'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
+          // POS Configuration → Print size: small POS receipt (default) or full A4 invoice.
+          final doc = (posConfig['pos.print_size'] ?? '') == 'a4'
+              ? _a4Html(company: posCompany, branchLine: posHasCustomCompany ? '' : branchName, ntn: posNtn, contact: posContact,
+                  logo: posLogo, ts: ts, customer: customer, subtotal: subtotal, discount: discount, total: total,
+                  method: method, split: _tenderSummary(transaction), footer: posFooter, terms: posTerms)
+              : content;
+          final blob = html.Blob([doc], 'text/html;charset=utf-8'); final url = html.Url.createObjectUrlFromBlob(blob); html.window.open(url, '_blank');
         })),
         const SizedBox(width: 12),
         Expanded(child: ElevatedButton.icon(icon: const Icon(Icons.add_shopping_cart, size: 16), label: const Text('New Sale'), onPressed: () => Navigator.pop(context))),

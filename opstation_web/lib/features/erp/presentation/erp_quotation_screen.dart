@@ -367,6 +367,14 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           .select('*')
           .eq('quotation_id', row['id'] as String)
           .order('sr_no');
+      // Keep the lines in the order they were entered: sort by line number as a
+      // NUMBER (text sorting would put line 10 before line 2).
+      final sorted = List<Map<String, dynamic>>.from(items as List)
+        ..sort((a, b) {
+          final x = num.tryParse('${a['sr_no'] ?? ''}') ?? 1e9;
+          final y = num.tryParse('${b['sr_no'] ?? ''}') ?? 1e9;
+          return x.compareTo(y);
+        });
       if (!mounted) return;
       _clearAllLineCtl();
       setState(() {
@@ -384,7 +392,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
           'brand_id': row['brand_id'],
           '_saved_brand': row['brand_id'],
         };
-        _lines = List<Map<String, dynamic>>.from(items).map((it) => {
+        _lines = sorted.map((it) => {
               'product_id': it['product_id'],
               'item_name': it['item_name'],
               'uom_id': it['uom_id'],

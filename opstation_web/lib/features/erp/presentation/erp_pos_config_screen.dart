@@ -27,7 +27,8 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
   bool _loading = true, _saving = false;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
-  static const _keys = ['pos.company_name','pos.footer_note','pos.terms','pos.ntn','pos.contact','pos.logo'];
+  static const _keys = ['pos.company_name','pos.footer_note','pos.terms','pos.ntn','pos.contact','pos.logo','pos.print_size'];
+  String _printSize = 'pos'; // pos (receipt printer) | a4 (full page invoice)
 
   @override void initState() { super.initState(); _load(); _loadMethods(); }
   @override void didChangeDependencies() { super.didChangeDependencies(); }
@@ -49,6 +50,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         _ntnCtrl.text     = map['pos.ntn']           ?? '';
         _contactCtrl.text = map['pos.contact']       ?? '';
         _logoDataUri      = (map['pos.logo']?.isNotEmpty == true) ? map['pos.logo'] : null;
+        _printSize        = map['pos.print_size'] == 'a4' ? 'a4' : 'pos';
         _loading = false;
       });
     } catch (e) { _snack(friendlyError('Could not load', e)); setState(() => _loading = false); }
@@ -62,6 +64,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         'pos.company_name': _companyCtrl.text.trim(), 'pos.footer_note': _footerCtrl.text.trim(),
         'pos.terms': _termsCtrl.text.trim(), 'pos.ntn': _ntnCtrl.text.trim(),
         'pos.contact': _contactCtrl.text.trim(), 'pos.logo': _logoDataUri ?? '',
+        'pos.print_size': _printSize,
       };
       for (final e in configs.entries) {
         final branchId = _branchId;
@@ -189,6 +192,22 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
             ElevatedButton.icon(icon: const Icon(Icons.save_outlined, size: 18), label: const Text('Save Configuration'), onPressed: _saving ? null : _save, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14))),
           ]),
           const SizedBox(height: 32),
+          const _Section(title: 'Print Size', subtitle: 'Page size used when printing a POS receipt'),
+          const SizedBox(height: 10),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'pos', icon: Icon(Icons.receipt_long_outlined, size: 18), label: Text('POS receipt')),
+              ButtonSegment(value: 'a4', icon: Icon(Icons.description_outlined, size: 18), label: Text('Full A4 invoice')),
+            ],
+            selected: {_printSize},
+            onSelectionChanged: (v) => setState(() => _printSize = v.first),
+          ),
+          const SizedBox(height: 6),
+          Text(_printSize == 'a4'
+                  ? 'Prints a full-page invoice: logo and company details at the top, numbered items table, totals, payment, footer and terms.'
+                  : 'Prints a narrow receipt for thermal POS printers.',
+              style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          const SizedBox(height: 28),
           _Section(title: 'Receipt Logo', subtitle: 'PNG or JPEG, max 500 KB, shown at top of receipt'),
           const SizedBox(height: 12),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
