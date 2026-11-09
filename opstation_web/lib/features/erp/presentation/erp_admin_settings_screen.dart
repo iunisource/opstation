@@ -1864,6 +1864,36 @@ class _ErpAdminSettingsScreenState
             if (t.choice != null) _choiceRow(t.choice!),
             for (final ch in t.moreChoices) _choiceRow(ch),
           ],
+          // Daily backup: where to send it, Google Drive and "Back up now",
+          // right here under the toggle.
+          if (on && t.key == 'org.backup_enabled') ...[
+            const Divider(height: 1, color: AppTheme.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                _DriveBackupPanel(
+                  key: _driveKey,
+                  orgId: ref.read(currentUserProvider)?.orgId ?? '',
+                  isMaster: (() {
+                    final r = ref.read(currentUserProvider)?.role;
+                    return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+                  })(),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: ElevatedButton.icon(
+                    onPressed: _backupRunning ? null : _backupNow,
+                    icon: _backupRunning
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.backup_outlined, size: 18),
+                    label: Text(_backupRunning ? 'Backing up…' : 'Back up now'),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+                  ),
+                ),
+              ]),
+            ),
+          ],
           // Auditor customer groups: picked right here, under the toggle.
           if (on && t.key == 'org.auditor_group_scope') ...[
             const Divider(height: 1, color: AppTheme.border),
@@ -2288,63 +2318,6 @@ class _ErpAdminSettingsScreenState
                     const SizedBox(height: 16),
                     _HiddenGroupsPanel(
                         orgId: ref.read(currentUserProvider)?.orgId ?? ''),
-                  ],
-                  if (_values['org.backup_enabled'] ?? false) ...[
-                    const SizedBox(height: 16),
-                    _DriveBackupPanel(
-                      key: _driveKey,
-                      orgId: ref.read(currentUserProvider)?.orgId ?? '',
-                      isMaster: (() {
-                        final r = ref.read(currentUserProvider)?.role;
-                        return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
-                      })(),
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      constraints: const BoxConstraints(maxWidth: 760),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.border),
-                      ),
-                      child: Row(
-                        children: [
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Run a backup now',
-                                    style: TextStyle(
-                                        fontSize: 14, fontWeight: FontWeight.w600)),
-                                SizedBox(height: 4),
-                                Text(
-                                    'Send a zipped CSV export of all data to the places ticked above, right now.',
-                                    style: TextStyle(
-                                        fontSize: 12.5,
-                                        color: AppTheme.textSecondary,
-                                        height: 1.35)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          ElevatedButton.icon(
-                            onPressed: _backupRunning ? null : _backupNow,
-                            icon: _backupRunning
-                                ? const SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white))
-                                : const Icon(Icons.backup_outlined, size: 18),
-                            label: Text(_backupRunning ? 'Sending…' : 'Back up now'),
-                            style: ElevatedButton.styleFrom(
-                                backgroundColor: AppTheme.primary,
-                                foregroundColor: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
                   const SizedBox(height: 8),
                   _seriousZone(),
