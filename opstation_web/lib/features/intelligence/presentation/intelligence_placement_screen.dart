@@ -14,6 +14,7 @@ import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../widgets/survey_audit_status.dart';
 import '../services/survey_remove.dart';
+import '../services/autopilot.dart';
 
 class IntelligencePlacementScreen extends ConsumerStatefulWidget {
   const IntelligencePlacementScreen({super.key});
@@ -46,6 +47,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
   DateTime? _lastSurvey(String cid) {
     DateTime? last;
     for (final a in (_latest[cid] ?? const <String, Map<String, dynamic>>{}).values) {
+      if (isInvoiceRow(a)) continue; // Auto Pilot rows aren't surveys
       final t = DateTime.tryParse('${a['surveyed_at'] ?? ''}');
       if (t != null && (last == null || t.isAfter(last))) last = t;
     }
@@ -186,7 +188,8 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           .eq('org_id', orgId)
           .isFilter('voided_at', null)
           .order('surveyed_at', ascending: false);
-      final audits = List<Map<String, dynamic>>.from(auditRows);
+      // Auto Pilot: add placements picked up from sales invoices (newest wins).
+      final audits = mergeAutopilot(List<Map<String, dynamic>>.from(auditRows), await autopilotRows(orgId));
 
       // Dedupe to latest per (customer_id, product_id)
       final latest = <String, Map<String, Map<String, dynamic>>>{};
@@ -201,13 +204,18 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
       List<Map<String, dynamic>> customers = [];
       if (latest.keys.isNotEmpty) {
-        final rows = await client
-            .from('customers')
-            .select('id, shop_name, code')
-            .eq('org_id', orgId)
-            .eq('is_active', true)
-            .inFilter('id', latest.keys.toList());
-        customers = List<Map<String, dynamic>>.from(rows);
+        // In batches: one request with every shop id gets too long once the
+        // list is big (Auto Pilot adds shops that were never surveyed).
+        final ids = latest.keys.toList();
+        for (var i = 0; i < ids.length; i += 150) {
+          final rows = await client
+              .from('customers')
+              .select('id, shop_name, code')
+              .eq('org_id', orgId)
+              .eq('is_active', true)
+              .inFilter('id', ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150));
+          customers.addAll(List<Map<String, dynamic>>.from(rows));
+        }
         customers.sort((a, b) => (a['shop_name'] as String).compareTo(b['shop_name'] as String));
       }
 
@@ -297,9 +305,18 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _kv('Status', (audit['is_present'] as bool) ? 'Displayed' : 'Not displayed'),
-                    _kv('Surveyed by', _surveyorNameFor(customer['id'] as String, product['id'] as String)),
-                    if (audit['source'] == 'audit_fix') _kv('Type', 'Auditor correction'),
-                    _kv('Last survey', _fmt(audit['surveyed_at'] as String?)),
+                    if (isInvoiceRow(audit) && audit['is_present'] != true) ...[
+                      _kv('Source', 'Auto Pilot — not surveyed and not bought in the window'),
+                    ] else if (isInvoiceRow(audit)) ...[
+                      _kv('Source', 'Sales invoice (Auto Pilot)'),
+                      _kv('Invoice', '${audit['ref'] ?? '-'}'),
+                      _kv('Invoice date', '${audit['ref_date'] ?? '-'}'),
+                    ] else ...[
+                      _kv('Surveyed by', _surveyorNameFor(customer['id'] as String, product['id'] as String)),
+                      if (audit['source'] == 'audit_fix') _kv('Type', 'Auditor correction'),
+                      if (audit['source'] == 'autopilot_kept') _kv('Type', 'Auto Pilot (kept)'),
+                      _kv('Last survey', _fmt(audit['surveyed_at'] as String?)),
+                    ],
                   ],
                 ),
         ),
@@ -663,10 +680,21 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                                 child: Center(
                                   child: audit == null
                                       ? const Text('—', style: TextStyle(color: AppTheme.textSecondary))
-                                      : Icon(
-                                          (audit['is_present'] as bool) ? Icons.check_circle : Icons.cancel,
-                                          color: (audit['is_present'] as bool) ? AppTheme.success : AppTheme.danger,
-                                          size: 22,
+                                      : Tooltip(
+                                          message: placementSourceLabel(audit),
+                                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                            Icon(
+                                              (audit['is_present'] as bool) ? Icons.check_circle : Icons.cancel,
+                                              color: (audit['is_present'] as bool) ? AppTheme.success : AppTheme.danger,
+                                              size: 22,
+                                            ),
+                                            // From a sales invoice (Auto Pilot), not a survey.
+                                            if (isInvoiceRow(audit))
+                                              const Padding(
+                                                padding: EdgeInsets.only(left: 2),
+                                                child: Icon(Icons.receipt_long, size: 14, color: AppTheme.primary),
+                                              ),
+                                          ]),
                                         ),
                                 ),
                               ),

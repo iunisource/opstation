@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../services/autopilot.dart';
 import '../../../core/widgets/responsive.dart';
 
 /// Intelligence Dashboard — placement score by salesman and by market (route).
@@ -374,7 +375,11 @@ class _IntelligenceDashboardScreenState
         client.from('competitor_categories').select('id, name').eq('org_id', orgId),
         client.from('competitor_brand_aliases').select('alias, canonical').eq('org_id', orgId),
       ]);
-      final audits = List<Map<String, dynamic>>.from(resA[0] as List);
+      // Auto Pilot: placements picked up from sales invoices join the surveys;
+      // the newest entry per shop + product still wins below.
+      final autoRows = await autopilotRows(orgId);
+      if (usedLatestRpc && autoRows.isNotEmpty) rpcLatest = [...rpcLatest, ...autoRows];
+      final audits = [...List<Map<String, dynamic>>.from(resA[0] as List), if (!usedLatestRpc) ...autoRows];
       final routesRaw = orgRoutes;
       final assignsRaw = resA[1] as List;
       final usersRaw = resA[2] as List;
@@ -427,7 +432,9 @@ class _IntelligenceDashboardScreenState
       if (usedLatestRpc) {
         // Already reduced server-side to the latest per (customer, product).
         for (final a in rpcLatest) {
-          latest['${a['customer_id']}|${a['product_id']}'] = a;
+          final key = '${a['customer_id']}|${a['product_id']}';
+          final prev = latest[key];
+          if (prev == null || '${a['surveyed_at']}'.compareTo('${prev['surveyed_at']}') > 0) latest[key] = a;
         }
       } else {
         // Client path: optional date-range restriction, then latest-per-pair.

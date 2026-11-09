@@ -8,6 +8,7 @@ import 'package:excel/excel.dart' as xls;
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import '../services/autopilot.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 
@@ -85,11 +86,13 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
         c.from('users').select('id, name').eq('org_id', orgId),
       ]);
       final prodIds = {for (final p in res[0]) p['id'] as String};
+      // Auto Pilot: placements from sales invoices count too (newest wins).
+      final autoRows = await autopilotRows(orgId);
       final active = {for (final s in res[2]) s['id'] as String: s};
 
       // Latest survey per (shop, product).
       final latest = <String, Map<String, dynamic>>{};
-      for (final a in res[1]) {
+      for (final a in [...res[1], ...autoRows]) {
         final pid = a['product_id'] as String?;
         final cid = a['customer_id'] as String?;
         if (pid == null || cid == null || !prodIds.contains(pid) || !active.containsKey(cid)) continue;

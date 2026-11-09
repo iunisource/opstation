@@ -78,9 +78,10 @@ class _AdminToggle {
   final _BranchField? branch; // optional branch-picker companion
   final _UsersField? users; // optional user multi-select companion
   final _ChoiceField? choice; // optional one-of-several companion
+  final List<_ChoiceField> moreChoices; // further one-of-several companions
   final bool defaultOn; // value used when no app_config row exists yet
   const _AdminToggle(this.key, this.title, this.subtitle,
-      {this.number, this.text, this.branch, this.users, this.choice, this.defaultOn = false});
+      {this.number, this.text, this.branch, this.users, this.choice, this.moreChoices = const [], this.defaultOn = false});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -690,6 +691,34 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.intel_autopilot',
+    'Auto Pilot — placement scores update from sales',
+    'When ON, a shop\'s placement score is also updated by what it buys. If a shop '
+        'has 6 of 10 placements and buys one of the missing 4, that item counts as '
+        'placed and the score goes to 7/10 — no survey needed. A shop with no survey '
+        'gets a score from its invoices (2 of 10 bought = 20%). A return that cancels '
+        'the only sale takes the item off again; a survey-found item stays. Only items '
+        'linked to system products (Intelligence → Products) are picked up. Turning it '
+        'OFF goes back to surveys only (you can choose to keep the current results).',
+    choice: _ChoiceField('org.intel_autopilot_mode', 'Score comes from', [
+      ('survey_invoice', 'Surveys + Sales invoices'),
+      ('survey', 'Surveys only'),
+    ], 'survey_invoice'),
+    moreChoices: [
+      _ChoiceField('org.intel_autopilot_days', 'An invoiced item counts as placed for', [
+        ('30', '30 days'),
+        ('60', '60 days'),
+        ('90', '90 days'),
+        ('180', '180 days'),
+      ], '90'),
+      _ChoiceField('org.intel_autopilot_conflict', 'When a survey and an invoice disagree', [
+        ('latest', 'Latest one wins'),
+        ('survey', 'Survey always wins'),
+      ], 'latest'),
+    ],
+  ),
+
+  _AdminToggle(
     'org.auditor_group_scope',
     'Limit auditors to customer groups',
     'When ON, each auditor sees and gives feedback on only the shops in the customer groups '
@@ -910,6 +939,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Intelligence & Surveys', Icons.travel_explore_outlined, [
     'org.intel_delete_access',
+    'org.intel_autopilot',
     'org.audit_location_tracking',
     'org.auditor_group_scope',
   ]),
@@ -1107,8 +1137,7 @@ class _ErpAdminSettingsScreenState
                     branches.any((br) => br['id'] == storedB));
             _branchValues[b.key] = valid ? storedB : 'all';
           }
-          final ch = t.choice;
-          if (ch != null) {
+          for (final ch in [if (t.choice != null) t.choice!, ...t.moreChoices]) {
             final v = cfg[ch.key]?.trim();
             _choiceValues[ch.key] = (v != null && ch.options.any((o) => o.$1 == v)) ? v : ch.defaultValue;
           }
@@ -1289,6 +1318,40 @@ class _ErpAdminSettingsScreenState
   }
 
   Future<void> _setToggle(String key, bool val) async {
+    // Auto Pilot off: keep what it filled in, or go back to surveys only.
+    if (key == 'org.intel_autopilot' && !val && (_values[key] ?? false)) {
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Turn off Auto Pilot?'),
+          content: const Text(
+              'Placements picked up from sales invoices will stop counting and scores go back '
+              'to surveys only.\n\nOr keep the current Auto Pilot placements: they are saved as '
+              '"Auto Pilot (kept)" entries dated today, and a later survey can still change them.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(), child: const Text('Cancel')),
+            OutlinedButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop('keep'), child: const Text('Keep current placements')),
+            ElevatedButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop('revert'), child: const Text('Go back to surveys only')),
+          ],
+        ),
+      );
+      if (choice == null) { if (mounted) setState(() {}); return; }
+      if (choice == 'keep') {
+        try {
+          final n = await Supabase.instance.client.rpc('intel_autopilot_keep',
+              params: {'p_org': ref.read(currentUserProvider)?.orgId});
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Kept $n Auto Pilot placements.')));
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('Could not keep the placements', e))));
+            setState(() {});
+          }
+          return; // leave Auto Pilot on so nothing is lost
+        }
+      }
+    }
     // Mutual exclusion: a voucher's Supervision and Approval/review flows can't
     // both be on. Turning one on prompts to turn its partner off.
     final partner = _exclusiveToggles[key];
@@ -1718,7 +1781,7 @@ class _ErpAdminSettingsScreenState
   Widget _toggleCard(_AdminToggle t) {
     final on = _values[t.key] ?? false;
     final hasCompanion =
-        on && (t.number != null || t.text != null || t.branch != null || t.users != null || t.choice != null);
+        on && (t.number != null || t.text != null || t.branch != null || t.users != null || t.choice != null || t.moreChoices.isNotEmpty);
     return Container(
       decoration: BoxDecoration(
         color: on ? AppTheme.primary.withOpacity(0.045) : Colors.white,
@@ -1779,6 +1842,7 @@ class _ErpAdminSettingsScreenState
             if (t.branch != null) _branchRow(t.branch!),
             if (t.users != null) _usersRow(t.users!),
             if (t.choice != null) _choiceRow(t.choice!),
+            for (final ch in t.moreChoices) _choiceRow(ch),
           ],
           // Auditor customer groups: picked right here, under the toggle.
           if (on && t.key == 'org.auditor_group_scope') ...[

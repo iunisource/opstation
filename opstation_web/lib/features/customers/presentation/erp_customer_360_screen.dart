@@ -18,6 +18,7 @@ import '../../auth/auth_controller.dart';
 import 'customer_history_screen.dart';
 import 'customer_edit_review.dart';
 import 'customer_other_locations.dart';
+import '../../intelligence/services/autopilot.dart';
 
 /// Customer 360 — a unified view of a single shop:
 ///  • Overview     : profile, location, credit vs current outstanding
@@ -1132,10 +1133,15 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       final seenP = <String>{};
       final placement = <Map<String, dynamic>>[];
       final history = <Map<String, dynamic>>[];
-      for (final r in pa) {
+      // Auto Pilot: this shop's placements from sales invoices (newest wins).
+      final orgIdAp = ref.read(currentUserProvider)?.orgId;
+      final apRows = orgIdAp == null
+          ? const <Map<String, dynamic>>[]
+          : (await autopilotRows(orgIdAp)).where((r) => r['customer_id'] == _customerId).toList();
+      for (final r in mergeAutopilot(List<Map<String, dynamic>>.from(pa), apRows)) {
         final pid = r['product_id'] as String?;
         if (pid == null) continue;
-        history.add({
+        if (r['source'] != 'invoice') history.add({
           'pid': pid,
           'present': r['is_present'] == true,
           'at': r['surveyed_at'] as String?,
@@ -1145,6 +1151,8 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           'product_id': pid,
           'present': r['is_present'] as bool? ?? false,
           'surveyed_at': r['surveyed_at'] as String?,
+          'source': r['source'],
+          'ref': r['ref'],
         });
       }
       if (placement.isNotEmpty) {
@@ -2330,6 +2338,9 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   Text(sku,
                       style: const TextStyle(
                           fontSize: 11, color: AppTheme.textSecondary)),
+                if (p['source'] == 'invoice')
+                  Text('From invoice ${p['ref'] ?? ''} (Auto Pilot)',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.primary)),
               ],
             ),
           ),
