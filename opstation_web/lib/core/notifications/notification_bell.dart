@@ -70,13 +70,33 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
       final ids = readBy.keys.toList();
       List<Map<String, dynamic>> notifs = [];
       if (ids.isNotEmpty) {
-        final rows = await Supabase.instance.client
-            .from('notifications')
-            .select('id, title, body, link_url, created_at')
-            .inFilter('id', ids)
-            .order('created_at', ascending: false)
-            .limit(50);
-        notifs = List<Map<String, dynamic>>.from(rows);
+        // Ask in small batches: one request carrying every id the user has
+        // ever received grew too long for the server once the list got big,
+        // failed, and left the drawer empty while the counter still showed.
+        const size = 100;
+        final chunks = [
+          for (var i = 0; i < ids.length; i += size)
+            ids.sublist(i, i + size > ids.length ? ids.length : i + size)
+        ];
+        final seen = <String>{};
+        for (var i = 0; i < chunks.length; i += 8) {
+          final wave = chunks.sublist(i, i + 8 > chunks.length ? chunks.length : i + 8);
+          final results = await Future.wait(wave.map((c) => Supabase.instance.client
+              .from('notifications')
+              .select('id, title, body, link_url, created_at')
+              .inFilter('id', c)
+              .order('created_at', ascending: false)
+              .limit(50)));
+          for (final rows in results) {
+            for (final r in rows as List) {
+              final m = Map<String, dynamic>.from(r as Map);
+              if (seen.add('${m['id']}')) notifs.add(m);
+            }
+          }
+        }
+        // Newest 50 overall.
+        notifs.sort((a, b) => '${b['created_at'] ?? ''}'.compareTo('${a['created_at'] ?? ''}'));
+        if (notifs.length > 50) notifs = notifs.sublist(0, 50);
         // Attach each notification's read_at for this user.
         for (final n in notifs) {
           n['read_at'] = readBy[n['id'] as String];

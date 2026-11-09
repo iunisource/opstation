@@ -417,13 +417,13 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
     final branchName = (_sidebarBranch?['name'] as String?) ?? 'Current Branch';
     final shown = _entries.where((e) => matchesQuery('${e['entry_number'] ?? ''} ${e['description'] ?? ''}', _txnQuery)).toList();
 
-    return Container(
-      color: AppTheme.background,
-      padding: const EdgeInsets.all(24),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    // Phone: the page scrolls as one, filters stack, and each transaction
+    // shows as a small card instead of a wide table row.
+    final phone = MediaQuery.of(context).size.width < 700;
+    final page = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         LayoutBuilder(builder: (_, cc) {
           final narrow = cc.maxWidth < 640;
-          final titleBlock = const Text('Account Activity Report', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800));
+          final titleBlock = Text('Account Activity Report', style: TextStyle(fontSize: phone ? 20 : 24, fontWeight: FontWeight.w800));
           final actions = (_loaded && _entries.isNotEmpty)
             ? Wrap(spacing: 8, runSpacing: 8, children: [
                 OutlinedButton.icon(icon: const Icon(Icons.table_view_outlined, size: 16), label: const Text('Excel', style: TextStyle(fontSize: 12)),
@@ -441,12 +441,13 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
         // ── Filters ───────────────────────────────────────────────
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(phone ? 12 : 16),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Flex(direction: phone ? Axis.vertical : Axis.horizontal, mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Account picker
-              SizedBox(width: 420, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: phone ? double.infinity : 420, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Account *', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 TextField(controller: _accCtrl, focusNode: _accFocus,
@@ -476,9 +477,9 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                       ])));
                   }).toList())),
               ])),
-              const SizedBox(width: 16),
+              const SizedBox(width: 16, height: 12),
               // Date range
-              SizedBox(width: 200, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: phone ? double.infinity : 200, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('As On', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 InkWell(onTap: () async {
@@ -491,9 +492,9 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                   child: Row(children: [const Icon(Icons.date_range, size: 14, color: AppTheme.textSecondary), const SizedBox(width: 8),
                     Text(DateFormat('dd/MM/yyyy').format(_dateFrom) + ' - ' + DateFormat('dd/MM/yyyy').format(_dateTo), style: const TextStyle(fontSize: 12))]))),
               ])),
-              if (_isAdminTier) const SizedBox(width: 16),
+              if (_isAdminTier) const SizedBox(width: 16, height: 12),
               // Branch
-              if (_isAdminTier) SizedBox(width: 190, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_isAdminTier) SizedBox(width: phone ? double.infinity : 190, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Branch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
@@ -508,13 +509,15 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                   ))),
               ])),
               const SizedBox(width: 16),
-              Padding(padding: const EdgeInsets.only(top: 19), child: ElevatedButton(onPressed: _loading ? null : _loadReport,
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
-                child: _loading ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Load Report'))),
-              const SizedBox(width: 10),
-              Padding(padding: const EdgeInsets.only(top: 19), child: OutlinedButton(onPressed: _reset, child: const Text('Reset'))),
-              const Spacer(),
-              Padding(padding: const EdgeInsets.only(top: 24), child: Row(children: [
+              Padding(padding: EdgeInsets.only(top: phone ? 4 : 19), child: Row(mainAxisSize: MainAxisSize.min, children: [
+                ElevatedButton(onPressed: _loading ? null : _loadReport,
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+                  child: _loading ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Load Report')),
+                const SizedBox(width: 10),
+                OutlinedButton(onPressed: _reset, child: const Text('Reset')),
+              ])),
+              if (!phone) const Spacer(),
+              Padding(padding: EdgeInsets.only(top: phone ? 12 : 24), child: Row(mainAxisSize: MainAxisSize.min, children: [
                 _radio('Summary', !_detailed, () => setState(() => _detailed = false)),
                 const SizedBox(width: 14),
                 _radio('Detailed', _detailed, () => setState(() => _detailed = true)),
@@ -529,15 +532,20 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-            child: Row(children: [
-              Expanded(child: Wrap(spacing: 22, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                _chip('Opening', _bal(_opening), AppTheme.textPrimary),
-                _chip('Debit', 'Rs. ${fmt.format(_periodDr)}', AppTheme.primary),
-                _chip('Credit', 'Rs. ${fmt.format(_periodCr)}', Colors.green.shade700),
-                _chip('Closing', _bal(_closing), _closing >= 0 ? AppTheme.danger : Colors.green.shade700),
-              ])),
-              const SizedBox(width: 12),
-              SizedBox(width: 240, child: TextField(
+            child: Flex(direction: phone ? Axis.vertical : Axis.horizontal, mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: phone ? CrossAxisAlignment.stretch : CrossAxisAlignment.center, children: [
+              (() {
+                final chips = Wrap(spacing: 22, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  _chip('Opening', _bal(_opening), AppTheme.textPrimary),
+                  _chip('Debit', 'Rs. ${fmt.format(_periodDr)}', AppTheme.primary),
+                  _chip('Credit', 'Rs. ${fmt.format(_periodCr)}', Colors.green.shade700),
+                  _chip('Closing', _bal(_closing), _closing >= 0 ? AppTheme.danger : Colors.green.shade700),
+                ]);
+                // No stretching on phones: the page scrolls, so there is no fixed height to fill.
+                return phone ? chips : Expanded(child: chips) as Widget;
+              })(),
+              const SizedBox(width: 12, height: 10),
+              SizedBox(width: phone ? double.infinity : 240, child: TextField(
                 controller: _txnSearchCtrl,
                 decoration: const InputDecoration(hintText: 'Search transactions...', isDense: true,
                   prefixIcon: Icon(Icons.search, size: 16), border: OutlineInputBorder(),
@@ -548,7 +556,8 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
             ]),
           ),
           const SizedBox(height: 10),
-          if (_detailed) Expanded(child: Container(
+          if (_detailed && phone) _phoneList(shown, fmt),
+          if (_detailed && !phone) Expanded(child: Container(
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
             child: Column(children: [
               Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -603,12 +612,19 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                 ])),
             ]),
           )),
-        ] else Expanded(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.account_balance_outlined, size: 52, color: AppTheme.textSecondary.withOpacity(0.3)),
-          const SizedBox(height: 12),
-          const Text('Select an account and date range, then Load Report', style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
-        ]))),
-      ]),
+        ] else (() {
+          final hint = Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.account_balance_outlined, size: 52, color: AppTheme.textSecondary.withOpacity(0.3)),
+            const SizedBox(height: 12),
+            const Text('Select an account and date range, then Load Report', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
+          ]));
+          return phone ? Padding(padding: const EdgeInsets.symmetric(vertical: 40), child: hint) : Expanded(child: hint);
+        })(),
+      ]);
+    return Container(
+      color: AppTheme.background,
+      padding: EdgeInsets.all(phone ? 12 : 24),
+      child: phone ? SingleChildScrollView(child: page) : page,
     );
   }
 
@@ -693,6 +709,95 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       if (!mounted) return;
       showDialog(context: context, builder: (_) => _voucherDialog(h, lines));
     } catch (err) { _snack('Open failed: $err'); }
+  }
+
+  /// Phone layout of the detailed list: one small card per transaction.
+  Widget _phoneList(List<Map<String, dynamic>> shown, MoneyFmt fmt) {
+    Widget money(String label, double v, Color c) => Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+          Text(v > 0 ? fmt.format(v) : '-', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: v > 0 ? c : Colors.black26)),
+        ]);
+    Widget band(String left, String right) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          color: AppTheme.primary.withOpacity(0.05),
+          child: Row(children: [
+            Expanded(child: Text(left, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700))),
+            Text(right, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+          ]),
+        );
+    return Container(
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        band('Opening balance', _bal(_opening)),
+        const Divider(height: 1),
+        if (shown.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(_txnQuery.isEmpty ? 'No transactions in this period.' : 'No matching transactions.',
+                textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textSecondary)),
+          ),
+        for (var i = 0; i < shown.length; i++) ...[
+          if (i > 0) const Divider(height: 1, color: AppTheme.border),
+          (() {
+            final e = shown[i];
+            final ds = (e['entry_date'] as String?) ?? '';
+            final dt = DateTime.tryParse(ds);
+            final date = dt != null ? DateFormat('d MMM yy').format(dt) : ds;
+            final dr = (e['debit'] as num?)?.toDouble() ?? 0;
+            final cr = (e['credit'] as num?)?.toDouble() ?? 0;
+            final bal = (e['balance'] as num?)?.toDouble() ?? 0;
+            final desc = (e['description'] as String?) ?? '';
+            return InkWell(
+              onTap: () => _openVoucher(e),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Text(date, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text((e['entry_number'] as String?) ?? '',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w600, decoration: TextDecoration.underline))),
+                  ]),
+                  if (desc.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(desc, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5)),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Expanded(child: money('Debit', dr, AppTheme.primary)),
+                    Expanded(child: money('Credit', cr, Colors.green.shade700)),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                      const Text('Balance', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                      Text(_bal(bal), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800)),
+                    ])),
+                  ]),
+                ]),
+              ),
+            );
+          })(),
+        ],
+        const Divider(height: 1),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          color: AppTheme.background,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${shown.length}${_txnQuery.isEmpty ? '' : ' of ${_entries.length}'} transactions',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(child: money('Debit', _periodDr, AppTheme.primary)),
+              Expanded(child: money('Credit', _periodCr, Colors.green.shade700)),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                const Text('Closing', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                Text(_bal(_closing), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+              ])),
+            ]),
+          ]),
+        ),
+      ]),
+    );
   }
 
   Widget _voucherDialog(Map<String, dynamic> h, List<Map<String, dynamic>> lines) {
