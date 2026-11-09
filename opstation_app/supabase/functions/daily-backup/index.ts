@@ -16,7 +16,7 @@
 //
 // Deploy:  supabase functions deploy daily-backup --no-verify-jwt
 // Secrets: GMAIL_USER, GMAIL_APP_PASSWORD, CRON_SECRET   (already set)
-//          GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET             (for Google Drive)
+//          DRIVE_CLIENT_ID, DRIVE_CLIENT_SECRET             (for Google Drive)
 //          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY (auto-injected)
 // Requires SQL: public.list_org_backup_tables()
 
@@ -49,8 +49,8 @@ async function driveToken(refreshToken: string): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: Deno.env.get("GOOGLE_CLIENT_ID") ?? "",
-      client_secret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "",
+      client_id: Deno.env.get("DRIVE_CLIENT_ID") ?? "",
+      client_secret: Deno.env.get("DRIVE_CLIENT_SECRET") ?? "",
       refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),

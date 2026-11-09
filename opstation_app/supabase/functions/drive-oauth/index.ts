@@ -10,7 +10,7 @@
 // files it creates (the backup folder and zips) — nothing else in the Drive.
 //
 // Deploy:  supabase functions deploy drive-oauth --no-verify-jwt
-// Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+// Secrets: DRIVE_CLIENT_ID, DRIVE_CLIENT_SECRET
 //          APP_URL (optional, default https://opstation-f06c7.web.app)
 // Requires SQL 457.
 
@@ -32,8 +32,8 @@ serve(async (req) => {
   const url = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-  const clientId = Deno.env.get("GOOGLE_CLIENT_ID") ?? "";
-  const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "";
+  const clientId = Deno.env.get("DRIVE_CLIENT_ID") ?? "";
+  const clientSecret = Deno.env.get("DRIVE_CLIENT_SECRET") ?? "";
   const appUrl = (Deno.env.get("APP_URL") ?? "https://opstation-f06c7.web.app").replace(/\/+$/, "");
   const redirectUri = `${url}/functions/v1/drive-oauth`;
   const admin = createClient(url, serviceKey);
@@ -133,7 +133,7 @@ serve(async (req) => {
   // ── Calls from the settings card (signed-in master admin) ────────────────
   try {
     if (!clientId || !clientSecret) {
-      return json({ error: "Google Drive is not set up on the server yet (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)." }, 500);
+      return json({ error: "Google Drive is not set up on the server yet (DRIVE_CLIENT_ID / DRIVE_CLIENT_SECRET)." }, 500);
     }
     const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
     if (!jwt) return json({ error: "unauthorized" }, 401);
