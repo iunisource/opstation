@@ -1,4 +1,6 @@
 import 'dart:convert';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -308,10 +310,11 @@ const List<_AdminToggle> _toggles = [
 
   _AdminToggle(
     'org.backup_enabled',
-    'Daily data backup by email',
+    'Daily data backup',
     'When ON, a zipped CSV export of all of this organization\'s data (one file '
-        'per table) is emailed to the recipients below every night. Leave '
-        'recipients blank to send to no one.',
+        'per table) is sent every night to the places ticked under "Send backups to" '
+        'below — email (recipients here, up to about 24 MB) and/or the company\'s '
+        'Google Drive.',
     text: _TextSetting('org.backup_emails', 'Backup recipients',
         hint: 'Comma- or newline-separated email addresses'),
   ),
@@ -1001,6 +1004,7 @@ class _ErpAdminSettingsScreenState
   final Set<String> _saving = {};
   bool _loading = true;
   bool _backupRunning = false;
+  final _driveKey = GlobalKey<_DriveBackupPanelState>();
   // UI: search + collapsible sections.
   final TextEditingController _searchCtrl = TextEditingController();
   String _search = '';
@@ -1279,7 +1283,8 @@ class _ErpAdminSettingsScreenState
   Future<void> _backupNow() async {
     setState(() => _backupRunning = true);
     try {
-      final res = await Supabase.instance.client.functions.invoke('daily-backup');
+      final res = await Supabase.instance.client.functions.invoke('daily-backup',
+          body: {'org_id': ref.read(currentUserProvider)?.orgId});
       final data = res.data;
       final ok = res.status == 200 && data is Map && data['ok'] == true;
       String msg;
@@ -1289,16 +1294,31 @@ class _ErpAdminSettingsScreenState
           msg = 'No recipients set — add a backup email above and try again.';
         } else {
           final r = results.first as Map;
+          final drive = '${r['drive'] ?? ''}';
+          final driveNote = drive.isEmpty
+              ? ''
+              : drive.startsWith('ok')
+                  ? ' Saved to Google Drive.'
+                  : drive == 'needs_reconnect'
+                      ? ' Google Drive needs reconnecting.'
+                      : ' Google Drive upload failed.';
           switch (r['status']) {
             case 'sent':
-              msg = 'Backup emailed — ${r['tables']} tables, ${r['mb']} MB, to ${r['recipients']} recipient(s).';
+              msg = 'Backup emailed — ${r['tables']} tables, ${r['mb']} MB, to ${r['recipients']} recipient(s).$driveNote';
               break;
             case 'too_large':
-              msg = 'Backup built but too large to email (${r['mb']} MB).';
+              msg = 'Backup built but too large to email (${r['mb']} MB).$driveNote';
+              break;
+            case 'drive':
+              msg = 'Backup saved to Google Drive — ${r['tables']} tables, ${r['mb']} MB.';
+              break;
+            case 'drive_failed':
+              msg = 'Backup could not be saved to Google Drive.$driveNote';
               break;
             default:
-              msg = 'Backup skipped — check the recipients above.';
+              msg = 'Backup skipped — tick where to send it and add recipients or connect Google Drive.';
           }
+          _driveKey.currentState?.reload();
         }
       } else {
         final err = (data is Map ? data['error'] : null) ?? 'status ${res.status}';
@@ -2271,6 +2291,15 @@ class _ErpAdminSettingsScreenState
                   ],
                   if (_values['org.backup_enabled'] ?? false) ...[
                     const SizedBox(height: 16),
+                    _DriveBackupPanel(
+                      key: _driveKey,
+                      orgId: ref.read(currentUserProvider)?.orgId ?? '',
+                      isMaster: (() {
+                        final r = ref.read(currentUserProvider)?.role;
+                        return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+                      })(),
+                    ),
+                    const SizedBox(height: 16),
                     Container(
                       constraints: const BoxConstraints(maxWidth: 760),
                       padding: const EdgeInsets.all(16),
@@ -2290,7 +2319,7 @@ class _ErpAdminSettingsScreenState
                                         fontSize: 14, fontWeight: FontWeight.w600)),
                                 SizedBox(height: 4),
                                 Text(
-                                    'Email a zipped CSV export of all data to the recipients above, right now.',
+                                    'Send a zipped CSV export of all data to the places ticked above, right now.',
                                     style: TextStyle(
                                         fontSize: 12.5,
                                         color: AppTheme.textSecondary,
@@ -2868,6 +2897,306 @@ class _HiddenGroupsPanelState extends State<_HiddenGroupsPanel> {
 
 /// Customer groups each auditor may work on ('org.auditor_group_scope', SQL
 /// 446). Pick an auditor, tick groups. Saved in auditor_customer_groups.
+/// Daily backup: where to send it (email / Google Drive), the connected Drive's
+/// status, and how long to keep backups there. Connecting, disconnecting and
+/// the Drive settings are for master admins only (also enforced on the server).
+class _DriveBackupPanel extends StatefulWidget {
+  final String orgId;
+  final bool isMaster;
+  const _DriveBackupPanel({super.key, required this.orgId, required this.isMaster});
+  @override
+  State<_DriveBackupPanel> createState() => _DriveBackupPanelState();
+}
+
+class _DriveBackupPanelState extends State<_DriveBackupPanel> {
+  bool _loading = true;
+  bool _busy = false;
+  Set<String> _targets = {'email'};
+  String _keep = '30';
+  Map<String, dynamic>? _drive; // null = not connected
+
+  static const _keepOptions = [
+    ('7', '7 days'), ('14', '14 days'), ('30', '30 days'), ('90', '90 days'),
+    ('180', '180 days'), ('365', '1 year'), ('0', 'Keep all'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    reload();
+    // Back from Google's sign-in page.
+    final h = html.window.location.hash;
+    if (h.contains('drive=')) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final q = Uri.tryParse(h.substring(h.indexOf('?') < 0 ? h.length : h.indexOf('?')))?.queryParameters ?? {};
+        final r = q['drive'];
+        final msg = r == 'connected'
+            ? 'Google Drive connected — backups will be saved there.'
+            : r == 'cancelled'
+                ? 'Google Drive was not connected.'
+                : 'Google Drive could not be connected. ${q['msg'] ?? ''}';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      });
+    }
+  }
+
+  Future<void> reload() async {
+    if (widget.orgId.isEmpty) return;
+    final c = Supabase.instance.client;
+    try {
+      final cfg = await c.from('app_config').select('key, value').eq('org_id', widget.orgId)
+          .inFilter('key', ['org.backup_targets', 'org.backup_drive_keep_days']).isFilter('branch_id', null);
+      Map<String, dynamic>? drive;
+      try {
+        final st = await c.rpc('backup_drive_status', params: {'p_org': widget.orgId});
+        final list = st as List;
+        if (list.isNotEmpty) drive = Map<String, dynamic>.from(list.first as Map);
+      } catch (_) {}
+      final m = {for (final r in cfg as List) '${r['key']}': '${r['value'] ?? ''}'};
+      if (!mounted) return;
+      setState(() {
+        final t = (m['org.backup_targets'] ?? '').trim();
+        _targets = t.isEmpty ? {'email'} : t.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
+        final k = (m['org.backup_drive_keep_days'] ?? '').trim();
+        _keep = _keepOptions.any((o) => o.$1 == k) ? k : '30';
+        _drive = drive;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _save(String key, String value) async {
+    await Supabase.instance.client.from('app_config').upsert(
+        {'key': key, 'value': value, 'org_id': widget.orgId}, onConflict: 'key,org_id,branch_id');
+  }
+
+  Future<void> _setTarget(String t, bool on) async {
+    final next = {..._targets};
+    on ? next.add(t) : next.remove(t);
+    setState(() => _targets = next);
+    try {
+      await _save('org.backup_targets', next.join(','));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
+      reload();
+    }
+  }
+
+  Future<void> _connect() async {
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('drive-oauth', body: {'action': 'start', 'org_id': widget.orgId});
+      final url = res.data is Map ? (res.data as Map)['url'] as String? : null;
+      if (url == null) {
+        final err = res.data is Map ? (res.data as Map)['error'] : null;
+        throw err ?? 'Could not start';
+      }
+      html.window.location.assign(url); // Google sign-in, then back here
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not connect Google Drive: ${_err(e)}')));
+      }
+    }
+  }
+
+  Future<void> _disconnect() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Disconnect Google Drive?'),
+        content: const Text('Backups will stop going to Google Drive. Backups already saved there stay in the folder.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(true), child: const Text('Disconnect')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('drive-oauth', body: {'action': 'disconnect', 'org_id': widget.orgId});
+      if (res.data is Map && (res.data as Map)['ok'] != true) throw (res.data as Map)['error'] ?? 'failed';
+      await reload();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not disconnect: ${_err(e)}')));
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  static String _err(Object e) {
+    if (e is FunctionException) {
+      final d = e.details;
+      return '${(d is Map ? d['error'] : d) ?? e.reasonPhrase ?? 'failed'}';
+    }
+    return '$e';
+  }
+
+  String _fmtWhen(dynamic iso) {
+    final d = DateTime.tryParse('${iso ?? ''}');
+    if (d == null) return '—';
+    final l = d.toLocal();
+    const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final h = l.hour % 12 == 0 ? 12 : l.hour % 12;
+    return '${l.day} ${m[l.month - 1]} ${l.year}, $h:${l.minute.toString().padLeft(2, '0')} ${l.hour < 12 ? 'AM' : 'PM'}';
+  }
+
+  Widget _chip(String t, Color fg, Color bg) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
+        child: Text(t, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg)),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final master = widget.isMaster;
+    final d = _drive;
+    final needsReconnect = d != null && d['status'] == 'needs_reconnect';
+    final hasError = d != null && d['status'] == 'error';
+    const muted = TextStyle(fontSize: 12.5, color: AppTheme.textSecondary, height: 1.45);
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 760),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+      child: _loading
+          ? const Padding(padding: EdgeInsets.all(12), child: Center(child: CircularProgressIndicator()))
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Send backups to', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(spacing: 18, children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Checkbox(value: _targets.contains('email'), onChanged: (v) => _setTarget('email', v ?? false)),
+                  const Text('Email', style: TextStyle(fontSize: 13.5)),
+                ]),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Checkbox(
+                    value: _targets.contains('drive'),
+                    onChanged: master ? (v) => _setTarget('drive', v ?? false) : null,
+                  ),
+                  const Text('Google Drive', style: TextStyle(fontSize: 13.5)),
+                ]),
+              ]),
+              const Text('Email only works up to about 24 MB — bigger backups go to Google Drive only.', style: muted),
+              const SizedBox(height: 14),
+              const Text('Google Drive', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: needsReconnect ? const Color(0xFFFFFBF5) : Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: needsReconnect ? const Color(0xFFFED7AA) : AppTheme.border),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Icon(needsReconnect ? Icons.warning_amber_rounded : Icons.folder_outlined,
+                        color: needsReconnect ? const Color(0xFFD97706) : AppTheme.textSecondary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: d == null
+                          ? const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('Not connected', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                              SizedBox(height: 2),
+                              Text('Opstation can only see and manage the backup files it creates — nothing else in your Drive.',
+                                  style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                            ])
+                          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                                Text(needsReconnect ? 'Google Drive needs reconnecting' : 'Connected · ${d['google_email'] ?? ''}',
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5)),
+                                if (needsReconnect)
+                                  _chip('Backups are not being saved to Drive', const Color(0xFFB45309), const Color(0xFFFFF7ED))
+                                else if (hasError)
+                                  _chip('Last upload failed — retried tonight', const Color(0xFFB45309), const Color(0xFFFFF7ED))
+                                else
+                                  _chip('✓ Working', const Color(0xFF047857), const Color(0xFFECFDF5)),
+                              ]),
+                              const SizedBox(height: 4),
+                              if (needsReconnect)
+                                const Text('Google no longer allows Opstation to save to this Drive. Backups are emailed instead when they fit.', style: muted),
+                              Text('Folder: ${d['folder_name'] ?? '—'}', style: muted),
+                              if (d['last_backup_at'] != null)
+                                Text('Last backup: ${_fmtWhen(d['last_backup_at'])} · '
+                                    '${(((d['last_backup_bytes'] as num?) ?? 0) / 1048576).toStringAsFixed(1)} MB · '
+                                    '${d['last_backup_tables'] ?? 0} tables', style: muted)
+                              else
+                                const Text('No backup saved to Drive yet — runs tonight, or use Back up now.', style: muted),
+                              Text('Connected by ${d['connected_by_name'] ?? '—'} on ${_fmtWhen(d['connected_at'])}', style: muted),
+                              if (d['last_file_link'] != null)
+                                InkWell(
+                                  onTap: () => html.window.open('${d['last_file_link']}', '_blank'),
+                                  child: const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Text('Open last backup in Drive ↗',
+                                        style: TextStyle(fontSize: 12.5, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                                  ),
+                                ),
+                            ]),
+                    ),
+                    const SizedBox(width: 10),
+                    if (master)
+                      _busy
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : d == null || needsReconnect
+                              ? ElevatedButton(onPressed: _connect, child: Text(d == null ? 'Connect Google Drive' : 'Reconnect'))
+                              : OutlinedButton(
+                                  onPressed: _disconnect,
+                                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger),
+                                  child: const Text('Disconnect')),
+                  ]),
+                  if (d != null) ...[
+                    const Divider(height: 24),
+                    Row(children: [
+                      const Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('Keep backups for', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                          SizedBox(height: 2),
+                          Text('Older backup files in this folder are deleted automatically.',
+                              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                        ]),
+                      ),
+                      SizedBox(
+                        width: 180,
+                        child: DropdownButtonFormField<String>(
+                          value: _keep,
+                          isDense: true,
+                          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
+                          items: [for (final o in _keepOptions) DropdownMenuItem(value: o.$1, child: Text(o.$2, style: const TextStyle(fontSize: 13)))],
+                          onChanged: master
+                              ? (v) async {
+                                  if (v == null) return;
+                                  setState(() => _keep = v);
+                                  try { await _save('org.backup_drive_keep_days', v); } catch (_) { reload(); }
+                                }
+                              : null,
+                        ),
+                      ),
+                    ]),
+                  ],
+                  if (!master) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(8)),
+                      child: const Text('🔒 Only master admins can connect, disconnect or change the Google Drive settings.',
+                          style: TextStyle(fontSize: 12.5)),
+                    ),
+                  ],
+                ]),
+              ),
+            ]),
+    );
+  }
+}
+
 class _AuditorGroupsPanel extends StatefulWidget {
   final String orgId;
   final bool embedded; // inside the toggle's card: no frame / heading
