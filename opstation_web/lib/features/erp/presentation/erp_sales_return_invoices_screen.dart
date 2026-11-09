@@ -173,7 +173,14 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     } catch (e) { _showSnack(friendlyError('The date could not be changed', e)); }
   }
 
-  void _showSnack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
+  // One message at a time: a new one replaces any still showing or queued
+  // (repeated messages used to stack up and keep reappearing).
+  void _showSnack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
+  }
 
   void _initCtrls() {
     for (final c in _priceCtrl.values) c.dispose();
@@ -431,7 +438,11 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   }
 
   Future<void> _saveItemPrice(String itemId) async {
-    if (!_canEditPrices) { _showSnack('Price editing is restricted — ask an admin for access'); return; }
+    if (!_canEditPrices) {
+      // Only explain when it's a draft (where prices could be edited with access).
+      if (_isDraft && !_priceEditAllowed) _showSnack('Price editing is restricted — ask an admin for access');
+      return;
+    }
     final price = double.tryParse(_priceCtrl[itemId]?.text ?? '') ?? 0;
     final disc  = (double.tryParse(_discCtrl[itemId]?.text ?? '') ?? 0).clamp(0.0, 100.0);
     final qty   = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => {})['quantity'] as num?)?.toDouble() ?? 0;

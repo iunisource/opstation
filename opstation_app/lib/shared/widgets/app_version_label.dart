@@ -11,7 +11,8 @@ class AppVersionLabel extends StatelessWidget {
   static const _builtAt = String.fromEnvironment('BUILD_TIME');
 
   static String _fmtBuilt(String raw) {
-    final d = DateTime.tryParse(raw);
+    // Stamped in UTC by the build command; show it in the phone's local time.
+    final d = DateTime.tryParse(raw)?.toLocal();
     if (d == null) return raw;
     const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
