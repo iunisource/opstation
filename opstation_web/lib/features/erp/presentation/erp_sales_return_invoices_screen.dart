@@ -31,6 +31,8 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   List<Map<String, dynamic>> _items = [];
   Map<String, TextEditingController> _priceCtrl = {};
   Map<String, TextEditingController> _discCtrl  = {};
+  final TextEditingController _remarksCtrl = TextEditingController();
+  bool _remarksSaving = false;
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
@@ -58,7 +60,26 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     await _loadDetail(id);
   }
 
-  @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); super.dispose(); }
+  @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); _remarksCtrl.dispose(); super.dispose(); }
+
+  // Remarks: editable on a draft; admins can still correct them after issue
+  // (they don't change any amount). Shown on the print and in the ledger.
+  bool get _canEditRemarks => !_isVoided && (_isDraft || _isAdmin);
+
+  Future<void> _saveRemarks({bool quiet = false}) async {
+    final id = _detail['id'] as String?; if (id == null) return;
+    final v = _remarksCtrl.text.trim();
+    if (v == ((_detail['remarks'] as String?) ?? '').trim()) return;
+    setState(() => _remarksSaving = true);
+    try {
+      await Supabase.instance.client.from('sales_return_invoices')
+          .update({'remarks': v.isEmpty ? null : v, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', id);
+      _detail['remarks'] = v.isEmpty ? null : v;
+      await _logAudit(id, 'edited', v.isEmpty ? 'Remarks cleared' : 'Remarks: $v');
+      if (!quiet) _showSnack('Remarks saved');
+    } catch (e) { _showSnack(friendlyError('Remarks did not save', e)); }
+    if (mounted) setState(() => _remarksSaving = false);
+  }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -188,7 +209,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       final items = await client.from('sales_return_invoice_items')
           .select('*,products(name,sku),uoms(abbreviation)').eq('invoice_id', id);
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: inv['customer_id'] as String?, createdById: inv['created_by'] as String?);
-      setState(() { _detail = Map<String, dynamic>.from(inv); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; _initCtrls(); });
+      setState(() { _detail = Map<String, dynamic>.from(inv); _items = List<Map<String, dynamic>>.from(items); _meta = meta; _detailLoading = false; _initCtrls(); _remarksCtrl.text = (inv['remarks'] as String?) ?? ''; });
     } catch (e) { _showSnack(friendlyError('Could not open this', e)); setState(() => _detailLoading = false); }
   }
 
@@ -455,6 +476,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Issue'))],
     ));
     if (ok != true) return;
+    await _saveRemarks(quiet: true); // the ledger line takes its text from the remarks
     final userId = ref.read(currentUserProvider)?.id;
     final invId = _detail['id'] as String;
     final srnId = _detail['srn_id'] as String?;
@@ -532,6 +554,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
       preparedBy: _meta.preparedBy, footerNote: _meta.footerNote,
       relatedRefs: srnVoucher != null ? {'SRN #': srnVoucher} : null,
+      remarks: (() { final r = _remarksCtrl.text.trim().isNotEmpty ? _remarksCtrl.text.trim() : ((_detail['remarks'] as String?) ?? '').trim(); return r.isEmpty ? null : r; })(),
     );
   }
 
@@ -554,7 +577,10 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     final filtered = _invoices.where((r) {
       final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['customers']?['shop_name'] ?? ''} ${r['sales_returns']?['voucher_number'] ?? ''}', q);
       final locked = r['is_locked'] as bool? ?? false;
-      final matchFilter = _filter == 'all' || (_filter == 'draft' && !locked) || (_filter == 'issued' && locked);
+      final voided = r['is_voided'] == true;
+      final matchFilter = _filter == 'all'
+          || (_filter == 'voided' && voided)
+          || (!voided && ((_filter == 'draft' && !locked) || (_filter == 'issued' && locked)));
       bool matchSup = true;
       if (_superviseFlow && _supFilter != 'all') {
         final sup = r['supervised_at'] != null;
@@ -578,6 +604,8 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         _SriTab(label: 'Draft',  value: 'draft',  current: _filter, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
         _SriTab(label: 'Issued', value: 'issued', current: _filter, onTap: (v) => setState(() => _filter = v)),
+        const SizedBox(width: 6),
+        _SriTab(label: 'Voided', value: 'voided', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
       if (_superviseFlow && _isAdmin) ...[
         const SizedBox(height: 8),
@@ -839,6 +867,39 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           ),
           const SizedBox(height: 16),
         ],
+        Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.notes, size: 16, color: AppTheme.textSecondary),
+              const SizedBox(width: 6),
+              const Expanded(child: Text('Remarks', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+              if (_canEditRemarks)
+                TextButton.icon(
+                  onPressed: _remarksSaving ? null : () => _saveRemarks(),
+                  icon: _remarksSaving
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.save_outlined, size: 16),
+                  label: const Text('Save', style: TextStyle(fontSize: 12)),
+                ),
+            ]),
+            const SizedBox(height: 6),
+            if (_canEditRemarks)
+              TextField(
+                controller: _remarksCtrl,
+                minLines: 1, maxLines: 3,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  hintText: 'e.g. reason for the return — shown on the print and in the customer ledger',
+                  isDense: true, border: OutlineInputBorder()),
+              )
+            else
+              Text(((_detail['remarks'] as String?) ?? '').trim().isEmpty ? '—' : (_detail['remarks'] as String).trim(),
+                  style: const TextStyle(fontSize: 13)),
+          ]),
+        ),
         _SriAuditTrail(voucherId: _selectedId ?? ''),
       ]))),
     ]);
