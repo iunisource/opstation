@@ -769,11 +769,14 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       final matchSearch = matchesQuery('${r['voucher_number'] ?? ''} ${r['suppliers']?['name'] ?? ''} ${r['purchase_grns']?['voucher_number'] ?? ''}', q);
       final locked = r['is_locked'] as bool? ?? false;
       final review = r['review_status'] as String?;
+      final voided = r['is_voided'] == true;
       final matchFilter = _filter == 'all'
-          || (_filter == 'draft' && !locked && review == null)
-          || (_filter == 'review' && review == 'pending')
-          || (_filter == 'rejected' && review == 'rejected')
-          || (_filter == 'invoiced' && locked);
+          || (_filter == 'voided' && voided)
+          || (!voided && (
+                (_filter == 'draft' && !locked && review == null)
+             || (_filter == 'review' && review == 'pending')
+             || (_filter == 'rejected' && review == 'rejected')
+             || (_filter == 'invoiced' && locked)));
       bool matchSup = true;
       if (_superviseFlow && _supFilter != 'all') {
         final sup = r['supervised_at'] != null;
@@ -791,10 +794,10 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         decoration: const InputDecoration(hintText: 'Search PI / GRN / supplier…', prefixIcon: Icon(Icons.search, size: 18), isDense: true),
         onChanged: (v) => setState(() => _search = v))),
       const SizedBox(height: 8),
-      Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Wrap(runSpacing: 6, children: [
         _PiFilterTab(label: 'All',   value: 'all',   current: _filter, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
-        _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, count: _invoices.where((r) => !(r['is_locked'] as bool? ?? false) && r['review_status'] == null).length, onTap: (v) => setState(() => _filter = v)),
+        _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, count: _invoices.where((r) => r['is_voided'] != true && !(r['is_locked'] as bool? ?? false) && r['review_status'] == null).length, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
         if (_reviewFlow) ...[
           _PiFilterTab(label: 'Review', value: 'review', current: _filter, onTap: (v) => setState(() => _filter = v)),
@@ -803,6 +806,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           const SizedBox(width: 6),
         ],
         _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+        const SizedBox(width: 6),
+        _PiFilterTab(label: 'Voided', value: 'voided', current: _filter, onTap: (v) => setState(() => _filter = v)),
       ])),
       if (_superviseFlow && _isAdmin) ...[
         const SizedBox(height: 8),
