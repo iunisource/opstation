@@ -165,7 +165,7 @@ class _SurveyedShopsScreenState extends ConsumerState<SurveyedShopsScreen> {
                               if (p == null)
                                 _badge('No placement', amber)
                               else
-                                _badge('Placement ${p.$1}/${p.$2}', p.$2 > 0 && p.$1 * 2 >= p.$2 ? green : red),
+                                _badge('${d.autoPilot.contains(s.id) ? '🧾 ' : ''}Placement ${p.$1}/${p.$2}', p.$2 > 0 && p.$1 * 2 >= p.$2 ? green : red),
                               c == 0 ? _badge('No competitor', amber) : _badge('Competitor $c', grey),
                             ]),
                           ]),

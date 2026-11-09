@@ -222,9 +222,18 @@ class _NonSurveyedShopsScreenState extends ConsumerState<NonSurveyedShopsScreen>
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(fontSize: 12, color: hint),
                             ),
-                            if (fb > 0) ...[
+                            if (fb > 0 || d.placement[s.id] != null) ...[
                               const SizedBox(height: 6),
-                              _badge('$fb 💬', blue),
+                              Wrap(spacing: 6, runSpacing: 4, children: [
+                                // Auto Pilot: score from what the shop bought (no survey yet).
+                                if (d.placement[s.id] != null)
+                                  (() {
+                                    final p = d.placement[s.id]!;
+                                    final pct = p.$2 == 0 ? 0 : (p.$1 * 100 / p.$2).round();
+                                    return _badge('🧾 Placement ${p.$1}/${p.$2} · $pct%', const Color(0xFF047857));
+                                  })(),
+                                if (fb > 0) _badge('$fb 💬', blue),
+                              ]),
                             ],
                           ]),
                         ),

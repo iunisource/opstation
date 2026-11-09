@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
@@ -18,8 +19,10 @@ class ShopListData {
   final Map<String, int> competitor; // categories spotted
   final List<Map<String, dynamic>> audits; // newest first
   final Map<String, int> feedbackCount;
+  // Shops whose placement score includes sales invoices (Auto Pilot).
+  final Set<String> autoPilot;
   const ShopListData(this.shops, this.lastSurvey, this.lastBy, this.placement, this.competitor, this.audits,
-      this.feedbackCount);
+      this.feedbackCount, {this.autoPilot = const {}});
 
   Set<String> get surveyed => lastSurvey.keys.toSet();
 }
@@ -67,8 +70,39 @@ Future<ShopListData> loadShopLists(WidgetRef ref, {bool withAudits = true}) asyn
     final cur = m[a.productId];
     if (cur == null || a.surveyedAt.isAfter(cur.surveyedAt)) m[a.productId] = a;
   }
+  // Auto Pilot (Admin Settings): placements picked up from sales invoices.
+  // Worked out on the server each time; ignored when offline.
+  final latest = <String, Map<String, (bool, DateTime)>>{
+    for (final e in latestP.entries)
+      e.key: {for (final a in e.value.entries) a.key: (a.value.isPresent, a.value.surveyedAt)},
+  };
+  final autoShops = <String>{};
+  if (orgId != null) {
+    try {
+      for (var from = 0; from < 500000; from += 1000) {
+        final page = await Supabase.instance.client
+            .rpc('placement_invoice_rows', params: {'p_org': orgId})
+            .range(from, from + 999);
+        final rows = page as List;
+        for (final r in rows) {
+          final cid = '${r['customer_id']}';
+          if (!shops.containsKey(cid)) continue;
+          final at = DateTime.tryParse('${r['surveyed_at']}');
+          if (at == null) continue;
+          final m = latest.putIfAbsent(cid, () => {});
+          final pid = '${r['product_id']}';
+          final cur = m[pid];
+          if (cur == null || at.isAfter(cur.$2)) {
+            m[pid] = (r['is_present'] == true, at);
+            autoShops.add(cid);
+          }
+        }
+        if (rows.length < 1000) break;
+      }
+    } catch (_) {}
+  }
   final placement = {
-    for (final e in latestP.entries) e.key: (e.value.values.where((a) => a.isPresent).length, e.value.length),
+    for (final e in latest.entries) e.key: (e.value.values.where((a) => a.$1).length, e.value.length),
   };
   final cats = <String, Set<String>>{};
   for (final s in await db.select(db.competitorSpottings).get()) {
@@ -92,5 +126,6 @@ Future<ShopListData> loadShopLists(WidgetRef ref, {bool withAudits = true}) asyn
   for (final a in audits) {
     fb['${a['customer_id']}'] = (fb['${a['customer_id']}'] ?? 0) + 1;
   }
-  return ShopListData(shops, last, by, placement, {for (final e in cats.entries) e.key: e.value.length}, audits, fb);
+  return ShopListData(shops, last, by, placement, {for (final e in cats.entries) e.key: e.value.length}, audits, fb,
+      autoPilot: autoShops);
 }
