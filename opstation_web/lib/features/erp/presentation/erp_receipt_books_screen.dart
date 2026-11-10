@@ -144,6 +144,23 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   String _status = 'open'; // open | closed | all
   String _query = '';
   bool _busy = false;
+  final Map<String, String> _custNames = {}; // customer id -> shop name (for slip details)
+
+  /// Shop names for the given customer ids (fetched once, in small batches).
+  Future<void> _ensureCustNames(Iterable<dynamic> ids) async {
+    final want = {for (final i in ids) if (i != null && '$i'.isNotEmpty && !_custNames.containsKey('$i')) '$i'}.toList();
+    for (var i = 0; i < want.length; i += 100) {
+      try {
+        final rows = await _db.from('customers').select('id, shop_name')
+            .inFilter('id', want.sublist(i, i + 100 > want.length ? want.length : i + 100));
+        for (final r in rows as List) {
+          _custNames['${r['id']}'] = '${r['shop_name'] ?? ''}';
+        }
+      } catch (_) {}
+    }
+  }
+
+  String _shopOf(Map<String, dynamic> u) => _custNames['${u['customer_id'] ?? ''}'] ?? '';
 
   @override
   void initState() {
@@ -521,6 +538,8 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   Future<void> _slipTap(_Book b, int n) async {
     final c = b.cancelMap[n];
     final uses = b.used.where((u) => (u['serial'] as num).toInt() == n).toList();
+    await _ensureCustNames(uses.map((u) => u['customer_id']));
+    if (!mounted) return;
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -544,7 +563,11 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               for (final u in uses)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
-                  child: Text('Rs ${money((u['amount'] as num?) ?? 0)} · ${u['user_name'] ?? ''} · ${_fmt(u['at'])}'),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(_shopOf(u).isEmpty ? '—' : _shopOf(u), style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text('Rs ${money((u['amount'] as num?) ?? 0)} · ${u['user_name'] ?? ''} · ${_fmt(u['at'])}',
+                        style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                  ]),
                 ),
           ]),
         ),
@@ -901,6 +924,8 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
       for (final n in b.openOutOfOrder) (n, 'out_of_order'),
     ];
     final picked = {for (var i = 0; i < items.length; i++) i};
+    await _ensureCustNames(b.used.map((u) => u['customer_id']));
+    if (!mounted) return;
     final noteCtrl = TextEditingController();
     String? err;
     final ok = await showDialog<bool>(
@@ -934,7 +959,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                     title: Text('$n · ${kind == 'repeated' ? 'Used more than once' : 'Out of order'}',
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                     subtitle: Text(
-                        [for (final u in uses) '${_fmt(u['at'])} · Rs ${u['amount'] ?? '—'}'].join('   |   '),
+                        [for (final u in uses) '${_fmt(u['at'])} · ${_shopOf(u).isEmpty ? '—' : _shopOf(u)} · Rs ${u['amount'] ?? '—'}'].join('\n'),
                         style: const TextStyle(fontSize: 11.5)),
                   );
                 },
