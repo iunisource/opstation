@@ -53,7 +53,8 @@ class _UsersField {
   final String label;
   final bool accounts; // pick chart-of-accounts entries instead of users
   final List<String>? roles; // only users with these roles (null = everyone)
-  const _UsersField(this.key, this.label, {this.accounts = false, this.roles});
+  final String? emptyText; // shown when nobody is picked (default: nobody can edit)
+  const _UsersField(this.key, this.label, {this.accounts = false, this.roles, this.emptyText});
 }
 
 /// An optional one-of-several choice attached to a toggle (e.g. Off /
@@ -82,8 +83,10 @@ class _AdminToggle {
   final _ChoiceField? choice; // optional one-of-several companion
   final List<_ChoiceField> moreChoices; // further one-of-several companions
   final bool defaultOn; // value used when no app_config row exists yet
+  final bool companionWhenOff; // show the companion fields even while OFF
   const _AdminToggle(this.key, this.title, this.subtitle,
-      {this.number, this.text, this.branch, this.users, this.choice, this.moreChoices = const [], this.defaultOn = false});
+      {this.number, this.text, this.branch, this.users, this.choice, this.moreChoices = const [], this.defaultOn = false,
+      this.companionWhenOff = false});
 }
 
 const List<_AdminToggle> _toggles = [
@@ -650,8 +653,11 @@ const List<_AdminToggle> _toggles = [
         'already used number is refused, and a torn slip is marked "Cancelled" with a '
         'reason. Receipt Books shows every book with used / cancelled / unused slips and '
         'flags skipped, repeated and out-of-order slips. Admins can always issue books; '
-        'add more users below. When OFF, the CR# works as today.',
-    users: _UsersField('org.receipt_book_issuer_users', 'Also allowed to issue receipt books'),
+        'add more users below (this works whether the switch is ON or OFF, so books can '
+        'be issued before the app starts checking). When OFF, the CR# works as today.',
+    users: _UsersField('org.receipt_book_issuer_users', 'Also allowed to issue receipt books',
+        emptyText: 'No users selected — only admins can issue'),
+    companionWhenOff: true,
   ),
 
   _AdminToggle(
@@ -1774,7 +1780,7 @@ class _ErpAdminSettingsScreenState
         Expanded(
           child: Text(
             names.isEmpty
-                ? (u.accounts ? 'No accounts selected' : 'No users selected — nobody can edit')
+                ? (u.accounts ? 'No accounts selected' : (u.emptyText ?? 'No users selected — nobody can edit'))
                 : names.join(', '),
             style: TextStyle(
                 fontSize: 12.5,
@@ -1801,7 +1807,7 @@ class _ErpAdminSettingsScreenState
   Widget _toggleCard(_AdminToggle t) {
     final on = _values[t.key] ?? false;
     final hasCompanion =
-        on && (t.number != null || t.text != null || t.branch != null || t.users != null || t.choice != null || t.moreChoices.isNotEmpty);
+        (on || t.companionWhenOff) && (t.number != null || t.text != null || t.branch != null || t.users != null || t.choice != null || t.moreChoices.isNotEmpty);
     return Container(
       decoration: BoxDecoration(
         color: on ? AppTheme.primary.withOpacity(0.045) : Colors.white,
