@@ -21,7 +21,10 @@ import '../../providers/trip_controller.dart';
 
 class MarkVisitDialog extends ConsumerStatefulWidget {
   final Customer customer;
-  const MarkVisitDialog({super.key, required this.customer});
+  /// The stop already has a payment: this records ANOTHER payment (own CR#,
+  /// amount, time and GPS) as a new line — nothing earlier is changed.
+  final bool addPayment;
+  const MarkVisitDialog({super.key, required this.customer, this.addPayment = false});
 
   @override
   ConsumerState<MarkVisitDialog> createState() => _MarkVisitDialogState();
@@ -187,6 +190,7 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     final amountText = _amountCtrl.text.trim();
     final amount = amountText.isEmpty ? 0 : (int.tryParse(amountText) ?? -1);
     if (amount < 0) { setState(() => _errorText = 'Amount must be a valid number.'); return; }
+    if (widget.addPayment && amount <= 0) { setState(() => _errorText = 'Enter the amount of this payment.'); return; }
     if (amount > 0 && _crCtrl.text.trim().isEmpty) {
       setState(() => _errorText = 'Receipt number is required when amount > 0.');
       return;
@@ -310,8 +314,8 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Mark visit',
-                                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                                Text(widget.addPayment ? 'Add payment' : 'Mark visit',
+                                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
                                 Text(widget.customer.shopName,
                                     style: TextStyle(
                                       color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.65),
@@ -456,7 +460,7 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
                                   ? const SizedBox(width: 16, height: 16,
                                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                                   : const Icon(Icons.check_circle_outline, size: 18),
-                              label: const Text('Mark visit'),
+                              label: Text(widget.addPayment ? 'Save payment' : 'Mark visit'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: inRange && hasLocation
                                     ? AppColors.success : AppColors.warningDark,

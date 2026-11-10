@@ -75,6 +75,10 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
   }
 
   Future<void> _openMarkVisit(Customer customer) async {
+    // A stop that already has a payment gets "Add payment": the same form,
+    // saved as another payment line on this running route.
+    final paid = (ref.read(tripControllerProvider).valueOrNull?.active?.visits ?? const <Visit>[])
+        .any((v) => v.customerId == customer.id && v.amount > 0);
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -82,12 +86,12 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => MarkVisitDialog(customer: customer),
+      builder: (_) => MarkVisitDialog(customer: customer, addPayment: paid),
     );
     if (ok == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Visit marked'),
+        SnackBar(
+          content: Text(paid ? 'Payment added' : 'Visit marked'),
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: 2),
         ),
@@ -949,8 +953,10 @@ class _StopCardState extends State<_StopCard> {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: canVisit ? onMarkVisit : null,
-                    icon: const Icon(Icons.check_circle_outline, size: 18),
-                    label: Text(visit != null ? 'Mark Again' : 'Mark visit'),
+                    icon: Icon(collections.any((v) => v.amount > 0) ? Icons.add_card : Icons.check_circle_outline, size: 18),
+                    label: Text(collections.any((v) => v.amount > 0)
+                        ? 'Add payment'
+                        : (visit != null ? 'Mark Again' : 'Mark visit')),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       minimumSize: const Size(0, 44),
