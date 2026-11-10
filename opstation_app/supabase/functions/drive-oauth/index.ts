@@ -66,9 +66,14 @@ serve(async (req) => {
         code, client_id: clientId, client_secret: clientSecret,
         redirect_uri: redirectUri, grant_type: "authorization_code",
       }),
-    }).then((r) => r.json()).catch(() => ({}));
+    }).then((r) => r.json()).catch((e) => ({ error: `network: ${e}` }));
     if (!tok.refresh_token || !tok.access_token) {
-      return backToApp("error", "Google did not grant access. Please try again.");
+      // Say what Google answered, so a wrong client secret / redirect is easy to spot.
+      const why = tok.error
+        ? `${tok.error}${tok.error_description ? ` – ${tok.error_description}` : ""}`
+        : tok.access_token ? "no long-term access returned (remove Opstation at myaccount.google.com/permissions and try again)" : "no answer";
+      console.error("drive-oauth token exchange failed", JSON.stringify(tok));
+      return backToApp("error", `Google did not grant access (${why}).`);
     }
 
     // Which Google account

@@ -526,14 +526,52 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       if (!matchesQuery('${e['description']} ${e['voucher']} ${_particularsOf(e)}', _entrySearchCtrl.text)) return false;
       return true;
     }).toList();
-    // Recalculate running balance for filtered view
-    double rb = 0;
+    // Running balance for the filtered view. With a From date (and no type /
+    // search filter) it starts from the balance brought forward, so the last
+    // balance is the real balance on the To date.
+    double rb = (_dateFrom != null && _plainView) ? _openingBal : 0;
     return list.map((e) { rb += (e['debit'] as double) - (e['credit'] as double); return {...e, 'display_balance': rb}; }).toList();
   }
+
+  bool get _dated => _dateFrom != null || _dateTo != null;
+  bool get _plainView => _typeFilter == 'All' && _entrySearchCtrl.text.trim().isEmpty;
+  DateTime? _entryDate(Map<String, dynamic> e) {
+    final ds = e['date'] as String? ?? '';
+    return ds.length >= 10 ? DateTime.tryParse(ds) : null;
+  }
+
+  /// Balance brought forward: every entry before the From date.
+  double get _openingBal {
+    if (_dateFrom == null) return 0;
+    double b = 0;
+    for (final e in _entries) {
+      final d = _entryDate(e);
+      if (d != null && d.isBefore(_dateFrom!)) b += (e['debit'] as double) - (e['credit'] as double);
+    }
+    return b;
+  }
+
+  /// Totals from the start of the ledger up to the To date (or today).
+  (double, double) get _uptoTotals {
+    double dr = 0, cr = 0;
+    for (final e in _entries) {
+      final d = _entryDate(e);
+      if (_dateTo != null && d != null && d.isAfter(_dateTo!.add(const Duration(days: 1)))) continue;
+      dr += e['debit'] as double;
+      cr += e['credit'] as double;
+    }
+    return (dr, cr);
+  }
+
+  String get _uptoLabel => _dateTo == null ? 'today' : DateFormat('d MMM yy').format(_dateTo!);
+  String get _fromLabel => _dateFrom == null ? '' : DateFormat('d MMM yy').format(_dateFrom!);
 
   @override
   Widget build(BuildContext context) {
     final display = _displayEntries;
+    final opening = _openingBal;
+    final (allDr, allCr) = _uptoTotals;
+    final closing = allDr - allCr;
     double totalDebit = 0, totalCredit = 0;
     for (final e in display) { totalDebit += e['debit'] as double; totalCredit += e['credit'] as double; }
     final netBal = totalDebit - totalCredit; // payable negative, advance positive
@@ -707,10 +745,21 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           const SizedBox(height: 12),
           if (_selectedSupplier != null && _entries.isNotEmpty) ...[
             AdaptiveKpiRow(children: [
-              _Stat(label: 'Total Debit', value: 'Rs. ${money(totalDebit)}', color: AppTheme.primary),
-              _Stat(label: 'Total Credit', value: 'Rs. ${money(totalCredit)}', color: Colors.green.shade700),
-              _Stat(label: netBal <= 0 ? 'Net Payable' : 'Net Advance', value: 'Rs. ${money(netBal)}', color: netBal < 0 ? AppTheme.danger : Colors.green.shade700),
+              _Stat(label: _dated ? 'Debit · selected period' : 'Total Debit', value: 'Rs. ${money(totalDebit)}', color: AppTheme.primary),
+              _Stat(label: _dated ? 'Credit · selected period' : 'Total Credit', value: 'Rs. ${money(totalCredit)}', color: Colors.green.shade700),
+              _Stat(label: _dated ? 'Net · selected period' : netBal <= 0 ? 'Net Payable' : 'Net Advance', value: 'Rs. ${money(netBal)}', color: netBal < 0 ? AppTheme.danger : Colors.green.shade700),
             ]),
+            // A date range also shows the ledger from its very beginning.
+            if (_dated) ...[
+              const SizedBox(height: 8),
+              AdaptiveKpiRow(children: [
+                if (_dateFrom != null)
+                  _Stat(label: 'Opening · before $_fromLabel', value: 'Rs. ${money(opening)}', color: AppTheme.textSecondary),
+                _Stat(label: 'Debit · from beginning', value: 'Rs. ${money(allDr)}', color: AppTheme.primary),
+                _Stat(label: 'Credit · from beginning', value: 'Rs. ${money(allCr)}', color: Colors.green.shade700),
+                _Stat(label: 'Balance as of $_uptoLabel', value: 'Rs. ${money(closing)}', color: closing < 0 ? AppTheme.danger : Colors.green.shade700),
+              ]),
+            ],
             const SizedBox(height: 10),
             Row(children: [
               Expanded(child: TextField(controller: _entrySearchCtrl, decoration: const InputDecoration(hintText: 'Search entries...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)))),
@@ -806,10 +855,29 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                 borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
                 border: const Border(top: BorderSide(color: AppTheme.border)),
               ),
-              child: Row(children: [
-                Expanded(child: Text('${display.length} entries', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
-                Text('Rs. ${money(netBal)}',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal < 0 ? AppTheme.danger : Colors.green.shade700)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Row(children: [
+                  Expanded(child: Text(_dated ? '${display.length} entries · selected period' : '${display.length} entries',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600))),
+                  if (_dated)
+                    Flexible(child: Text('Dr ${money(totalDebit)} · Cr ${money(totalCredit)} · Net ',
+                        overflow: TextOverflow.ellipsis, textAlign: TextAlign.right,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                  Text('Rs. ${money(netBal)}',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: netBal < 0 ? AppTheme.danger : Colors.green.shade700)),
+                ]),
+                if (_dated) ...[
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Expanded(child: Text('From beginning to $_uptoLabel',
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary, fontWeight: FontWeight.w700))),
+                    Flexible(child: Text('Dr ${money(allDr)} · Cr ${money(allCr)} · Balance ',
+                        overflow: TextOverflow.ellipsis, textAlign: TextAlign.right,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                    Text('Rs. ${money(closing)}',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: closing < 0 ? AppTheme.danger : Colors.green.shade700)),
+                  ]),
+                ],
               ]),
             ),
           )),
@@ -851,7 +919,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       td += e['debit'] as double; tc += e['credit'] as double;
       buf.writeln([date, esc(e['voucher'] as String? ?? ''), esc(_exportDesc(e)), esc(e['type'] as String), (e['debit'] as double).toStringAsFixed(2), (e['credit'] as double).toStringAsFixed(2), (e['display_balance'] as double).toStringAsFixed(2)].join(','));
     }
-    buf.writeln(',,,Total,' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
+    buf.writeln(',,,${_dated ? 'Total (selected period)' : 'Total'},' + td.toStringAsFixed(2) + ',' + tc.toStringAsFixed(2) + ',' + (td - tc).toStringAsFixed(2));
+    if (_dated) {
+      final (aDr, aCr) = _uptoTotals;
+      if (_dateFrom != null) buf.writeln(',,,Opening (before $_fromLabel),,,' + _openingBal.toStringAsFixed(2));
+      buf.writeln(',,,Total from beginning to $_uptoLabel,' + aDr.toStringAsFixed(2) + ',' + aCr.toStringAsFixed(2) + ',' + (aDr - aCr).toStringAsFixed(2));
+    }
     final csvContent = String.fromCharCode(0xFEFF) + buf.toString();
     final blob = html.Blob([csvContent], 'text/csv;charset=utf-8');
     final url = html.Url.createObjectUrlFromBlob(blob);
@@ -1177,6 +1250,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     if (display.isEmpty || _selectedSupplier == null) return null;
     double td = 0, tc = 0;
     for (final e in display) { td += e['debit'] as double; tc += e['credit'] as double; }
+    final (aDr, aCr) = _uptoTotals;
+    final closingDoc = aDr - aCr;
     final netBal = td - tc; // payable negative, advance positive
     final sup = _selectedSupplier!;
     final supplierName = (sup['name'] as String?) ?? '';
@@ -1201,9 +1276,17 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       partyName: supplierName, partyCode: supplierCode, branchName: 'All Branches',
       period: period, genTime: genTime, lines: lines,
       totalDebit: money(td), totalCredit: money(tc),
-      netBalanceLabel: (netBal < 0 ? 'Net Payable: Rs. ' : 'Net Advance: Rs. ') + money(netBal.abs()),
-      netBalanceValue: 'Rs. ' + money(netBal),
-      netIsDanger: netBal < 0, fileBase: fileBase,
+      openingLabel: _dateFrom != null ? 'Opening balance (before $_fromLabel)' : null,
+      openingBalance: _dateFrom != null ? money(_openingBal) : null,
+      overallLabel: _dated ? 'Total from beginning to $_uptoLabel' : null,
+      overallDebit: _dated ? money(aDr) : null,
+      overallCredit: _dated ? money(aCr) : null,
+      overallBalance: _dated ? money(closingDoc) : null,
+      netBalanceLabel: _dated
+          ? (closingDoc < 0 ? 'Net Payable as of $_uptoLabel: Rs. ' : 'Net Advance as of $_uptoLabel: Rs. ') + money(closingDoc.abs())
+          : (netBal < 0 ? 'Net Payable: Rs. ' : 'Net Advance: Rs. ') + money(netBal.abs()),
+      netBalanceValue: 'Rs. ' + money(_dated ? closingDoc : netBal),
+      netIsDanger: (_dated ? closingDoc : netBal) < 0, fileBase: fileBase,
       footerMessage: _footerMsg,
     );
   }

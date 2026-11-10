@@ -57,6 +57,13 @@ class LedgerDoc {
   final List<LedgerPdc> pdc;
   final String? pdcTotal;
   final String? footerMessage; // optional custom note printed at the very end
+  // Date range chosen: balance brought forward and totals from the beginning.
+  final String? openingLabel;
+  final String? openingBalance;
+  final String? overallLabel;
+  final String? overallDebit;
+  final String? overallCredit;
+  final String? overallBalance;
 
   const LedgerDoc({
     required this.docTitle,
@@ -76,6 +83,12 @@ class LedgerDoc {
     this.pdc = const [],
     this.pdcTotal,
     this.footerMessage,
+    this.openingLabel,
+    this.openingBalance,
+    this.overallLabel,
+    this.overallDebit,
+    this.overallCredit,
+    this.overallBalance,
   });
 }
 
@@ -352,8 +365,8 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
 
       // ── Stat cards ─────────────────────────────────────────────────────
       pw.Row(children: [
-        stat('Total Debit', 'Rs. ' + d.totalDebit, _accent),
-        stat('Total Credit', 'Rs. ' + d.totalCredit, _green),
+        stat(d.overallLabel != null ? 'Debit (period)' : 'Total Debit', 'Rs. ' + d.totalDebit, _accent),
+        stat(d.overallLabel != null ? 'Credit (period)' : 'Total Credit', 'Rs. ' + d.totalCredit, _green),
         pw.Expanded(
           child: pw.Container(
             padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -361,7 +374,7 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
                 border: pw.Border.all(color: PdfColors.grey300),
                 borderRadius: pw.BorderRadius.circular(4)),
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text('NET BALANCE',
+              pw.Text(d.overallLabel != null ? 'BALANCE' : 'NET BALANCE',
                   style: pw.TextStyle(
                       fontSize: 7,
                       color: PdfColors.grey600,
@@ -401,18 +414,42 @@ Future<Uint8List> buildLedgerPdfBytes(LedgerDoc d) async {
                 hc('Credit', a: pw.TextAlign.right),
                 hc('Balance', a: pw.TextAlign.right),
               ]),
+          if (d.openingBalance != null)
+            pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey50),
+                children: [
+                  c(''),
+                  c(''),
+                  c(d.openingLabel ?? 'Opening balance', bold: true),
+                  c(''),
+                  c(''),
+                  c(''),
+                  c(d.openingBalance!, a: pw.TextAlign.right, bold: true),
+                ]),
           for (final l in d.lines) ...lineRows(l),
           pw.TableRow(
               decoration: const pw.BoxDecoration(color: PdfColors.grey100),
               children: [
                 c('${d.lines.length} entries', bold: true),
                 c(''),
-                c(''),
+                c(d.overallLabel != null ? 'Total for the selected period' : '', bold: d.overallLabel != null),
                 c('Total', bold: true, a: pw.TextAlign.right),
                 c(d.totalDebit, a: pw.TextAlign.right, bold: true),
                 c(d.totalCredit, a: pw.TextAlign.right, bold: true),
                 c(''),
               ]),
+          if (d.overallLabel != null)
+            pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                children: [
+                  c(''),
+                  c(''),
+                  c(d.overallLabel!, bold: true),
+                  c('Total', bold: true, a: pw.TextAlign.right),
+                  c(d.overallDebit ?? '', a: pw.TextAlign.right, bold: true),
+                  c(d.overallCredit ?? '', a: pw.TextAlign.right, bold: true),
+                  c(d.overallBalance ?? '', a: pw.TextAlign.right, bold: true),
+                ]),
         ],
       ),
       pw.SizedBox(height: 10),
