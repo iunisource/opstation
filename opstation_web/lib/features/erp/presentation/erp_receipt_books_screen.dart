@@ -54,6 +54,15 @@ class _Book {
   final List<Map<String, dynamic>> cancelled; // {id, serial, reason, by, at}
   _Book(this.row, this.used, this.cancelled);
 
+  /// "Mark as checked" rows for this book (SQL 458): {id, serial, kind, note, checked_by_name, checked_at}.
+  List<Map<String, dynamic>> checks = const [];
+  Map<String, dynamic>? checkOf(String kind, int n) {
+    for (final c in checks) {
+      if (c['kind'] == kind && (c['serial'] as num).toInt() == n) return c;
+    }
+    return null;
+  }
+
   String get id => row['id'] as String;
   int get start => (row['start_no'] as num).toInt();
   int get end => (row['end_no'] as num).toInt();
@@ -106,7 +115,17 @@ class _Book {
   late final List<Map<String, dynamic>> byOthers =
       used.where((u) => '${u['user_id'] ?? ''}' != holderId).toList();
 
-  int get issues => skipped.length + missingAtClose.length + repeated.length + outOfOrder.length + byOthers.length;
+  /// Flagged slips still to look at (not marked as checked).
+  List<int> get openRepeated => [for (final n in repeated) if (checkOf('repeated', n) == null) n];
+  List<int> get openOutOfOrder => [for (final n in outOfOrder) if (checkOf('out_of_order', n) == null) n];
+  List<Map<String, dynamic>> get checkedRows => [
+        for (final c in checks)
+          if ((c['kind'] == 'repeated' && repeated.contains((c['serial'] as num).toInt())) ||
+              (c['kind'] == 'out_of_order' && outOfOrder.contains((c['serial'] as num).toInt())))
+            c
+      ];
+
+  int get issues => skipped.length + missingAtClose.length + openRepeated.length + openOutOfOrder.length + byOthers.length;
 }
 
 class _State extends ConsumerState<ErpReceiptBooksScreen> {
@@ -185,6 +204,14 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           if (page.length < 1000 || f > 100000) break;
         }
       }
+      // Slips already marked as checked (SQL 458; missing table = none yet).
+      try {
+        final rows = List<Map<String, dynamic>>.from(await _db.from('receipt_slip_checks')
+            .select('id, book_id, serial, kind, note, checked_by_name, checked_at').eq('org_id', orgId) as List);
+        for (final b in books) {
+          b.checks = [for (final r in rows) if (r['book_id'] == b.id) r];
+        }
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _flowOn = on;
@@ -798,8 +825,23 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                       style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
             if (b.skipped.isNotEmpty) _flag('Skipped', 'Not used, but higher slips are — a collection may not be entered.', Colors.amber.shade800, b.skipped),
             if (b.missingAtClose.isNotEmpty) _flag('Missing at close', 'Never used or cancelled before the book was closed.', AppTheme.danger, b.missingAtClose),
-            if (b.repeated.isNotEmpty) _flag('Used more than once', 'The same slip is on two or more collections.', AppTheme.danger, b.repeated),
-            if (b.outOfOrder.isNotEmpty) _flag('Out of order', 'Used after a higher slip — the book order was broken.', Colors.deepOrange, b.outOfOrder),
+            if (b.openRepeated.isNotEmpty) _flag('Used more than once', 'The same slip is on two or more collections.', AppTheme.danger, b.openRepeated),
+            if (b.openOutOfOrder.isNotEmpty) _flag('Out of order', 'Used after a higher slip — the book order was broken.', Colors.deepOrange, b.openOutOfOrder),
+            // Without the receipt-book check, reused / jumped slips can't be
+            // stopped in the app — so they can be looked into and marked checked.
+            if (_canIssue && !_flowOn && (b.openRepeated.isNotEmpty || b.openOutOfOrder.isNotEmpty))
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : () => _markChecked(b),
+                    icon: const Icon(Icons.fact_check_outlined, size: 16),
+                    label: const Text('Mark as checked', style: TextStyle(fontSize: 12.5)),
+                  ),
+                ),
+              ),
+            if (b.checkedRows.isNotEmpty) _checkedList(b),
             if (b.byOthers.isNotEmpty)
               _flag('Used by someone else', b.byOthers.map((u) => '${u['serial']} by ${u['user_name'] ?? '—'}').toSet().join(', '),
                   AppTheme.danger, [for (final u in b.byOthers) (u['serial'] as num).toInt()]),
@@ -828,7 +870,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
     final used = b.usedSet.contains(n);
     final can = b.cancelMap.containsKey(n);
     final miss = b.skipped.contains(n) || b.missingAtClose.contains(n);
-    final bad = b.repeated.contains(n) || b.outOfOrder.contains(n);
+    final bad = b.openRepeated.contains(n) || b.openOutOfOrder.contains(n);
     final Color bg = used ? AppTheme.success.withOpacity(0.15)
         : can ? Colors.grey.withOpacity(0.18)
         : miss ? Colors.amber.withOpacity(0.25) : Colors.white;
@@ -849,6 +891,141 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
         child: Text('$n', style: TextStyle(
             fontSize: 11, decoration: can ? TextDecoration.lineThrough : null,
             fontWeight: bad ? FontWeight.w800 : FontWeight.w500)),
+      ),
+    );
+  }
+
+  Future<void> _markChecked(_Book b) async {
+    final items = <(int, String)>[
+      for (final n in b.openRepeated) (n, 'repeated'),
+      for (final n in b.openOutOfOrder) (n, 'out_of_order'),
+    ];
+    final picked = {for (var i = 0; i < items.length; i++) i};
+    final noteCtrl = TextEditingController();
+    String? err;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: Text('Mark as checked · ${b.holder}'),
+        content: SizedBox(
+          width: 480,
+          height: 420,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Tick the slips you have looked into. They stop counting as issues and stay listed as checked, '
+                'with your note and name.', style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 8),
+            Row(children: [
+              TextButton(onPressed: () => setD(() => picked.addAll(List.generate(items.length, (i) => i))), child: const Text('Tick all')),
+              TextButton(onPressed: () => setD(picked.clear), child: const Text('Clear')),
+              const Spacer(),
+              Text('${picked.length} of ${items.length}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ]),
+            Expanded(
+              child: ListView.builder(
+                itemCount: items.length,
+                itemBuilder: (_, i) {
+                  final (n, kind) = items[i];
+                  final uses = [for (final u in b.used) if ((u['serial'] as num).toInt() == n) u];
+                  return CheckboxListTile(
+                    dense: true,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: picked.contains(i),
+                    onChanged: (v) => setD(() => v == true ? picked.add(i) : picked.remove(i)),
+                    title: Text('$n · ${kind == 'repeated' ? 'Used more than once' : 'Out of order'}',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    subtitle: Text(
+                        [for (final u in uses) '${_fmt(u['at'])} · Rs ${u['amount'] ?? '—'}'].join('   |   '),
+                        style: const TextStyle(fontSize: 11.5)),
+                  );
+                },
+              ),
+            ),
+            TextField(
+              controller: noteCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'What was checked',
+                  hintText: 'e.g. Genuine payments — old slip numbers written on new receipts'),
+            ),
+            if (err != null)
+              Padding(padding: const EdgeInsets.only(top: 6),
+                  child: Text(err!, style: const TextStyle(color: AppTheme.danger, fontSize: 12))),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(false), child: const Text('Back')),
+          ElevatedButton(
+            onPressed: () {
+              if (picked.isEmpty) return setD(() => err = 'Tick at least one slip.');
+              if (noteCtrl.text.trim().isEmpty) return setD(() => err = 'Write what was checked.');
+              Navigator.of(ctx, rootNavigator: true).pop(true);
+            },
+            child: Text('Mark ${picked.length} as checked'),
+          ),
+        ],
+      )),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      final n = await _db.rpc('receipt_slip_check', params: {
+        'p_book': b.id,
+        'p_items': [for (final i in picked) {'serial': items[i].$1, 'kind': items[i].$2}],
+        'p_note': noteCtrl.text.trim(),
+      });
+      _snack('Marked $n slip${n == 1 ? '' : 's'} as checked');
+      await _load();
+    } catch (e) {
+      _snack(friendlyError('Could not mark as checked', e));
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Widget _checkedList(_Book b) {
+    final rows = b.checkedRows;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 4),
+            dense: true,
+            title: Text('Checked (${rows.length}): ${rows.map((r) => r['serial']).toSet().take(30).join(', ')}',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+            children: [
+              for (final r in rows)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.check_circle_outline, size: 18, color: AppTheme.success),
+                  title: Text('${r['serial']} · ${r['kind'] == 'repeated' ? 'Used more than once' : 'Out of order'}',
+                      style: const TextStyle(fontSize: 12.5)),
+                  subtitle: Text('${r['note'] ?? ''} — ${r['checked_by_name'] ?? '—'}, ${_fmt(r['checked_at'])}',
+                      style: const TextStyle(fontSize: 11.5)),
+                  trailing: _canIssue
+                      ? IconButton(
+                          tooltip: 'Undo',
+                          icon: const Icon(Icons.undo, size: 18),
+                          onPressed: _busy
+                              ? null
+                              : () async {
+                                  setState(() => _busy = true);
+                                  try {
+                                    await _db.rpc('receipt_slip_uncheck', params: {'p_id': r['id']});
+                                    await _load();
+                                  } catch (e) {
+                                    _snack(friendlyError('Could not undo', e));
+                                  }
+                                  if (mounted) setState(() => _busy = false);
+                                },
+                        )
+                      : null,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
