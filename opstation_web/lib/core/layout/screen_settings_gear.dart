@@ -33,6 +33,7 @@ const _customerKeys = [
   'org.field_location_capture',
   'org.surveyor_location_supervise',
   'org.loc_fix_warning',
+  'org.route_guide',
 ];
 const _intelKeys = ['org.intel_delete_access', 'org.intel_autopilot', 'org.audit_location_tracking', 'org.auditor_group_scope'];
 
@@ -133,7 +134,23 @@ const Map<String, _ScreenSettings> _screenSettings = {
   '/products': _ScreenSettings('Intelligence Products', ['org.intel_autopilot']),
   '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys),
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
+  // ── Logistics ──
+  '/fleet': _logistics,
+  '/deliveries': _logistics,
+  '/dispatch-orders': _logistics,
+  '/dispatch-dashboard': _logistics,
+  // ── HR ──
+  '/hr/attendance': _hr,
+  '/hr/attendance-review': _hr,
+  '/hr/attendance-board': _hr,
+  '/hr/attendance-kiosk': _hr,
+  '/hr/employees': _hr,
+  '/hr/leave': _hr,
 };
+
+const _logistics = _ScreenSettings('Logistics', ['org.fleet_alerts', 'org.delivery_flow_enabled']);
+const _hrPage = ('Open HR Setup', '/hr/setup');
+const _hr = _ScreenSettings('HR & Attendance', ['org.web_checkin'], [], _hrPage);
 
 /// Floating gear on the screen (bottom-left): opens this screen's settings. Shown to master
 /// admins and admins (who can open Admin Settings), only on screens that have settings.
@@ -244,7 +261,7 @@ class ScreenSettingsGear extends ConsumerWidget {
                     child: ListTile(
                       leading: const Icon(Icons.tune, color: AppTheme.primary),
                       title: Text(cfg.page!.$1, style: const TextStyle(fontWeight: FontWeight.w700)),
-                      subtitle: const Text('Payment methods, print size, receipt and more'),
+                      subtitle: Text(cfg.page!.$2 == '/hr/setup' ? 'Departments, designations and shifts' : 'Payment methods, print size, receipt and more'),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () {
                         Navigator.of(ctx).pop();

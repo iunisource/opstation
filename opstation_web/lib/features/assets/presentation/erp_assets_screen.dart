@@ -111,6 +111,9 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
 
   // ── Asset suggestions (SQL 366): new additions to watched accounts. ──
   List<Map<String, dynamic>> _suggestions = [];
+  // Fleet vehicles (SQL 463) that aren't in the asset list yet.
+  List<Map<String, dynamic>> _fleetMissing = [];
+  bool _fleetLater = false;
 
   // detail sub-data
   bool _detailLoading = false;
@@ -200,10 +203,19 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
             .order('entry_date', ascending: false)
             .order('created_at', ascending: false));
       } catch (_) {/* not set up yet — no suggestions */}
+      var fleetMissing = <Map<String, dynamic>>[];
+      try {
+        fleetMissing = List<Map<String, dynamic>>.from(await client
+            .from('fleet_vehicles')
+            .select('id, reg_no, make, model, vehicle_type, chassis_no, branch_id')
+            .eq('org_id', orgId).eq('is_active', true).isFilter('asset_id', null)
+            .order('reg_no'));
+      } catch (_) {/* Fleet not set up yet */}
 
       if (!mounted) return;
       setState(() {
         _suggestions = suggestions;
+        _fleetMissing = fleetMissing;
         _assets = List<Map<String, dynamic>>.from(assets);
         _categories = List<Map<String, dynamic>>.from(cats);
         // Real branches only for picking — processor / off-site (virtual)
@@ -1688,6 +1700,10 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 tooltip: 'Refresh'),
           ]),
           SizedBox(height: narrow ? 10 : 16),
+          if (!_loading && _fleetMissing.isNotEmpty && !_fleetLater && !showDetail) ...[
+            _fleetBanner(),
+            SizedBox(height: narrow ? 10 : 14),
+          ],
           if (!_loading && _suggestions.isNotEmpty && !showDetail) ...[
             _suggestionsBanner(),
             SizedBox(height: narrow ? 10 : 14),
@@ -2385,6 +2401,54 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   // ── Asset suggestions (SQL 366) ─────────────────────────────────────────
   String _suggAmt(dynamic v) => 'Rs ${_money.format((v as num?) ?? 0)}';
 
+  /// Vehicles added in Logistics → Fleet that aren't in the asset list.
+  Widget _fleetBanner() {
+    String title(Map v) => [v['reg_no'], v['make'], v['model']].where((x) => (x ?? '') != '').join(' ');
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.local_shipping_outlined, size: 18, color: Color(0xFFB45309)),
+          const SizedBox(width: 8),
+          Expanded(child: Text(
+            '${_fleetMissing.length} vehicle${_fleetMissing.length == 1 ? '' : 's'} in Fleet ${_fleetMissing.length == 1 ? 'isn\'t' : 'aren\'t'} in the asset list yet',
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF92400E)))),
+          TextButton(onPressed: () => setState(() => _fleetLater = true), child: const Text('Later')),
+        ]),
+        const SizedBox(height: 4),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          for (final v in _fleetMissing)
+            OutlinedButton.icon(
+              onPressed: () {
+                final cat = _categories.firstWhere(
+                    (c) => RegExp(r'vehicle', caseSensitive: false).hasMatch('${c['name'] ?? ''}'),
+                    orElse: () => <String, dynamic>{});
+                _assetDialog(
+                  prefill: {
+                    'name': title(v),
+                    'model': v['model'],
+                    'manufacturer': v['make'],
+                    'serial_no': v['chassis_no'],
+                    'branch_id': v['branch_id'],
+                    if (cat.isNotEmpty) 'category_id': cat['id'],
+                    'notes': 'From Fleet (${v['reg_no']})',
+                  },
+                  fleetVehicleId: v['id'] as String,
+                );
+              },
+              icon: const Icon(Icons.add, size: 15),
+              label: Text('Add ${title(v)}', style: const TextStyle(fontSize: 12)),
+            ),
+        ]),
+      ]),
+    );
+  }
+
   Widget _suggestionsBanner() {
     final n = _suggestions.length;
     final total = _suggestions.fold<double>(0, (a, s) =>
@@ -2587,7 +2651,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
   }
 
   Future<void> _assetDialog({Map<String, dynamic>? existing,
-      Map<String, dynamic>? prefill, String? suggestionId}) async {
+      Map<String, dynamic>? prefill, String? suggestionId, String? fleetVehicleId}) async {
     final isEdit = existing != null;
     final pre = isEdit ? null : prefill;
     final orgId = _orgId;
@@ -2609,11 +2673,11 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     final descCtrl =
         TextEditingController(text: existing?['description'] as String? ?? '');
     final serialCtrl =
-        TextEditingController(text: existing?['serial_no'] as String? ?? '');
+        TextEditingController(text: existing?['serial_no'] as String? ?? pre?['serial_no'] as String? ?? '');
     final modelCtrl =
-        TextEditingController(text: existing?['model'] as String? ?? '');
+        TextEditingController(text: existing?['model'] as String? ?? pre?['model'] as String? ?? '');
     final mfgCtrl = TextEditingController(
-        text: existing?['manufacturer'] as String? ?? '');
+        text: existing?['manufacturer'] as String? ?? pre?['manufacturer'] as String? ?? '');
     final supplierCtrl =
         TextEditingController(text: existing?['supplier_id'] as String? ?? pre?['supplier'] as String? ?? '');
     final costCtrl = TextEditingController(
@@ -2623,7 +2687,8 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
     final notesCtrl =
         TextEditingController(text: existing?['notes'] as String? ?? pre?['notes'] as String? ?? '');
 
-    String? categoryId = existing?['category_id'] as String?;
+    String? categoryId = existing?['category_id'] as String? ??
+        (_categories.any((c) => c['id'] == pre?['category_id']) ? pre!['category_id'] as String : null);
     String status = existing?['status'] as String? ?? 'in_use';
     String? condition = existing?['condition'] as String?;
     String? branchId = existing?['branch_id'] as String? ??
@@ -2696,6 +2761,12 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                 'p_action': 'created',
                 'p_note': 'Asset created',
               });
+              // Added from a Fleet vehicle: link the two.
+              if (fleetVehicleId != null) {
+                try {
+                  await client.from('fleet_vehicles').update({'asset_id': id}).eq('id', fleetVehicleId);
+                } catch (_) {}
+              }
               // Created from a suggestion: link it (closes it once covered).
               if (suggestionId != null) {
                 try {

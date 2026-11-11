@@ -90,6 +90,7 @@ import '../../features/retailer/presentation/retailer_portal_screen.dart' deferr
 import '../../features/erp/presentation/floor_scan_screen.dart' deferred as _s078;
 import '../permissions/access_control.dart';
 import '../permissions/permission_registry.dart';
+import '../navigation/recent_screens.dart';
 import '../../features/erp/presentation/erp_placeholder_screen.dart' deferred as _s079;
 import '../../features/erp/presentation/erp_payment_voucher_screen.dart' deferred as _s080;
 import '../../features/erp/presentation/erp_products_screen.dart' deferred as _s081;
@@ -176,6 +177,8 @@ import '../../features/erp/presentation/erp_quick_costing_screen.dart' deferred 
 import '../../features/erp/presentation/erp_field_returns_screen.dart' deferred as _s163;
 import '../../features/erp/presentation/erp_discount_policies_screen.dart' deferred as _s164;
 import '../../features/intelligence/presentation/intelligence_reports_screen.dart' deferred as _s167;
+import '../../features/deliveries/presentation/dispatch_dashboard_screen.dart' deferred as _s168;
+import '../../features/fleet/fleet_screen.dart' deferred as _s169;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -194,7 +197,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
   final notifier = ref.watch(authNotifierProvider);
   _warmStartupChunks();
 
-  return GoRouter(
+  final router = GoRouter(
     initialLocation: '/login',
     refreshListenable: notifier,
     redirect: (context, state) {
@@ -284,6 +287,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           if (role == WebUserRole.dispatchManager) {
             return loc == '/deliveries' ||
                 loc == '/dispatch-orders' ||
+                loc == '/dispatch-dashboard' ||
+                loc == '/fleet' ||
                 loc.startsWith('/deliveries/');
           }
           if (role == WebUserRole.accountant) {
@@ -310,7 +315,9 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // lives outside the /erp/ prefix — let it through to the check.
             final permScopedLogistics = loc == '/deliveries' ||
                 loc.startsWith('/deliveries/') ||
-                loc == '/dispatch-orders';
+                loc == '/dispatch-orders' ||
+                loc == '/dispatch-dashboard' ||
+                loc == '/fleet';
             // Route Roster (Operations) is registry-gated too.
             final permScopedOps = const {
               '/dashboard', '/team', '/routes', '/operations/route-roster', '/operations/time-in-market', '/live-map',
@@ -373,23 +380,23 @@ final webRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(
         path: '/login',
-        builder: (_, __) => _deferred(_s038.loadLibrary(), () => _s038.LoginScreen()),
+        builder: (_, __) => _deferred('_s038', _s038.loadLibrary, () => _s038.LoginScreen()),
       ),
       GoRoute(
         path: '/signup',
-        builder: (_, __) => _deferred(_s039.loadLibrary(), () => _s039.SignupWizardScreen()),
+        builder: (_, __) => _deferred('_s039', _s039.loadLibrary, () => _s039.SignupWizardScreen()),
       ),
       GoRoute(
         path: '/change-password',
-        builder: (_, __) => _deferred(_s040.loadLibrary(), () => _s040.ChangePasswordScreen()),
+        builder: (_, __) => _deferred('_s040', _s040.loadLibrary, () => _s040.ChangePasswordScreen()),
       ),
       GoRoute(
         path: '/subscription-expired',
-        builder: (_, __) => _deferred(_s068.loadLibrary(), () => _s068.SubscriptionExpiredScreen()),
+        builder: (_, __) => _deferred('_s068', _s068.loadLibrary, () => _s068.SubscriptionExpiredScreen()),
       ),
       GoRoute(
         path: '/pa/:token',
-        builder: (_, state) => _deferred(_s143.loadLibrary(), () => _s143.PaymentAdvicePublicScreen(token: state.pathParameters['token'] ?? '')),
+        builder: (_, state) => _deferred('_s143', _s143.loadLibrary, () => _s143.PaymentAdvicePublicScreen(token: state.pathParameters['token'] ?? '')),
       ),
       GoRoute(
         path: '/boot',
@@ -397,27 +404,27 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/act/:token',
-        builder: (_, state) => _deferred(_s144.loadLibrary(), () => _s144.EmailActionScreen(
+        builder: (_, state) => _deferred('_s144', _s144.loadLibrary, () => _s144.EmailActionScreen(
             token: state.pathParameters['token'] ?? '',
             action: state.uri.queryParameters['a'])),
       ),
       GoRoute(
         path: '/f/:token',
-        builder: (_, state) => _deferred(_s078.loadLibrary(), () => _s078.FloorScanScreen(token: state.pathParameters['token'] ?? '')),
+        builder: (_, state) => _deferred('_s078', _s078.loadLibrary, () => _s078.FloorScanScreen(token: state.pathParameters['token'] ?? '')),
       ),
       // Public attendance kiosk — bookmarkable, no login. Works for every org:
       // the punched employee's own record supplies the org.
       GoRoute(
         path: '/kiosk',
-        builder: (_, __) => _deferred(_s035.loadLibrary(), () => _s035.HrAttendanceKioskScreen()),
+        builder: (_, __) => _deferred('_s035', _s035.loadLibrary, () => _s035.HrAttendanceKioskScreen()),
       ),
       GoRoute(
         path: '/r/login',
-        builder: (_, __) => _deferred(_s076.loadLibrary(), () => _s076.RetailerLoginScreen()),
+        builder: (_, __) => _deferred('_s076', _s076.loadLibrary, () => _s076.RetailerLoginScreen()),
       ),
       GoRoute(
         path: '/r',
-        builder: (_, __) => _deferred(_s077.loadLibrary(), () => _s077.RetailerPortalScreen()),
+        builder: (_, __) => _deferred('_s077', _s077.loadLibrary, () => _s077.RetailerPortalScreen()),
       ),
       ShellRoute(
         builder: (context, state, child) => MainLayout(
@@ -432,188 +439,203 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           ),
         ),
         routes: [
-          GoRoute(path: '/dashboard', builder: (_, __) => _deferred(_s041.loadLibrary(), () => _s041.DashboardScreen())),
-          GoRoute(path: '/team', builder: (_, state) => _deferred(_s042.loadLibrary(), () => _s042.TeamScreen(historyId: state.uri.queryParameters['history']))),
-          GoRoute(path: '/customers', builder: (_, state) => _deferred(_s043.loadLibrary(), () => _s043.CustomersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/crm/customers', builder: (_, __) => _deferred(_s043.loadLibrary(), () => _s043.CustomersScreen(crmMode: true))),
-          GoRoute(path: '/customers/import', builder: (_, __) => _deferred(_s056.loadLibrary(), () => _s056.BulkImportCustomersScreen())),
-          GoRoute(path: '/crm/follow-ups', builder: (_, __) => _deferred(_s044.loadLibrary(), () => _s044.FollowUpsScreen())),
-          GoRoute(path: '/crm/pipeline', builder: (_, __) => _deferred(_s045.loadLibrary(), () => _s045.CrmPipelineScreen())),
-          GoRoute(path: '/crm/tasks', builder: (_, __) => _deferred(_s046.loadLibrary(), () => _s046.ErpTasksScreen())),
-          GoRoute(path: '/crm/supplier-profile', builder: (_, __) => _deferred(_s047.loadLibrary(), () => _s047.ErpSupplier360Screen())),
-          GoRoute(path: '/products', builder: (_, __) => _deferred(_s048.loadLibrary(), () => _s048.ProductsScreen())),
-          GoRoute(path: '/competitor-categories', builder: (_, __) => _deferred(_s049.loadLibrary(), () => _s049.CompetitorCategoriesScreen())),
-          GoRoute(path: '/competitor-brand-aliases', builder: (_, __) => _deferred(_s050.loadLibrary(), () => _s050.CompetitorBrandAliasesScreen())),
-          GoRoute(path: '/intelligence/dashboard', builder: (_, __) => _deferred(_s052.loadLibrary(), () => _s052.IntelligenceDashboardScreen())),
-          GoRoute(path: '/intelligence/placement', builder: (_, __) => _deferred(_s051.loadLibrary(), () => _s051.IntelligencePlacementScreen())),
-          GoRoute(path: '/intelligence/score-distribution', builder: (_, __) => _deferred(_s161.loadLibrary(), () => _s161.IntelligenceScoreDistributionScreen())),
-          GoRoute(path: '/intelligence/competitors', builder: (_, __) => _deferred(_s053.loadLibrary(), () => _s053.IntelligenceCompetitorsScreen())),
-          GoRoute(path: '/intelligence/reports', builder: (_, __) => _deferred(_s167.loadLibrary(), () => _s167.IntelligenceReportsScreen())),
-          GoRoute(path: '/intelligence/performance', builder: (_, __) => _deferred(_s054.loadLibrary(), () => _s054.IntelligencePerformanceScreen())),
-          GoRoute(path: '/routes', builder: (_, __) => _deferred(_s055.loadLibrary(), () => _s055.RoutesScreen())),
-          GoRoute(path: '/operations/route-roster', builder: (_, __) => _deferred(_s151.loadLibrary(), () => _s151.RouteRosterScreen())),
-          GoRoute(path: '/operations/time-in-market', builder: (_, __) => _deferred(_s160.loadLibrary(), () => _s160.TimeInMarketScreen())),
-          GoRoute(path: '/routes/import', builder: (_, __) => _deferred(_s057.loadLibrary(), () => _s057.BulkImportRoutesScreen())),
-          GoRoute(path: '/deliveries', builder: (_, __) => _deferred(_s059.loadLibrary(), () => _s059.DeliveriesScreen())),
+          GoRoute(path: '/dashboard', builder: (_, __) => _deferred('_s041', _s041.loadLibrary, () => _s041.DashboardScreen())),
+          GoRoute(path: '/team', builder: (_, state) => _deferred('_s042', _s042.loadLibrary, () => _s042.TeamScreen(historyId: state.uri.queryParameters['history']))),
+          GoRoute(path: '/customers', builder: (_, state) => _deferred('_s043', _s043.loadLibrary, () => _s043.CustomersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/crm/customers', builder: (_, __) => _deferred('_s043', _s043.loadLibrary, () => _s043.CustomersScreen(crmMode: true))),
+          GoRoute(path: '/customers/import', builder: (_, __) => _deferred('_s056', _s056.loadLibrary, () => _s056.BulkImportCustomersScreen())),
+          GoRoute(path: '/crm/follow-ups', builder: (_, __) => _deferred('_s044', _s044.loadLibrary, () => _s044.FollowUpsScreen())),
+          GoRoute(path: '/crm/pipeline', builder: (_, __) => _deferred('_s045', _s045.loadLibrary, () => _s045.CrmPipelineScreen())),
+          GoRoute(path: '/crm/tasks', builder: (_, __) => _deferred('_s046', _s046.loadLibrary, () => _s046.ErpTasksScreen())),
+          GoRoute(path: '/crm/supplier-profile', builder: (_, __) => _deferred('_s047', _s047.loadLibrary, () => _s047.ErpSupplier360Screen())),
+          GoRoute(path: '/products', builder: (_, __) => _deferred('_s048', _s048.loadLibrary, () => _s048.ProductsScreen())),
+          GoRoute(path: '/competitor-categories', builder: (_, __) => _deferred('_s049', _s049.loadLibrary, () => _s049.CompetitorCategoriesScreen())),
+          GoRoute(path: '/competitor-brand-aliases', builder: (_, __) => _deferred('_s050', _s050.loadLibrary, () => _s050.CompetitorBrandAliasesScreen())),
+          GoRoute(path: '/intelligence/dashboard', builder: (_, __) => _deferred('_s052', _s052.loadLibrary, () => _s052.IntelligenceDashboardScreen())),
+          GoRoute(path: '/intelligence/placement', builder: (_, __) => _deferred('_s051', _s051.loadLibrary, () => _s051.IntelligencePlacementScreen())),
+          GoRoute(path: '/intelligence/score-distribution', builder: (_, __) => _deferred('_s161', _s161.loadLibrary, () => _s161.IntelligenceScoreDistributionScreen())),
+          GoRoute(path: '/intelligence/competitors', builder: (_, __) => _deferred('_s053', _s053.loadLibrary, () => _s053.IntelligenceCompetitorsScreen())),
+          GoRoute(path: '/intelligence/reports', builder: (_, __) => _deferred('_s167', _s167.loadLibrary, () => _s167.IntelligenceReportsScreen())),
+          GoRoute(path: '/intelligence/performance', builder: (_, __) => _deferred('_s054', _s054.loadLibrary, () => _s054.IntelligencePerformanceScreen())),
+          GoRoute(path: '/routes', builder: (_, __) => _deferred('_s055', _s055.loadLibrary, () => _s055.RoutesScreen())),
+          GoRoute(path: '/operations/route-roster', builder: (_, __) => _deferred('_s151', _s151.loadLibrary, () => _s151.RouteRosterScreen())),
+          GoRoute(path: '/operations/time-in-market', builder: (_, __) => _deferred('_s160', _s160.loadLibrary, () => _s160.TimeInMarketScreen())),
+          GoRoute(path: '/routes/import', builder: (_, __) => _deferred('_s057', _s057.loadLibrary, () => _s057.BulkImportRoutesScreen())),
+          GoRoute(path: '/deliveries', builder: (_, __) => _deferred('_s059', _s059.loadLibrary, () => _s059.DeliveriesScreen())),
           GoRoute(
             path: '/deliveries/:id',
-            builder: (_, state) => _deferred(_s060.loadLibrary(), () => _s060.DeliveryDetailScreen(deliveryId: state.pathParameters['id']!)),
+            builder: (_, state) => _deferred('_s060', _s060.loadLibrary, () => _s060.DeliveryDetailScreen(deliveryId: state.pathParameters['id']!)),
           ),
-          GoRoute(path: '/live-map', builder: (_, state) => _deferred(_s069.loadLibrary(), () => _s069.LiveMapScreen(tripId: state.uri.queryParameters['trip']))),
-          GoRoute(path: '/dispatch-orders', builder: (_, __) => _deferred(_s061.loadLibrary(), () => _s061.DispatchOrdersScreen())),
-          GoRoute(path: '/orders', builder: (_, __) => _deferred(_s062.loadLibrary(), () => _s062.OrdersScreen())),
-          GoRoute(path: '/reports', builder: (_, __) => _deferred(_s058.loadLibrary(), () => _s058.ReportsScreen())),
-          GoRoute(path: '/reports/combined-summary', builder: (_, __) => _deferred(_s140.loadLibrary(), () => _s140.CombinedTripSummaryScreen())),
-          GoRoute(path: '/compliance', builder: (_, __) => _deferred(_s070.loadLibrary(), () => _s070.ComplianceScreen())),
-          GoRoute(path: '/settings', builder: (_, __) => _deferred(_s063.loadLibrary(), () => _s063.SettingsScreen())),
-          GoRoute(path: '/account-linking', builder: (_, __) => _deferred(_s066.loadLibrary(), () => _s066.OrgAccessScreen())),
-          GoRoute(path: '/operations/files', builder: (_, __) => _deferred(_s071.loadLibrary(), () => _s071.RetailerFilesScreen())),
+          GoRoute(path: '/live-map', builder: (_, state) => _deferred('_s069', _s069.loadLibrary, () => _s069.LiveMapScreen(tripId: state.uri.queryParameters['trip']))),
+          GoRoute(path: '/fleet', builder: (_, state) => _deferred('_s169', _s169.loadLibrary, () => _s169.FleetScreen(openId: state.uri.queryParameters['v']))),
+          GoRoute(path: '/dispatch-dashboard', builder: (_, __) => _deferred('_s168', _s168.loadLibrary, () => _s168.DispatchDashboardScreen())),
+          GoRoute(path: '/dispatch-orders', builder: (_, __) => _deferred('_s061', _s061.loadLibrary, () => _s061.DispatchOrdersScreen())),
+          GoRoute(path: '/orders', builder: (_, __) => _deferred('_s062', _s062.loadLibrary, () => _s062.OrdersScreen())),
+          GoRoute(path: '/reports', builder: (_, __) => _deferred('_s058', _s058.loadLibrary, () => _s058.ReportsScreen())),
+          GoRoute(path: '/reports/combined-summary', builder: (_, __) => _deferred('_s140', _s140.loadLibrary, () => _s140.CombinedTripSummaryScreen())),
+          GoRoute(path: '/compliance', builder: (_, __) => _deferred('_s070', _s070.loadLibrary, () => _s070.ComplianceScreen())),
+          GoRoute(path: '/settings', builder: (_, __) => _deferred('_s063', _s063.loadLibrary, () => _s063.SettingsScreen())),
+          GoRoute(path: '/account-linking', builder: (_, __) => _deferred('_s066', _s066.loadLibrary, () => _s066.OrgAccessScreen())),
+          GoRoute(path: '/operations/files', builder: (_, __) => _deferred('_s071', _s071.loadLibrary, () => _s071.RetailerFilesScreen())),
           // Read-only Files view for ERP users — same screen, audience-filtered.
-          GoRoute(path: '/erp/files', builder: (_, __) => _deferred(_s071.loadLibrary(), () => _s071.RetailerFilesScreen(audience: 'erpUser'))),
-          GoRoute(path: '/operations/notifications', builder: (_, __) => _deferred(_s072.loadLibrary(), () => _s072.NotificationsComposerScreen())),
-          GoRoute(path: '/operations/retailers', builder: (_, __) => _deferred(_s073.loadLibrary(), () => _s073.RetailersAdminScreen())),
-          GoRoute(path: '/assets', builder: (_, st) => _deferred(_s074.loadLibrary(), () => _s074.ErpAssetsScreen(focusId: st.uri.queryParameters['focus']))),
-          GoRoute(path: '/assets/report', builder: (_, __) => _deferred(_s148.loadLibrary(), () => _s148.ErpAssetReportScreen())),
-          GoRoute(path: '/facility', builder: (_, __) => _deferred(_s075.loadLibrary(), () => _s075.ErpFacilityScreen())),
-          GoRoute(path: '/orgs', builder: (_, __) => _deferred(_s064.loadLibrary(), () => _s064.OrgsScreen())),
-          GoRoute(path: '/orgs/profile', builder: (_, st) => _deferred(_s152.loadLibrary(),
+          GoRoute(path: '/erp/files', builder: (_, __) => _deferred('_s071', _s071.loadLibrary, () => _s071.RetailerFilesScreen(audience: 'erpUser'))),
+          GoRoute(path: '/operations/notifications', builder: (_, __) => _deferred('_s072', _s072.loadLibrary, () => _s072.NotificationsComposerScreen())),
+          GoRoute(path: '/operations/retailers', builder: (_, __) => _deferred('_s073', _s073.loadLibrary, () => _s073.RetailersAdminScreen())),
+          GoRoute(path: '/assets', builder: (_, st) => _deferred('_s074', _s074.loadLibrary, () => _s074.ErpAssetsScreen(focusId: st.uri.queryParameters['focus']))),
+          GoRoute(path: '/assets/report', builder: (_, __) => _deferred('_s148', _s148.loadLibrary, () => _s148.ErpAssetReportScreen())),
+          GoRoute(path: '/facility', builder: (_, __) => _deferred('_s075', _s075.loadLibrary, () => _s075.ErpFacilityScreen())),
+          GoRoute(path: '/orgs', builder: (_, __) => _deferred('_s064', _s064.loadLibrary, () => _s064.OrgsScreen())),
+          GoRoute(path: '/orgs/profile', builder: (_, st) => _deferred('_s152', _s152.loadLibrary,
               () => _s152.OrgProfileScreen(key: ValueKey(st.uri.queryParameters['id']), orgId: st.uri.queryParameters['id'] ?? ''))),
-          GoRoute(path: '/subscriptions', builder: (_, __) => _deferred(_s065.loadLibrary(), () => _s065.SubscriptionsScreen())),
-          GoRoute(path: '/enquiries', builder: (_, __) => _deferred(_s165.loadLibrary(), () => _s165.EnquiriesScreen())),
-          GoRoute(path: '/leads', builder: (_, __) => _deferred(_s166.loadLibrary(), () => _s166.LeadsScreen())),
-          GoRoute(path: '/billing', builder: (_, __) => _deferred(_s067.loadLibrary(), () => _s067.BillingScreen())),
-          GoRoute(path: '/erp/products',  builder: (_, state) => _deferred(_s081.loadLibrary(), () => _s081.ErpProductsScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/low-stock-report', builder: (_, __) => _deferred(_s082.loadLibrary(), () => _s082.ErpLowStockReportScreen())),
-          GoRoute(path: '/erp/stock-value-report', builder: (_, __) => _deferred(_s083.loadLibrary(), () => _s083.ErpStockValueReportScreen())),
-          GoRoute(path: '/erp/stock-balance-report', builder: (_, __) => _deferred(_s084.loadLibrary(), () => _s084.ErpStockBalanceReportScreen())),
-          GoRoute(path: '/erp/stock-aging-report', builder: (_, __) => _deferred(_s086.loadLibrary(), () => _s086.ErpStockAgingReportScreen())),
-          GoRoute(path: '/erp/batch-tracking', builder: (_, state) => _deferred(_s156.loadLibrary(), () => _s156.ErpBatchTrackingScreen(query: state.uri.queryParameters['q']))),
-          GoRoute(path: '/erp/inventory-integrity', builder: (_, __) => _deferred(_s085.loadLibrary(), () => _s085.ErpInventoryIntegrityScreen())),
-          GoRoute(path: '/erp/product-classifications', builder: (_, __) => _deferred(_s106.loadLibrary(), () => _s106.ErpProductClassificationsScreen())),
-          GoRoute(path: '/erp/users', builder: (_, state) => _deferred(_s107.loadLibrary(), () => _s107.ErpUsersScreen(editUserId: state.uri.queryParameters['edit']))),
-          GoRoute(path: '/erp/admin-settings', builder: (_, __) => _deferred(_s108.loadLibrary(), () => _s108.ErpAdminSettingsScreen())),
-          GoRoute(path: '/erp/ai-connector', builder: (_, __) => _deferred(_s109.loadLibrary(), () => _s109.ErpMcpConnectorScreen())),
-          GoRoute(path: '/erp/automation', builder: (_, __) => _deferred(_s147.loadLibrary(), () => _s147.ErpAutomationScreen())),
-          GoRoute(path: '/erp/audit-log', builder: (_, __) => _deferred(_s134.loadLibrary(), () => _s134.ErpAuditLogScreen())),
-          GoRoute(path: '/erp/super-summary', builder: (_, __) => _deferred(_s029.loadLibrary(), () => _s029.ErpSuperSummaryScreen())),
-          GoRoute(path: '/erp/onboarding', builder: (_, __) => _deferred(_s009.loadLibrary(), () => _s009.ErpOnboardingScreen())),
-          GoRoute(path: '/erp/home', builder: (_, __) => _deferred(_s111.loadLibrary(), () => _s111.ErpHomeScreen())),
+          GoRoute(path: '/subscriptions', builder: (_, __) => _deferred('_s065', _s065.loadLibrary, () => _s065.SubscriptionsScreen())),
+          GoRoute(path: '/enquiries', builder: (_, __) => _deferred('_s165', _s165.loadLibrary, () => _s165.EnquiriesScreen())),
+          GoRoute(path: '/leads', builder: (_, __) => _deferred('_s166', _s166.loadLibrary, () => _s166.LeadsScreen())),
+          GoRoute(path: '/billing', builder: (_, __) => _deferred('_s067', _s067.loadLibrary, () => _s067.BillingScreen())),
+          GoRoute(path: '/erp/products',  builder: (_, state) => _deferred('_s081', _s081.loadLibrary, () => _s081.ErpProductsScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/low-stock-report', builder: (_, __) => _deferred('_s082', _s082.loadLibrary, () => _s082.ErpLowStockReportScreen())),
+          GoRoute(path: '/erp/stock-value-report', builder: (_, __) => _deferred('_s083', _s083.loadLibrary, () => _s083.ErpStockValueReportScreen())),
+          GoRoute(path: '/erp/stock-balance-report', builder: (_, __) => _deferred('_s084', _s084.loadLibrary, () => _s084.ErpStockBalanceReportScreen())),
+          GoRoute(path: '/erp/stock-aging-report', builder: (_, __) => _deferred('_s086', _s086.loadLibrary, () => _s086.ErpStockAgingReportScreen())),
+          GoRoute(path: '/erp/batch-tracking', builder: (_, state) => _deferred('_s156', _s156.loadLibrary, () => _s156.ErpBatchTrackingScreen(query: state.uri.queryParameters['q']))),
+          GoRoute(path: '/erp/inventory-integrity', builder: (_, __) => _deferred('_s085', _s085.loadLibrary, () => _s085.ErpInventoryIntegrityScreen())),
+          GoRoute(path: '/erp/product-classifications', builder: (_, __) => _deferred('_s106', _s106.loadLibrary, () => _s106.ErpProductClassificationsScreen())),
+          GoRoute(path: '/erp/users', builder: (_, state) => _deferred('_s107', _s107.loadLibrary, () => _s107.ErpUsersScreen(editUserId: state.uri.queryParameters['edit']))),
+          GoRoute(path: '/erp/admin-settings', builder: (_, __) => _deferred('_s108', _s108.loadLibrary, () => _s108.ErpAdminSettingsScreen())),
+          GoRoute(path: '/erp/ai-connector', builder: (_, __) => _deferred('_s109', _s109.loadLibrary, () => _s109.ErpMcpConnectorScreen())),
+          GoRoute(path: '/erp/automation', builder: (_, __) => _deferred('_s147', _s147.loadLibrary, () => _s147.ErpAutomationScreen())),
+          GoRoute(path: '/erp/audit-log', builder: (_, __) => _deferred('_s134', _s134.loadLibrary, () => _s134.ErpAuditLogScreen())),
+          GoRoute(path: '/erp/super-summary', builder: (_, __) => _deferred('_s029', _s029.loadLibrary, () => _s029.ErpSuperSummaryScreen())),
+          GoRoute(path: '/erp/onboarding', builder: (_, __) => _deferred('_s009', _s009.loadLibrary, () => _s009.ErpOnboardingScreen())),
+          GoRoute(path: '/erp/home', builder: (_, __) => _deferred('_s111', _s111.loadLibrary, () => _s111.ErpHomeScreen())),
           GoRoute(path: '/erp/no-access', builder: (_, __) => const _NoAccessScreen()),
-          GoRoute(path: '/erp/opening-stock', builder: (_, __) => _deferred(_s112.loadLibrary(), () => _s112.ErpOpeningStockScreen())),
-          GoRoute(path: '/erp/stock-transfers', builder: (_, state) => _deferred(_s113.loadLibrary(), () => _s113.ErpStockTransfersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/processor-tracker', builder: (_, __) => _deferred(_s114.loadLibrary(), () => _s114.ErpProcessorTrackerScreen())),
-          GoRoute(path: '/erp/processor-jobwork', builder: (_, __) => _deferred(_s115.loadLibrary(), () => _s115.ErpProcessorJobworkScreen())),
-          GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => _deferred(_s001.loadLibrary(), () => _s001.ErpStockAdjustmentScreen())),
-          GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => _deferred(_s080.loadLibrary(), () => _s080.ErpPaymentVoucherScreen())),
-          GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => _deferred(_s117.loadLibrary(), () => _s117.ErpReceiptVouchersScreen())),
-      GoRoute(path: '/financials/investors', builder: (_, __) => _deferred(_s157.loadLibrary(), () => _s157.ErpInvestorsScreen())),
-      GoRoute(path: '/financials/duplicate-references', builder: (_, __) => _deferred(_s158.loadLibrary(), () => _s158.ErpDuplicateRefsScreen())),
-      GoRoute(path: '/financials/payment-advice', builder: (_, state) => _deferred(_s141.loadLibrary(), () => _s141.ErpPaymentAdviceScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/pdc-voucher', builder: (_, __) => _deferred(_s110.loadLibrary(), () => _s110.ErpPdcVoucherScreen())),
-          GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => _deferred(_s118.loadLibrary(), () => _s118.ErpSupplierLedgerScreen())),
-                GoRoute(path: '/financials/journal-vouchers', builder: (_, state) => _deferred(_s003.loadLibrary(), () => _s003.ErpJournalVoucherScreen(focusId: state.uri.queryParameters['focus']))),
-                GoRoute(path: '/financials/opening-journal', builder: (_, __) => _deferred(_s005.loadLibrary(), () => _s005.ErpOpeningJournalScreen())),
-        GoRoute(path: '/financials/trial-balance',  builder: (_, __) => _deferred(_s002.loadLibrary(), () => _s002.ErpTrialBalanceScreen())),
-        GoRoute(path: '/financials/account-activity', builder: (_, __) => _deferred(_s006.loadLibrary(), () => _s006.ErpAccountActivityScreen())),
-        GoRoute(path: '/financials/cash-book', builder: (_, __) => _deferred(_s004.loadLibrary(), () => _s004.ErpCashBookScreen())),
-      GoRoute(path: '/financials/profit-loss',     builder: (_, __) => _deferred(_s007.loadLibrary(), () => _s007.ErpProfitLossScreen())),
-      GoRoute(path: '/financials/balance-sheet',   builder: (_, __) => _deferred(_s008.loadLibrary(), () => _s008.ErpBalanceSheetScreen())),
-      GoRoute(path: '/manufacturing/product-assembly', builder: (_, __) => _deferred(_s010.loadLibrary(), () => _s010.ErpProductAssemblyScreen())),
-      GoRoute(path: '/manufacturing/quick-costing', builder: (_, __) => _deferred(_s162.loadLibrary(), () => _s162.ErpQuickCostingScreen())),
-      GoRoute(path: '/manufacturing/production-voucher', builder: (_, state) => _deferred(_s011.loadLibrary(), () => _s011.ErpProductionVoucherScreen(focusId: state.uri.queryParameters['focus']))),
-      GoRoute(path: '/manufacturing/job-card', builder: (_, __) => _deferred(_s017.loadLibrary(), () => _s017.ErpJobCardScreen())),
-      GoRoute(path: '/manufacturing/qc-checkpoints', builder: (_, __) => _deferred(_s018.loadLibrary(), () => _s018.ErpQcCheckpointsScreen())),
-      GoRoute(path: '/manufacturing/qc-station', builder: (_, __) => _deferred(_s019.loadLibrary(), () => _s019.ErpQcStationScreen())),
-      GoRoute(path: '/manufacturing/job-kiosk', builder: (_, __) => _deferred(_s020.loadLibrary(), () => _s020.ErpJobKioskScreen())),
-      GoRoute(path: '/manufacturing/duty-roster', builder: (_, __) => _deferred(_s146.loadLibrary(), () => _s146.ErpDutyRosterScreen())),
-      GoRoute(path: '/manufacturing/label-printing', builder: (_, __) => _deferred(_s154.loadLibrary(), () => _s154.ErpLabelPrintingScreen())),
-      GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => _deferred(_s021.loadLibrary(), () => _s021.ErpProductionFloorScreen())),
+          GoRoute(path: '/erp/opening-stock', builder: (_, __) => _deferred('_s112', _s112.loadLibrary, () => _s112.ErpOpeningStockScreen())),
+          GoRoute(path: '/erp/stock-transfers', builder: (_, state) => _deferred('_s113', _s113.loadLibrary, () => _s113.ErpStockTransfersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/processor-tracker', builder: (_, __) => _deferred('_s114', _s114.loadLibrary, () => _s114.ErpProcessorTrackerScreen())),
+          GoRoute(path: '/erp/processor-jobwork', builder: (_, __) => _deferred('_s115', _s115.loadLibrary, () => _s115.ErpProcessorJobworkScreen())),
+          GoRoute(path: '/erp/stock-adjustment', builder: (_, __) => _deferred('_s001', _s001.loadLibrary, () => _s001.ErpStockAdjustmentScreen())),
+          GoRoute(path: '/erp/payment-vouchers', builder: (_, __) => _deferred('_s080', _s080.loadLibrary, () => _s080.ErpPaymentVoucherScreen())),
+          GoRoute(path: '/erp/receipt-vouchers', builder: (_, __) => _deferred('_s117', _s117.loadLibrary, () => _s117.ErpReceiptVouchersScreen())),
+      GoRoute(path: '/financials/investors', builder: (_, __) => _deferred('_s157', _s157.loadLibrary, () => _s157.ErpInvestorsScreen())),
+      GoRoute(path: '/financials/duplicate-references', builder: (_, __) => _deferred('_s158', _s158.loadLibrary, () => _s158.ErpDuplicateRefsScreen())),
+      GoRoute(path: '/financials/payment-advice', builder: (_, state) => _deferred('_s141', _s141.loadLibrary, () => _s141.ErpPaymentAdviceScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/pdc-voucher', builder: (_, __) => _deferred('_s110', _s110.loadLibrary, () => _s110.ErpPdcVoucherScreen())),
+          GoRoute(path: '/erp/supplier-ledger', builder: (_, __) => _deferred('_s118', _s118.loadLibrary, () => _s118.ErpSupplierLedgerScreen())),
+                GoRoute(path: '/financials/journal-vouchers', builder: (_, state) => _deferred('_s003', _s003.loadLibrary, () => _s003.ErpJournalVoucherScreen(focusId: state.uri.queryParameters['focus']))),
+                GoRoute(path: '/financials/opening-journal', builder: (_, __) => _deferred('_s005', _s005.loadLibrary, () => _s005.ErpOpeningJournalScreen())),
+        GoRoute(path: '/financials/trial-balance',  builder: (_, __) => _deferred('_s002', _s002.loadLibrary, () => _s002.ErpTrialBalanceScreen())),
+        GoRoute(path: '/financials/account-activity', builder: (_, __) => _deferred('_s006', _s006.loadLibrary, () => _s006.ErpAccountActivityScreen())),
+        GoRoute(path: '/financials/cash-book', builder: (_, __) => _deferred('_s004', _s004.loadLibrary, () => _s004.ErpCashBookScreen())),
+      GoRoute(path: '/financials/profit-loss',     builder: (_, __) => _deferred('_s007', _s007.loadLibrary, () => _s007.ErpProfitLossScreen())),
+      GoRoute(path: '/financials/balance-sheet',   builder: (_, __) => _deferred('_s008', _s008.loadLibrary, () => _s008.ErpBalanceSheetScreen())),
+      GoRoute(path: '/manufacturing/product-assembly', builder: (_, __) => _deferred('_s010', _s010.loadLibrary, () => _s010.ErpProductAssemblyScreen())),
+      GoRoute(path: '/manufacturing/quick-costing', builder: (_, __) => _deferred('_s162', _s162.loadLibrary, () => _s162.ErpQuickCostingScreen())),
+      GoRoute(path: '/manufacturing/production-voucher', builder: (_, state) => _deferred('_s011', _s011.loadLibrary, () => _s011.ErpProductionVoucherScreen(focusId: state.uri.queryParameters['focus']))),
+      GoRoute(path: '/manufacturing/job-card', builder: (_, __) => _deferred('_s017', _s017.loadLibrary, () => _s017.ErpJobCardScreen())),
+      GoRoute(path: '/manufacturing/qc-checkpoints', builder: (_, __) => _deferred('_s018', _s018.loadLibrary, () => _s018.ErpQcCheckpointsScreen())),
+      GoRoute(path: '/manufacturing/qc-station', builder: (_, __) => _deferred('_s019', _s019.loadLibrary, () => _s019.ErpQcStationScreen())),
+      GoRoute(path: '/manufacturing/job-kiosk', builder: (_, __) => _deferred('_s020', _s020.loadLibrary, () => _s020.ErpJobKioskScreen())),
+      GoRoute(path: '/manufacturing/duty-roster', builder: (_, __) => _deferred('_s146', _s146.loadLibrary, () => _s146.ErpDutyRosterScreen())),
+      GoRoute(path: '/manufacturing/label-printing', builder: (_, __) => _deferred('_s154', _s154.loadLibrary, () => _s154.ErpLabelPrintingScreen())),
+      GoRoute(path: '/manufacturing/production-floor', builder: (_, __) => _deferred('_s021', _s021.loadLibrary, () => _s021.ErpProductionFloorScreen())),
       // Registered in the permission registry (so it rendered as a menu item)
       // but had no GoRoute — same pre-existing gap as the HR attendance screens.
-      GoRoute(path: '/manufacturing/production-plan', builder: (_, __) => _deferred(_s022.loadLibrary(), () => _s022.ErpProductionPlanScreen())),
-      GoRoute(path: '/intelligence/report-builder', builder: (_, __) => _deferred(_s023.loadLibrary(), () => _s023.ErpReportBuilderScreen())),
-      GoRoute(path: '/reports/center', builder: (_, __) => _deferred(_s024.loadLibrary(), () => _s024.ReportsCenterScreen())),
-      GoRoute(path: '/reports/margin', builder: (_, __) => _deferred(_s025.loadLibrary(), () => _s025.ErpMarginReportScreen())),
-      GoRoute(path: '/erp/customer-balance-report', builder: (_, __) => _deferred(_s026.loadLibrary(), () => _s026.ErpCustomerBalanceReportScreen())),
-      GoRoute(path: '/erp/supplier-balance-report', builder: (_, __) => _deferred(_s027.loadLibrary(), () => _s027.ErpSupplierBalanceReportScreen())),
-      GoRoute(path: '/reports/skipped-receipts', builder: (_, __) => _deferred(_s028.loadLibrary(), () => _s028.ErpSkippedReceiptsReportScreen())),
-      GoRoute(path: '/reports/receipt-books', builder: (_, __) => _deferred(_s159.loadLibrary(), () => _s159.ErpReceiptBooksScreen())),
-      GoRoute(path: '/reports/collections', builder: (_, __) => _deferred(_s145.loadLibrary(), () => _s145.ErpCollectionReportScreen())),
-      GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => _deferred(_s012.loadLibrary(), () => _s012.ErpProductionInverseVoucherScreen())),
-      GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => _deferred(_s013.loadLibrary(), () => _s013.ErpDamageStockVoucherScreen())),
-      GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => _deferred(_s014.loadLibrary(), () => _s014.ErpClaimProcessingVoucherScreen())),
-      GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => _deferred(_s015.loadLibrary(), () => _s015.ErpProductionWasteReportScreen())),
-      GoRoute(path: '/manufacturing/production-report', builder: (_, __) => _deferred(_s149.loadLibrary(), () => _s149.ErpProductionReportScreen())),
-      GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => _deferred(_s016.loadLibrary(), () => _s016.ErpOverheadsSummaryScreen())),
-      GoRoute(path: '/hr/employees', builder: (_, state) => _deferred(_s030.loadLibrary(), () => _s030.HrEmployeesScreen(focusId: state.uri.queryParameters['focus']))),
-      GoRoute(path: '/hr/setup', builder: (_, state) => _deferred(_s150.loadLibrary(), () => _s150.HrSetupScreen(initialTab: state.uri.queryParameters['tab']))),
-      GoRoute(path: '/hr/employee-attendance', builder: (_, state) => _deferred(_s031.loadLibrary(), () => _s031.HrEmployeeAttendanceScreen(empId: state.uri.queryParameters['emp'] ?? ''))),
-      GoRoute(path: '/hr/attendance', builder: (_, __) => _deferred(_s036.loadLibrary(), () => _s036.HrAttendanceScreen())),
-      GoRoute(path: '/hr/attendance-review', builder: (_, __) => _deferred(_s032.loadLibrary(), () => _s032.HrAttendanceReviewScreen())),
+      GoRoute(path: '/manufacturing/production-plan', builder: (_, __) => _deferred('_s022', _s022.loadLibrary, () => _s022.ErpProductionPlanScreen())),
+      GoRoute(path: '/intelligence/report-builder', builder: (_, __) => _deferred('_s023', _s023.loadLibrary, () => _s023.ErpReportBuilderScreen())),
+      GoRoute(path: '/reports/center', builder: (_, __) => _deferred('_s024', _s024.loadLibrary, () => _s024.ReportsCenterScreen())),
+      GoRoute(path: '/reports/margin', builder: (_, __) => _deferred('_s025', _s025.loadLibrary, () => _s025.ErpMarginReportScreen())),
+      GoRoute(path: '/erp/customer-balance-report', builder: (_, __) => _deferred('_s026', _s026.loadLibrary, () => _s026.ErpCustomerBalanceReportScreen())),
+      GoRoute(path: '/erp/supplier-balance-report', builder: (_, __) => _deferred('_s027', _s027.loadLibrary, () => _s027.ErpSupplierBalanceReportScreen())),
+      GoRoute(path: '/reports/skipped-receipts', builder: (_, __) => _deferred('_s028', _s028.loadLibrary, () => _s028.ErpSkippedReceiptsReportScreen())),
+      GoRoute(path: '/reports/receipt-books', builder: (_, __) => _deferred('_s159', _s159.loadLibrary, () => _s159.ErpReceiptBooksScreen())),
+      GoRoute(path: '/reports/collections', builder: (_, __) => _deferred('_s145', _s145.loadLibrary, () => _s145.ErpCollectionReportScreen())),
+      GoRoute(path: '/manufacturing/production-inverse-voucher', builder: (_, __) => _deferred('_s012', _s012.loadLibrary, () => _s012.ErpProductionInverseVoucherScreen())),
+      GoRoute(path: '/manufacturing/damage-stock-voucher', builder: (_, __) => _deferred('_s013', _s013.loadLibrary, () => _s013.ErpDamageStockVoucherScreen())),
+      GoRoute(path: '/manufacturing/claim-processing-voucher', builder: (_, __) => _deferred('_s014', _s014.loadLibrary, () => _s014.ErpClaimProcessingVoucherScreen())),
+      GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => _deferred('_s015', _s015.loadLibrary, () => _s015.ErpProductionWasteReportScreen())),
+      GoRoute(path: '/manufacturing/production-report', builder: (_, __) => _deferred('_s149', _s149.loadLibrary, () => _s149.ErpProductionReportScreen())),
+      GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => _deferred('_s016', _s016.loadLibrary, () => _s016.ErpOverheadsSummaryScreen())),
+      GoRoute(path: '/hr/employees', builder: (_, state) => _deferred('_s030', _s030.loadLibrary, () => _s030.HrEmployeesScreen(focusId: state.uri.queryParameters['focus']))),
+      GoRoute(path: '/hr/setup', builder: (_, state) => _deferred('_s150', _s150.loadLibrary, () => _s150.HrSetupScreen(initialTab: state.uri.queryParameters['tab']))),
+      GoRoute(path: '/hr/employee-attendance', builder: (_, state) => _deferred('_s031', _s031.loadLibrary, () => _s031.HrEmployeeAttendanceScreen(empId: state.uri.queryParameters['emp'] ?? ''))),
+      GoRoute(path: '/hr/attendance', builder: (_, __) => _deferred('_s036', _s036.loadLibrary, () => _s036.HrAttendanceScreen())),
+      GoRoute(path: '/hr/attendance-review', builder: (_, __) => _deferred('_s032', _s032.loadLibrary, () => _s032.HrAttendanceReviewScreen())),
       // These two screens existed and were registered in the permission registry
       // (so they rendered as menu items) but had no GoRoute — clicking them threw
       // "no routes for location". Pre-existing gap, not introduced by the Files work.
-      GoRoute(path: '/hr/attendance-kiosk', builder: (_, __) => _deferred(_s035.loadLibrary(), () => _s035.HrAttendanceKioskScreen())),
-      GoRoute(path: '/hr/attendance-board', builder: (_, __) => _deferred(_s034.loadLibrary(), () => _s034.HrAttendanceBoardScreen())),
-      GoRoute(path: '/hr/leave', builder: (_, state) => _deferred(_s037.loadLibrary(), () => _s037.HrLeaveScreen(focusId: state.uri.queryParameters['focus']))),
-      GoRoute(path: '/hr/payroll', builder: (_, state) => _deferred(_s033.loadLibrary(), () => _s033.HrPayrollScreen(focusId: state.uri.queryParameters['focus']))),
-      GoRoute(path: '/erp/customer-ledger', builder: (_, __) => _deferred(_s119.loadLibrary(), () => _s119.ErpCustomerLedgerScreen())),
-          GoRoute(path: '/erp/inventory-ledger', builder: (_, s) => _deferred(_s120.loadLibrary(), () => _s120.ErpInventoryLedgerScreen(focusProductId: s.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/price-list', builder: (_, __) => _deferred(_s122.loadLibrary(), () => _s122.ErpPriceListScreen())),
-          GoRoute(path: '/erp/fg-without-bom', builder: (_, __) => _deferred(_s121.loadLibrary(), () => _s121.ErpFgWithoutBomScreen())),
-          GoRoute(path: '/erp/quotation', builder: (_, __) => _deferred(_s123.loadLibrary(), () => _s123.ErpQuotationScreen())),
+      GoRoute(path: '/hr/attendance-kiosk', builder: (_, __) => _deferred('_s035', _s035.loadLibrary, () => _s035.HrAttendanceKioskScreen())),
+      GoRoute(path: '/hr/attendance-board', builder: (_, __) => _deferred('_s034', _s034.loadLibrary, () => _s034.HrAttendanceBoardScreen())),
+      GoRoute(path: '/hr/leave', builder: (_, state) => _deferred('_s037', _s037.loadLibrary, () => _s037.HrLeaveScreen(focusId: state.uri.queryParameters['focus']))),
+      GoRoute(path: '/hr/payroll', builder: (_, state) => _deferred('_s033', _s033.loadLibrary, () => _s033.HrPayrollScreen(focusId: state.uri.queryParameters['focus']))),
+      GoRoute(path: '/erp/customer-ledger', builder: (_, __) => _deferred('_s119', _s119.loadLibrary, () => _s119.ErpCustomerLedgerScreen())),
+          GoRoute(path: '/erp/inventory-ledger', builder: (_, s) => _deferred('_s120', _s120.loadLibrary, () => _s120.ErpInventoryLedgerScreen(focusProductId: s.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/price-list', builder: (_, __) => _deferred('_s122', _s122.loadLibrary, () => _s122.ErpPriceListScreen())),
+          GoRoute(path: '/erp/fg-without-bom', builder: (_, __) => _deferred('_s121', _s121.loadLibrary, () => _s121.ErpFgWithoutBomScreen())),
+          GoRoute(path: '/erp/quotation', builder: (_, __) => _deferred('_s123', _s123.loadLibrary, () => _s123.ErpQuotationScreen())),
           // Moved to Manufacturing; old links still work.
           GoRoute(path: '/erp/quick-costing', redirect: (_, __) => '/manufacturing/quick-costing'),
-          GoRoute(path: '/erp/demand-plan', builder: (_, __) => _deferred(_s127.loadLibrary(), () => _s127.ErpDemandPlanScreen())),
-          GoRoute(path: '/erp/pos-config', builder: (_, __) => _deferred(_s129.loadLibrary(), () => _s129.ErpPosConfigScreen())),
-          GoRoute(path: '/erp/pos-catalog', builder: (_, __) => _deferred(_s128.loadLibrary(), () => _s128.ErpPosCatalogScreen())),
-          GoRoute(path: '/erp/pos-customer-history', builder: (_, __) => _deferred(_s130.loadLibrary(), () => _s130.ErpPosCustomerHistoryScreen())),
-          GoRoute(path: '/erp/pos-held-bills', builder: (_, __) => _deferred(_s131.loadLibrary(), () => _s131.ErpPosHeldBillsScreen())),
-          GoRoute(path: '/erp/pos-expense-management', builder: (_, __) => _deferred(_s132.loadLibrary(), () => _s132.ErpPosExpenseManagementScreen())),
-          GoRoute(path: '/erp/delivery-orders', builder: (_, state) => _deferred(_s093.loadLibrary(), () => _s093.ErpDeliveryOrdersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/sales-invoices', builder: (_, state) => _deferred(_s093.loadLibrary(), () => _s093.ErpSalesInvoicesScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/grn', builder: (_, state) => _deferred(_s091.loadLibrary(), () => _s091.ErpGrnScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/purchase-invoices', builder: (_, state) => _deferred(_s092.loadLibrary(), () => _s092.ErpPurchaseInvoicesScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/branches', builder: (_, __) => _deferred(_s087.loadLibrary(), () => _s087.ErpBranchesScreen())),
-          GoRoute(path: '/erp/uoms',      builder: (_, __) => _deferred(_s088.loadLibrary(), () => _s088.ErpUomsScreen())),
-          GoRoute(path: '/erp/stock',     builder: (_, __) => _deferred(_s089.loadLibrary(), () => _s089.ErpStockScreen())),
-          GoRoute(path: '/erp/suppliers', builder: (_, state) => _deferred(_s103.loadLibrary(), () => _s103.ErpSuppliersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/purchase',  builder: (_, state) => _deferred(_s090.loadLibrary(), () => _s090.ErpPurchaseScreen(
+          GoRoute(path: '/erp/demand-plan', builder: (_, __) => _deferred('_s127', _s127.loadLibrary, () => _s127.ErpDemandPlanScreen())),
+          GoRoute(path: '/erp/pos-config', builder: (_, __) => _deferred('_s129', _s129.loadLibrary, () => _s129.ErpPosConfigScreen())),
+          GoRoute(path: '/erp/pos-catalog', builder: (_, __) => _deferred('_s128', _s128.loadLibrary, () => _s128.ErpPosCatalogScreen())),
+          GoRoute(path: '/erp/pos-customer-history', builder: (_, __) => _deferred('_s130', _s130.loadLibrary, () => _s130.ErpPosCustomerHistoryScreen())),
+          GoRoute(path: '/erp/pos-held-bills', builder: (_, __) => _deferred('_s131', _s131.loadLibrary, () => _s131.ErpPosHeldBillsScreen())),
+          GoRoute(path: '/erp/pos-expense-management', builder: (_, __) => _deferred('_s132', _s132.loadLibrary, () => _s132.ErpPosExpenseManagementScreen())),
+          GoRoute(path: '/erp/delivery-orders', builder: (_, state) => _deferred('_s093', _s093.loadLibrary, () => _s093.ErpDeliveryOrdersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/sales-invoices', builder: (_, state) => _deferred('_s093', _s093.loadLibrary, () => _s093.ErpSalesInvoicesScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/grn', builder: (_, state) => _deferred('_s091', _s091.loadLibrary, () => _s091.ErpGrnScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/purchase-invoices', builder: (_, state) => _deferred('_s092', _s092.loadLibrary, () => _s092.ErpPurchaseInvoicesScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/branches', builder: (_, __) => _deferred('_s087', _s087.loadLibrary, () => _s087.ErpBranchesScreen())),
+          GoRoute(path: '/erp/uoms',      builder: (_, __) => _deferred('_s088', _s088.loadLibrary, () => _s088.ErpUomsScreen())),
+          GoRoute(path: '/erp/stock',     builder: (_, __) => _deferred('_s089', _s089.loadLibrary, () => _s089.ErpStockScreen())),
+          GoRoute(path: '/erp/suppliers', builder: (_, state) => _deferred('_s103', _s103.loadLibrary, () => _s103.ErpSuppliersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/purchase',  builder: (_, state) => _deferred('_s090', _s090.loadLibrary, () => _s090.ErpPurchaseScreen(
             focusId: state.uri.queryParameters['focus'],
             seedProductId: state.uri.queryParameters['seedProduct'],
             seedQty: state.uri.queryParameters['seedQty'],
             seedBranchId: state.uri.queryParameters['seedBranch']))),
-          GoRoute(path: '/erp/sales',     builder: (_, state) => _deferred(_s093.loadLibrary(), () => _s093.ErpSalesScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/dispatch-summary', builder: (_, __) => _deferred(_s125.loadLibrary(), () => _s125.ErpDispatchSummaryScreen())),
-          GoRoute(path: '/erp/schemes',   builder: (_, __) => _deferred(_s124.loadLibrary(), () => _s124.ErpSchemesScreen())),
-          GoRoute(path: '/erp/schemes-report', builder: (_, __) => _deferred(_s126.loadLibrary(), () => _s126.ErpSchemesReportScreen())),
-          GoRoute(path: '/erp/field-orders', builder: (_, state) => _deferred(_s094.loadLibrary(), () => _s094.ErpFieldOrdersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/discounts', builder: (_, __) => _deferred(_s164.loadLibrary(), () => _s164.ErpDiscountPoliciesScreen())),
-          GoRoute(path: '/erp/field-returns', builder: (_, state) => _deferred(_s163.loadLibrary(), () => _s163.ErpFieldReturnsScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/fulfillment', builder: (_, state) => _deferred(_s155.loadLibrary(), () => _s155.ErpFulfillmentScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/retailer-orders', builder: (_, state) => _deferred(_s095.loadLibrary(), () => _s095.ErpRetailerOrdersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/sales-report', builder: (_, __) => _deferred(_s096.loadLibrary(), () => _s096.ErpSalesReportScreen())),
-          GoRoute(path: '/erp/sale-vs-recovery', builder: (_, __) => _deferred(_s142.loadLibrary(), () => _s142.ErpSaleVsRecoveryScreen())),
-          GoRoute(path: '/erp/sales-return-report', builder: (_, __) => _deferred(_s097.loadLibrary(), () => _s097.ErpSalesReturnReportScreen())),
-          GoRoute(path: '/erp/sales-dashboard', builder: (_, __) => _deferred(_s098.loadLibrary(), () => _s098.ErpSalesDashboardScreen())),
-          GoRoute(path: '/erp/purchase-dashboard', builder: (_, __) => _deferred(_s098.loadLibrary(), () => _s098.ErpPurchaseDashboardScreen())),
-          GoRoute(path: '/erp/purchase-report', builder: (_, __) => _deferred(_s104.loadLibrary(), () => _s104.ErpPurchaseReportScreen())),
-          GoRoute(path: '/erp/pending-po-items', builder: (_, __) => _deferred(_s153.loadLibrary(), () => _s153.ErpPendingPoItemsScreen())),
-          GoRoute(path: '/erp/purchase-variance', builder: (_, __) => _deferred(_s105.loadLibrary(), () => _s105.ErpPurchaseVarianceScreen())),
-          GoRoute(path: '/erp/sales-returns', builder: (_, __) => _deferred(_s136.loadLibrary(), () => _s136.ErpSalesReturnsScreen())),
-          GoRoute(path: '/erp/purchase-returns', builder: (_, __) => _deferred(_s137.loadLibrary(), () => _s137.ErpPurchaseReturnsScreen())),
-          GoRoute(path: '/erp/sales-return-invoices', builder: (_, state) => _deferred(_s138.loadLibrary(), () => _s138.ErpSalesReturnInvoicesScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/purchase-return-vouchers', builder: (_, state) => _deferred(_s139.loadLibrary(), () => _s139.ErpPurchaseReturnVouchersScreen(focusId: state.uri.queryParameters['focus']))),
-          GoRoute(path: '/erp/customer-aging', builder: (_, __) => _deferred(_s133.loadLibrary(), () => _s133.ErpCustomerAgingScreen())),
-          GoRoute(path: '/erp/supplier-aging', builder: (_, __) => _deferred(_s135.loadLibrary(), () => _s135.ErpSupplierAgingScreen())),
-          GoRoute(path: '/erp/pos',       builder: (_, __) => _deferred(_s099.loadLibrary(), () => _s099.ErpPosScreen())),
-          GoRoute(path: '/erp/promoters', builder: (_, __) => _deferred(_s100.loadLibrary(), () => _s100.ErpPromotersScreen())),
-          GoRoute(path: '/erp/promoter-ledger', builder: (_, __) => _deferred(_s101.loadLibrary(), () => _s101.ErpPromoterLedgerScreen())),
-          GoRoute(path: '/erp/chart-of-accounts', builder: (_, __) => _deferred(_s102.loadLibrary(), () => _s102.ErpChartOfAccountsScreen())),
+          GoRoute(path: '/erp/sales',     builder: (_, state) => _deferred('_s093', _s093.loadLibrary, () => _s093.ErpSalesScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/dispatch-summary', builder: (_, __) => _deferred('_s125', _s125.loadLibrary, () => _s125.ErpDispatchSummaryScreen())),
+          GoRoute(path: '/erp/schemes',   builder: (_, __) => _deferred('_s124', _s124.loadLibrary, () => _s124.ErpSchemesScreen())),
+          GoRoute(path: '/erp/schemes-report', builder: (_, __) => _deferred('_s126', _s126.loadLibrary, () => _s126.ErpSchemesReportScreen())),
+          GoRoute(path: '/erp/field-orders', builder: (_, state) => _deferred('_s094', _s094.loadLibrary, () => _s094.ErpFieldOrdersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/discounts', builder: (_, __) => _deferred('_s164', _s164.loadLibrary, () => _s164.ErpDiscountPoliciesScreen())),
+          GoRoute(path: '/erp/field-returns', builder: (_, state) => _deferred('_s163', _s163.loadLibrary, () => _s163.ErpFieldReturnsScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/fulfillment', builder: (_, state) => _deferred('_s155', _s155.loadLibrary, () => _s155.ErpFulfillmentScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/retailer-orders', builder: (_, state) => _deferred('_s095', _s095.loadLibrary, () => _s095.ErpRetailerOrdersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/sales-report', builder: (_, __) => _deferred('_s096', _s096.loadLibrary, () => _s096.ErpSalesReportScreen())),
+          GoRoute(path: '/erp/sale-vs-recovery', builder: (_, __) => _deferred('_s142', _s142.loadLibrary, () => _s142.ErpSaleVsRecoveryScreen())),
+          GoRoute(path: '/erp/sales-return-report', builder: (_, __) => _deferred('_s097', _s097.loadLibrary, () => _s097.ErpSalesReturnReportScreen())),
+          GoRoute(path: '/erp/sales-dashboard', builder: (_, __) => _deferred('_s098', _s098.loadLibrary, () => _s098.ErpSalesDashboardScreen())),
+          GoRoute(path: '/erp/purchase-dashboard', builder: (_, __) => _deferred('_s098', _s098.loadLibrary, () => _s098.ErpPurchaseDashboardScreen())),
+          GoRoute(path: '/erp/purchase-report', builder: (_, __) => _deferred('_s104', _s104.loadLibrary, () => _s104.ErpPurchaseReportScreen())),
+          GoRoute(path: '/erp/pending-po-items', builder: (_, __) => _deferred('_s153', _s153.loadLibrary, () => _s153.ErpPendingPoItemsScreen())),
+          GoRoute(path: '/erp/purchase-variance', builder: (_, __) => _deferred('_s105', _s105.loadLibrary, () => _s105.ErpPurchaseVarianceScreen())),
+          GoRoute(path: '/erp/sales-returns', builder: (_, __) => _deferred('_s136', _s136.loadLibrary, () => _s136.ErpSalesReturnsScreen())),
+          GoRoute(path: '/erp/purchase-returns', builder: (_, __) => _deferred('_s137', _s137.loadLibrary, () => _s137.ErpPurchaseReturnsScreen())),
+          GoRoute(path: '/erp/sales-return-invoices', builder: (_, state) => _deferred('_s138', _s138.loadLibrary, () => _s138.ErpSalesReturnInvoicesScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/purchase-return-vouchers', builder: (_, state) => _deferred('_s139', _s139.loadLibrary, () => _s139.ErpPurchaseReturnVouchersScreen(focusId: state.uri.queryParameters['focus']))),
+          GoRoute(path: '/erp/customer-aging', builder: (_, __) => _deferred('_s133', _s133.loadLibrary, () => _s133.ErpCustomerAgingScreen())),
+          GoRoute(path: '/erp/supplier-aging', builder: (_, __) => _deferred('_s135', _s135.loadLibrary, () => _s135.ErpSupplierAgingScreen())),
+          GoRoute(path: '/erp/pos',       builder: (_, __) => _deferred('_s099', _s099.loadLibrary, () => _s099.ErpPosScreen())),
+          GoRoute(path: '/erp/promoters', builder: (_, __) => _deferred('_s100', _s100.loadLibrary, () => _s100.ErpPromotersScreen())),
+          GoRoute(path: '/erp/promoter-ledger', builder: (_, __) => _deferred('_s101', _s101.loadLibrary, () => _s101.ErpPromoterLedgerScreen())),
+          GoRoute(path: '/erp/chart-of-accounts', builder: (_, __) => _deferred('_s102', _s102.loadLibrary, () => _s102.ErpChartOfAccountsScreen())),
         ],
       ),
     ],
   );
+  // Remember the screens each user opens, for "Jump back in" on the home page.
+  String? lastPath;
+  void track() {
+    try {
+      final path = router.routerDelegate.currentConfiguration.uri.path;
+      if (path == lastPath) return;
+      lastPath = path;
+      RecentScreens.record(ref.read(currentUserProvider)?.id, path);
+    } catch (_) {}
+  }
+  router.routerDelegate.addListener(track);
+  ref.onDispose(() => router.routerDelegate.removeListener(track));
+  return router;
 });
 
 
@@ -683,64 +705,89 @@ class _BootSplash extends StatelessWidget {
       );
 }
 
-Widget _deferred(Future<void> load, Widget Function() make) =>
-    _DeferredScreen(load: load, make: make);
+Widget _deferred(String key, Future<void> Function() load, Widget Function() make) =>
+    _DeferredScreen(key: ValueKey('deferred:$key'), id: key, load: load, make: make);
 
-class _DeferredScreen extends StatelessWidget {
-  final Future<void> load;
+/// Screens whose code has already downloaded in this tab. Once loaded, the
+/// screen is built straight away — no loading splash, and a router refresh
+/// (token refresh, permissions reload…) no longer tears the open screen down
+/// and shows the loader again.
+final Set<String> _loadedScreens = <String>{};
+
+class _DeferredScreen extends StatefulWidget {
+  final String id;
+  final Future<void> Function() load;
   final Widget Function() make;
-  const _DeferredScreen({required this.load, required this.make});
+  const _DeferredScreen({super.key, required this.id, required this.load, required this.make});
   @override
-  Widget build(BuildContext context) => FutureBuilder<void>(
-        future: load,
-        builder: (_, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const _BootSplash();
-          }
-          if (snap.hasError) {
-            // A deferred code chunk failed to load. Usual cause: this tab (or
-            // the service-worker cache) is running an older main.dart.js while
-            // the server already has a newer build's chunks — chunk filenames
-            // are not content-hashed, so old code + new chunk don't match.
-            // Recover automatically ONCE per minute with a clean reload
-            // (drops the stale SW); if it happens again right away, fall back
-            // to the manual button so we can never loop.
-            _appReady();
-            if (_claimAutoReload()) {
-              Future.microtask(_hardReload);
-              return const Scaffold(
-                  body: Center(child: CircularProgressIndicator()));
-            }
-            return Scaffold(
-              body: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.refresh, size: 36),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'This screen could not load. Opstation may have been '
-                        'updated, or the connection dropped — reload to continue.',
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: _hardReload,
-                        icon: const Icon(Icons.refresh, size: 18),
-                        label: const Text('Reload'),
-                      ),
-                    ],
-                  ),
-                ),
+  State<_DeferredScreen> createState() => _DeferredScreenState();
+}
+
+class _DeferredScreenState extends State<_DeferredScreen> {
+  late bool _ready = _loadedScreens.contains(widget.id);
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_ready) {
+      widget.load().then((_) {
+        _loadedScreens.add(widget.id);
+        if (mounted) setState(() => _ready = true);
+      }, onError: (Object _) {
+        if (mounted) setState(() => _failed = true);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_ready) {
+      _appReady();
+      return widget.make();
+    }
+    // The very first screen sits under index.html's loading screen. After
+    // that, a screen still downloading shows only a thin bar at the top —
+    // never the full logo loader, which looks like the app restarted.
+    if (!_failed) return _readySent ? const _LightLoader() : const _BootSplash();
+    // A deferred code chunk failed to load. Usual cause: this tab (or the
+    // service-worker cache) is running an older main.dart.js while the server
+    // already has a newer build's chunks — chunk filenames are not
+    // content-hashed, so old code + new chunk don't match. Recover
+    // automatically ONCE per minute with a clean reload (drops the stale SW);
+    // if it happens again right away, fall back to the manual button so we
+    // can never loop.
+    _appReady();
+    if (_claimAutoReload()) {
+      Future.microtask(_hardReload);
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.refresh, size: 36),
+              const SizedBox(height: 12),
+              const Text(
+                'This screen could not load. Opstation may have been '
+                'updated, or the connection dropped — reload to continue.',
+                textAlign: TextAlign.center,
               ),
-            );
-          }
-          _appReady();
-          return make();
-        },
-      );
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _hardReload,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Reload'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Tells the loading screen in index.html that a real screen is on show, so
@@ -754,6 +801,213 @@ void _appReady() {
     try {
       html.window.dispatchEvent(html.Event('opstation-ready'));
     } catch (_) {}
+  });
+  _preloadScreens();
+}
+
+/// Thin progress bar shown while a not-yet-downloaded screen loads.
+class _LightLoader extends StatelessWidget {
+  const _LightLoader();
+  @override
+  Widget build(BuildContext context) => const Align(
+        alignment: Alignment.topCenter,
+        child: LinearProgressIndicator(minHeight: 2),
+      );
+}
+
+/// Every screen's code, so it can be fetched quietly in the background.
+final Map<String, Future<void> Function()> _allScreens = {
+  '_s001': _s001.loadLibrary,
+  '_s002': _s002.loadLibrary,
+  '_s003': _s003.loadLibrary,
+  '_s004': _s004.loadLibrary,
+  '_s005': _s005.loadLibrary,
+  '_s006': _s006.loadLibrary,
+  '_s007': _s007.loadLibrary,
+  '_s008': _s008.loadLibrary,
+  '_s009': _s009.loadLibrary,
+  '_s010': _s010.loadLibrary,
+  '_s011': _s011.loadLibrary,
+  '_s012': _s012.loadLibrary,
+  '_s013': _s013.loadLibrary,
+  '_s014': _s014.loadLibrary,
+  '_s015': _s015.loadLibrary,
+  '_s016': _s016.loadLibrary,
+  '_s017': _s017.loadLibrary,
+  '_s018': _s018.loadLibrary,
+  '_s019': _s019.loadLibrary,
+  '_s020': _s020.loadLibrary,
+  '_s021': _s021.loadLibrary,
+  '_s022': _s022.loadLibrary,
+  '_s023': _s023.loadLibrary,
+  '_s024': _s024.loadLibrary,
+  '_s025': _s025.loadLibrary,
+  '_s026': _s026.loadLibrary,
+  '_s027': _s027.loadLibrary,
+  '_s028': _s028.loadLibrary,
+  '_s029': _s029.loadLibrary,
+  '_s030': _s030.loadLibrary,
+  '_s031': _s031.loadLibrary,
+  '_s032': _s032.loadLibrary,
+  '_s033': _s033.loadLibrary,
+  '_s034': _s034.loadLibrary,
+  '_s035': _s035.loadLibrary,
+  '_s036': _s036.loadLibrary,
+  '_s037': _s037.loadLibrary,
+  '_s038': _s038.loadLibrary,
+  '_s039': _s039.loadLibrary,
+  '_s040': _s040.loadLibrary,
+  '_s041': _s041.loadLibrary,
+  '_s042': _s042.loadLibrary,
+  '_s043': _s043.loadLibrary,
+  '_s044': _s044.loadLibrary,
+  '_s045': _s045.loadLibrary,
+  '_s046': _s046.loadLibrary,
+  '_s047': _s047.loadLibrary,
+  '_s048': _s048.loadLibrary,
+  '_s049': _s049.loadLibrary,
+  '_s050': _s050.loadLibrary,
+  '_s051': _s051.loadLibrary,
+  '_s052': _s052.loadLibrary,
+  '_s053': _s053.loadLibrary,
+  '_s054': _s054.loadLibrary,
+  '_s055': _s055.loadLibrary,
+  '_s056': _s056.loadLibrary,
+  '_s057': _s057.loadLibrary,
+  '_s058': _s058.loadLibrary,
+  '_s140': _s140.loadLibrary,
+  '_s141': _s141.loadLibrary,
+  '_s142': _s142.loadLibrary,
+  '_s059': _s059.loadLibrary,
+  '_s060': _s060.loadLibrary,
+  '_s061': _s061.loadLibrary,
+  '_s062': _s062.loadLibrary,
+  '_s063': _s063.loadLibrary,
+  '_s064': _s064.loadLibrary,
+  '_s065': _s065.loadLibrary,
+  '_s066': _s066.loadLibrary,
+  '_s067': _s067.loadLibrary,
+  '_s068': _s068.loadLibrary,
+  '_s069': _s069.loadLibrary,
+  '_s070': _s070.loadLibrary,
+  '_s071': _s071.loadLibrary,
+  '_s072': _s072.loadLibrary,
+  '_s073': _s073.loadLibrary,
+  '_s074': _s074.loadLibrary,
+  '_s075': _s075.loadLibrary,
+  '_s076': _s076.loadLibrary,
+  '_s077': _s077.loadLibrary,
+  '_s078': _s078.loadLibrary,
+  '_s079': _s079.loadLibrary,
+  '_s080': _s080.loadLibrary,
+  '_s081': _s081.loadLibrary,
+  '_s082': _s082.loadLibrary,
+  '_s083': _s083.loadLibrary,
+  '_s084': _s084.loadLibrary,
+  '_s085': _s085.loadLibrary,
+  '_s086': _s086.loadLibrary,
+  '_s087': _s087.loadLibrary,
+  '_s088': _s088.loadLibrary,
+  '_s089': _s089.loadLibrary,
+  '_s090': _s090.loadLibrary,
+  '_s091': _s091.loadLibrary,
+  '_s092': _s092.loadLibrary,
+  '_s093': _s093.loadLibrary,
+  '_s094': _s094.loadLibrary,
+  '_s095': _s095.loadLibrary,
+  '_s096': _s096.loadLibrary,
+  '_s097': _s097.loadLibrary,
+  '_s098': _s098.loadLibrary,
+  '_s099': _s099.loadLibrary,
+  '_s100': _s100.loadLibrary,
+  '_s101': _s101.loadLibrary,
+  '_s102': _s102.loadLibrary,
+  '_s103': _s103.loadLibrary,
+  '_s104': _s104.loadLibrary,
+  '_s105': _s105.loadLibrary,
+  '_s106': _s106.loadLibrary,
+  '_s107': _s107.loadLibrary,
+  '_s108': _s108.loadLibrary,
+  '_s109': _s109.loadLibrary,
+  '_s110': _s110.loadLibrary,
+  '_s111': _s111.loadLibrary,
+  '_s112': _s112.loadLibrary,
+  '_s113': _s113.loadLibrary,
+  '_s114': _s114.loadLibrary,
+  '_s115': _s115.loadLibrary,
+  '_s116': _s116.loadLibrary,
+  '_s117': _s117.loadLibrary,
+  '_s118': _s118.loadLibrary,
+  '_s119': _s119.loadLibrary,
+  '_s120': _s120.loadLibrary,
+  '_s121': _s121.loadLibrary,
+  '_s122': _s122.loadLibrary,
+  '_s123': _s123.loadLibrary,
+  '_s124': _s124.loadLibrary,
+  '_s125': _s125.loadLibrary,
+  '_s126': _s126.loadLibrary,
+  '_s127': _s127.loadLibrary,
+  '_s128': _s128.loadLibrary,
+  '_s129': _s129.loadLibrary,
+  '_s130': _s130.loadLibrary,
+  '_s131': _s131.loadLibrary,
+  '_s132': _s132.loadLibrary,
+  '_s133': _s133.loadLibrary,
+  '_s134': _s134.loadLibrary,
+  '_s135': _s135.loadLibrary,
+  '_s136': _s136.loadLibrary,
+  '_s137': _s137.loadLibrary,
+  '_s138': _s138.loadLibrary,
+  '_s139': _s139.loadLibrary,
+  '_s143': _s143.loadLibrary,
+  '_s144': _s144.loadLibrary,
+  '_s145': _s145.loadLibrary,
+  '_s146': _s146.loadLibrary,
+  '_s147': _s147.loadLibrary,
+  '_s148': _s148.loadLibrary,
+  '_s149': _s149.loadLibrary,
+  '_s150': _s150.loadLibrary,
+  '_s151': _s151.loadLibrary,
+  '_s152': _s152.loadLibrary,
+  '_s165': _s165.loadLibrary,
+  '_s166': _s166.loadLibrary,
+  '_s153': _s153.loadLibrary,
+  '_s154': _s154.loadLibrary,
+  '_s155': _s155.loadLibrary,
+  '_s156': _s156.loadLibrary,
+  '_s157': _s157.loadLibrary,
+  '_s158': _s158.loadLibrary,
+  '_s159': _s159.loadLibrary,
+  '_s160': _s160.loadLibrary,
+  '_s161': _s161.loadLibrary,
+  '_s162': _s162.loadLibrary,
+  '_s163': _s163.loadLibrary,
+  '_s164': _s164.loadLibrary,
+  '_s167': _s167.loadLibrary,
+  '_s168': _s168.loadLibrary,
+  '_s169': _s169.loadLibrary,
+};
+
+/// Once the first screen is up, download the other screens' code one by one
+/// in the background, so moving between screens doesn't wait on a download.
+/// Startup stays as fast as before. Failures are ignored here — opening that
+/// screen later simply tries again (and handles a newer deploy).
+bool _preloadStarted = false;
+void _preloadScreens() {
+  if (_preloadStarted) return;
+  _preloadStarted = true;
+  Future<void>.delayed(const Duration(seconds: 3), () async {
+    for (final e in _allScreens.entries) {
+      if (_loadedScreens.contains(e.key)) continue;
+      try {
+        await e.value();
+        _loadedScreens.add(e.key);
+      } catch (_) {
+        // e.g. offline, or a new version was deployed — stop quietly.
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+    }
   });
 }
 

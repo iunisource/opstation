@@ -199,6 +199,8 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('logistics', 'Logistics', Icons.local_shipping_outlined, [
     PermItem('deliveries', 'Deliveries', PermKind.doc, '/deliveries'),
     PermItem('dispatch_orders', 'Dispatch Orders', PermKind.doc, '/dispatch-orders'),
+    PermItem('dispatch_dashboard', 'Dispatch Dashboard', PermKind.report, '/dispatch-dashboard'),
+    PermItem('fleet', 'Fleet', PermKind.doc, '/fleet'),
   ], moduleGated: false),
   // CRM is licensable in app_modules.dart but had no registry entry, so none
   // of its routes appeared in kRouteToModule and the menu showed for every

@@ -1,4 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../attendance/web_attendance_button.dart';
+import '../../features/fleet/fleet_common.dart' show fleetDueCountProvider;
 import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
@@ -1220,7 +1222,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ),
           actions: [
             _searchButton(context, user, _showFn(ref, user)),
-            const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
+            const WebAttendanceButton(), const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
             const SizedBox(width: 6),
           ],
         ),
@@ -1301,7 +1303,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
         child: Row(children: [
           const Spacer(),
-          const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
+          const WebAttendanceButton(), const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
         ]),
       ),
     ]);
@@ -1392,6 +1394,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final processorOverduePending = gate('/erp/processor-tracker', ref.watch(processorOverdueCountProvider).valueOrNull ?? 0);
   final integrityCount = gate('/erp/inventory-integrity', ref.watch(inventoryIntegrityCountProvider).valueOrNull ?? 0);
   final attReviewPending = gate('/hr/attendance-review', ref.watch(attendanceReviewPendingCountProvider).valueOrNull ?? 0);
+  final fleetDue = gate('/fleet', ref.watch(fleetDueCountProvider).valueOrNull ?? 0);
   final leavePending = gate('/hr/leave', ref.watch(leavePendingCountProvider).valueOrNull ?? 0);
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final batchTrackingOn = ref.watch(batchTrackingEnabledProvider).valueOrNull ?? false;
@@ -1691,14 +1694,19 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       // Logistics — Deliveries (incl. supplier pickups) + Dispatch Orders.
       // Permission-scoped via the registry, so any user granted either item
       // sees this menu — not only admin-tier or the dispatch-manager role.
-      if (modules.contains('logistics') && (show('/deliveries') || show('/dispatch-orders')))
+      if (modules.contains('logistics') && (show('/deliveries') || show('/dispatch-orders') || show('/dispatch-dashboard') || show('/fleet')))
         _navMenu(context, 'Logistics', Icons.local_shipping_outlined, location,
-          ['/deliveries', '/dispatch-orders'],
+          ['/deliveries', '/dispatch-orders', '/dispatch-dashboard', '/fleet'],
+          badge: show('/fleet') ? fleetDue : 0,
           [
+            if (show('/dispatch-dashboard'))
+              _menuItem(context, 'Dispatch Dashboard', Icons.map_outlined, '/dispatch-dashboard', location),
             if (show('/deliveries'))
               _menuItem(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
             if (show('/dispatch-orders'))
               _menuItem(context, 'Dispatch Orders', Icons.assignment_outlined, '/dispatch-orders', location),
+            if (show('/fleet'))
+              _menuItem(context, 'Fleet', Icons.directions_car_outlined, '/fleet', location, badge: fleetDue),
           ]),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
@@ -1774,8 +1782,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         ],
 
         if (isDispatch) ...[
+          _navButton(context, 'Dispatch Dashboard', Icons.map_outlined, '/dispatch-dashboard', location),
           _navButton(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
           _navButton(context, 'Dispatch Orders', Icons.assignment_outlined, '/dispatch-orders', location),
+          _navButton(context, 'Fleet', Icons.directions_car_outlined, '/fleet', location),
         ],
 
         if (isAccountant)
@@ -2473,7 +2483,7 @@ class _TopNav extends ConsumerWidget {
         const SizedBox(width: 4),
         _branchSelector(ref, modules),
         Container(width: 1, height: 28, color: Colors.white12),
-        const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 52)),
+        const WebAttendanceButton(), const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 52)),
       ]),
     );
   }
@@ -2648,7 +2658,7 @@ class _SideNav extends ConsumerWidget {
           child: Row(children: [
             _searchButton(context, user, show),
             const Spacer(),
-            const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
+            const WebAttendanceButton(), const NotificationBell(), _userMenu(context, ref, user, const Offset(0, 8)),
           ]),
         ),
         Padding(

@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import 'web_punch_screening.dart';
 
 /// Count of unreviewed absences (no punch + no approved leave, on working days)
 /// over the last 7 days ending yesterday. Drives the pendency badge on the
@@ -33,6 +34,12 @@ final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return 0;
   final client = Supabase.instance.client;
+  // Web check-ins waiting to be screened count as pending too.
+  int flags = 0;
+  try {
+    final f = await client.rpc('web_punch_flags_count', params: {'p_org': user.orgId});
+    flags = (f as num?)?.toInt() ?? 0;
+  } catch (_) {}
   try {
     String fmt(DateTime d) =>
         '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -51,7 +58,7 @@ final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
         .eq('org_id', user.orgId!).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false);
     final empIds = [for (final e in (emps as List)) e['id'] as String];
     final startById = {for (final e in (emps as List)) e['id'] as String: _reviewStartFor(e as Map)};
-    if (empIds.isEmpty) return 0;
+    if (empIds.isEmpty) return flags;
     final att = await client.from('hr_attendance')
         .select('employee_id, att_date, status, check_in, is_penalty, review_status')
         .eq('org_id', user.orgId!).gte('att_date', fmt(from)).lte('att_date', fmt(to));
@@ -80,9 +87,9 @@ final attendanceReviewPendingCountProvider = FutureProvider<int>((ref) async {
         count++;
       }
     }
-    return count;
+    return count + flags;
   } catch (_) {
-    return 0;
+    return flags;
   }
 });
 
@@ -643,6 +650,11 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
               : Column(children: [
                   _filterBar(),
                   const Divider(height: 1),
+                  // Web check-ins flagged for screening (SQL 461).
+                  WebPunchScreening(
+                    orgId: _orgId ?? '',
+                    onChanged: () => ref.invalidate(attendanceReviewPendingCountProvider),
+                  ),
                   if (_pending.isNotEmpty) _bulkBar(),
                   Expanded(child: _list()),
                   if (_working) const LinearProgressIndicator(minHeight: 2),

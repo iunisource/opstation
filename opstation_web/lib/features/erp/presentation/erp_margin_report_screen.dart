@@ -22,6 +22,9 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   String? _branchId;
   String? _customerId; String _customerLabel = '';
   String? _productId; String _productLabel = '';
+  // Admins only: one sales invoice, to see that invoice's margin.
+  String? _invoiceNo; String _invoiceLabel = '';
+  List<Map<String, dynamic>> _invoices = [];
   String? _group;
   String? _mainGroup;
   String? _subGroup;
@@ -46,6 +49,10 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   bool _sortAsc = true;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
+  bool get _isAdmin {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  }
 
   static const _money = MoneyFmt();
   static String _fmtMoney(num? v) => _money.format(v ?? 0);
@@ -60,6 +67,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadBranches(); _loadGroups(); _loadCustomers(); _loadProducts(); _loadUserName();
+      if (_isAdmin) _loadInvoices();
     });
   }
 
@@ -142,6 +150,38 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     } catch (_) {}
   }
 
+  Future<void> _loadInvoices() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final List<Map<String, dynamic>> all = [];
+      int from = 0; const page = 1000;
+      while (true) {
+        final rows = await Supabase.instance.client.from('sales_invoices')
+            .select('voucher_number, voucher_date, customers(shop_name)')
+            .eq('org_id', orgId).eq('is_voided', false)
+            .order('voucher_date', ascending: false).order('voucher_number', ascending: false)
+            .range(from, from + page - 1);
+        final list = List<Map<String, dynamic>>.from(rows);
+        all.addAll(list);
+        if (list.length < page) break;
+        from += page; if (from > 50000) break;
+      }
+      if (mounted) setState(() => _invoices = [
+        for (final r in all)
+          if ((r['voucher_number'] as String? ?? '').isNotEmpty)
+            {
+              'id': r['voucher_number'],
+              'date': r['voucher_date'],
+              'label': [
+                r['voucher_number'],
+                if (r['voucher_date'] != null) DateFormat('dd/MM/yyyy').format(DateTime.parse(r['voucher_date'] as String)),
+                if ((r['customers'] is Map) && ((r['customers'] as Map)['shop_name'] ?? '') != '') (r['customers'] as Map)['shop_name'],
+              ].join('  ·  '),
+            },
+      ]);
+    } catch (_) {}
+  }
+
   List<Map<String, dynamic>> _filter(List<Map<String, dynamic>> src, String q) {
     if (q.isEmpty) return src.take(60).toList();
     return src.where((e) => matchesQuery('${e['label'] ?? ''}', q)).take(200).toList();
@@ -159,6 +199,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       _to = DateTime.now();
       _branchId = null; _customerId = null; _customerLabel = '';
       _productId = null; _productLabel = ''; _group = null; _mainGroup = null; _subGroup = null;
+      _invoiceNo = null; _invoiceLabel = '';
       _rows = []; _hasRun = false; _search = '';
       _negCostOnly = false; _negMarginOnly = false;
     });
@@ -180,7 +221,9 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         'p_main_group': _mainGroup,
         'p_sub_group': _subGroup,
       });
-      final list = List<Map<String, dynamic>>.from((res as List?) ?? const []);
+      var list = List<Map<String, dynamic>>.from((res as List?) ?? const []);
+      final inv = _invoiceNo;
+      if (inv != null) list = list.where((r) => '${r['sale_number'] ?? ''}' == inv).toList();
       if (mounted) setState(() { _rows = list; _hasRun = true; _running = false; });
     } catch (e) {
       if (mounted) { _snack(friendlyError('Report failed', e)); setState(() => _running = false); }
@@ -258,6 +301,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
     if (_branchId != null) parts.add('Branch: ${_branches.firstWhere((b) => b['id'] == _branchId, orElse: () => {'name': _branchId})['name']}');
     if (_customerLabel.isNotEmpty) parts.add('Customer: $_customerLabel');
     if (_productLabel.isNotEmpty) parts.add('Product: $_productLabel');
+    if (_invoiceNo != null) parts.add('Invoice: $_invoiceNo');
     if (_group != null) parts.add('Group: $_group');
     if (_subGroup != null) parts.add('Sub Group: $_subGroup');
     if (_mainGroup != null) parts.add('Main Group: $_mainGroup');
@@ -517,6 +561,19 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
             filterFn: (q) => _filter(_products, q),
             onPick: (e) => setState(() { _productId = e['id'] as String?; _productLabel = e['label'] as String? ?? ''; }),
             onClear: () => setState(() { _productId = null; _productLabel = ''; }))),
+          if (_isAdmin)
+            _field('Sales Invoice (optional)', 300, _SearchField(
+              key: ValueKey('inv_$_invoiceNo'),
+              initialLabel: _invoiceLabel, hint: 'All invoices',
+              filterFn: (q) => _filter(_invoices, q),
+              onPick: (e) => setState(() {
+                _invoiceNo = e['id'] as String?;
+                _invoiceLabel = e['label'] as String? ?? '';
+                // Match the period to the invoice's date so it's always in range.
+                final d = DateTime.tryParse('${e['date'] ?? ''}');
+                if (d != null) { _from = d; _to = d; }
+              }),
+              onClear: () => setState(() { _invoiceNo = null; _invoiceLabel = ''; }))),
           _field('Product Group', 200, DropdownButtonFormField<String?>(
             value: _group, isExpanded: true,
             decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),

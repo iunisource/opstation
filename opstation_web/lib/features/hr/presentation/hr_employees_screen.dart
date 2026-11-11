@@ -86,6 +86,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   DateTime? _dob, _joinDate, _leftOn;
   String _status = 'active';
   String? _shiftId;
+  // Opstation login linked to this employee (web check-in, SQL 462).
+  String? _loginUserId;
+  List<Map<String, dynamic>> _logins = [];
   String? _photoUrl;
   bool _photoUploading = false;
   List<Map<String, dynamic>> _shifts = [];
@@ -135,10 +138,19 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     if (orgId == null) { await Future.delayed(const Duration(milliseconds: 400)); if (mounted) _loadAll(); return; }
     setState(() => _loading = true);
     try {
-      await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches(), _loadShifts(), _loadAssetAccounts()]);
+      await Future.wait([_loadDepts(), _loadDesignations(), _loadBranches(), _loadShifts(), _loadAssetAccounts(), _loadLogins()]);
       await _loadEmployees();
     } catch (e) { _snack(friendlyError('Could not load', e)); }
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _loadLogins() async {
+    final orgId = _orgId; if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client.from('users').select('id, name, email, role')
+          .eq('org_id', orgId).or('role.is.null,role.neq.retailer').order('name').limit(2000);
+      if (mounted) setState(() => _logins = List<Map<String, dynamic>>.from(rows));
+    } catch (_) {}
   }
 
   Future<void> _loadEmployees() async {
@@ -315,7 +327,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _deptId = null; _desigId = null; _gender = null; _empType = null; _bloodGroup = null;
       _branchId = _branches.isNotEmpty ? _branches.first['id'] as String : null;
       _dob = null; _joinDate = null; _leftOn = null;
-      _shiftId = null; _photoUrl = null; _notifyPunch = false;
+      _shiftId = null; _photoUrl = null; _notifyPunch = false; _loginUserId = null;
       _docs = [];
     });
   }
@@ -329,6 +341,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _cnic.text = e['cnic'] as String? ?? '';
       _phone.text = e['phone'] as String? ?? '';
       _email.text = e['email'] as String? ?? '';
+      _loginUserId = e['login_user_id'] as String?;
       _address.text = e['address'] as String? ?? '';
       _emergency.text = e['emergency_contact'] as String? ?? '';
       _salary.text = (e['basic_salary'] as num?) != null ? (e['basic_salary'] as num).toString() : '';
@@ -532,6 +545,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       };
       if (_isAdmin) { payload['approved_by'] = userId; payload['approved_at'] = DateTime.now().toUtc().toIso8601String(); }
       else { payload['approved_by'] = null; payload['approved_at'] = null; }
+      // Only sent when used, so saving still works before SQL 462 is run.
+      if (_loginUserId != null || _current?['login_user_id'] != null) payload['login_user_id'] = _loginUserId;
       if (_current == null) {
         payload['id'] = id; payload['created_by'] = userId; payload['created_at'] = DateTime.now().toUtc().toIso8601String();
         await client.from('hr_employees').insert(payload);
@@ -1591,6 +1606,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
               const SizedBox(height: 12),
               _labeled('Address', _tf(_address, lines: 2)),
               const SizedBox(height: 12),
+              _labeled('Opstation login (for web check-in)', _loginDropdown()),
+              const SizedBox(height: 12),
               _labeled('Punch notifications', Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                 Switch(value: _notifyPunch, onChanged: _canWrite ? (v) => setState(() => _notifyPunch = v) : null),
                 const SizedBox(width: 8),
@@ -2001,6 +2018,25 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       _snack('Photo uploaded \u2014 remember to Save');
     } catch (e) { _snack(friendlyError('Upload failed', e)); }
     if (mounted) setState(() => _photoUploading = false);
+  }
+
+  Widget _loginDropdown() {
+    final has = _logins.any((u) => u['id'] == _loginUserId);
+    return DropdownButtonFormField<String>(
+      value: has ? _loginUserId : '', isDense: true, isExpanded: true,
+      decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+        border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0))), enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFE0E0E0)))),
+      style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+      items: [
+        const DropdownMenuItem(value: '', child: Text('Not linked', style: TextStyle(color: AppTheme.textSecondary))),
+        for (final u in _logins)
+          DropdownMenuItem(
+            value: u['id'] as String,
+            child: Text('${u['name'] ?? ''}${(u['email'] ?? '') != '' ? '  ·  ${u['email']}' : ''}', overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: !_canWrite ? null : (v) => setState(() => _loginUserId = (v == null || v.isEmpty) ? null : v),
+    );
   }
 
   Widget _shiftDropdown() {

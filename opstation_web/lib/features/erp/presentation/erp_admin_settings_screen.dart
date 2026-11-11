@@ -700,6 +700,40 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.fleet_alerts',
+    'Fleet service alerts',
+    'When a vehicle\'s service comes due (within the km below, or 7 days) or becomes overdue, '
+        'its assigned driver(s) and the users picked below get a push notification and a bell alert. '
+        'Once when due, once when overdue, then weekly while overdue. Km are added every night from the '
+        'drivers\' trips and deliveries.',
+    number: _NumberField('org.fleet_alert_km', 'Alert ahead by', 200, suffix: 'km'),
+    users: _UsersField('org.fleet_alert_users', 'Also alert these users', emptyText: 'Only the vehicle\'s drivers are alerted'),
+  ),
+
+  _AdminToggle(
+    'org.web_checkin',
+    'Web check-in on office Wi-Fi',
+    'ERP users can check in and out from Opstation while connected to an office network. '
+        'The clock icon next to the bell throbs to remind them to check in, and again '
+        '15 minutes before their shift ends to check out. Their login email must match the '
+        'email on their employee record. Add the office networks below.',
+  ),
+
+  _AdminToggle(
+    'org.route_guide',
+    'Smart route guide',
+    'Shows salespeople a short brief for each shop on their route behind an "i" on the '
+        'shop card. The "i" pulses on the nearest shop and on the shop card that is open; '
+        'tapping it shows everything ticked below. Shop notes are added in Customer 360. '
+        'Salespeople don\'t have to fill in anything.',
+    choice: _ChoiceField('org.route_guide_lang', 'Language', [
+      ('en', 'English'),
+      ('ur', 'Urdu (اردو)'),
+      ('both', 'English + Urdu'),
+    ], 'en'),
+  ),
+
+  _AdminToggle(
     'org.intel_autopilot',
     'Auto Pilot — placement scores update from sales',
     'When ON, a shop\'s placement score is also updated by what it buys. If a shop '
@@ -885,6 +919,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.field_location_capture',
     'org.surveyor_location_supervise',
     'org.loc_fix_warning',
+    'org.route_guide',
     'org.customer_edit_alert',
     'org.quotation_custom_company',
     'org.cbr_collection_columns',
@@ -939,6 +974,12 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.asset_supervise_flow',
     'org.asset_suggest_flow',
     'org.backup_enabled',
+  ]),
+  _ToggleGroup('Logistics & Fleet', Icons.local_shipping_outlined, [
+    'org.fleet_alerts',
+  ]),
+  _ToggleGroup('HR & Attendance', Icons.badge_outlined, [
+    'org.web_checkin',
   ]),
   _ToggleGroup('Assistant', Icons.hub_outlined, [
     'org.station_master_enabled',
@@ -1898,6 +1939,22 @@ class _ErpAdminSettingsScreenState
                   ),
                 ),
               ]),
+            ),
+          ],
+          // Web check-in: the office networks, managed right here.
+          if (on && t.key == 'org.web_checkin') ...[
+            const Divider(height: 1, color: AppTheme.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+              child: _OfficeNetworks(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+            ),
+          ],
+          // Smart route guide: what the brief shows, ticked right here.
+          if (on && t.key == 'org.route_guide') ...[
+            const Divider(height: 1, color: AppTheme.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+              child: _RouteGuideItems(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
             ),
           ],
           // Auditor customer groups: picked right here, under the toggle.
@@ -3173,6 +3230,237 @@ class _DriveBackupPanelState extends State<_DriveBackupPanel> {
               ),
             ]),
     );
+  }
+}
+
+/// Web check-in → office networks (SQL 460). Added while connected to that
+/// Wi-Fi; the address is read on the server.
+class _OfficeNetworks extends StatefulWidget {
+  final String orgId;
+  const _OfficeNetworks({required this.orgId});
+  @override
+  State<_OfficeNetworks> createState() => _OfficeNetworksState();
+}
+
+class _OfficeNetworksState extends State<_OfficeNetworks> {
+  List<Map<String, dynamic>> _nets = [];
+  bool _onListed = false;
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+
+  SupabaseClient get _db => Supabase.instance.client;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await _db.rpc('office_networks_list', params: {'p_org': widget.orgId});
+      final m = Map<String, dynamic>.from(r as Map);
+      if (!mounted) return;
+      setState(() {
+        _nets = List<Map<String, dynamic>>.from((m['networks'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e as Map)));
+        _onListed = m['on_listed'] == true;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (mounted) setState(() { _loading = false; _error = 'Run SQL 460 first.'; });
+    }
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _add() async {
+    final ctrl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add this network'),
+        content: SizedBox(
+          width: 380,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Make sure this computer is connected to the office Wi-Fi you want to add.',
+                style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Name', hintText: 'e.g. Head Office Wi-Fi', isDense: true, border: OutlineInputBorder()),
+              onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Add')),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await _db.rpc('office_network_add', params: {'p_org': widget.orgId, 'p_name': name});
+      _snack('Network added');
+      await _load();
+    } catch (e) {
+      _snack(friendlyError('Could not add the network', e));
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _remove(Map<String, dynamic> n) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove network?'),
+        content: Text('People on "${n['name']}" will no longer be able to check in from Opstation.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await _db.rpc('office_network_remove', params: {'p_id': n['id']});
+      await _load();
+    } catch (e) {
+      _snack(friendlyError('Could not remove the network', e));
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const LinearProgressIndicator(minHeight: 2);
+    if (_error != null) return Text(_error!, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary));
+    String when(dynamic v) {
+      final d = DateTime.tryParse('${v ?? ''}');
+      return d == null ? '' : ' · ${d.toLocal().day} ${const ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.toLocal().month - 1]}';
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Office networks', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 4),
+      if (_nets.isEmpty)
+        const Padding(padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text('No networks yet — nobody can check in from Opstation until one is added.',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+      else
+        for (final n in _nets)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9)))),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Flexible(child: Text('${n['name'] ?? ''}', style: const TextStyle(fontSize: 13))),
+                  if (n['current'] == true) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                      decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(999)),
+                      child: const Text('You are on this', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF047857))),
+                    ),
+                  ],
+                ]),
+                Text('Added by ${n['by'] ?? '—'}${when(n['at'])}', style: const TextStyle(fontSize: 11.5, color: Color(0xFF94A3B8))),
+              ])),
+              TextButton(onPressed: _busy ? null : () => _remove(n), child: const Text('Remove', style: TextStyle(fontSize: 12))),
+            ]),
+          ),
+      const SizedBox(height: 10),
+      OutlinedButton.icon(
+        onPressed: _busy || _onListed ? null : _add,
+        icon: const Icon(Icons.add, size: 16),
+        label: Text(_onListed ? "The network you're on is already added" : "Add the network I'm on now"),
+      ),
+      const SizedBox(height: 8),
+      const Text('Open this while connected to the office Wi-Fi and tap Add. If the internet provider changes the connection, add it again.',
+          style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+    ]);
+  }
+}
+
+/// Smart route guide → "What to show" (org.route_guide_items).
+class _RouteGuideItems extends StatefulWidget {
+  final String orgId;
+  const _RouteGuideItems({required this.orgId});
+  @override
+  State<_RouteGuideItems> createState() => _RouteGuideItemsState();
+}
+
+class _RouteGuideItemsState extends State<_RouteGuideItems> {
+  static const _all = [
+    ('missing_skus', 'Missing SKUs', 'Listed Intelligence products not placed at this shop'),
+    ('notes', 'Shop notes', 'Added from Customer 360'),
+    ('balance', 'Outstanding balance & aging', 'Amount due, how much is over 60 days'),
+    ('last_payment', 'Last payment', 'Date and amount'),
+    ('order_due', 'Order due', 'Usual gap between orders vs days since the last one'),
+    ('not_bought', 'Items not bought lately', 'Regular items missing from recent orders'),
+    ('competitors', 'Competitor brands spotted', 'From competitor surveys (last 6 months)'),
+    ('offers', 'Offers & schemes', 'Running offers that apply to this shop'),
+    ('credit_limit', 'Credit limit', 'When the balance is over the limit'),
+    ('visit_pattern', 'Visit pattern', 'Last visit and skipped visits in a row'),
+  ];
+  Set<String> _on = {'missing_skus', 'notes'};
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await Supabase.instance.client.from('app_config').select('value')
+          .eq('org_id', widget.orgId).eq('key', 'org.route_guide_items').isFilter('branch_id', null).maybeSingle();
+      final v = '${r?['value'] ?? ''}'.trim();
+      if (v.isNotEmpty && mounted) setState(() => _on = v.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet());
+    } catch (_) {}
+  }
+
+  Future<void> _save(Set<String> next) async {
+    setState(() { _on = next; _saving = true; });
+    try {
+      await Supabase.instance.client.from('app_config').upsert(
+          {'key': 'org.route_guide_items', 'value': [for (final a in _all) if (next.contains(a.$1)) a.$1].join(','), 'org_id': widget.orgId},
+          onConflict: 'key,org_id,branch_id');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(friendlyError('That did not save', e))));
+    }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Text('What to show', style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+        TextButton(onPressed: () => _save({for (final a in _all) a.$1}), child: const Text('Tick all', style: TextStyle(fontSize: 12))),
+        TextButton(onPressed: () => _save({}), child: const Text('Clear', style: TextStyle(fontSize: 12))),
+        if (_saving) const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2)),
+      ]),
+      for (final a in _all)
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: _on.contains(a.$1),
+          onChanged: (v) => _save(v == true ? {..._on, a.$1} : ({..._on}..remove(a.$1))),
+          title: Text(a.$2, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          subtitle: Text(a.$3, style: const TextStyle(fontSize: 11.5)),
+        ),
+    ]);
   }
 }
 

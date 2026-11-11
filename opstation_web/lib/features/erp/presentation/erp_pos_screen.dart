@@ -1551,6 +1551,18 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final stock = (item['stock_qty'] as num?)?.toDouble() ?? 0;
       if (!_allowNoStock && (stock <= 0 || qty > stock)) { _showSnack('Insufficient stock for "${item['name']}": ${(stock < 0 ? 0 : stock).toStringAsFixed(0)} available'); return; }
     }
+    // A customer that has only a name (no account) — open the instant POS
+    // customer account first, so the sale never lands on an unknown customer.
+    final sc = _selectedCustomer;
+    if (sc != null && sc['id'] == null && '${sc['shop_name'] ?? ''}'.trim().isNotEmpty) {
+      try {
+        final made = await _createInstantCustomer('${sc['shop_name']}'.trim());
+        if (mounted) setState(() => _selectedCustomer = made);
+      } catch (e) {
+        _showSnack(friendlyError('Could not create the customer — pick one and try again', e));
+        return;
+      }
+    }
     // Batch tracking: scan the serial units being sold (off / optional / mandatory).
     _checkingOut = true;
     List<String> soldSerials = const [];
@@ -1811,8 +1823,21 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     ));
     if (ok != true || nameCtrl.text.trim().isEmpty) return;
     try {
-      final client = Supabase.instance.client;
       final name = nameCtrl.text.trim();
+      final newCust = await _createInstantCustomer(name, phone: phoneCtrl.text.trim(), cnic: cnicCtrl.text.trim());
+      setState(() { _selectedCustomer = newCust; _selectedPosCustomer = null; _customerSearchCtrl.clear(); });
+      _showSnack('Customer "$name" added');
+    } catch (e) { _showSnack(friendlyError('That did not save', e)); } finally { _checkingOut = false; }
+  }
+
+  /// The usual instant POS customer account (POS-000N), with a ledger like any
+  /// customer. Used by Quick Add and when a held bill / quotation brings only a
+  /// typed name.
+  Future<Map<String, dynamic>> _createInstantCustomer(String name, {String phone = '', String cnic = ''}) async {
+    final orgId = _orgId;
+    if (orgId == null) throw Exception('Not signed in');
+    {
+      final client = Supabase.instance.client;
       // Generate a POS-000N code (POS-origin customers).
       final existing = await client.from('customers').select('code').eq('org_id', orgId).like('code', 'POS-%');
       int maxN = 0;
@@ -1828,16 +1853,16 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       await client.from('customers').insert({
         'id': id, 'org_id': orgId, 'code': code,
         'shop_name': name, 'contact_person': name,
-        'phone': phoneCtrl.text.trim(), 'address': '',
-        'cnic': cnicCtrl.text.trim().isEmpty ? null : cnicCtrl.text.trim(),
+        'phone': phone, 'address': '',
+        'cnic': cnic.isEmpty ? null : cnic,
         'is_active': true, 'location_capture_allowed': false,
         'monthly_sale_target': 0, 'source': 'pos',
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
-      final newCust = {'id': id, 'shop_name': name, 'code': code, 'phone': phoneCtrl.text.trim(), 'cnic': cnicCtrl.text.trim(), 'source': 'pos'};
-      setState(() { _customers.add(newCust); _selectedCustomer = newCust; _selectedPosCustomer = null; _customerSearchCtrl.clear(); });
-      _showSnack('Customer "$name" added');
-    } catch (e) { _showSnack(friendlyError('That did not save', e)); } finally { _checkingOut = false; }
+      final newCust = <String, dynamic>{'id': id, 'shop_name': name, 'code': code, 'phone': phone, 'cnic': cnic, 'source': 'pos'};
+      if (mounted) setState(() => _customers.add(newCust));
+      return newCust;
+    }
   }
 
   Future<void> _closeSession() async {
@@ -3275,12 +3300,22 @@ ${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table
         (c) => c['id'] == billCustId,
         orElse: () => {'id': billCustId, 'shop_name': billCustName ?? 'Customer'},
       );
-    } else if (billCustName != null && billCustName.isNotEmpty && billCustName != 'Walk-in') {
-      // Customer stored by name (older held bills) — match in unified customers.
-      restoredCustomer = _customers.firstWhere(
-        (c) => (c['shop_name'] as String?) == billCustName,
-        orElse: () => {'id': billCustId, 'shop_name': billCustName},
-      );
+    } else if (billCustName != null && billCustName.trim().isNotEmpty && billCustName != 'Walk-in') {
+      // Only a typed name (e.g. a quotation for a one-off customer): use the
+      // customer with that name, else open the usual instant POS customer
+      // account so the sale — and any balance — sits on a real ledger.
+      final n = billCustName.trim().toLowerCase();
+      final hit = _customers.where((c) => '${c['shop_name'] ?? ''}'.trim().toLowerCase() == n).toList();
+      if (hit.isNotEmpty) {
+        restoredCustomer = hit.first;
+      } else {
+        try {
+          restoredCustomer = await _createInstantCustomer(billCustName.trim());
+          _showSnack('Customer account "${billCustName.trim()}" created');
+        } catch (e) {
+          _showSnack(friendlyError('Could not create the customer — pick one before checkout', e));
+        }
+      }
     }
     setState(() {
       _cart = items;

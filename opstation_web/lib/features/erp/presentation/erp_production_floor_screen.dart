@@ -290,7 +290,17 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
           const SizedBox(height: 4),
           Text(_prodLabel[j['product_id']] ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 6),
-          Text('${_trim(produced)} / ${_trim(planned)} made', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+          Row(children: [
+            Text(_open(j) ? '${_trim(produced)} made' : '${_trim(produced)} / ${_trim(planned)} made', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+            if (_open(j)) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.10), borderRadius: BorderRadius.circular(4)),
+                child: const Text('Open-ended', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, color: Colors.deepPurple)),
+              ),
+            ],
+          ]),
           if (finished)
             const Padding(padding: EdgeInsets.only(top: 3), child: Text('Finished — post final batch', style: TextStyle(fontSize: 10.5, color: Color(0xFF166534), fontWeight: FontWeight.w600)))
           else if (sinceLbl != null)
@@ -389,7 +399,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
                   DataCell(Text(_prodLabel[j['product_id']] ?? '—', style: const TextStyle(fontSize: 12))),
                   DataCell(Text(j['customer_id'] != null ? (_custLabel[j['customer_id']] ?? '—') : '—', style: const TextStyle(fontSize: 12))),
                   DataCell(Text(_histStatusLabel(j['status'] as String? ?? ''), style: const TextStyle(fontSize: 12))),
-                  DataCell(Text(_num(j['planned_qty']), style: const TextStyle(fontSize: 12))),
+                  DataCell(Text(_open(j) ? 'Open-ended' : _num(j['planned_qty']), style: const TextStyle(fontSize: 12))),
                   DataCell(Text(_num(j['produced_qty']), style: const TextStyle(fontSize: 12))),
                   DataCell(Text(j['voucher_date'] as String? ?? '', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   DataCell(Text(j['assigned_to'] != null ? (_userLabel[j['assigned_to']] ?? '—') : '—', style: const TextStyle(fontSize: 12))),
@@ -535,9 +545,9 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
                 Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2), decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
                   child: Text(lbl, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w700))),
               ])),
-              DataCell(Text(_trim(_planned(j)), style: const TextStyle(fontSize: 12))),
+              DataCell(Text(_open(j) ? 'Open-ended' : _trim(_planned(j)), style: const TextStyle(fontSize: 12))),
               DataCell(Text(_trim(_produced(j)), style: const TextStyle(fontSize: 12))),
-              DataCell(Text(_trim(_remaining(j)), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+              DataCell(Text(_open(j) ? '—' : _trim(_remaining(j)), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
               DataCell(Text(_trim((j['accepted_qty'] as num? ?? 0).toDouble()), style: const TextStyle(fontSize: 12, color: Colors.green))),
               DataCell(Text(_trim((j['rejected_qty'] as num? ?? 0).toDouble()), style: const TextStyle(fontSize: 12, color: Colors.red))),
               DataCell(Text('${j['priority'] ?? 0}', style: const TextStyle(fontSize: 12))),

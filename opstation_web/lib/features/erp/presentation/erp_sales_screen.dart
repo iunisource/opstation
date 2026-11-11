@@ -17,6 +17,8 @@ import '../services/voucher_meta.dart';
 import '../services/batch_tracking.dart';
 import '../widgets/opening_date_guard.dart';
 import '../../../core/widgets/product_picker.dart';
+import '../../../core/widgets/scan_bar.dart';
+import '../../../core/widgets/scan_feedback.dart';
 import '../widgets/voucher_docs_panel.dart';
 import '../widgets/voucher_remarks_panel.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -1565,6 +1567,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   String _statusFilter = 'all';
   // inline delivery qty
   final Map<String, TextEditingController> _deliverQtyCtrl = {};
+  // Barcode scanning (side by side with typing): scan an item → its quantity
+  // goes up by 1 and the cursor jumps to that quantity so it can be typed;
+  // Enter goes back to the scan box. Saving stays manual.
+  bool _scanMode = false;
+  final Map<String, FocusNode> _qtyFocus = {};
+  final _doScanKey = GlobalKey<ScanBarState>();
+  String? _lastScannedSoItem;
   Timer? _searchDebounce;
   // collect-amount at DO approval (default off = non-collection delivery)
   bool _collectEnabled = false;
@@ -1598,6 +1607,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   void dispose() {
     _searchDebounce?.cancel();
     for (final c in _deliverQtyCtrl.values) c.dispose();
+    for (final f in _qtyFocus.values) f.dispose();
     _drvNameCtrl.dispose(); _drvContactCtrl.dispose(); _vehicleNoCtrl.dispose();
     super.dispose();
   }
@@ -1674,7 +1684,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       // DO items, SO items and the SO header are independent — fetch together.
       final core = await Future.wait<dynamic>([
         client.from('delivery_order_items').select('*, products(name, sku), uoms(abbreviation)').eq('delivery_order_id', id),
-        client.from('sales_order_items').select('*, products(name, sku), uoms(abbreviation)').eq('sales_order_id', soId),
+        client.from('sales_order_items').select('*, products(name, sku, barcode), uoms(abbreviation)').eq('sales_order_id', soId),
         client.from('sales_orders').select('*, customers(shop_name, code, address, contact_person, phone), branches(name)').eq('id', soId).single(),
       ]);
       final items = core[0] as List;
@@ -1697,6 +1707,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       // Build delivery qty controllers for available SO items
       final existingSoItemIds = (items as List).map((i) => i['so_item_id'] as String).toSet();
       _deliverQtyCtrl.clear();
+      _scanMode = false;
+      _lastScannedSoItem = null;
       for (final soItem in soItems) {
         final ordered = (soItem['quantity'] as num?)?.toDouble() ?? 0;
         final delivered = (soItem['qty_delivered'] as num?)?.toDouble() ?? 0;
@@ -2498,6 +2510,92 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     }
   }
 
+  // ── barcode scanning ──────────────────────────────────────────────────────
+  List<Map<String, dynamic>> get _scanLines => _soItems.where((i) => _deliverQtyCtrl.containsKey(i['id'])).toList();
+  double _pendingOf(Map i) => ((i['quantity'] as num?)?.toDouble() ?? 0) - ((i['qty_delivered'] as num?)?.toDouble() ?? 0);
+  double _qtyOf(String soItemId) => double.tryParse(_deliverQtyCtrl[soItemId]?.text.trim() ?? '') ?? 0;
+  FocusNode _focusFor(String soItemId) => _qtyFocus.putIfAbsent(soItemId, () => FocusNode());
+
+  void _toggleScanMode() {
+    setState(() {
+      _scanMode = !_scanMode;
+      _lastScannedSoItem = null;
+      // Scanning counts from zero; typing (scan off) starts from the full pending.
+      if (_scanMode) {
+        for (final c in _deliverQtyCtrl.values) c.text = '0';
+      }
+    });
+    if (_scanMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _doScanKey.currentState?.focusInput());
+    }
+  }
+
+  /// Lines on this DO that a scanned code belongs to (barcode, then SKU).
+  List<Map<String, dynamic>> _linesForCode(String code) {
+    final c = code.trim().toLowerCase();
+    if (c.isEmpty) return const [];
+    bool hit(Map i, String k) => '${i['products']?[k] ?? ''}'.trim().toLowerCase() == c;
+    final byBarcode = _scanLines.where((i) => hit(i, 'barcode')).toList();
+    return byBarcode.isNotEmpty ? byBarcode : _scanLines.where((i) => hit(i, 'sku')).toList();
+  }
+
+  Future<ScanOutcome> _onDoScan(String code, double _) async {
+    final lines = _linesForCode(code);
+    if (lines.isEmpty) return ScanOutcome(false, 'Not on this order — $code');
+    // First line of that product that still has room.
+    final line = lines.firstWhere((i) => _qtyOf(i['id'] as String) < _pendingOf(i), orElse: () => const {});
+    if (line.isEmpty) {
+      final i = lines.first;
+      return ScanOutcome(false, '${i['products']?['name'] ?? ''} already complete — ${_n4(_qtyOf(i['id'] as String))} of ${_n4(_pendingOf(i))}');
+    }
+    final id = line['id'] as String;
+    final next = _qtyOf(id) + 1;
+    setState(() {
+      _deliverQtyCtrl[id]!.text = _plain4(next);
+      _lastScannedSoItem = id;
+    });
+    // Cursor to that quantity, selected, so the real count can be typed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final f = _focusFor(id);
+      f.requestFocus();
+      final c = _deliverQtyCtrl[id]!;
+      c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
+    });
+    return ScanOutcome(true, '✓ ${line['products']?['name'] ?? ''} · ${_n4(next)} of ${_n4(_pendingOf(line))} — type the quantity, or scan the next item');
+  }
+
+  /// Enter in a quantity box while scanning. A barcode scanner typing into the
+  /// box is caught and treated as a scan; a real number is kept (capped at
+  /// what is pending) and the cursor goes back to the scan box.
+  void _onQtySubmitted(Map<String, dynamic> line, String value) {
+    final id = line['id'] as String;
+    final v = value.trim();
+    final pending = _pendingOf(line);
+    final looksLikeCode = _linesForCode(v).isNotEmpty || (v.length >= 6 && (double.tryParse(v) ?? 0) > pending);
+    if (looksLikeCode) {
+      // Undo what the scanner typed, then handle it as a scan.
+      setState(() => _deliverQtyCtrl[id]!.text = _plain4(_scannedBefore[id] ?? 0));
+      _doScanKey.currentState?.focusInput();
+      _onDoScan(v, 1).then((r) {
+        if (!mounted) return;
+        if (r.ok) { ScanFeedback.ok(); } else { ScanFeedback.wrong(context); _showSnack(r.message); }
+      });
+      return;
+    }
+    final q = double.tryParse(v) ?? 0;
+    if (q > pending) {
+      setState(() => _deliverQtyCtrl[id]!.text = _plain4(pending));
+      _showSnack('${line['products']?['name'] ?? ''}: only ${_n4(pending)} pending — set to ${_n4(pending)}');
+    } else {
+      setState(() {});
+    }
+    _doScanKey.currentState?.focusInput();
+  }
+
+  /// Quantity on each line just before its box got focus (to undo a scanner
+  /// typing into it).
+  final Map<String, double> _scannedBefore = {};
+
   Future<void> _saveDelivery() async {
     if (_deliverQtyCtrl.isEmpty) { _showSnack('No items to save'); return; }
     final orgId = _orgId;
@@ -3110,8 +3208,50 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
                   child: Text('${pendingSoItems.length} pending', style: const TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.w600)),
                 ),
+                const Spacer(),
+                _scanMode
+                    ? OutlinedButton.icon(
+                        onPressed: _toggleScanMode,
+                        icon: const Icon(Icons.keyboard_alt_outlined, size: 16),
+                        label: const Text('Stop scanning'))
+                    : OutlinedButton.icon(
+                        onPressed: _toggleScanMode,
+                        icon: const Icon(Icons.qr_code_scanner, size: 16),
+                        label: const Text('Scan items')),
               ]),
               const SizedBox(height: 8),
+              if (_scanMode) ...[
+                ScanBar(
+                  key: _doScanKey,
+                  onScan: _onDoScan,
+                  showQty: false,
+                  camera: true,
+                  strongFeedback: true,
+                  hint: 'Scan an item (or type its barcode + Enter) — then type the quantity, or keep scanning',
+                ),
+                const SizedBox(height: 8),
+                Builder(builder: (_) {
+                  double done = 0, total = 0;
+                  for (final it in pendingSoItems) {
+                    final p = _pendingOf(it);
+                    total += p;
+                    final q = _qtyOf(it['id'] as String);
+                    done += q > p ? p : q;
+                  }
+                  return Row(children: [
+                    Text('Counted ${_n4(done)} / ${_n4(total)}', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    const SizedBox(width: 10),
+                    Expanded(child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(value: total <= 0 ? 0 : (done / total).clamp(0, 1).toDouble(), minHeight: 7,
+                          backgroundColor: const Color(0xFFE2E8F0), color: AppTheme.success),
+                    )),
+                    const SizedBox(width: 10),
+                    const Text('Save stays manual', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                  ]);
+                }),
+                const SizedBox(height: 8),
+              ],
               Container(
                 decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.3))),
                 child: Column(children: [
@@ -3133,23 +3273,41 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                     final pending = ordered - delivered;
                     final available = _stockByProduct[item['product_id'] as String] ?? 0;
                     final ctrl = _deliverQtyCtrl[item['id'] as String];
+                    final justScanned = _scanMode && _lastScannedSoItem == item['id'];
+                    final full = _scanMode && ctrl != null && (double.tryParse(ctrl.text) ?? 0) >= pending && pending > 0;
                     return Column(children: [
-                      Padding(
+                      Container(
+                        color: justScanned ? const Color(0xFFECFDF5) : null,
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: Row(children: [
                           Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                            Row(children: [
+                              Flexible(child: Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+                              if (full) ...[
+                                const SizedBox(width: 6),
+                                const Icon(Icons.check_circle, size: 14, color: AppTheme.success),
+                              ],
+                            ]),
                             if (item['products']?['sku'] != null) Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                            if (_scanMode && '${item['products']?['barcode'] ?? ''}'.trim().isEmpty)
+                              const Text('No barcode — type the quantity', style: TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
                           ])),
                           Expanded(flex: 1, child: Text(item['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13))),
                           Expanded(flex: 2, child: Text(_n4(pending), style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600))),
                           Expanded(flex: 2, child: Text(_n4(available),
                               style: TextStyle(color: available >= pending ? AppTheme.success : AppTheme.danger, fontWeight: FontWeight.w600))),
-                          Expanded(flex: 2, child: ctrl != null ? SizedBox(height: 32, child: TextField(
-                            controller: ctrl,
-                            decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            onChanged: (_) => setState(() {}),
+                          Expanded(flex: 2, child: ctrl != null ? SizedBox(height: 32, child: Focus(
+                            onFocusChange: (has) {
+                              if (has) _scannedBefore[item['id'] as String] = double.tryParse(ctrl.text) ?? 0;
+                            },
+                            child: TextField(
+                              controller: ctrl,
+                              focusNode: _focusFor(item['id'] as String),
+                              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              onChanged: (_) => setState(() {}),
+                              onSubmitted: _scanMode ? (v) => _onQtySubmitted(item, v) : null,
+                            ),
                           )) : const SizedBox.shrink()),
                         ]),
                       ),

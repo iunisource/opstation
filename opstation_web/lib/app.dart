@@ -1,3 +1,4 @@
+import 'core/update/update_prompt.dart';
 import 'dart:async';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -228,7 +229,7 @@ class _OpstationWebAppState extends ConsumerState<OpstationWebApp> {
       // safe to keep app-wide. If any other screen throws a selection-layout
       // error, wrap that screen the same way rather than removing this.
       builder: (context, child) =>
-          SelectionArea(child: child ?? const SizedBox.shrink()),
+          UpdatePrompt(child: SelectionArea(child: child ?? const SizedBox.shrink())),
     );
   }
 }

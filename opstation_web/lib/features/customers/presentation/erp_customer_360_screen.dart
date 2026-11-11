@@ -19,6 +19,7 @@ import 'customer_history_screen.dart';
 import 'customer_edit_review.dart';
 import 'customer_other_locations.dart';
 import '../../intelligence/services/autopilot.dart';
+import 'customer_shop_notes.dart';
 
 /// Customer 360 — a unified view of a single shop:
 ///  • Overview     : profile, location, credit vs current outstanding
@@ -1523,6 +1524,8 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           ]),
         ),
         ),
+        // Notes for the salesperson's shop brief — only while Smart route guide is ON.
+        ShopNotesPanel(orgId: ref.read(currentUserProvider)?.orgId ?? '', customerId: _customerId),
       ],
     );
   }

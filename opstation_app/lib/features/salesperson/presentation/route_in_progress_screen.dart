@@ -23,6 +23,8 @@ import '../../reports/presentation/export_pdf_sheet.dart';
 import 'dialogs/mark_visit_dialog.dart';
 import 'dialogs/skip_visit_dialog.dart';
 import 'widgets/status_count_cell.dart';
+import 'widgets/route_guide_widgets.dart';
+import '../services/route_guide.dart';
 
 /// The in-progress route screen: counters at top, filterable stop list,
 /// "Slide to complete" at the bottom. When the trip is closed, switches
@@ -41,7 +43,16 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
   @override
   void dispose() {
     _searchCtrl.dispose();
+    try { _guide.stop(); } catch (_) {}
     super.dispose();
+  }
+
+  late final RouteGuideController _guide = ref.read(routeGuideProvider.notifier);
+
+  @override
+  void initState() {
+    super.initState();
+    _guide; // keep a handle so the guide can be stopped when leaving
   }
 
   List<Customer> _filter(Trip trip) {
@@ -283,6 +294,18 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
     }
 
     final isCompleted = trip.isClosed;
+
+    // Smart route guide: load the shop briefs and watch for the nearest shop.
+    final orgId = ref.read(orgIdProvider);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final guide = ref.read(routeGuideProvider.notifier);
+      if (isCompleted) {
+        guide.stop();
+      } else {
+        guide.ensure(orgId, trip.stopSnapshot, state.geofenceRadiusMeters);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -723,7 +746,9 @@ class _StopCardState extends State<_StopCard> {
         ] else
           Text(visitOutcomeOf(status, amount).label,
               style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: tone)),
-        const SizedBox(width: 6),
+        const SizedBox(width: 2),
+        GuideIcon(customer: customer, size: 22),
+        const SizedBox(width: 4),
         const Icon(Icons.expand_more, size: 17, color: AppColors.textSecondaryLight),
       ]),
       ),
@@ -819,6 +844,8 @@ class _StopCardState extends State<_StopCard> {
                           ),
                         ),
                       ],
+                      const SizedBox(width: 4),
+                      GuideIcon(customer: customer, opened: _open),
                     ]),
                     if (widget.locationSuspect)
                       InkWell(
