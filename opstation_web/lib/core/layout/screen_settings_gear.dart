@@ -135,6 +135,7 @@ const Map<String, _ScreenSettings> _screenSettings = {
   '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys),
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
   // ── Logistics ──
+  '/licences': _ScreenSettings('Licences & Compliance', ['org.compliance_reminders']),
   '/fleet': _logistics,
   '/deliveries': _logistics,
   '/dispatch-orders': _logistics,

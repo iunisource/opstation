@@ -700,6 +700,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.compliance_reminders',
+    'Licences & Compliance reminders',
+    'When a licence, certificate or filing comes due (its "remind before" days) or expires, the item\'s '
+        'responsible person and the users picked below get a push notification and a bell alert. '
+        'Once when due, once on expiry, then weekly while expired. Paused while a renewal is applied.',
+    users: _UsersField('org.compliance_alert_users', 'Also alert these users', emptyText: 'Only each item\'s responsible person is alerted'),
+  ),
+
+  _AdminToggle(
     'org.fleet_alerts',
     'Fleet service alerts',
     'When a vehicle\'s service comes due (within the km below, or 7 days) or becomes overdue, '
@@ -973,6 +982,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.asset_custodian_reminder',
     'org.asset_supervise_flow',
     'org.asset_suggest_flow',
+    'org.compliance_reminders',
     'org.backup_enabled',
   ]),
   _ToggleGroup('Logistics & Fleet', Icons.local_shipping_outlined, [

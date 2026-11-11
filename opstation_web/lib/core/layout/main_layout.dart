@@ -319,6 +319,17 @@ final assetSupervisePendingProvider = FutureProvider<int>((ref) async {
   } catch (_) { return 0; }
 });
 
+// Licences & Compliance items due soon or expired (SQL 465, nav badge).
+final complianceDueCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final r = await Supabase.instance.client.rpc('compliance_due_count', params: {'p_org': user.orgId});
+    return (r as num?)?.toInt() ?? 0;
+  } catch (_) { return 0; }
+});
+
 // Count of facility tasks open & overdue for the current org (nav badge).
 final facilityDueCountProvider = FutureProvider<int>((ref) async {
   await ref.watch(badgeGateProvider.future);
@@ -1361,6 +1372,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final assetSupervisePending = gate('/assets', (ref.watch(assetSupervisePendingProvider).valueOrNull ?? 0) +
       (ref.watch(assetSuggestionCountProvider).valueOrNull ?? 0));
   final facilityDue = gate('/facility', ref.watch(facilityDueCountProvider).valueOrNull ?? 0);
+  final compDue = gate('/licences', ref.watch(complianceDueCountProvider).valueOrNull ?? 0);
   final poPending = gate('/erp/purchase', (ref.watch(poPendingApprovalCountProvider).valueOrNull ?? 0) +
       (ref.watch(poRejectedUnackedCountProvider).valueOrNull ?? 0) +
       (ref.watch(poCloseRequestCountProvider).valueOrNull ?? 0));
@@ -1710,9 +1722,9 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ]),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
-      if (show('/assets') || show('/assets/report') || show('/facility'))
+      if (show('/assets') || show('/assets/report') || show('/facility') || show('/licences'))
         _navMenu(context, 'Management', Icons.domain_outlined, location,
-          ['/assets', '/assets/report', '/facility'],
+          ['/assets', '/assets/report', '/facility', '/licences'],
           [
             if (show('/assets'))
               _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue + assetSupervisePending),
@@ -1720,8 +1732,10 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Asset Report', Icons.summarize_outlined, '/assets/report', location),
             if (show('/facility'))
               _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
+            if (show('/licences'))
+              _menuItem(context, 'Licences & Compliance', Icons.verified_outlined, '/licences', location, badge: compDue),
           ],
-          badge: assetsDue + assetSupervisePending + facilityDue,
+          badge: assetsDue + assetSupervisePending + facilityDue + compDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/automation', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/ai-connector', '/erp/audit-log'],
@@ -1866,7 +1880,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         // Assets/Facility grants live outside erpMenuItems (their menu is built
         // inline from show()), so count them in the gate too.
         if (isErpUser &&
-            (erpMenuItems.isNotEmpty || show('/assets') || show('/assets/report') || show('/facility')))
+            (erpMenuItems.isNotEmpty || show('/assets') || show('/assets/report') || show('/facility') || show('/licences')))
           ...splitErpMenus(),
   ];
 }

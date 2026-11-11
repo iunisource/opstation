@@ -192,6 +192,9 @@ const List<PermModule> kPermissionRegistry = [
   PermModule('facility', 'Facility', Icons.cleaning_services_outlined, [
     PermItem('facility', 'Facility Maintenance', PermKind.doc, '/facility'),
   ]),
+  PermModule('compliance', 'Licences & Compliance', Icons.verified_outlined, [
+    PermItem('licences', 'Licences & Compliance', PermKind.doc, '/licences'),
+  ], moduleGated: false),
   // Logistics — driver jobs (Deliveries, incl. supplier pickups) and the
   // dispatcher's queue of approved Delivery Orders (Dispatch Orders). Not tied
   // to an org module; permission-scoped only, so any user granted these sees
