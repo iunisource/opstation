@@ -69,6 +69,20 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
           if (p is Map) m.addAll(Map<String, dynamic>.from(p));
         } catch (_) {}
       }
+      // Optional line details (SQL 467), in line order.
+      if (m != null && m['ok'] == true && m['lines'] is List) {
+        try {
+          final d = await Supabase.instance.client
+              .rpc('public_payment_advice_details', params: {'p_token': widget.token});
+          if (d is List) {
+            final ls = [for (final e in m['lines'] as List) Map<String, dynamic>.from(e as Map)];
+            for (var i = 0; i < ls.length && i < d.length; i++) {
+              ls[i]['details'] = d[i];
+            }
+            m['lines'] = ls;
+          }
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() {
         if (m == null || m['ok'] != true) {
@@ -347,8 +361,15 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('${i + 1}. ', style: const TextStyle(color: _muted, fontWeight: FontWeight.w600)),
           Expanded(
-            child: Text((l['party_name'] as String?) ?? '',
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5, color: _ink)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text((l['party_name'] as String?) ?? '',
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5, color: _ink)),
+              if (((l['details'] as String?) ?? '').trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text((l['details'] as String).trim(), style: const TextStyle(fontSize: 12, color: _muted)),
+                ),
+            ]),
           ),
           Text(_money(l['amount_to_pay'] as num?),
               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: _ink)),

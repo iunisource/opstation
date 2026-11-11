@@ -139,6 +139,9 @@ class _CombinedTripSummaryScreenState
         salespersonLabel: salespersonLabel,
         actor: actor,
         duplicate: duplicate,
+        reimbKey: key,
+        claimantId: effectiveUserId,
+        reimbRecord: action == _Action.share,
         trail: (action == _Action.share || svc.isAdminActor)
             ? await svc.logReportIssue(type: 'combined_summary', key: key, orgId: actor?.organizationId)
             : const [],

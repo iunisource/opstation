@@ -1,5 +1,6 @@
 import '../../../core/utils/place_name.dart';
 import '../../../core/utils/report_trail.dart';
+import '../../../core/utils/reimb.dart';
 import 'package:flutter/material.dart';
 import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -201,11 +202,27 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin ||
           user?.role == WebUserRole.superAdmin;
       final trail = await logReportIssue(user?.orgId, 'trip_summary', trip['id'] as String, counted: !isAdmin);
+      // Reimbursement Approvals (SQL 466): records the claim + paid stamp.
+      final reimb = await reimbSubmit(
+        orgId: user?.orgId,
+        type: 'trip_summary',
+        key: trip['id'] as String,
+        claimantId: trip['user_id'] as String?,
+        lines: [
+          {
+            'trip': trip['id'],
+            'day': DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal() ?? DateTime.now(),
+            'km': ctx.totalDistanceKm,
+          }
+        ],
+        record: !isAdmin,
+      );
       final bytes = await ReportPdfBuilder.buildTripSummary(
         ctx: ctx,
         orgName: orgName,
         duplicate: duplicate,
         trail: trail,
+        reimb: reimb,
       );
       await outputPdf(bytes, 'Trip Summary',
           date: DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal());

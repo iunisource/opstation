@@ -14,6 +14,7 @@ import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../salesperson/models/trip.dart';
 import '../pdf/report_pdf_builder.dart';
+import 'reimb.dart';
 import '../services/coverage_context_builder.dart';
 import '../services/report_context_builder.dart';
 
@@ -150,6 +151,21 @@ class ReportService {
         ? await logReportIssue(type: 'trip_summary', key: trip.id, orgId: actor?.organizationId)
         : const <String>[];
 
+    // Reimbursement Approvals (SQL 466): a shared summary becomes a claim;
+    // the PDF shows the rate and a FULLY / PARTLY PAID stamp.
+    final reimb = kind == ReportKind.summary
+        ? await reimbSubmit(
+            orgId: actor?.organizationId,
+            type: 'trip_summary',
+            key: trip.id,
+            claimantId: trip.userId,
+            lines: [
+              {'trip': trip.id, 'day': trip.startedAt.toLocal(), 'km': ctx.totalDistanceKm},
+            ],
+            record: claim && !isAdminActor,
+          )
+        : null;
+
     // Extra customer locations (for "Shop (Godown)" in the visit report).
     try {
       await CustomerLocations.ensureLoaded(_ref.read(appDatabaseProvider));
@@ -164,6 +180,7 @@ class ReportService {
           orgName: orgName,
           duplicate: duplicate,
           trail: trail,
+          reimb: reimb,
         ),
     };
     settings.toString(); // reserved
@@ -299,6 +316,11 @@ class ReportService {
     required AuthUser? actor,
     bool duplicate = false,
     List<String> trail = const [],
+    /// Reimbursement Approvals (SQL 466): the issue key, the salesperson
+    /// (null = several → not recorded) and whether this is a real issue.
+    String? reimbKey,
+    String? claimantId,
+    bool reimbRecord = false,
   }) async {
     final builder = _ref.read(reportContextBuilderProvider);
     final ctxs = await Future.wait(trips.map((t) => builder.build(t)));
@@ -369,6 +391,21 @@ class ReportService {
     }
     if (orgName.isEmpty) orgName = 'Opstation';
 
+    final reimb = reimbKey == null
+        ? null
+        : await reimbSubmit(
+            orgId: actor?.organizationId,
+            type: 'combined_summary',
+            key: reimbKey,
+            claimantId: claimantId,
+            lines: [
+              for (var i = 0; i < trips.length; i++)
+                if (claimantId == null || trips[i].userId == claimantId)
+                  {'trip': trips[i].id, 'day': trips[i].startedAt.toLocal(), 'km': ctxs[i].totalDistanceKm},
+            ],
+            record: reimbRecord && claimantId != null && !isAdminActor,
+          );
+
     final bytes = await ReportPdfBuilder.buildCombinedTripSummary(
       orgName: orgName,
       periodLabel: periodLabel,
@@ -379,6 +416,7 @@ class ReportService {
       usedGoogle: usedGoogle,
       duplicate: duplicate,
       trail: trail,
+      reimb: reimb,
     );
     return Uint8List.fromList(bytes);
   }

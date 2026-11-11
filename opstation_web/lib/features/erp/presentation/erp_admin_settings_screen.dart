@@ -700,6 +700,32 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.reimb_approvals',
+    'Reimbursement approvals',
+    'Every Trip Summary / Combined Trip Summary a driver or salesperson generates goes to '
+        'Management → Reimbursement Approvals. The approvers below approve or reject it; accounts mark it paid. '
+        'If the same trips are generated again later, the PDF says they are already fully or partly paid. '
+        'After approval: either accounts mark it paid on that screen, or an approved Payment Advice is made '
+        'automatically (one per claim; needs the rate per km) and the claim turns Paid when that advice is marked paid. '
+        'Push alerts: Admin Settings → Notifications → Reimbursements.',
+    users: _UsersField('org.reimb_approvers', 'Approvers', emptyText: 'Nobody picked — admins approve'),
+    number: _NumberField('org.reimb_rate_km', 'Rate per km (Rs, 0 = blank)', 0),
+    choice: _ChoiceField('org.reimb_after_approval', 'After approval', [
+      ('mark_paid', 'Accounts mark it paid here'),
+      ('payment_advice', 'Create a Payment Advice'),
+    ], 'mark_paid'),
+  ),
+
+  _AdminToggle(
+    'org.reimb_payers_only',
+    'Only these users can mark reimbursements paid',
+    'For "Accounts mark it paid here". When ON, only the users picked below (e.g. accounts) see the Mark paid button. '
+        'When OFF, anyone who can open Reimbursement Approvals can mark an approved claim paid. '
+        'Not used when a Payment Advice is created — the advice is paid as usual.',
+    users: _UsersField('org.reimb_payers', 'Who can mark paid', emptyText: 'Nobody can mark paid yet'),
+  ),
+
+  _AdminToggle(
     'org.compliance_reminders',
     'Licences & Compliance reminders',
     'When a licence, certificate or filing comes due (its "remind before" days) or expires, the item\'s '
@@ -987,6 +1013,10 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Logistics & Fleet', Icons.local_shipping_outlined, [
     'org.fleet_alerts',
+  ]),
+  _ToggleGroup('Reimbursements', Icons.receipt_long_outlined, [
+    'org.reimb_approvals',
+    'org.reimb_payers_only',
   ]),
   _ToggleGroup('HR & Attendance', Icons.badge_outlined, [
     'org.web_checkin',

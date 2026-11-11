@@ -10,6 +10,7 @@ class PaymentAdvicePdfLine {
   final String partyName;
   final String partyType; // customer | supplier
   final String bankDetails;
+  final String details; // optional particulars (shown under the party name)
   final double amountDue;
   final double amountToPay;
   final DateTime? lastPayment;
@@ -17,6 +18,7 @@ class PaymentAdvicePdfLine {
     required this.partyName,
     required this.partyType,
     required this.bankDetails,
+    this.details = '',
     required this.amountDue,
     required this.amountToPay,
     this.lastPayment,
@@ -141,6 +143,12 @@ class PaymentAdvicePdf {
                     if (lines[i].partyType != 'other')
                       pw.Text(lines[i].partyType,
                           style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+                    if (lines[i].details.trim().isNotEmpty)
+                      pw.Padding(
+                        padding: const pw.EdgeInsets.only(top: 2),
+                        child: pw.Text(lines[i].details.trim(),
+                            style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+                      ),
                   ]),
             ),
             cell(lines[i].bankDetails.isEmpty ? '-' : lines[i].bankDetails,

@@ -29,6 +29,16 @@ class CombinedSummaryRow {
 
 /// Builder for PDF reports. Shapes match the reference PDFs the user
 /// supplied (OPSTATION branded, OPERATIONS MANAGER signature, etc.).
+/// Reimbursement status printed on trip summaries (SQL 466).
+class ReimbInfo {
+  final double? rate; // Rs per km (null = left blank)
+  final String? stamp; // "FULLY PAID …" / "PARTLY PAID …"
+  final bool fullyPaid;
+  final String? approvedBy;
+  final double paidKm; // km of trips already paid on an earlier claim
+  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0});
+}
+
 class ReportPdfBuilder {
   static const _brandBlue = PdfColor.fromInt(0xFF1E3A8A);
   static const _ink = PdfColor.fromInt(0xFF111827);
@@ -81,6 +91,7 @@ class ReportPdfBuilder {
     required String orgName,
     bool duplicate = false,
     List<String> trail = const [],
+    ReimbInfo? reimb,
   }) async {
     final trip = ctx.trip;
     final doc = pw.Document();
@@ -106,7 +117,8 @@ class ReportPdfBuilder {
           pw.SizedBox(height: 14),
           _sequencedTable(ctx),
           pw.SizedBox(height: 18),
-          _reimbursementBlock(ctx),
+          if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
+          _reimbursementBlock(ctx, reimb),
           pw.SizedBox(height: 36),
           _signatureLine(),
         ],
@@ -131,6 +143,7 @@ class ReportPdfBuilder {
     required bool usedGoogle,
     bool duplicate = false,
     List<String> trail = const [],
+    ReimbInfo? reimb,
   }) async {
     final doc = pw.Document();
 
@@ -207,7 +220,8 @@ class ReportPdfBuilder {
               border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
             ),
           pw.SizedBox(height: 18),
-          _reimbursementClaimBlock(grandTotalKm),
+          if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
+          _reimbursementClaimBlock(grandTotalKm, reimb),
           pw.SizedBox(height: 36),
           _signatureLine(),
         ],
@@ -218,7 +232,7 @@ class ReportPdfBuilder {
 
   /// Claim block for the combined summary: the distance is filled from the
   /// trips; Rate per km and Total Amount are left blank for finance.
-  static pw.Widget _reimbursementClaimBlock(double totalKm) {
+  static pw.Widget _reimbursementClaimBlock(double totalKm, [ReimbInfo? reimb]) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(
@@ -241,11 +255,11 @@ class ReportPdfBuilder {
           pw.SizedBox(height: 8),
           _reimbRow('Total Distance', '${totalKm.toStringAsFixed(2)} km'),
           pw.SizedBox(height: 6),
-          _reimbRow('Rate per km', ''),
+          _reimbRow('Rate per km', reimb?.rate == null ? '' : 'Rs ${NumberFormat('#,##0.##').format(reimb!.rate)}'),
           pw.SizedBox(height: 6),
-          _reimbRow('Total Amount', ''),
+          _reimbRow('Total Amount', _reimbAmount(totalKm, reimb)),
           pw.SizedBox(height: 6),
-          _reimbRow('Approved By', ''),
+          _reimbRow('Approved By', reimb?.approvedBy ?? ''),
         ],
       ),
     );
@@ -1047,7 +1061,7 @@ class ReportPdfBuilder {
     );
   }
 
-  static pw.Widget _reimbursementBlock(TripReportContext ctx) {
+  static pw.Widget _reimbursementBlock(TripReportContext ctx, [ReimbInfo? reimb]) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(
@@ -1071,11 +1085,34 @@ class ReportPdfBuilder {
           _reimbRow(
               'Total Distance', '${ctx.totalDistanceKm.toStringAsFixed(2)} km'),
           pw.SizedBox(height: 6),
-          _reimbRow('Amount', ''),
+          _reimbRow('Amount', _reimbAmount(ctx.totalDistanceKm, reimb)),
           pw.SizedBox(height: 6),
-          _reimbRow('Approved By', ''),
+          _reimbRow('Approved By', reimb?.approvedBy ?? ''),
         ],
       ),
+    );
+  }
+
+  static String _reimbAmount(double km, ReimbInfo? r) {
+    if (r == null) return '';
+    if (r.fullyPaid) return 'Already paid — see above';
+    if (r.rate == null) return '';
+    final due = (km - r.paidKm) < 0 ? 0.0 : km - r.paidKm;
+    return 'Rs ${NumberFormat('#,##0').format((due * r.rate!).round())}  (@ Rs ${NumberFormat('#,##0.##').format(r.rate)}/km'
+        '${r.paidKm > 0 ? ' on ${due.toStringAsFixed(2)} unpaid km' : ''})';
+  }
+
+  /// "FULLY PAID" / "PARTLY PAID" box shown above the reimbursement block.
+  static pw.Widget _paidStamp(ReimbInfo r) {
+    final c = r.fullyPaid ? const PdfColor.fromInt(0xFF047857) : const PdfColor.fromInt(0xFF6D28D9);
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: c, width: 1.4),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Text(r.stamp ?? '', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: c)),
     );
   }
 

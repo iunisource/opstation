@@ -50,11 +50,14 @@ class _PaLine {
   /// Collapsed lines render as a single summary row above the entry area.
   bool collapsed = false;
   final TextEditingController bankCtrl = TextEditingController();
+  /// Optional particulars of the line (e.g. a reimbursement's trip details).
+  final TextEditingController detailsCtrl = TextEditingController();
   final TextEditingController dueCtrl = TextEditingController();
   final TextEditingController payCtrl = TextEditingController();
   DateTime? lastPayment;
   void dispose() {
     bankCtrl.dispose();
+    detailsCtrl.dispose();
     dueCtrl.dispose();
     payCtrl.dispose();
   }
@@ -471,6 +474,7 @@ class _ErpPaymentAdviceScreenState
           ..partyType = (r['party_type'] as String?) ?? 'supplier'
           ..partyName = (r['party_name'] as String?) ?? '';
         ln.bankCtrl.text = (r['bank_details'] as String?) ?? '';
+        ln.detailsCtrl.text = (r['details'] as String?) ?? '';
         ln.dueCtrl.text = _numStr(r['amount_due']);
         ln.payCtrl.text = _numStr(r['amount_to_pay']);
         ln.lastPayment =
@@ -651,6 +655,9 @@ class _ErpPaymentAdviceScreenState
           'party_id': l.partyId,
           'party_name': l.partyName,
           'bank_details': l.bankCtrl.text.trim(),
+          // Sent only when filled (lines are re-inserted on save, so a cleared
+          // field is simply left out → empty).
+          if (l.detailsCtrl.text.trim().isNotEmpty) 'details': l.detailsCtrl.text.trim(),
           'amount_due': double.tryParse(l.dueCtrl.text.trim()) ?? 0,
           'amount_to_pay': double.tryParse(l.payCtrl.text.trim()) ?? 0,
           'last_payment_date': l.lastPayment == null
@@ -806,6 +813,9 @@ class _ErpPaymentAdviceScreenState
       }
       if (((o['bank_details'] as String?) ?? '').trim() != e.value.bankCtrl.text.trim()) {
         ch.add('bank details changed');
+      }
+      if (((o['details'] as String?) ?? '').trim() != e.value.detailsCtrl.text.trim()) {
+        ch.add('details changed');
       }
       if (ch.isNotEmpty) parts.add('${e.value.partyName}: ${ch.join(', ')}');
     }
@@ -1657,6 +1667,23 @@ class _ErpPaymentAdviceScreenState
             ),
         ]),
         const SizedBox(height: 12),
+        if (!readOnly || l.detailsCtrl.text.trim().isNotEmpty) ...[
+          TextField(
+            controller: l.detailsCtrl,
+            enabled: !readOnly,
+            minLines: 1,
+            maxLines: 3,
+            decoration: InputDecoration(
+              labelText: 'Details (optional)',
+              hintText: 'What this payment is for',
+              isDense: true,
+              filled: true,
+              fillColor: readOnly ? AppTheme.background : Colors.white,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         // Bank details (free text, multiline) + bullet helper.
         Row(children: [
           const Text('Bank/Beneficiary Details',
@@ -1826,6 +1853,11 @@ class _ErpPaymentAdviceScreenState
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600)),
+                  if (l.detailsCtrl.text.trim().isNotEmpty)
+                    Text(l.detailsCtrl.text.trim(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                   if (l.lastPayment != null)
                     Text(
                         'Last paid ${DateFormat('d MMM yyyy').format(l.lastPayment!)}',
@@ -1974,6 +2006,7 @@ class _ErpPaymentAdviceScreenState
             partyName: (r['party_name'] as String?) ?? '',
             partyType: (r['party_type'] as String?) ?? '',
             bankDetails: (r['bank_details'] as String?) ?? '',
+            details: (r['details'] as String?) ?? '',
             amountDue: ((r['amount_due'] as num?) ?? 0).toDouble(),
             amountToPay: ((r['amount_to_pay'] as num?) ?? 0).toDouble(),
             lastPayment:

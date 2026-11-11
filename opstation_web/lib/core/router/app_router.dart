@@ -180,6 +180,7 @@ import '../../features/intelligence/presentation/intelligence_reports_screen.dar
 import '../../features/deliveries/presentation/dispatch_dashboard_screen.dart' deferred as _s168;
 import '../../features/fleet/fleet_screen.dart' deferred as _s169;
 import '../../features/licences/licences_screen.dart' deferred as _s170;
+import '../../features/reimbursements/reimbursements_screen.dart' deferred as _s171;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -328,7 +329,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // Management (Assets / Asset Report / Facility) is registry-gated
             // and lives outside /erp/ — the menu showed it, but this check used
             // to bounce the click straight back home.
-            final permScopedMgmt = loc == '/assets' || loc == '/assets/report' || loc == '/facility' || loc == '/licences';
+            final permScopedMgmt = loc == '/assets' || loc == '/assets/report' || loc == '/facility' || loc == '/licences' || loc == '/reimbursements';
             // Intelligence screens (surveys) are registry-gated too.
             final permScopedIntel = const {
               '/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement',
@@ -486,6 +487,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/assets/report', builder: (_, __) => _deferred('_s148', _s148.loadLibrary, () => _s148.ErpAssetReportScreen())),
           GoRoute(path: '/facility', builder: (_, __) => _deferred('_s075', _s075.loadLibrary, () => _s075.ErpFacilityScreen())),
           GoRoute(path: '/licences', builder: (_, state) => _deferred('_s170', _s170.loadLibrary, () => _s170.LicencesScreen(openId: state.uri.queryParameters['i']))),
+          GoRoute(path: '/reimbursements', builder: (_, state) => _deferred('_s171', _s171.loadLibrary, () => _s171.ReimbursementsScreen(openId: state.uri.queryParameters['c']))),
           GoRoute(path: '/orgs', builder: (_, __) => _deferred('_s064', _s064.loadLibrary, () => _s064.OrgsScreen())),
           GoRoute(path: '/orgs/profile', builder: (_, st) => _deferred('_s152', _s152.loadLibrary,
               () => _s152.OrgProfileScreen(key: ValueKey(st.uri.queryParameters['id']), orgId: st.uri.queryParameters['id'] ?? ''))),
@@ -989,6 +991,7 @@ final Map<String, Future<void> Function()> _allScreens = {
   '_s168': _s168.loadLibrary,
   '_s169': _s169.loadLibrary,
   '_s170': _s170.loadLibrary,
+  '_s171': _s171.loadLibrary,
 };
 
 /// Once the first screen is up, download the other screens' code one by one

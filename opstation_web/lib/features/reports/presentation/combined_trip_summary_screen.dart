@@ -1,4 +1,5 @@
 import '../../../core/utils/report_trail.dart';
+import '../../../core/utils/reimb.dart';
 import 'package:flutter/material.dart';
 import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -48,6 +49,8 @@ class _CombinedTripSummaryScreenState
 
   List<Map<String, dynamic>> _users = [];
   List<_DayRow> _rows = [];
+  /// Per-trip km for Reimbursement Approvals (SQL 466): {trip, day, km, user}.
+  List<Map<String, dynamic>> _tripLines = [];
   double _grandKm = 0;
   double _grandLastWeekKm = 0;
   double _grandAbandonedKm = 0;
@@ -145,6 +148,7 @@ class _CombinedTripSummaryScreenState
 
       // Aggregate distance per (salesperson, calendar day).
       final acc = <String, _DayRow>{};
+      final tripLines = <Map<String, dynamic>>[];
       // A quick restart counts as one trip (distance from the FIRST start).
       // Abandoned trips (ended with no visits, not restarted): their km COUNT
       // but are flagged for review; they don't count as trips.
@@ -182,6 +186,7 @@ class _CombinedTripSummaryScreenState
         );
         final ctx = ctxs[si]!;
         row.km += ctx.totalDistanceKm;
+        tripLines.add({'trip': t['id'], 'day': d, 'km': ctx.totalDistanceKm, 'user': uid});
         if (abandoned) {
           row.abandonedKm += ctx.totalDistanceKm;
         } else {
@@ -207,6 +212,7 @@ class _CombinedTripSummaryScreenState
       setState(() {
         _users = List<Map<String, dynamic>>.from(users);
         _rows = rows;
+        _tripLines = tripLines.where((l) => !(l['day'] as DateTime).isBefore(rangeStart)).toList();
         _grandKm = grand;
         _grandLastWeekKm = grandLw;
         _grandAbandonedKm = grandAb;
@@ -277,6 +283,14 @@ class _CombinedTripSummaryScreenState
         grandTotalKm: _grandKm,
         lastWeekTotalKm: _grandLastWeekKm,
         duplicate: duplicate,
+        reimb: await reimbSubmit(
+          orgId: user?.orgId,
+          type: 'combined_summary',
+          key: key,
+          claimantId: _selectedUserId,
+          lines: _selectedUserId == null ? _tripLines : _tripLines.where((l) => l['user'] == _selectedUserId).toList(),
+          record: !isAdmin && _selectedUserId != null,
+        ),
         trail: await logReportIssue(user?.orgId, 'combined_summary', key, counted: !isAdmin),
       );
       await outputPdf(bytes, 'Combined Trip Summary');
