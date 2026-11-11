@@ -1734,9 +1734,9 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ]),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
-      if (show('/assets') || show('/assets/report') || show('/facility') || show('/licences') || show('/reimbursements'))
+      if (show('/assets') || show('/assets/report') || show('/facility') || show('/licences'))
         _navMenu(context, 'Management', Icons.domain_outlined, location,
-          ['/assets', '/assets/report', '/facility', '/licences', '/reimbursements'],
+          ['/assets', '/assets/report', '/facility', '/licences'],
           [
             if (show('/assets'))
               _menuItem(context, 'Assets', Icons.chair_outlined, '/assets', location, badge: assetsDue + assetSupervisePending),
@@ -1746,10 +1746,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Facility', Icons.cleaning_services_outlined, '/facility', location, badge: facilityDue),
             if (show('/licences'))
               _menuItem(context, 'Licences & Compliance', Icons.verified_outlined, '/licences', location, badge: compDue),
-            if (show('/reimbursements'))
-              _menuItem(context, 'Reimbursement Approvals', Icons.receipt_long_outlined, '/reimbursements', location, badge: reimbTodo),
           ],
-          badge: assetsDue + assetSupervisePending + facilityDue + compDue + reimbTodo,
+          badge: assetsDue + assetSupervisePending + facilityDue + compDue,
         ),
       _navMenu(context, 'ERP', Icons.manage_accounts_outlined, location,
         ['/erp/onboarding', '/erp/branches', '/erp/files', '/erp/automation', '/billing', '/erp/super-summary', '/erp/users', '/erp/admin-settings', '/erp/ai-connector', '/erp/audit-log'],
@@ -1794,6 +1792,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     if (show('/operations/retailers')) _menuItem(context, 'Retailers', Icons.storefront_outlined, '/operations/retailers', location),
     if (show('/reports')) _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
     if (show('/reports/combined-summary')) _menuItem(context, 'Combined Trip Summary', Icons.route_outlined, '/reports/combined-summary', location),
+    if (show('/reimbursements')) _menuItem(context, 'Reimbursement Approvals', Icons.receipt_long_outlined, '/reimbursements', location, badge: reimbTodo),
     if (show('/compliance')) _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
     if (show('/operations/time-in-market')) _menuItem(context, 'Time in Market', Icons.timelapse_outlined, '/operations/time-in-market', location),
     if (show('/operations/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
@@ -1822,7 +1821,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isAdminTier) ...[
           if (modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
+            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/reimbursements', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
               _menuItem(context, 'Team', Icons.people_outline, '/team', location, badge: devicePending),
@@ -1835,6 +1834,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuLabel('Reports'),
               _menuItem(context, 'Reports', Icons.bar_chart_outlined, '/reports', location),
               _menuItem(context, 'Combined Trip Summary', Icons.route_outlined, '/reports/combined-summary', location),
+              _menuItem(context, 'Reimbursement Approvals', Icons.receipt_long_outlined, '/reimbursements', location, badge: reimbTodo),
               _menuItem(context, 'Compliance', Icons.rule, '/compliance', location),
               _menuItem(context, 'Time in Market', Icons.timelapse_outlined, '/operations/time-in-market', location),
               _menuLabel('Setup'),
@@ -1843,7 +1843,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               if (user?.role == WebUserRole.masterAdmin)
                 _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
             ],
-            badge: customerSupervisePending + devicePending,
+            badge: customerSupervisePending + devicePending + reimbTodo,
           ),
           _navMenu(context, 'CRM', Icons.contacts_outlined, location,
             ['/crm/customers', '/crm/follow-ups', '/crm/pipeline', '/crm/supplier-profile'],
@@ -1887,14 +1887,14 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isErpUser && opsErpItems.isNotEmpty && modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
             const ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/operations/route-roster', '/live-map', '/operations/retailers',
-             '/reports', '/reports/combined-summary', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications'],
+             '/reports', '/reports/combined-summary', '/reimbursements', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications'],
             opsErpItems,
-            badge: devicePending),
+            badge: devicePending + reimbTodo),
 
         // Assets/Facility grants live outside erpMenuItems (their menu is built
         // inline from show()), so count them in the gate too.
         if (isErpUser &&
-            (erpMenuItems.isNotEmpty || show('/assets') || show('/assets/report') || show('/facility') || show('/licences') || show('/reimbursements')))
+            (erpMenuItems.isNotEmpty || show('/assets') || show('/assets/report') || show('/facility') || show('/licences')))
           ...splitErpMenus(),
   ];
 }

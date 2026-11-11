@@ -703,7 +703,7 @@ const List<_AdminToggle> _toggles = [
     'org.reimb_approvals',
     'Reimbursement approvals',
     'Every Trip Summary / Combined Trip Summary a driver or salesperson generates goes to '
-        'Management → Reimbursement Approvals. The approvers below approve or reject it; accounts mark it paid. '
+        'Operations → Reimbursement Approvals. The approvers below approve or reject it; accounts mark it paid. '
         'If the same trips are generated again later, the PDF says they are already fully or partly paid. '
         'After approval: either accounts mark it paid on that screen, or an approved Payment Advice is made '
         'automatically (one per claim; needs the rate per km) and the claim turns Paid when that advice is marked paid. '

@@ -323,13 +323,13 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // Route Roster (Operations) is registry-gated too.
             final permScopedOps = const {
               '/dashboard', '/team', '/routes', '/operations/route-roster', '/operations/time-in-market', '/live-map',
-              '/operations/retailers', '/reports', '/compliance', '/operations/files',
+              '/operations/retailers', '/reports', '/reimbursements', '/compliance', '/operations/files',
               '/operations/notifications',
             }.contains(loc);
             // Management (Assets / Asset Report / Facility) is registry-gated
             // and lives outside /erp/ — the menu showed it, but this check used
             // to bounce the click straight back home.
-            final permScopedMgmt = loc == '/assets' || loc == '/assets/report' || loc == '/facility' || loc == '/licences' || loc == '/reimbursements';
+            final permScopedMgmt = loc == '/assets' || loc == '/assets/report' || loc == '/facility' || loc == '/licences';
             // Intelligence screens (surveys) are registry-gated too.
             final permScopedIntel = const {
               '/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement',
