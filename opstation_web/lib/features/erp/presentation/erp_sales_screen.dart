@@ -4467,6 +4467,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                           })),
             ),
           ]),
+        onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
+        detailActive: _selectedId != null,
         detailChild: _selectedId == null
             ? const Center(child: Text('Select a Sales Invoice', style: TextStyle(color: AppTheme.textSecondary)))
             : _detailLoading
@@ -4485,12 +4487,123 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       discountTotal += qty * price * discPct / 100;
     }
     final grandTotal = subtotal - discountTotal;
+    // Phones: actions wrap under the title, info stacks, items become cards.
+    final narrow = MediaQuery.of(context).size.width < 700;
+    Widget infoRow(List<Widget> cells) => narrow
+        ? Wrap(spacing: 16, runSpacing: 10, children: [for (final c in cells) SizedBox(width: 150, child: c)])
+        : Row(children: [
+            for (var i = 0; i < cells.length; i++) ...[
+              if (i > 0) const SizedBox(width: 16),
+              Expanded(child: cells[i]),
+            ],
+          ]);
 
     return Column(children: [
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 24, vertical: 12),
         decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+        child: narrow
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          ]),
+          const SizedBox(width: 12),
+          if (_isLocked) const _LockedBadge(),
+                ]),
+                const SizedBox(height: 6),
+                Wrap(spacing: 2, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          if (_schemesEnabled && !_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
+            OutlinedButton.icon(
+              onPressed: _schemeBusy ? null : _checkSchemes,
+              icon: _schemeBusy
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.local_offer_outlined, size: 16, color: AppTheme.primary),
+              label: const Text('Schemes'),
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (!_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
+            if (!_reviewFlow) ...[
+              ElevatedButton(onPressed: _saveDiscounts, child: const Text('Save')),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && !_isPendingReview) ...[
+              ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && _isPendingReview && _isAdmin) ...[
+              OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && _isPendingReview && !_isAdmin) ...[
+              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
+              const SizedBox(width: 8),
+            ],
+          ],
+          if (_canEditDate)
+            IconButton(
+              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
+              tooltip: 'Edit date',
+              onPressed: _pickDate,
+            ),
+          // Hide the manual lock toggle while an unlocked invoice is under the
+          // review flow — posting must go through Approve. Unlock stays available.
+          if (_isLocked || !_reviewFlow)
+            IconButton(
+              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+              tooltip: _isLocked ? 'Unlock' : 'Lock',
+              onPressed: _toggleLock,
+            ),
+          if (_superviseFlow && _canSupervise && !(_detail['is_voided'] as bool? ?? false)) ...[
+            if (_detail['supervised_at'] == null)
+              OutlinedButton.icon(
+                icon: _superviseBusy
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                label: const Text('Supervise'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                onPressed: _superviseBusy ? null : _supervise)
+            else
+              TextButton.icon(
+                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                onPressed: _clearSupervision),
+            const SizedBox(width: 8),
+          ],
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print preview',
+            onPressed: _printSI,
+          ),
+          IconButton(
+            icon: Icon(Icons.share_outlined, color: Colors.teal.shade700),
+            tooltip: 'Share PDF',
+            onPressed: () => _printSI(share: true),
+          ),
+          if (_canDelete && !(_detail['is_voided'] as bool? ?? false))
+            TextButton.icon(
+              icon: const Icon(Icons.block, size: 18, color: AppTheme.danger),
+              label: const Text('Cancel / Void', style: TextStyle(color: AppTheme.danger)),
+              onPressed: _cancelSI,
+            ),
+          if (_detail['is_voided'] as bool? ?? false)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+                ]),
+              ])
+            : Row(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
             const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -4590,35 +4703,31 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
       Expanded(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(narrow ? 12 : 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // Header info
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(children: [
-                Row(children: [
-                  Expanded(child: _InfoRow(label: 'SI No.', value: _detail['voucher_number'] as String? ?? '-')),
-                  const SizedBox(width: 16),
-                  Expanded(child: _InfoRow(label: 'Date', value: _detail['voucher_date'] != null
-                      ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-')),
-                  const SizedBox(width: 16),
-                  Expanded(child: _InfoRow(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-')),
+                infoRow([
+                  _InfoRow(label: 'SI No.', value: _detail['voucher_number'] as String? ?? '-'),
+                  _InfoRow(label: 'Date', value: _detail['voucher_date'] != null
+                      ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
+                  _InfoRow(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
                 ]),
                 const SizedBox(height: 10),
-                Row(children: [
-                  Expanded(child: _InfoRow(
+                infoRow([
+                  _InfoRow(
                     label: 'Customer',
                     value: _detail['customers']?['shop_name'] as String? ?? _detail['sales_orders']?['customers']?['shop_name'] as String? ?? 'Walk-in',
                     sub: () {
                       final code = _detail['customers']?['code'] as String? ?? _detail['sales_orders']?['customers']?['code'] as String?;
                       return (code != null && code.isNotEmpty) ? 'Code: $code' : null;
                     }(),
-                  )),
-                  const SizedBox(width: 16),
-                  Expanded(child: _InfoRow(label: 'SO #', value: _detail['sales_orders']?['voucher_number'] as String? ?? '-')),
-                  const SizedBox(width: 16),
-                  Expanded(child: _InfoRow(label: 'DO #', value: _detail['delivery_orders']?['voucher_number'] as String? ?? '-')),
+                  ),
+                  _InfoRow(label: 'SO #', value: _detail['sales_orders']?['voucher_number'] as String? ?? '-'),
+                  _InfoRow(label: 'DO #', value: _detail['delivery_orders']?['voucher_number'] as String? ?? '-'),
                 ]),
                 const SizedBox(height: 12),
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4651,7 +4760,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             Container(
               decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
               child: Column(children: [
-                Container(
+                if (!narrow) Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
                   child: const Row(children: [
@@ -4671,6 +4780,78 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   final discPct = (double.tryParse(_discountCtrl[item['id'] as String]?.text ?? '0') ?? 0).clamp(0.0, 100.0);
                   final discAmt = qty * price * discPct / 100;
                   final lineTotal = (qty * price) - discAmt;
+                  final priceCell = item['is_foc'] == true
+                      ? const Text('Free', style: TextStyle(color: Colors.teal, fontWeight: FontWeight.w600))
+                      : (_priceEditable && !_isLocked)
+                          ? SizedBox(height: 32, child: TextField(
+                              controller: _priceCtrl[item['id'] as String],
+                              decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              onChanged: (_) => setState(() {}),
+                            ))
+                          : Text(_n4(price));
+                  final discCell = _isLocked
+                      ? Text('${discPct.toStringAsFixed(2)} %', style: const TextStyle(color: AppTheme.textSecondary))
+                      : SizedBox(height: 32, child: TextField(
+                          controller: _discountCtrl[item['id'] as String],
+                          decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder(), suffixText: '%'),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (v) {
+                            final val = double.tryParse(v) ?? 0;
+                            if (val > 100) {
+                              final ctrl = _discountCtrl[item['id'] as String]!;
+                              ctrl.text = '100';
+                              ctrl.selection = TextSelection.fromPosition(const TextPosition(offset: 3));
+                            } else if (val < 0) {
+                              final ctrl = _discountCtrl[item['id'] as String]!;
+                              ctrl.text = '0';
+                              ctrl.selection = TextSelection.fromPosition(const TextPosition(offset: 1));
+                            }
+                            setState(() {});
+                          },
+                        ));
+                  final nameCell = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Flexible(child: Text(item['products']?['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+                      if (item['is_foc'] == true) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(color: Colors.teal.withOpacity(0.12), borderRadius: BorderRadius.circular(3)),
+                          child: const Text('FOC', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.teal)),
+                        ),
+                      ],
+                    ]),
+                    if (item['products']?['sku'] != null) Text(item['products']['sku'] as String, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ]);
+                  if (narrow) {
+                    return Column(children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          nameCell,
+                          const SizedBox(height: 8),
+                          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                            Text('${_n4(qty)} ${item['uoms']?['abbreviation'] as String? ?? ''}  ×  ',
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                            Expanded(child: Align(alignment: Alignment.centerLeft, child: SizedBox(width: 120, child: priceCell))),
+                          ]),
+                          const SizedBox(height: 8),
+                          Row(children: [
+                            const Text('Disc. ', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                            SizedBox(width: 90, child: discCell),
+                            const Spacer(),
+                            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                              Text(_n4(lineTotal), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                              if (item['is_foc'] != true && discPct > 0)
+                                Text('${_n4(price * (1 - discPct / 100))} / unit', style: const TextStyle(fontSize: 11, color: AppTheme.primary)),
+                            ]),
+                          ]),
+                        ]),
+                      ),
+                      const Divider(height: 1),
+                    ]);
+                  }
                   return Column(children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
