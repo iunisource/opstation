@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/void_filter.dart';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
@@ -42,6 +43,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   bool _loading = false;
 
   DateTime? _dateFrom;
+  bool _mobileTools = false; // phone: filters & actions folded away by default
   DateTime? _dateTo;
   String _typeFilter = 'All';
 
@@ -510,9 +512,10 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           .eq('party_id', customerId);
       final jvIds = (jvLines as List).map((l) => l['entry_id'] as String).toSet().toList();
       final jvHeaders = jvIds.isEmpty ? const <Map<String, dynamic>>[] : await _headersById('journal_entries', jvIds, orgId,
-          select: 'id, entry_number, entry_date, description, posted_at, created_at, status, reference_type',
+          select: '*',
           refTypes: const ['jv', 'opening_jv', 'opening_balance']);
-      final jvMap = {for (final v in jvHeaders) v['id'] as String: v};
+      // Voided JVs and their reversals are left out (back-office; they net to zero).
+      final jvMap = {for (final v in jvHeaders) if (!isVoidPair(v)) v['id'] as String: v};
       if (jvMap.isNotEmpty) {
         for (final line in jvLines as List) {
           final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
@@ -884,10 +887,15 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           // spaceBetween collapses to "buttons hugging the title" once the title
           // is narrow). Mobile: title on its own line, actions wrapping beneath.
           if (context.isMobile) ...[
-            Text('Customer Ledger', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            Text(branch == null ? 'All Branches' : 'Branch: ${branch['name']}',
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-            if (_selectedCustomer != null && _entries.isNotEmpty) ...[
+            // One compact line on phones: title and branch side by side.
+            Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+              const Text('Customer Ledger', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              const SizedBox(width: 8),
+              Expanded(child: Text(branch == null ? 'All Branches' : '${branch['name']}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12))),
+            ]),
+            if (_selectedCustomer != null && _entries.isNotEmpty && _mobileTools) ...[
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
@@ -987,7 +995,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                 titleBlock, const Spacer(), actions,
               ]);
             }),
-          const SizedBox(height: 16),
+          SizedBox(height: context.isMobile ? 8 : 16),
           if (_errors.isNotEmpty) Container(
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(10),
@@ -1000,7 +1008,8 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             ]),
           ),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(width: 340, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Flexible(fit: context.isMobile ? FlexFit.tight : FlexFit.loose, child: SizedBox(width: context.isMobile ? null : 340,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Focus(
                 onKeyEvent: (_, event) {
                   if (!_showDropdown || event is! KeyDownEvent) return KeyEventResult.ignored;
@@ -1054,7 +1063,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
                     },
                   ),
                 ),
-            ])),
+            ]))),
             if (_selectedCustomer != null) ...[
               if (_dateFrom != null || _dateTo != null) ...[
                 const SizedBox(width: 6),
@@ -1062,8 +1071,11 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               ],
             ],
           ]),
-          const SizedBox(height: 12),
-          if (_selectedCustomer != null && _entries.isNotEmpty) ...[
+          SizedBox(height: context.isMobile ? 8 : 12),
+          // Phone: one summary line; tap "Filters" to show cards, search and actions.
+          if (_selectedCustomer != null && _entries.isNotEmpty && context.isMobile)
+            _mobileStrip(display.length, _dated ? 'Balance as of $_uptoLabel' : 'Net balance', _dated ? closing : netBal),
+          if (_selectedCustomer != null && _entries.isNotEmpty && (!context.isMobile || _mobileTools)) ...[
             // Three stats in a Row give ~70px each on a phone — enough to stack
             // "N-e-t" vertically. Wrap gives them a real width instead.
             AdaptiveKpiRow(children: [
@@ -1214,6 +1226,32 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       ),
     );
   }
+
+  Widget _mobileStrip(int n, String label, double bal) => Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.border)),
+        child: Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('$label · $n entries', maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              Text('Rs. ${money(bal)}',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: bal > 0 ? AppTheme.danger : Colors.green.shade700)),
+            ]),
+          ),
+          if (_dated || _typeFilter != 'All' || _entrySearchCtrl.text.trim().isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.only(right: 2),
+              child: Icon(Icons.filter_alt, size: 16, color: AppTheme.primary),
+            ),
+          TextButton.icon(
+            onPressed: () => setState(() => _mobileTools = !_mobileTools),
+            icon: Icon(_mobileTools ? Icons.expand_less : Icons.tune, size: 18),
+            label: Text(_mobileTools ? 'Hide' : 'Filters', style: const TextStyle(fontSize: 12.5)),
+          ),
+        ]),
+      );
 
   Color _typeColor(String type) {
     switch (type) {

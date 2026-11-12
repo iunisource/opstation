@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/void_filter.dart';
 import 'dart:html' as html;
 import 'dart:typed_data';
 import 'package:opstation_web/core/utils/friendly_error.dart';
@@ -121,7 +122,10 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
       final rows = await client.rpc('rpc_account_ledger', params: {
         'p_org_id': orgId, 'p_account_id': accId, 'p_date_from': from, 'p_date_to': to, 'p_branch_id': bid,
       });
-      final entries = List<Map<String, dynamic>>.from((rows as List?) ?? []);
+      final allEntries = List<Map<String, dynamic>>.from((rows as List?) ?? []);
+      // Voided entries and their reversals are left out (same date, net zero).
+      final hidden = await voidPairKeys(orgId, allEntries.map((e) => '${e['entry_number'] ?? ''}'), byNumber: true);
+      final entries = allEntries.where((e) => !hidden.contains('${e['entry_number'] ?? ''}')).toList();
 
       double bal = opening;
       for (final e in entries) {

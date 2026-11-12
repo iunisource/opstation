@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/void_filter.dart';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -76,6 +77,9 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
           movements.add(m);
         }
       }
+      // Voided entries and their reversals are left out (same date, net zero).
+      final hidden = await voidPairKeys(orgId, movements.map((m) => '${m['entry_id'] ?? ''}'));
+      movements.removeWhere((m) => hidden.contains('${m['entry_id'] ?? ''}'));
       double bal = opening;
       for (final m in movements) {
         final dr = _toD(m['debit']);

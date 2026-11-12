@@ -1,4 +1,5 @@
 import 'package:opstation_web/core/utils/friendly_error.dart';
+import '../../../core/utils/void_filter.dart';
 import 'package:flutter/material.dart';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
@@ -93,7 +94,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
       final entryIds = lineList.map((l) => l['entry_id'] as String).toSet().toList();
       final heads = await client
           .from('journal_entries')
-          .select('id, entry_number, entry_date, description, reference_type, status, posted_at')
+          .select()
           .inFilter('id', entryIds);
       final headMap = {for (final h in (heads as List)) (h['id'] as String): h as Map<String, dynamic>};
 
@@ -102,6 +103,7 @@ class _ErpPromoterLedgerScreenState extends ConsumerState<ErpPromoterLedgerScree
         final h = headMap[l['entry_id']];
         if (h == null) continue;
         if ((h['status'] as String?) == 'draft') continue;
+        if (isVoidPair(h)) continue; // voided entry / its reversal — not shown
         merged.add({'line': l, 'head': h});
       }
       merged.sort((a, b) {

@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/void_filter.dart';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
@@ -364,9 +365,10 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           .eq('party_id', supplierId);
       final jvIds = (jvLines as List).map((l) => l['entry_id'] as String).toSet().toList();
       final jvHeaders = jvIds.isEmpty ? const <Map<String, dynamic>>[] : await _headersById('journal_entries', jvIds, orgId,
-          select: 'id, entry_number, entry_date, description, posted_at, created_at, status, reference_type',
+          select: '*',
           refTypes: const ['jv', 'opening_jv', 'opening_balance', 'jobwork', 'jobwork_void']);
-      final jvMap = {for (final v in jvHeaders) v['id'] as String: v};
+      // Voided JVs and their reversals are left out (back-office; they net to zero).
+      final jvMap = {for (final v in jvHeaders) if (!isVoidPair(v)) v['id'] as String: v};
       if (jvMap.isNotEmpty) {
         for (final line in jvLines as List) {
           final v = jvMap[line['entry_id'] as String]; if (v == null) continue;
