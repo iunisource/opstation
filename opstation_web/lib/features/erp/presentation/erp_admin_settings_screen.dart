@@ -22,8 +22,9 @@ class _NumberField {
   final String label; // e.g. 'Aging threshold'
   final int defaultValue;
   final String suffix; // e.g. 'days'
+  final bool decimal; // allow e.g. 12.5 (rates)
   const _NumberField(this.key, this.label, this.defaultValue,
-      {this.suffix = ''});
+      {this.suffix = '', this.decimal = false});
 }
 
 /// An optional free-text parameter attached to a toggle (e.g. a recipient
@@ -709,7 +710,7 @@ const List<_AdminToggle> _toggles = [
         'automatically (one per claim; needs the rate per km) and the claim turns Paid when that advice is marked paid. '
         'Push alerts: Admin Settings → Notifications → Reimbursements.',
     users: _UsersField('org.reimb_approvers', 'Approvers', emptyText: 'Nobody picked — admins approve'),
-    number: _NumberField('org.reimb_rate_km', 'Rate per km (Rs, 0 = blank)', 0),
+    number: _NumberField('org.reimb_rate_km', 'Rate per km (Rs, 0 = blank)', 0, decimal: true),
     choice: _ChoiceField('org.reimb_after_approval', 'After approval', [
       ('mark_paid', 'Accounts mark it paid here'),
       ('payment_advice', 'Create a Payment Advice'),
@@ -1503,8 +1504,12 @@ class _ErpAdminSettingsScreenState
 
   Future<void> _saveNumber(_NumberField n) async {
     final raw = _numCtrls[n.key]!.text.trim();
-    final parsed = int.tryParse(raw);
-    final clean = (parsed == null || parsed < 0) ? n.defaultValue : parsed;
+    final num? parsed = n.decimal ? num.tryParse(raw) : int.tryParse(raw);
+    final num clean0 = (parsed == null || parsed < 0) ? n.defaultValue : parsed;
+    // Decimals keep up to 2 places; "12.0" is stored as "12".
+    final num clean = n.decimal
+        ? (clean0 == clean0.roundToDouble() ? clean0.round() : double.parse(clean0.toStringAsFixed(2)))
+        : clean0;
     // Normalize the field to the cleaned value.
     if (_numCtrls[n.key]!.text != clean.toString()) {
       _numCtrls[n.key]!.text = clean.toString();
@@ -1536,7 +1541,7 @@ class _ErpAdminSettingsScreenState
             width: 90,
             child: TextField(
               controller: _numCtrls[n.key],
-              keyboardType: TextInputType.number,
+              keyboardType: n.decimal ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.number,
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 13),
               decoration: const InputDecoration(

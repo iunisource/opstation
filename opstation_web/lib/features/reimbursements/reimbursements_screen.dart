@@ -264,6 +264,16 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         child: Text('${c['advice_number'] ?? 'Payment Advice'}'),
       );
     }
+    if (_paMode && c['status'] == 'approved' && c['advice_id'] == null) {
+      // Approved before the Payment Advice flow was switched on.
+      return _canApprove
+          ? ElevatedButton(
+              style: ElevatedButton.styleFrom(visualDensity: VisualDensity.compact),
+              onPressed: () => _makeAdvice(c),
+              child: const Text('Create PA'),
+            )
+          : null;
+    }
     if (c['status'] == 'approved' && _canPay) {
       return ElevatedButton(
         style: ElevatedButton.styleFrom(visualDensity: VisualDensity.compact),
@@ -385,7 +395,11 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                     onPressed: () { Navigator.pop(ctx); _openAdvice(c); },
                     icon: const Icon(Icons.description_outlined, size: 16),
                     label: Text('Open ${c['advice_number'] ?? 'Payment Advice'}')),
-                if (c['status'] == 'approved' && _canPay && c['advice_id'] == null)
+                if (_paMode && c['status'] == 'approved' && c['advice_id'] == null && _canApprove)
+                  ElevatedButton.icon(
+                    onPressed: () async { Navigator.pop(ctx); await _makeAdvice(c); },
+                    icon: const Icon(Icons.description_outlined, size: 16), label: const Text('Create Payment Advice')),
+                if (!_paMode && c['status'] == 'approved' && _canPay && c['advice_id'] == null)
                   ElevatedButton.icon(
                     onPressed: () async { Navigator.pop(ctx); await _markPaid(c); },
                     icon: const Icon(Icons.payments_outlined, size: 16), label: const Text('Mark paid')),
@@ -496,6 +510,16 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   void _openAdvice(Map c) {
     if (c['advice_id'] == null) return;
     GoRouter.of(context).go('/financials/payment-advice?focus=${c['advice_id']}');
+  }
+
+  Future<void> _makeAdvice(Map c) async {
+    try {
+      await _db.rpc('reimb_make_advice', params: {'p_claim': c['id']});
+      _snack('Payment Advice created');
+      await _load();
+    } catch (e) {
+      _snack(friendlyError('Could not create the Payment Advice', e));
+    }
   }
 
   // ── actions ───────────────────────────────────────────────────────────────
