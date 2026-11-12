@@ -116,8 +116,22 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
 
   // ── figures ───────────────────────────────────────────────────────────────
   /// Lines of [c] already paid on ANOTHER claim.
+  /// The approved / paid claim (other than [c]) that already covers [tripId].
+  Map<String, dynamic>? _coveredBy(Map c, String? tripId) {
+    final p = _paidTrips[tripId];
+    if (p != null && p['claim_id'] != c['id']) {
+      return _claims.where((x) => x['id'] == p['claim_id']).firstOrNull ?? {'id': p['claim_id'], 'status': 'paid', 'paid_on': p['paid_on']};
+    }
+    for (final o in _claims) {
+      if (o['id'] == c['id'] || (o['status'] != 'approved' && o['status'] != 'paid')) continue;
+      if ((_lines[o['id']] ?? const []).any((l) => l['trip_id'] == tripId)) return o;
+    }
+    return null;
+  }
+
+  /// Lines of [c] already approved or paid on ANOTHER claim (left out of its amount).
   List<Map<String, dynamic>> _paidElsewhere(Map c) => (_lines[c['id']] ?? const [])
-      .where((l) => _paidTrips[l['trip_id']] != null && _paidTrips[l['trip_id']]!['claim_id'] != c['id'])
+      .where((l) => _coveredBy(c, l['trip_id'] as String?) != null)
       .toList();
 
   double _unpaidKm(Map c) {
@@ -241,7 +255,10 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
 
   Widget _statusPill(Map c) {
     final pe = c['status'] == 'pending' && _paidElsewhere(c).isNotEmpty;
-    final p = pe ? ('Partly paid before', const Color(0xFF6D28D9), const Color(0xFFF5F3FF)) : _pill('${c['status']}');
+    final all = pe && _unpaidKm(c) <= 0.0001;
+    final p = pe
+        ? (all ? 'Already approved / paid' : 'Partly paid before', const Color(0xFF6D28D9), const Color(0xFFF5F3FF))
+        : _pill('${c['status']}');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(color: p.$3, borderRadius: BorderRadius.circular(999)),
@@ -293,12 +310,13 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     ]);
     final doc = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(c['doc_type'] == 'combined_summary' ? 'Combined Trip Summary' : 'Trip Summary', style: const TextStyle(fontSize: 12.5)),
-      Text('${c['trips']} trip${c['trips'] == 1 ? '' : 's'}', style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+      Text('${c['trips']} trip${c['trips'] == 1 ? '' : 's'}${c['repeat_of'] != null ? ' · generated again' : ''}',
+          style: TextStyle(fontSize: 11.5, color: c['repeat_of'] != null ? const Color(0xFF6D28D9) : AppTheme.textSecondary)),
     ]);
     final money = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(amt == null ? '—' : _rs(amt), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
       Text(pe.isNotEmpty && c['status'] == 'pending'
-              ? '${_dayCount(pe)} day(s) already paid'
+              ? '${_dayCount(pe)} day(s) already approved / paid'
               : (c['status'] == 'paid' ? 'paid ${_fd(c['paid_on'], 'd MMM')}' : (_rate == null || c['status'] == 'rejected' ? '' : '@ Rs ${NumberFormat('#,##0.##').format(c['rate'] ?? _rate)}/km')),
           style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
     ]);
@@ -351,9 +369,10 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     final peRefs = {
       for (final l in pe)
         () {
-          final p = _paidTrips[l['trip_id']]!;
-          final oc = _claims.where((x) => x['id'] == p['claim_id']).firstOrNull;
-          return 'paid ${_fd(p['paid_on'])}${(oc?['paid_ref'] ?? '') != '' ? ' — ${oc!['paid_ref']}' : ''}';
+          final oc = _coveredBy(c, l['trip_id'] as String?)!;
+          return oc['status'] == 'paid'
+              ? 'paid ${_fd(oc['paid_on'])}${(oc['paid_ref'] ?? '') != '' ? ' — ${oc['paid_ref']}' : ''}'
+              : 'approved ${_fd(oc['decided_at'])}, not paid yet';
         }(),
     };
     final amt = _amount(c);
@@ -411,7 +430,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFED7AA))),
                   child: Text(
-                    '${peDays.length} of these days (${peDays.join(', ')}) were already paid (${peRefs.join('; ')}). '
+                    '${peDays.length} of these days (${peDays.join(', ')}) were already approved or paid on an earlier claim (${peRefs.join('; ')}). '
                     'They are left out of the amount.',
                     style: const TextStyle(fontSize: 12.5, color: Color(0xFF9A3412))),
                 ),
@@ -474,6 +493,10 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                       SizedBox(width: 90, child: Text(_km(l['km'] as num?), style: const TextStyle(fontSize: 12.5))),
                       () {
                         final p = _paidTrips[l['trip_id']];
+                        final other = _coveredBy(c, l['trip_id'] as String?);
+                        if (p == null && other != null) {
+                          return const Text('Approved on an earlier claim', style: TextStyle(fontSize: 11.5, color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600));
+                        }
                         if (p == null) {
                           return Text(c['status'] == 'rejected' ? '' : 'Unpaid', style: const TextStyle(fontSize: 11.5, color: Color(0xFFB45309), fontWeight: FontWeight.w600));
                         }
