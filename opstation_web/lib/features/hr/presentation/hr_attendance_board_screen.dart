@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:html' as html;
+import 'dart:ui' show FontFeature;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -40,6 +41,8 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
   List<_Emp> _emps = [];
   bool _loading = true;
   bool _fullscreen = false;
+  _St? _filter; // tapped count chip → show only these
+  final Set<String> _collapsed = {}; // phone: collapsed departments
   DateTime _lastRefresh = DateTime.now();
   Timer? _refresh;
 
@@ -176,9 +179,9 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
               : const EdgeInsets.fromLTRB(20, 16, 20, 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _topBar(),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
             _headline(),
-            const SizedBox(height: 16),
+            const SizedBox(height: 6),
             Expanded(child: _loading
                 ? const Center(child: CircularProgressIndicator(color: Colors.white54))
                 : (_emps.isEmpty
@@ -191,7 +194,8 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
   }
 
   Widget _topBar() {
-    final title = const Text('Attendance Board', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800));
+    final title = Text(isNarrow(context) ? 'Attendance' : 'Attendance Board',
+        style: TextStyle(color: Colors.white, fontSize: isNarrow(context) ? 19 : (_fullscreen ? 26 : 22), fontWeight: FontWeight.w800));
     final dateStepper = Row(mainAxisSize: MainAxisSize.min, children: [
       _ghostBtn(Icons.chevron_left, () => setState(() { _date = _date.subtract(const Duration(days: 1)); _load(); })),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -252,125 +256,177 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
           child: Icon(icon, size: 20, color: onTap == null ? Colors.white24 : Colors.white70))));
   }
 
+  /// Counts as one row of small chips (tap one to show only those people).
   Widget _headline() {
     final narrow = isNarrow(context);
-    Widget tileBody(String label, String value, Color valueColor, Color bg, Color border) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: border)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(value, style: TextStyle(color: valueColor, fontSize: 30, fontWeight: FontWeight.w900, height: 1)),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
-      ]),
-    );
-    final total = _emps.length;
-
-    if (narrow) {
-      Widget cell(Widget body) => SizedBox(width: 150, child: body);
-      return Wrap(spacing: 10, runSpacing: 10, children: [
-        cell(tileBody('On site', '${_count(_St.present)}', const Color(0xFF2E9E5B), const Color(0xFF2E9E5B).withOpacity(0.14), const Color(0xFF2E9E5B).withOpacity(0.4))),
-        cell(tileBody('Left', '${_count(_St.left)}', const Color(0xFF5B7F9E), const Color(0xFF5B7F9E).withOpacity(0.14), const Color(0xFF5B7F9E).withOpacity(0.4))),
-        cell(tileBody('Not arrived', '${_count(_St.notArrived)}', const Color(0xFF8A93A3), const Color(0xFF8A93A3).withOpacity(0.14), const Color(0xFF8A93A3).withOpacity(0.4))),
-        cell(tileBody('Leave / Half', '${_count(_St.leave)}', const Color(0xFFD9822B), const Color(0xFFD9822B).withOpacity(0.14), const Color(0xFFD9822B).withOpacity(0.4))),
-        cell(tileBody('Absent', '${_count(_St.absent)}', const Color(0xFFD64545), const Color(0xFFD64545).withOpacity(0.14), const Color(0xFFD64545).withOpacity(0.4))),
-        cell(tileBody('Total staff', '$total', Colors.white, Colors.white10, Colors.white24)),
-      ]);
+    final big = _fullscreen;
+    Widget chip(String label, int n, Color c, _St? st) {
+      final sel = _filter == st && st != null;
+      return Material(
+        color: sel ? c.withOpacity(0.28) : c.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(narrow ? 8 : 999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(narrow ? 8 : 999),
+          onTap: () => setState(() => _filter = (st == null || _filter == st) ? null : st),
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: narrow ? 6 : 12, vertical: narrow ? 6 : 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(narrow ? 8 : 999),
+              border: Border.all(color: sel ? c : c.withOpacity(0.45), width: sel ? 1.6 : 1),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+              Text('$n', style: TextStyle(color: c == Colors.white ? Colors.white : c, fontSize: big ? 20 : (narrow ? 15 : 16), fontWeight: FontWeight.w900)),
+              const SizedBox(width: 5),
+              Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white70, fontSize: big ? 14 : (narrow ? 11 : 12), fontWeight: FontWeight.w600))),
+            ]),
+          ),
+        ),
+      );
     }
-
-    Widget tile(String label, int n, Color c) => Expanded(child: Container(
-      margin: const EdgeInsets.only(right: 10),
-      child: tileBody(label, '$n', c, c.withOpacity(0.14), c.withOpacity(0.4)),
-    ));
-    return Row(children: [
-      tile('On site', _count(_St.present), const Color(0xFF2E9E5B)),
-      tile('Left', _count(_St.left), const Color(0xFF5B7F9E)),
-      tile('Not arrived', _count(_St.notArrived), const Color(0xFF8A93A3)),
-      tile('Leave / Half', _count(_St.leave), const Color(0xFFD9822B)),
-      tile('Absent', _count(_St.absent), const Color(0xFFD64545)),
-      Expanded(child: tileBody('Total staff', '$total', Colors.white, Colors.white10, Colors.white24)),
+    final chips = [
+      chip('On site', _count(_St.present), _color(_St.present), _St.present),
+      chip('Left', _count(_St.left), _color(_St.left), _St.left),
+      chip(narrow ? 'Not arr.' : 'Not arrived', _count(_St.notArrived), _color(_St.notArrived), _St.notArrived),
+      chip(narrow ? 'Leave' : 'Leave / Half', _count(_St.leave), _color(_St.leave), _St.leave),
+      chip('Absent', _count(_St.absent), _color(_St.absent), _St.absent),
+      if (_count(_St.off) > 0) chip('Day off', _count(_St.off), _color(_St.off), _St.off),
+      chip(narrow ? 'Total' : 'Total staff', _emps.length, Colors.white, null),
+    ];
+    if (narrow) {
+      return GridView.count(
+        crossAxisCount: 3, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 6, crossAxisSpacing: 6, childAspectRatio: 3.1,
+        children: chips,
+      );
+    }
+    return Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+      ...chips,
+      if (_filter != null)
+        TextButton(onPressed: () => setState(() => _filter = null),
+            child: const Text('Show everyone', style: TextStyle(color: Colors.white70, fontSize: 12))),
     ]);
   }
 
   Widget _grid() {
-    // group by department, preserve a stable order
+    final narrow = isNarrow(context);
+    final shown = _filter == null ? _emps : _emps.where((e) => e.state == _filter).toList();
+    if (shown.isEmpty) {
+      return Center(child: Text('Nobody is ${_label(_filter!).toLowerCase()}', style: const TextStyle(color: Colors.white54)));
+    }
+    // group by department, stable order
     final groups = <String, List<_Emp>>{};
-    for (final e in _emps) { (groups[e.deptName] ??= []).add(e); }
+    for (final e in shown) { (groups[e.deptName] ??= []).add(e); }
     final deptOrder = groups.keys.toList()..sort();
-    return SingleChildScrollView(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        for (final dept in deptOrder) ...[
-          Padding(padding: const EdgeInsets.only(top: 6, bottom: 10),
-            child: Row(children: [
-              Text(dept, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-              const SizedBox(width: 8),
-              Text('${groups[dept]!.where((e) => e.state == _St.present).length}/${groups[dept]!.length} on site',
-                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
-            ])),
-          Wrap(spacing: 12, runSpacing: 12, children: [
-            for (final e in groups[dept]!) _card(e),
-          ]),
-          const SizedBox(height: 18),
-        ],
-      ]),
-    );
+    final tileW = _fullscreen ? 300.0 : 250.0;
+    return LayoutBuilder(builder: (ctx, box) {
+      // Tiles fill the row evenly: as many columns as fit at ~tileW each.
+      final cols = narrow ? 1 : (box.maxWidth / tileW).floor().clamp(1, 12).toInt();
+      final w = narrow ? box.maxWidth : (box.maxWidth - (cols - 1) * 6) / cols;
+      return SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final dept in deptOrder) ...[
+            InkWell(
+              onTap: narrow ? () => setState(() => _collapsed.contains(dept) ? _collapsed.remove(dept) : _collapsed.add(dept)) : null,
+              child: Padding(padding: const EdgeInsets.only(top: 8, bottom: 6),
+                child: Row(children: [
+                  Text(dept, style: TextStyle(color: Colors.white, fontSize: _fullscreen ? 17 : 14, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 8),
+                  Flexible(child: Text(
+                      '${groups[dept]!.where((e) => e.state == _St.present).length}/${groups[dept]!.length} on site'
+                      '${groups[dept]!.any((e) => e.state == _St.left) ? ' · ${groups[dept]!.where((e) => e.state == _St.left).length} left' : ''}',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12))),
+                  if (narrow) ...[
+                    const Spacer(),
+                    Icon(_collapsed.contains(dept) ? Icons.expand_more : Icons.expand_less, color: Colors.white38, size: 18),
+                  ],
+                ])),
+            ),
+            if (!(narrow && _collapsed.contains(dept)))
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final e in groups[dept]!) SizedBox(width: w, child: _card(e)),
+              ]),
+          ],
+          const SizedBox(height: 16),
+        ]),
+      );
+    });
   }
 
+  /// One short tile: photo · name/code · In and Out stacked on the right (never cut).
   Widget _card(_Emp e) {
     final c = _color(e.state);
-    return GestureDetector(
-      onTap: () => context.go('/hr/employees?focus=${e.id}'),
-      child: Container(
-      width: 150,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: c.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.withOpacity(0.55), width: 1.4),
-      ),
-      child: Column(children: [
-        Stack(alignment: Alignment.bottomRight, children: [
-          Container(
-            width: 56, height: 56,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: c, width: 2.4),
-              color: Colors.white12,
-              image: (e.photoUrl != null && e.photoUrl!.isNotEmpty)
-                  ? DecorationImage(image: NetworkImage(e.photoUrl!), fit: BoxFit.cover) : null,
+    final big = _fullscreen;
+    final av = big ? 46.0 : 38.0;
+    Widget time(String tag, String value, Color color, {bool bold = false}) => Text.rich(
+          TextSpan(children: [
+            TextSpan(text: '$tag ', style: TextStyle(color: Colors.white38, fontSize: big ? 11 : 9.5, fontWeight: FontWeight.w800, letterSpacing: .4)),
+            TextSpan(text: value, style: TextStyle(color: color, fontSize: big ? 14 : 12, fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+                fontFeatures: const [FontFeature.tabularFigures()])),
+          ]),
+          maxLines: 1, softWrap: false,
+        );
+    final hasIn = e.checkIn != null && e.checkIn!.isNotEmpty;
+    final hasOut = e.checkOut != null && e.checkOut!.isNotEmpty;
+    final right = hasIn || hasOut
+        ? Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+            if (hasIn) time('IN', _to12(e.checkIn!), const Color(0xFF86EFAC)),
+            if (hasOut) time('OUT', _to12(e.checkOut!), const Color(0xFF93C5FD), bold: true)
+            else if (e.state == _St.present) time('OUT', '—', Colors.white24),
+          ])
+        : Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(color: c.withOpacity(0.18), borderRadius: BorderRadius.circular(6)),
+            child: Text(_label(e.state), style: TextStyle(color: c, fontSize: big ? 12.5 : 11, fontWeight: FontWeight.w700)),
+          );
+    return Material(
+      color: const Color(0xFF111827),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => context.go('/hr/employees?focus=${e.id}'),
+        child: Container(
+          padding: EdgeInsets.fromLTRB(8, big ? 9 : 7, 9, big ? 9 : 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border(
+              left: BorderSide(color: c, width: 4),
+              top: const BorderSide(color: Color(0xFF1F2937)),
+              right: const BorderSide(color: Color(0xFF1F2937)),
+              bottom: const BorderSide(color: Color(0xFF1F2937)),
             ),
-            child: (e.photoUrl == null || e.photoUrl!.isEmpty)
-                ? const Icon(Icons.person, color: Colors.white54, size: 28) : null,
           ),
-          Container(width: 16, height: 16, decoration: BoxDecoration(
-            color: c, shape: BoxShape.circle, border: Border.all(color: const Color(0xFF0B1220), width: 2))),
-        ]),
-        const SizedBox(height: 8),
-        Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-        Text(e.code, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(color: c.withOpacity(0.22), borderRadius: BorderRadius.circular(6)),
-          child: Text(
-            e.state == _St.present && e.checkIn != null
-                ? 'In ${_to12(e.checkIn!)}'
-                : e.state == _St.left && e.checkOut != null
-                    ? (e.checkIn != null
-                        ? 'In ${_to12(e.checkIn!)} · Out ${_to12(e.checkOut!)}'
-                        : 'Out ${_to12(e.checkOut!)}')
-                    : _label(e.state),
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
+          child: Row(children: [
+            Container(
+              width: av, height: av,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white12,
+                image: (e.photoUrl != null && e.photoUrl!.isNotEmpty)
+                    ? DecorationImage(image: NetworkImage(e.photoUrl!), fit: BoxFit.cover) : null,
+              ),
+              child: (e.photoUrl == null || e.photoUrl!.isEmpty)
+                  ? Icon(Icons.person, color: Colors.white54, size: av * 0.5) : null,
+            ),
+            const SizedBox(width: 9),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white, fontSize: big ? 15 : 13, fontWeight: FontWeight.w700)),
+              Text(e.code, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white38, fontSize: big ? 12 : 11)),
+            ])),
+            const SizedBox(width: 6),
+            right,
+          ]),
         ),
-      ]),
       ),
     );
   }
 
   String _to12(String hhmm) {
     final p = hhmm.split(':');
-    if (p.length != 2) return hhmm;
+    if (p.length < 2) return hhmm;
     var h = int.tryParse(p[0]) ?? 0;
     final m = p[1];
     final ap = h >= 12 ? 'PM' : 'AM';
