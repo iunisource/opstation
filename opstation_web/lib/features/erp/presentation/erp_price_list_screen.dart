@@ -36,8 +36,24 @@ class _Line {
   // Cost the rate was based on, and the formula rate, at the time (saved
   // lists keep these from SQL 343 on, so the "Quoted = X%" line still works).
   final double? base, calc;
-  const _Line(this.productId, this.sku, this.name, this.uom, this.rate, this.edited, {this.base, this.calc});
+  // Product's own formula (source / method / %) when it differs from the list's.
+  final Map<String, dynamic>? fx;
+  const _Line(this.productId, this.sku, this.name, this.uom, this.rate, this.edited, {this.base, this.calc, this.fx});
 }
+
+/// A product's own pricing formula (overrides the list's source / method / %).
+class _Fx {
+  final String source, method;
+  final double margin;
+  const _Fx(this.source, this.method, this.margin);
+  Map<String, dynamic> toJson() => {'source': source, 'method': method, 'margin': margin};
+  static _Fx? fromJson(dynamic j) => j is Map
+      ? _Fx('${j['source'] ?? 'purchase'}', '${j['method'] ?? 'markup'}', (j['margin'] as num?)?.toDouble() ?? 0)
+      : null;
+}
+
+String _srcLabel(String s) => s == 'selling' ? 'Selling Price' : (s == 'bom' ? 'BoM Cost' : 'Purchase Cost');
+String _methLabel(String m) => m == 'margin' ? 'margin on price' : 'markup on cost';
 
 class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   bool _loading = true;
@@ -58,6 +74,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   String _method = 'markup';   // markup (× (1+m)) | margin (÷ (1−m))
   String _title = 'Price List'; // printed heading: 'Price List' | 'Cost Sheet'
   final Map<String, double> _override = {}; // product_id -> manually entered rate
+  final Map<String, _Fx> _pf = {}; // product_id -> its own formula
   Map<String, dynamic>? _snap; // a saved price list being viewed (read-only); null = live generator
   // A saved list reopened in the generator for editing: {id, name, notes, title, created_by}.
   Map<String, dynamic>? _editing;
@@ -228,8 +245,10 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
 
   double get _margin => (double.tryParse(_marginCtrl.text.trim()) ?? 0);
 
-  double _base(_P p) {
-    switch (_source) {
+  _Fx _fxOf(_P p) => _pf[p.id] ?? _Fx(_source, _method, _margin);
+
+  double _base(_P p, [String? source]) {
+    switch (source ?? _fxOf(p).source) {
       case 'selling': return p.sell;
       case 'bom': return _bomRate[p.id] ?? p.cost; // fallback to purchase cost
       default: return p.cost;
@@ -240,10 +259,12 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   /// calculated rate.
   double _rate(_P p) => _override[p.id] ?? _calcRate(p);
 
-  double _calcRate(_P p) {
-    final b = _base(p);
-    final m = _margin / 100;
-    if (_method == 'margin') {
+  double _calcRate(_P p) => _calcWith(p, _fxOf(p));
+
+  double _calcWith(_P p, _Fx fx) {
+    final b = _base(p, fx.source);
+    final m = fx.margin / 100;
+    if (fx.method == 'margin') {
       // Margin on price: margin is a % OF the final price. Guard m>=100%.
       return m >= 1 ? b : b / (1 - m);
     }
@@ -253,9 +274,16 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
   /// For a manually quoted rate: what % it works out to on the same cost
   /// source and method as the formula, and how far it is from the formula.
   /// e.g. "Quoted 160 = 45.5% markup on Purchase Cost 110 · formula 40% → 154 (+6, +3.9%)"
-  String _quoteBasis(_P p, double rate) =>
-      _basisText(rate: rate, base: _base(p), calc: _calcRate(p), margin: _margin,
-          method: _method, methodLabel: _methodLabel, sourceLabel: _sourceLabel);
+  String _quoteBasis(_P p, double rate) {
+    final fx = _fxOf(p);
+    return _basisText(rate: rate, base: _base(p), calc: _calcRate(p), margin: fx.margin,
+        method: fx.method, methodLabel: _methLabel(fx.method), sourceLabel: _srcLabel(fx.source));
+  }
+
+  String _fxNote(Map<String, dynamic> fx, double rate) {
+    final f = _Fx.fromJson(fx)!;
+    return 'Own formula: ${_srcLabel(f.source)}, ${_qty.format(f.margin)}% ${_methLabel(f.method)} → ${_qty.format(rate)}';
+  }
 
   /// Same line for a saved list, from the cost / formula rate stored with it.
   String? _savedBasis(_Line l, Map<String, dynamic> snap) {
@@ -285,63 +313,129 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         '($sourceLabel ${_qty.format(base)}) · $vs';
   }
 
+  /// Per product: use the list's formula, its own formula (source, method,
+  /// %), or a fixed (manually forced) rate.
   Future<void> _editRate(_P p) async {
-    final calc = _calcRate(p);
-    final ctrl = TextEditingController(text: _rate(p).toStringAsFixed(2));
-    ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+    final listFx = _Fx(_source, _method, _margin);
+    final listCalc = _calcWith(p, listFx);
+    String mode = _override.containsKey(p.id) ? 'fixed' : (_pf.containsKey(p.id) ? 'own' : 'list');
+    var own = _pf[p.id] ?? listFx;
+    final pctCtrl = TextEditingController(text: _qty.format(own.margin).replaceAll(',', ''));
+    final rateCtrl = TextEditingController(text: _rate(p).toStringAsFixed(2));
+    rateCtrl.selection = TextSelection(baseOffset: 0, extentOffset: rateCtrl.text.length);
+    InputDecoration dec(String l) => InputDecoration(labelText: l, isDense: true, border: const OutlineInputBorder());
     final res = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(p.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Calculated rate: ${_qty.format(calc)}  ($_sourceLabel, ${_qty.format(_margin)}% $_methodLabel)',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          const SizedBox(height: 12),
-          StatefulBuilder(builder: (ctx2, setLocal) {
-            final v = double.tryParse(ctrl.text.trim().replaceAll(',', ''));
-            final changed = v != null && (v - calc).abs() >= 0.005;
-            return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Rate', isDense: true, border: OutlineInputBorder()),
-                onChanged: (_) => setLocal(() {}),
-                onSubmitted: (_) => Navigator.pop(ctx, 'save'),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        final ownCalc = _calcWith(p, own);
+        final fixed = double.tryParse(rateCtrl.text.trim().replaceAll(',', ''));
+        final noBom = own.source == 'bom' && _bomLoaded && !_bomRate.containsKey(p.id);
+        Widget opt(String v, String title, String sub) => InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => setD(() => mode = v),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(mode == v ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 20,
+                      color: mode == v ? AppTheme.primary : AppTheme.textSecondary),
+                  const SizedBox(width: 10),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(sub, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                  ])),
+                ]),
               ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: 380,
-                child: Text(
-                    changed ? _quoteBasis(p, v!) : 'Same as the formula.',
-                    style: TextStyle(
-                        fontSize: 11.5,
-                        color: changed ? const Color(0xFF92400E) : AppTheme.textSecondary,
-                        fontWeight: changed ? FontWeight.w600 : FontWeight.normal)),
-              ),
-            ]);
-          }),
-        ]),
-        actions: [
-          if (_override.containsKey(p.id))
-            TextButton(onPressed: () => Navigator.pop(ctx, 'reset'), child: const Text('Use calculated')),
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
-        ],
-      ),
+            );
+        return AlertDialog(
+          title: Text(p.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                opt('list', 'List formula', '${_qty.format(listCalc)}  ·  $_sourceLabel, ${_qty.format(_margin)}% $_methodLabel'),
+                opt('own', 'Own formula for this product', mode == 'own' ? 'Rate ${_qty.format(ownCalc)}' : 'Pick its own cost source, method and %'),
+                if (mode == 'own') Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 0, 8),
+                  child: Column(children: [
+                    Row(children: [
+                      Expanded(child: DropdownButtonFormField<String>(
+                        value: own.source, isExpanded: true, decoration: dec('Source of cost'),
+                        items: const [
+                          DropdownMenuItem(value: 'purchase', child: Text('Purchase (cost price)')),
+                          DropdownMenuItem(value: 'selling', child: Text('Selling price')),
+                          DropdownMenuItem(value: 'bom', child: Text('BoM cost')),
+                        ],
+                        onChanged: (v) async {
+                          own = _Fx(v ?? 'purchase', own.method, own.margin);
+                          if (own.source == 'bom') await _ensureBomRates();
+                          setD(() {});
+                        },
+                      )),
+                      const SizedBox(width: 8),
+                      SizedBox(width: 90, child: TextField(
+                        controller: pctCtrl, decoration: dec('%'),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        onChanged: (v) => setD(() => own = _Fx(own.source, own.method, double.tryParse(v.trim()) ?? 0)),
+                      )),
+                    ]),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: own.method, isExpanded: true, decoration: dec('Costing method'),
+                      items: const [
+                        DropdownMenuItem(value: 'markup', child: Text('Markup on cost')),
+                        DropdownMenuItem(value: 'margin', child: Text('Margin on price')),
+                      ],
+                      onChanged: (v) => setD(() => own = _Fx(own.source, v ?? 'markup', own.margin)),
+                    ),
+                    const SizedBox(height: 6),
+                    Align(alignment: Alignment.centerLeft, child: Text(
+                        noBom
+                            ? 'No active BoM for this product — its purchase cost is used.'
+                            : '${_srcLabel(own.source)} ${_qty.format(_base(p, own.source))} → rate ${_qty.format(ownCalc)}',
+                        style: TextStyle(fontSize: 11.5, color: noBom ? const Color(0xFFB91C1C) : AppTheme.textSecondary))),
+                  ]),
+                ),
+                opt('fixed', 'Fixed rate', 'Type the price yourself'),
+                if (mode == 'fixed') Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 0, 4),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    TextField(
+                      controller: rateCtrl, autofocus: true, decoration: dec('Rate'),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: (_) => setD(() {}),
+                      onSubmitted: (_) => Navigator.pop(ctx, 'save'),
+                    ),
+                    const SizedBox(height: 6),
+                    if (fixed != null)
+                      Text(_basisText(rate: fixed, base: _base(p, listFx.source), calc: listCalc, margin: _margin,
+                              method: _method, methodLabel: _methodLabel, sourceLabel: _sourceLabel),
+                          style: const TextStyle(fontSize: 11.5, color: Color(0xFF92400E), fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('Save')),
+          ],
+        );
+      }),
     );
-    if (!mounted || res == null) return;
+    if (!mounted || res != 'save') return;
     setState(() {
-      if (res == 'reset') {
+      if (mode == 'list') {
         _override.remove(p.id);
+        _pf.remove(p.id);
+      } else if (mode == 'own') {
+        _override.remove(p.id);
+        final same = own.source == listFx.source && own.method == listFx.method && (own.margin - listFx.margin).abs() < 0.0001;
+        if (same) { _pf.remove(p.id); } else { _pf[p.id] = own; }
       } else {
-        final v = double.tryParse(ctrl.text.trim().replaceAll(',', ''));
+        final v = double.tryParse(rateCtrl.text.trim().replaceAll(',', ''));
         if (v == null || v < 0) return;
-        if ((v - calc).abs() < 0.005) {
-          _override.remove(p.id); // same as calculated — no need to pin it
-        } else {
-          _override[p.id] = v;
-        }
+        _pf.remove(p.id);
+        if ((v - listCalc).abs() < 0.005) { _override.remove(p.id); } else { _override[p.id] = v; }
       }
     });
   }
@@ -495,16 +589,18 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
         for (final l in (snap['lines'] as List? ?? const []))
           _Line('${l['product_id'] ?? ''}', '${l['sku'] ?? ''}', '${l['name'] ?? ''}', '${l['uom'] ?? ''}',
               (l['rate'] as num?)?.toDouble() ?? 0, l['edited'] == true,
-              base: (l['base'] as num?)?.toDouble(), calc: (l['calc'] as num?)?.toDouble()),
+              base: (l['base'] as num?)?.toDouble(), calc: (l['calc'] as num?)?.toDouble(),
+              fx: l['fx'] is Map ? Map<String, dynamic>.from(l['fx'] as Map) : null),
       ];
 
   List<_Line> get _outLines => _snap != null
       ? _snapLines(_snap!)
       : [for (final p in _rows) _Line(p.id, p.sku, p.name, p.uom, _rate(p), _override.containsKey(p.id),
-            base: _base(p), calc: _calcRate(p))];
+            base: _base(p), calc: _calcRate(p),
+            fx: _override.containsKey(p.id) ? null : _pf[p.id]?.toJson())];
 
   Future<void> _prepare() async {
-    if (_snap == null && _source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
+    if (_snap == null && (_source == 'bom' || _pf.values.any((f) => f.source == 'bom'))) { await _ensureBomRates(); if (mounted) setState(() {}); }
   }
 
   // ── Save a generated list (manual, for the record) ────────────────────────
@@ -537,7 +633,8 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
           {'product_id': l.productId, 'sku': l.sku, 'name': l.name, 'uom': l.uom,
            'rate': double.parse(l.rate.toStringAsFixed(4)), 'edited': l.edited,
            if (l.base != null) 'base': double.parse(l.base!.toStringAsFixed(4)),
-           if (l.calc != null) 'calc': double.parse(l.calc!.toStringAsFixed(4))},
+           if (l.calc != null) 'calc': double.parse(l.calc!.toStringAsFixed(4)),
+           if (l.fx != null) 'fx': l.fx},
       ];
 
   /// Overwrite the saved list being edited (the previous version is kept in
@@ -626,16 +723,19 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
       // Pin exactly the products that were on the saved list.
       _pickedIds..clear()..addAll(lines.map((l) => '${l['product_id']}').where(known.contains));
       _override.clear();
+      _pf.clear();
       for (final l in lines) {
         final pid = '${l['product_id']}';
         if (l['edited'] == true && known.contains(pid)) _override[pid] = (l['rate'] as num?)?.toDouble() ?? 0;
+        final fx = _Fx.fromJson(l['fx']);
+        if (fx != null && l['edited'] != true && known.contains(pid)) _pf[pid] = fx;
       }
       _editing = {
         'id': s['id'], 'name': s['name'], 'notes': s['notes'], 'title': s['title'], 'created_by': s['created_by'],
       };
       _snap = null;
     });
-    if (_source == 'bom') { await _ensureBomRates(); if (mounted) setState(() {}); }
+    if (_source == 'bom' || _pf.values.any((f) => f.source == 'bom')) { await _ensureBomRates(); if (mounted) setState(() {}); }
     if (missing > 0) _toast('$missing product${missing == 1 ? ' is' : 's are'} no longer active and left out.');
   }
 
@@ -1203,11 +1303,11 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
               Text('${rows.length} product(s)  ·  Rate = $_sourceLabel, ${_qty.format(_margin)}% ($_methodLabel)'
                   '  ·  tap a rate to edit it',
                   style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-              if (_override.isNotEmpty)
+              if (_override.isNotEmpty || _pf.isNotEmpty)
                 TextButton.icon(
-                  onPressed: () => setState(_override.clear),
+                  onPressed: () => setState(() { _override.clear(); _pf.clear(); }),
                   icon: const Icon(Icons.restart_alt, size: 15),
-                  label: Text('Reset ${_override.length} edited rate${_override.length == 1 ? '' : 's'}', style: const TextStyle(fontSize: 12)),
+                  label: Text('Reset ${_override.length + _pf.length} edited rate${_override.length + _pf.length == 1 ? '' : 's'}', style: const TextStyle(fontSize: 12)),
                   style: TextButton.styleFrom(foregroundColor: const Color(0xFFB45309), visualDensity: VisualDensity.compact),
                 ),
             ]),
@@ -1254,12 +1354,21 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                         final name = Text(p.name, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis);
                         // BoM chosen but this product has no active recipe → its
                         // purchase cost is used instead. Say so, don't hide it.
-                        if (live && _source == 'bom' && _bomLoaded && !_bomRate.containsKey(p.productId)) {
+                        final srcUsed = p.edited ? _source : (_pf[p.productId]?.source ?? _source);
+                        if (live && srcUsed == 'bom' && _bomLoaded && !_bomRate.containsKey(p.productId)) {
                           return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             name,
                             const SizedBox(height: 2),
                             const Text('No active BoM for this product — rate is from its purchase cost',
                                 style: TextStyle(fontSize: 11, color: Color(0xFFB91C1C))),
+                          ]);
+                        }
+                        if (!p.edited && p.fx != null) {
+                          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            name,
+                            const SizedBox(height: 2),
+                            Text(_fxNote(p.fx!, p.rate), maxLines: 2, overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 11, color: Color(0xFF1D4ED8))),
                           ]);
                         }
                         if (!p.edited) return name;
@@ -1277,7 +1386,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       })),
                       SizedBox(width: 60, child: Text(p.uom, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.center)),
                       SizedBox(width: 110, child: Builder(builder: (_) {
-                        final edited = p.edited;
+                        final edited = p.edited || p.fx != null;
                         final src = byId[p.productId];
                         return InkWell(
                           onTap: (live && src != null) ? () => _editRate(src) : null,

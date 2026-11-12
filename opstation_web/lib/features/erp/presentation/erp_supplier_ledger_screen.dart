@@ -22,12 +22,20 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
 class ErpSupplierLedgerScreen extends ConsumerStatefulWidget {
-  const ErpSupplierLedgerScreen({super.key});
+  /// Account to open (global search / deep link) — wins over the last-viewed one.
+  final String? focusId;
+  const ErpSupplierLedgerScreen({super.key, this.focusId});
   @override
   ConsumerState<ErpSupplierLedgerScreen> createState() => _ErpSupplierLedgerScreenState();
 }
 
 class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScreen> {
+  /// The account to open: the route's focus (always current), else ?focus= in the URL.
+  String? _urlFocus(String href, int qIdx) =>
+      (widget.focusId != null && widget.focusId!.isNotEmpty)
+          ? widget.focusId
+          : (qIdx == -1 ? null : Uri.splitQueryString(href.substring(qIdx + 1))['focus']);
+
   List<Map<String, dynamic>> _suppliers = [];
   Map<String, dynamic>? _selectedSupplier;
   List<Map<String, dynamic>> _filteredSuppliers = [];
@@ -94,8 +102,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       bool fromStorage = false;
       final href = html.window.location.href;
       final qIdx = href.indexOf('?');
-      if (qIdx != -1) {
-        final f = Uri.splitQueryString(href.substring(qIdx + 1))['focus'];
+      {
+        final f = _urlFocus(href, qIdx);
         if (f != null && f.isNotEmpty) id = f;
       }
       final s = html.window.localStorage;
@@ -178,8 +186,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       // takes priority over the saved (localStorage) selection.
       final href = html.window.location.href;
       final qIdx = href.indexOf('?');
-      if (qIdx != -1) {
-        final focusId = Uri.splitQueryString(href.substring(qIdx + 1))['focus'];
+      {
+        final focusId = _urlFocus(href, qIdx);
         if (focusId != null && focusId.isNotEmpty) {
           final fm = _suppliers.where((c) => c['id'] == focusId).toList();
           if (fm.isNotEmpty) { _selectSupplier(fm.first); return; }
