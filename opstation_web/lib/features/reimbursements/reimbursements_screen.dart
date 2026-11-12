@@ -562,7 +562,11 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   }
 
   Future<void> _markPaid(Map c) async {
-    final amt = TextEditingController(text: c['amount'] == null ? '' : '${(c['amount'] as num).round()}');
+    // Pre-filled from km × rate per km (editable); the stored amount wins if set at approval.
+    final km = _unpaidKm(c);
+    final rate = (c['rate'] as num?)?.toDouble() ?? _rate;
+    final num? suggested = c['amount'] as num? ?? (rate == null ? null : (km * rate).round());
+    final amt = TextEditingController(text: suggested == null ? '' : '${suggested.round()}');
     final ref_ = TextEditingController();
     String method = 'Cash';
     DateTime on = DateTime.now();
@@ -574,7 +578,9 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         content: SizedBox(
           width: 420,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('${_dates(c)} · ${_km(_unpaidKm(c))}', style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            Text('${_dates(c)} · ${_km(km)}'
+                '${rate == null ? ' · no rate per km set' : ' × Rs ${NumberFormat('#,##0.##').format(rate)}/km = ${_rs((km * rate).round())}'}',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
             const SizedBox(height: 12),
             Row(children: [
               Expanded(child: TextField(
