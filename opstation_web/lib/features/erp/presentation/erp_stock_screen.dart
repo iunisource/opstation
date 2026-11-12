@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/app_link.dart';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -106,7 +107,7 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
     if (productId == null) return;
     // GoRouter uses the hash URL strategy, so a new-tab deep link needs '/#/'.
     final origin = html.window.location.origin;
-    html.window.open('$origin/#/erp/inventory-ledger?focus=$productId', '_blank');
+    openAppLink(context, '/erp/inventory-ledger?focus=$productId');
   }
 
   void _printStock(List<Map<String, dynamic>> cols, List<_PivotRow> rows) {

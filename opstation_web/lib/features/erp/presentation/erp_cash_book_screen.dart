@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/app_link.dart';
 import '../../../core/utils/void_filter.dart';
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
@@ -178,9 +179,8 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
                 icon: const Icon(Icons.open_in_new, size: 15),
                 label: const Text('Open Journal Voucher'),
                 onPressed: () {
-                  final href = html.window.location.href; final hIdx = href.indexOf('#');
-                  final origin = hIdx != -1 ? href.substring(0, hIdx) : href;
-                  html.window.open(origin + '#/financials/journal-vouchers?id=' + vno, '_blank');
+                  Navigator.of(ctx).pop();
+                  openAppLink(context, '/financials/journal-vouchers?id=' + vno);
                 },
               )),
             ]),

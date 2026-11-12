@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/app_link.dart';
 import 'dart:html' as html;
 import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
@@ -179,7 +180,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
               final href = html.window.location.href;
               final hashIdx = href.indexOf('#');
               final origin = hashIdx != -1 ? href.substring(0, hashIdx) : href;
-              html.window.open('${origin}#/erp/payment-vouchers?id=${vNum}', '_blank');
+              openAppLink(context, '/erp/payment-vouchers?id=${vNum}');
               _ctxOverlay?.remove(); _ctxOverlay = null;
             },
             child: Padding(

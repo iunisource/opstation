@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/widgets/journal_modal.dart';
 import '../../../core/utils/void_filter.dart';
 import 'dart:convert';
 import 'dart:html' as html;
@@ -1004,11 +1005,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No voucher ID to open')));
       return;
     }
-    if (type == 'Journal (JV)') {
-      final vno = entry['voucher'] as String? ?? '';
-      final href = html.window.location.href; final hIdx = href.indexOf('#');
-      final origin = hIdx != -1 ? href.substring(0, hIdx) : href;
-      html.window.open(origin + '#/financials/journal-vouchers?id=' + vno, '_blank');
+    if (type == 'Journal (JV)' || type == 'Opening Balance' || type == 'Job-work Fee') {
+      await showJournalModal(context, entryId: id); // opens in place (also in the installed app)
       return;
     }
     Map<String, dynamic>? voucher;

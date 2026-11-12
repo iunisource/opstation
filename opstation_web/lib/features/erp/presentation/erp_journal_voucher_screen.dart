@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
+import '../../../core/utils/app_link.dart';
 import 'dart:html' as html;
 import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
@@ -300,7 +301,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
             final num = v['entry_number'] as String? ?? '';
             final href = html.window.location.href; final hIdx = href.indexOf('#');
             final origin = hIdx != -1 ? href.substring(0, hIdx) : href;
-            html.window.open(origin + '#/financials/journal-vouchers?id=' + num, '_blank');
+            openAppLink(context, '/financials/journal-vouchers?id=' + num);
             _ctxOverlay?.remove(); _ctxOverlay = null;
           }, child: const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
