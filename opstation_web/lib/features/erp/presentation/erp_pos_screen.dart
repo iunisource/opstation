@@ -3368,6 +3368,26 @@ class _ReceiptDialog extends StatelessWidget {
 
   static String _e(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
+  /// Amount in words (Pakistani style: thousand / lakh / crore).
+  static String _words(double v) {
+    const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve',
+      'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+    const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    String two(int n) => n < 20 ? ones[n] : '${tens[n ~/ 10]}${n % 10 > 0 ? ' ${ones[n % 10]}' : ''}';
+    String three(int n) => n >= 100 ? '${ones[n ~/ 100]} Hundred${n % 100 > 0 ? ' ${two(n % 100)}' : ''}' : two(n);
+    var n = v.abs().floor();
+    final paisa = ((v.abs() - n) * 100).round();
+    if (n == 0 && paisa == 0) return 'Zero Rupees Only';
+    final parts = <String>[];
+    if (n >= 10000000) { parts.add('${three(n ~/ 10000000)} Crore'); n %= 10000000; }
+    if (n >= 100000) { parts.add('${two(n ~/ 100000)} Lakh'); n %= 100000; }
+    if (n >= 1000) { parts.add('${two(n ~/ 1000)} Thousand'); n %= 1000; }
+    if (n > 0) parts.add(three(n));
+    final rs = parts.isEmpty ? '' : '${parts.join(' ')} Rupees';
+    final ps = paisa > 0 ? '${rs.isEmpty ? '' : ' and '}${two(paisa)} Paisa' : '';
+    return '$rs$ps Only';
+  }
+
   /// Full A4 invoice (POS Configuration → Print size: A4).
   String _a4Html({
     required String company, required String branchLine, required String ntn, required String contact,
@@ -3378,8 +3398,11 @@ class _ReceiptDialog extends StatelessWidget {
     final ref = (transaction['transaction_number'] as String?) ?? '';
     final isReturn = transaction['transaction_type'] == 'return';
     final phone = (transaction['pos_customers']?['phone'] as String?) ?? '';
+    final accent = isReturn ? '#b91c1c' : '#1e3a8a';
     final rows = StringBuffer();
     var i = 0;
+    var totalQty = 0.0;
+    var lineDisc = 0.0;
     for (final it in items) {
       i++;
       final q = it['quantity'] as double;
@@ -3388,44 +3411,87 @@ class _ReceiptDialog extends StatelessWidget {
       final dt = it['discount_type'] as String? ?? 'fixed';
       final da = dt == 'percent' ? p * q * (d / 100) : d;
       final lt = q * p - da;
-      rows.write('<tr><td class="c">$i</td><td>${_e(it['name'] as String? ?? '-')}</td>'
+      totalQty += q;
+      lineDisc += da;
+      final sku = '${it['sku'] ?? ''}'.trim();
+      rows.write('<tr><td class="c mut">$i</td>'
+          '<td><div class="nm">${_e(it['name'] as String? ?? '-')}</div>${sku.isNotEmpty ? '<div class="sku">${_e(sku)}</div>' : ''}</td>'
           '<td class="r">${q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toString()}</td>'
           '<td class="r">${money(p)}</td>'
-          '<td class="r">${da > 0 ? (dt == 'percent' ? '${d.toStringAsFixed(d == d.roundToDouble() ? 0 : 1)}%' : money(da)) : '-'}</td>'
+          '<td class="r ${da > 0 ? 'disc' : 'mut'}">${da > 0 ? (dt == 'percent' ? '${money(da)}<span class="pct"> (${d.toStringAsFixed(d == d.roundToDouble() ? 0 : 1)}%)</span>' : money(da)) : '—'}</td>'
           '<td class="r b">${money(lt)}</td></tr>');
     }
     final ap = (transaction['amount_paid'] as num?)?.toDouble();
     final bc = (transaction['balance_change'] as num?)?.toDouble() ?? 0;
-    final balLine = (ap == null || bc == 0)
-        ? ''
-        : '<tr><td>${bc < 0 ? 'Balance due' : 'Credit added'}</td><td class="r b">Rs. ${money(bc.abs())}</td></tr>';
-    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>${_e(isReturn ? 'Return' : 'Invoice')} ${_e(ref)}</title><style>'
-        '@page{size:A4;margin:14mm}*{box-sizing:border-box}'
-        'body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:12.5px;margin:0}'
-        '.hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:14px}'
-        '.co{display:flex;gap:14px;align-items:center}.co img{max-height:70px;max-width:180px}'
-        '.co h1{font-size:22px;margin:0}.co p{margin:2px 0;color:#555;font-size:11.5px}'
-        '.inv{text-align:right}.inv h2{font-size:24px;letter-spacing:3px;margin:0 0 6px}.inv p{margin:2px 0;font-size:12px}'
-        '.bill{display:flex;justify-content:space-between;margin-bottom:14px}.bill .lab{font-size:10.5px;color:#777;text-transform:uppercase;letter-spacing:1px}'
-        'table.items{width:100%;border-collapse:collapse}table.items th{background:#f1f3f5;text-align:left;font-size:11px;padding:8px;border-bottom:1px solid #ccc}'
-        'table.items td{padding:7px 8px;border-bottom:1px solid #e5e5e5}.r{text-align:right}.c{text-align:center}.b{font-weight:bold}'
-        '.tot{display:flex;justify-content:flex-end;margin-top:12px}.tot table{min-width:280px;border-collapse:collapse}'
-        '.tot td{padding:5px 8px}.tot .grand td{border-top:2px solid #111;font-size:15px;font-weight:bold}'
-        '.pay{margin-top:14px;font-size:12px;color:#333}.foot{margin-top:28px;border-top:1px dashed #bbb;padding-top:10px;text-align:center;color:#555;font-size:11.5px}'
-        '.terms{margin-top:8px;font-size:10px;color:#888;text-align:center}'
+    final billDisc = (discount - lineDisc) > 0.005 ? discount - lineDisc : 0.0;
+    final qtyTxt = totalQty == totalQty.roundToDouble() ? totalQty.toStringAsFixed(0) : totalQty.toStringAsFixed(2);
+    String tr(String l, String v, {String cls = ''}) => '<tr class="$cls"><td>$l</td><td class="r">$v</td></tr>';
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>${_e(isReturn ? 'Sales Return' : 'Invoice')} ${_e(ref)}</title><style>'
+        '@page{size:A4;margin:12mm 12mm 14mm}*{box-sizing:border-box}'
+        'body{font-family:"Segoe UI",Arial,Helvetica,sans-serif;color:#1f2937;font-size:12px;margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+        '.top{display:flex;justify-content:space-between;align-items:stretch;gap:16px;margin-bottom:16px}'
+        '.co{display:flex;gap:14px;align-items:center;min-width:0}.co img{max-height:72px;max-width:170px;object-fit:contain}'
+        '.co h1{font-size:21px;margin:0 0 3px;color:#111827;letter-spacing:.2px}.co p{margin:1px 0;color:#6b7280;font-size:11px}'
+        '.doc{background:$accent;color:#fff;border-radius:8px;padding:12px 16px;min-width:210px}'
+        '.doc h2{margin:0 0 8px;font-size:18px;letter-spacing:4px;font-weight:800}'
+        '.doc table{border-collapse:collapse;width:100%;font-size:11.5px}.doc td{padding:2px 0;color:#e5e7eb}.doc td.v{text-align:right;color:#fff;font-weight:700}'
+        '.cards{display:flex;gap:12px;margin-bottom:14px}.card{flex:1;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px}'
+        '.lab{font-size:9.5px;color:#6b7280;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;margin-bottom:4px}'
+        '.big{font-size:14px;font-weight:700;color:#111827}'
+        'table.items{width:100%;border-collapse:collapse}'
+        'table.items thead{display:table-header-group}table.items tr{page-break-inside:avoid}'
+        'table.items th{background:$accent;color:#fff;text-align:left;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;padding:8px}'
+        'table.items th:first-child{border-radius:6px 0 0 6px}table.items th:last-child{border-radius:0 6px 6px 0}'
+        'table.items td{padding:7px 8px;border-bottom:1px solid #eef0f3;vertical-align:top}'
+        'table.items tbody tr:nth-child(even) td{background:#f9fafb}'
+        '.nm{font-weight:600;color:#111827}.sku{font-size:10px;color:#9ca3af;margin-top:1px}'
+        '.r{text-align:right;white-space:nowrap}.c{text-align:center}.b{font-weight:700}.mut{color:#9ca3af}.disc{color:#c2410c}.pct{font-size:10px;color:#9ca3af}'
+        'table.items tfoot td{padding:8px;font-weight:700;border-top:1.5px solid #d1d5db;background:#fff}'
+        '.sum{display:flex;gap:16px;margin-top:14px;align-items:flex-start}'
+        '.notes{flex:1;font-size:11px;color:#4b5563}.words{border-left:3px solid $accent;background:#f9fafb;padding:8px 10px;border-radius:0 6px 6px 0;margin-bottom:10px;color:#111827}'
+        '.tot{width:290px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden}'
+        '.tot table{width:100%;border-collapse:collapse}.tot td{padding:6px 12px;font-size:12px}'
+        '.tot .grand td{background:$accent;color:#fff;font-size:16px;font-weight:800;padding:9px 12px}'
+        '.tot .dim td{color:#6b7280}.tot .due td{color:#b91c1c;font-weight:700}.tot .cr td{color:#047857;font-weight:700}'
+        '.sign{display:flex;justify-content:space-between;gap:40px;margin-top:46px}.sign div{flex:1;border-top:1px solid #9ca3af;padding-top:5px;text-align:center;font-size:10.5px;color:#6b7280}'
+        '.foot{margin-top:18px;text-align:center;color:#374151;font-size:12px;font-weight:600}'
+        '.terms{margin-top:6px;font-size:9.5px;color:#9ca3af;text-align:center;white-space:pre-line}'
+        '.printed{margin-top:10px;text-align:center;font-size:9px;color:#c0c4cc}'
         '</style></head><body>'
-        '<div class="hd"><div class="co">${logo.isNotEmpty ? '<img src="$logo">' : ''}<div><h1>${_e(company)}</h1>'
+        // header
+        '<div class="top"><div class="co">${logo.isNotEmpty ? '<img src="$logo">' : ''}<div><h1>${_e(company)}</h1>'
         '${branchLine.isNotEmpty ? '<p>${_e(branchLine)}</p>' : ''}${ntn.isNotEmpty ? '<p>${_e(ntn)}</p>' : ''}${contact.isNotEmpty ? '<p>${_e(contact)}</p>' : ''}</div></div>'
-        '<div class="inv"><h2>${isReturn ? 'RETURN' : 'INVOICE'}</h2>${ref.isNotEmpty ? '<p><b>No:</b> ${_e(ref)}</p>' : ''}<p><b>Date:</b> ${_e(ts)}</p></div></div>'
-        '<div class="bill"><div><div class="lab">Bill to</div><div class="b" style="font-size:14px">${_e(customer)}</div>${phone.isNotEmpty ? '<div>${_e(phone)}</div>' : ''}</div>'
-        '<div style="text-align:right"><div class="lab">Cashier</div><div>${_e(cashierName.isEmpty ? '-' : cashierName)}</div></div></div>'
-        '<table class="items"><thead><tr><th class="c" style="width:36px">#</th><th>Item</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Discount</th><th class="r">Amount</th></tr></thead>'
-        '<tbody>$rows</tbody></table>'
-        '<div class="tot"><table><tr><td>Subtotal</td><td class="r">${money(subtotal)}</td></tr>'
-        '${discount > 0 ? '<tr><td>Discount</td><td class="r">-${money(discount)}</td></tr>' : ''}'
-        '<tr class="grand"><td>TOTAL</td><td class="r">Rs. ${money(total)}</td></tr>$balLine</table></div>'
-        '<div class="pay"><b>Payment:</b> ${_e(method)}${split.isNotEmpty ? ' &nbsp;·&nbsp; ${_e(split)}' : ''}</div>'
-        '${footer.isNotEmpty ? '<div class="foot">${_e(footer)}</div>' : ''}${terms.isNotEmpty ? '<div class="terms">${_e(terms)}</div>' : ''}'
+        '<div class="doc"><h2>${isReturn ? 'SALES RETURN' : 'INVOICE'}</h2><table>'
+        '${ref.isNotEmpty ? '<tr><td>No.</td><td class="v">${_e(ref)}</td></tr>' : ''}'
+        '<tr><td>Date</td><td class="v">${_e(ts)}</td></tr>'
+        '<tr><td>Cashier</td><td class="v">${_e(cashierName.isEmpty ? '-' : cashierName)}</td></tr>'
+        '</table></div></div>'
+        // bill to + payment
+        '<div class="cards"><div class="card"><div class="lab">${isReturn ? 'Returned by' : 'Bill to'}</div><div class="big">${_e(customer)}</div>'
+        '${phone.isNotEmpty ? '<div style="color:#4b5563;margin-top:2px">${_e(phone)}</div>' : ''}</div>'
+        '<div class="card"><div class="lab">Payment</div><div class="big">${_e(method)}</div>'
+        '${split.isNotEmpty ? '<div style="color:#4b5563;margin-top:2px">${_e(split)}</div>' : ''}</div></div>'
+        // items
+        '<table class="items"><thead><tr><th class="c" style="width:34px">#</th><th>Item</th><th class="r" style="width:60px">Qty</th>'
+        '<th class="r" style="width:90px">Rate</th><th class="r" style="width:100px">Discount</th><th class="r" style="width:105px">Amount</th></tr></thead>'
+        '<tbody>$rows</tbody>'
+        '<tfoot><tr><td></td><td>${items.length} item${items.length == 1 ? '' : 's'}</td><td class="r">$qtyTxt</td><td></td>'
+        '<td class="r disc">${lineDisc > 0 ? money(lineDisc) : ''}</td><td class="r">${money(subtotal - lineDisc)}</td></tr></tfoot></table>'
+        // summary
+        '<div class="sum"><div class="notes"><div class="lab">Amount in words</div><div class="words">${_e(_words(total))}</div>'
+        '${footer.isNotEmpty ? '<div class="lab">Note</div><div>${_e(footer)}</div>' : ''}</div>'
+        '<div class="tot"><table>'
+        '${tr('Subtotal', money(subtotal))}'
+        '${lineDisc > 0 ? tr('Item discounts', '−${money(lineDisc)}', cls: 'dim') : ''}'
+        '${billDisc > 0 ? tr('Bill discount', '−${money(billDisc)}', cls: 'dim') : ''}'
+        '${tr(isReturn ? 'Refund total' : 'Total', 'Rs. ${money(total)}', cls: 'grand')}'
+        '${ap != null ? tr(isReturn ? 'Refunded' : 'Paid', money(ap), cls: 'dim') : ''}'
+        '${(ap != null && bc != 0) ? tr(bc < 0 ? 'Balance due' : 'Credit added', 'Rs. ${money(bc.abs())}', cls: bc < 0 ? 'due' : 'cr') : ''}'
+        '</table></div></div>'
+        '<div class="sign"><div>Customer signature</div><div>Authorised signature</div></div>'
+        '<div class="foot">Thank you for your business!</div>'
+        '${terms.isNotEmpty ? '<div class="terms">${_e(terms)}</div>' : ''}'
+        '<div class="printed">Printed ${_e(DateFormat('d MMM yyyy, h:mm a').format(DateTime.now()))} · Opstation</div>'
         '<script>window.onload=function(){window.print();}</script></body></html>';
   }
 
