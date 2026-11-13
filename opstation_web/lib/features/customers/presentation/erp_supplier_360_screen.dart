@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/purchase_invoice_modal.dart';
+import '../../../core/widgets/journal_modal.dart';
+import '../../../core/utils/app_link.dart';
+import '../../../core/utils/void_filter.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -250,18 +254,81 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
         }
       } catch (_) {}
 
-      final list = List<Map<String, dynamic>>.from(invs)
-        ..sort((a, b) => (a['voucher_date'] as String).compareTo(b['voucher_date'] as String));
+      // Everything else the Supplier Ledger counts, so both show the same
+      // payable: journal vouchers / opening balances / job-work (credit = we
+      // owe more, debit = settles), receipts from the supplier (CRV, credit)
+      // and purchase returns (debit). Voided JVs and their reversals are skipped.
+      final extraCharges = <Map<String, dynamic>>[];
+      double extraDebits = 0;
+      try {
+        final jl = await client.from('journal_lines')
+            .select('entry_id, debit, credit').eq('party_id', sid);
+        final ids = (jl as List).map((l) => '${l['entry_id']}').toSet().toList();
+        final heads = <String, Map>{};
+        for (var i = 0; i < ids.length; i += 150) {
+          final chunk = ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150);
+          final rows = await client.from('journal_entries').select()
+              .eq('org_id', orgId).eq('status', 'posted').inFilter('id', chunk)
+              .inFilter('reference_type', const ['jv', 'opening_jv', 'opening_balance', 'jobwork', 'jobwork_void']);
+          for (final h in rows as List) {
+            if (isVoidPair(h as Map)) continue;
+            heads['${h['id']}'] = h;
+          }
+        }
+        for (final l in jl) {
+          final h = heads['${l['entry_id']}'];
+          if (h == null) continue;
+          final date = '${h['entry_date'] ?? h['posted_at'] ?? h['created_at'] ?? ''}';
+          if (date.length >= 10 && date.substring(0, 10).compareTo(asOfStr) > 0) continue;
+          extraDebits += ((l['debit'] as num?) ?? 0).toDouble();
+          final cr = ((l['credit'] as num?) ?? 0).toDouble();
+          if (cr > 0) {
+            extraCharges.add({'id': h['id'], 'kind': 'jv', 'voucher_number': h['entry_number'] ?? '-', 'voucher_date': date.length >= 10 ? date.substring(0, 10) : asOfStr, 'grand_total': cr});
+          }
+        }
+      } catch (_) {}
+      try {
+        final crl = await client.from('crv_voucher_lines').select('amount, voucher_id')
+            .eq('account_type', 'supplier').eq('account_id', sid);
+        final ids = (crl as List).map((l) => '${l['voucher_id']}').toSet().toList();
+        final heads = <String, Map>{};
+        for (var i = 0; i < ids.length; i += 150) {
+          final rows = await client.from('crv_vouchers').select('id, voucher_number, voucher_date, created_at')
+              .eq('org_id', orgId).eq('status', 'posted').inFilter('id', ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150));
+          for (final h in rows as List) { heads['${h['id']}'] = h as Map; }
+        }
+        for (final l in crl) {
+          final h = heads['${l['voucher_id']}'];
+          if (h == null) continue;
+          final date = '${h['voucher_date'] ?? h['created_at'] ?? ''}';
+          if (date.length >= 10 && date.substring(0, 10).compareTo(asOfStr) > 0) continue;
+          extraCharges.add({'id': h['id'], 'kind': 'crv', 'voucher_number': h['voucher_number'] ?? '-', 'voucher_date': date.length >= 10 ? date.substring(0, 10) : asOfStr,
+              'grand_total': ((l['amount'] as num?) ?? 0).toDouble()});
+        }
+      } catch (_) {}
+      try {
+        final prs = await client.from('purchase_return_invoices').select('*')
+            .eq('org_id', orgId).eq('supplier_id', sid);
+        for (final r in prs as List) {
+          if (r['is_voided'] == true || r['status'] == 'void') continue;
+          extraDebits += ((r['grand_total'] ?? r['total'] ?? r['total_amount'] ?? 0) as num).toDouble();
+        }
+      } catch (_) {}
+
+      final list = <Map<String, dynamic>>[
+        ...List<Map<String, dynamic>>.from(invs),
+        ...extraCharges,
+      ]..sort((a, b) => '${a['voucher_date']}'.compareTo('${b['voucher_date']}'));
       double cur = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
       final items = <Map<String, dynamic>>[];
-      double avail = paid;
+      double avail = paid + extraDebits;
       for (final inv in list) {
         final total = (inv['grand_total'] as num?)?.toDouble() ?? 0;
         final applied = avail >= total ? total : avail;
         avail -= applied;
         final outstanding = total - applied;
         if (outstanding <= 0.005) continue;
-        final invDate = DateTime.parse(inv['voucher_date'] as String);
+        final invDate = DateTime.tryParse('${inv['voucher_date']}') ?? asOf;
         final age = asOf.difference(invDate).inDays;
         if (age <= 30) cur += outstanding;
         else if (age <= 60) b1 += outstanding;
@@ -269,7 +336,9 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
         else if (age <= 120) b3 += outstanding;
         else b4 += outstanding;
         items.add({
-          'voucher_number': inv['voucher_number'] as String? ?? '-',
+          'id': inv['id'],
+          'kind': inv['kind'] ?? 'pi',
+          'voucher_number': '${inv['voucher_number'] ?? '-'}',
           'voucher_date': invDate,
           'outstanding': outstanding,
           'ageDays': age,
@@ -1089,7 +1158,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
               style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: AppTheme.primary)),
           const SizedBox(height: 12),
           Row(children: [
-            _miniStat('Open invoices', '${_openItems.length}'),
+            _tapStat(_miniStat('Open invoices', '${_openItems.length}', color: AppTheme.primary), () => _tabs.animateTo(1)),
             const SizedBox(width: 24),
             _miniStat('Credit limit', creditLimit == null || creditLimit == 0 ? 'No limit' : 'Rs ${_money.format(creditLimit)}'),
           ]),
@@ -1100,7 +1169,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
       _card(title: 'Purchase summary', icon: Icons.shopping_bag_outlined, child: Row(children: [
         _miniStat('Total purchased', 'Rs ${_money.format(_totalPurchased)}'),
         const SizedBox(width: 24),
-        _miniStat('Invoices', '$_piCount'),
+        _tapStat(_miniStat('Invoices', '$_piCount', color: AppTheme.primary), () => _tabs.animateTo(2)),
         const SizedBox(width: 24),
         _miniStat('Last purchase', _lastPurchase == null ? '—' : DateFormat('d MMM y').format(_lastPurchase!)),
       ])),
@@ -1162,8 +1231,8 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                 final inv = _openItems[i];
                 final age = inv['ageDays'] as int;
                 final (label, color) = _bucketOf(age);
-                return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9), child: Row(children: [
-                  Expanded(flex: 3, child: Text(inv['voucher_number'] as String, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                return InkWell(onTap: () => _openDoc(inv), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9), child: Row(children: [
+                  Expanded(flex: 3, child: Text(inv['voucher_number'] as String, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary, decoration: TextDecoration.underline))),
                   Expanded(flex: 3, child: Text(DateFormat('d MMM yyyy').format(inv['voucher_date'] as DateTime), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 2, child: Align(alignment: Alignment.centerRight, child: Text('$age', style: const TextStyle(fontSize: 12)))),
                   Expanded(flex: 3, child: Align(alignment: Alignment.center, child: Container(
@@ -1171,7 +1240,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                     decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
                     child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color))))),
                   Expanded(flex: 3, child: Align(alignment: Alignment.centerRight, child: Text(_money2.format(inv['outstanding'] as double), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.primary)))),
-                ]));
+                ])));
               }),
           ])),
     ]);
@@ -1207,11 +1276,11 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
             itemBuilder: (_, i) {
               final p = _recentPis[i];
               final d = DateTime.tryParse('${p['voucher_date']}');
-              return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9), child: Row(children: [
-                Expanded(flex: 3, child: Text(p['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+              return InkWell(onTap: () => _openDoc({'id': p['id'], 'kind': 'pi'}), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9), child: Row(children: [
+                Expanded(flex: 3, child: Text(p['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primary, decoration: TextDecoration.underline))),
                 Expanded(flex: 3, child: Text(d != null ? DateFormat('d MMM yyyy').format(d) : '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                 Expanded(flex: 3, child: Align(alignment: Alignment.centerRight, child: Text(_money2.format((p['grand_total'] as num?)?.toDouble() ?? 0), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)))),
-              ]));
+              ])));
             }),
         ])),
     ]);
@@ -1359,6 +1428,29 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
       if (onTap != null) const Icon(Icons.copy, size: 13, color: AppTheme.textSecondary),
     ]));
     return onTap == null ? content : InkWell(onTap: onTap, child: content);
+  }
+
+  /// A stat that opens another tab (underlined value + hand cursor).
+  Widget _tapStat(Widget child, VoidCallback onTap) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2), child: child),
+      );
+
+  /// Open a row's document in a modal: purchase invoice or journal voucher.
+  void _openDoc(Map<String, dynamic> it) {
+    final id = it['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    switch (it['kind']) {
+      case 'jv':
+        showJournalModal(context, entryId: id);
+        break;
+      case 'crv':
+        openAppLink(context, '/erp/receipt-vouchers?id=${it['voucher_number']}');
+        break;
+      default:
+        showPurchaseInvoiceModal(context, invoiceId: id);
+    }
   }
 
   Widget _miniStat(String label, String value, {Color? color}) {
