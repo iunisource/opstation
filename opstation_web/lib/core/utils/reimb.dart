@@ -15,7 +15,14 @@ Future<ReimbInfo?> reimbSubmit({
   required List<Map<String, dynamic>> lines, // {trip, day: DateTime, km}
   required bool record,
 }) async {
-  if (orgId == null || lines.isEmpty) return null;
+  if (orgId == null) return null;
+  reimbLastError = null;
+  // Whatever happens below, the print still gets the rate per km from settings.
+  Future<ReimbInfo?> fallback() async {
+    final rate = await reimbRateForScreen(orgId);
+    return rate == null ? null : ReimbInfo(rate: rate);
+  }
+  if (lines.isEmpty) return fallback();
   String ymd(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
   try {
     final r = await Supabase.instance.client.rpc('reimb_submit', params: {
@@ -28,15 +35,24 @@ Future<ReimbInfo?> reimbSubmit({
       ],
       'p_record': record,
     });
-    if (r is! Map) return null;
+    if (r is! Map) {
+      reimbLastError = 'Reimbursement check returned nothing';
+      return fallback();
+    }
     final m = Map<String, dynamic>.from(r);
+    // Older database without the rate in the reply: take it from settings.
+    m['rate'] ??= await reimbRateForScreen(orgId);
     // Admin Settings → "Rate per km on Trip Summaries" switched off → no rate / amount printed.
     if (!await reimbRatePrintOn(orgId)) m['rate'] = null;
     return reimbInfoFrom(m, lines);
-  } catch (_) {
-    return null;
+  } catch (e) {
+    reimbLastError = '$e';
+    return fallback();
   }
 }
+
+/// Last reimbursement-check error (shown on the web so it can be reported).
+String? reimbLastError;
 
 /// Whether the rate per km and amounts are printed on trip summaries (default on).
 Future<bool> reimbRatePrintOn(String orgId) async {

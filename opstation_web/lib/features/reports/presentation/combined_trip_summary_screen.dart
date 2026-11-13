@@ -290,6 +290,11 @@ class _CombinedTripSummaryScreenState
         trail: await logReportIssue(user?.orgId, 'combined_summary', key, counted: !isAdmin),
       );
       await outputPdf(bytes, 'Combined Trip Summary');
+      if (reimbLastError != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text('Paid / already-generated details could not be checked: $reimbLastError')));
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

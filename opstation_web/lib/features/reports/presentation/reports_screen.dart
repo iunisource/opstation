@@ -215,7 +215,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
             'km': ctx.totalDistanceKm,
           }
         ],
-        record: !isAdmin,
+        record: true, // every generation records / refreshes the claim
       );
       final bytes = await ReportPdfBuilder.buildTripSummary(
         ctx: ctx,
@@ -226,6 +226,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       );
       await outputPdf(bytes, 'Trip Summary',
           date: DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal());
+      if (reimbLastError != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text('Paid / already-generated details could not be checked: $reimbLastError')));
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
