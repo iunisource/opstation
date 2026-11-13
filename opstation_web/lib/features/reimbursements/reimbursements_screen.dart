@@ -409,6 +409,11 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   OutlinedButton.icon(
                     onPressed: () async { Navigator.pop(ctx); await _approve(c); },
                     icon: const Icon(Icons.check, size: 16), label: const Text('Approve after all')),
+                if (c['status'] == 'approved' && _canApprove)
+                  OutlinedButton.icon(
+                    onPressed: () async { Navigator.pop(ctx); await _cancelApproval(c); },
+                    style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger),
+                    icon: const Icon(Icons.undo, size: 16), label: const Text('Cancel approval')),
                 if (c['advice_id'] != null)
                   OutlinedButton.icon(
                     onPressed: () { Navigator.pop(ctx); _openAdvice(c); },
@@ -533,6 +538,42 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   void _openAdvice(Map c) {
     if (c['advice_id'] == null) return;
     GoRouter.of(context).go('/financials/payment-advice?focus=${c['advice_id']}');
+  }
+
+  /// Approved but not paid yet → back to Pending (its Payment Advice, if any, is voided).
+  Future<void> _cancelApproval(Map c) async {
+    final reason = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: Text('Cancel approval — ${c['claimant_name'] ?? ''}'),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(c['advice_id'] != null
+                    ? 'The claim goes back to Pending and Payment Advice ${c['advice_number'] ?? ''} is voided.'
+                    : 'The claim goes back to Pending, to approve or reject again.',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 10),
+            TextField(controller: reason, autofocus: true, maxLines: 2,
+                decoration: const InputDecoration(labelText: 'Reason *', border: OutlineInputBorder())),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Keep approved')),
+          ElevatedButton(onPressed: () => Navigator.pop(d, true), child: const Text('Cancel approval')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (reason.text.trim().isEmpty) { _snack('Enter the reason'); return; }
+    try {
+      await _db.rpc('reimb_cancel_approval', params: {'p_claim': c['id'], 'p_reason': reason.text.trim()});
+      _snack('Approval cancelled — back to Pending');
+      await _load();
+    } catch (e) {
+      _snack(friendlyError('Could not cancel', e));
+    }
   }
 
   Future<void> _makeAdvice(Map c) async {
