@@ -78,6 +78,25 @@ class _ErpSkippedReceiptsReportScreenState
   Map<int, List<Map<String, dynamic>>> _uses = {};
   int _accountedElsewhere = 0; // gaps dropped: used by someone / outside the period
   int _cancelledDropped = 0; // gaps dropped: cancelled in Receipt Books
+  int _bookSwitches = 0; // gaps / out-of-order ignored: the slips are from different books
+  // Receipt books (Receipt Books screen): {id, start, end, holder}.
+  List<Map<String, dynamic>> _books = [];
+  Map<String, dynamic>? _bookOf(int n) {
+    for (final b in _books) {
+      if (n >= (b['start'] as int) && n <= (b['end'] as int)) return b;
+    }
+    return null;
+  }
+  String _bookLabel(int n) {
+    final b = _bookOf(n);
+    return b == null ? 'not from an issued book' : 'book ${b['start']}–${b['end']}';
+  }
+  /// Two slips from different issued books (e.g. the old book ran out and a
+  /// new one was started) — a jump between them is not a gap / out of order.
+  bool _differentBooks(int a, int b) {
+    final x = _bookOf(a), y = _bookOf(b);
+    return x != null && y != null && x['id'] != y['id'];
+  }
   Map<String, String> _names = {};
 
   // Cleared serials: userId -> serial -> {comment, cleared_by, cleared_at}.
@@ -85,7 +104,10 @@ class _ErpSkippedReceiptsReportScreenState
 
   Map<String, dynamic>? _clearanceOf(String uid, int n) => _cleared[uid]?[n];
   bool _isCleared(String uid, int n) => _cleared[uid]?.containsKey(n) ?? false;
-  int get _clearedCount => _rows.fold(0, (s, r) => s + r.skipped.where((n) => _isCleared(r.userId, n)).length);
+  int get _clearedCount => _rows.fold(0, (s, r) => s + _allFlagged(r).where((n) => _isCleared(r.userId, n)).length);
+  List<int> _allFlagged(_PersonGaps r) => {...r.skipped, ...r.repeated, ...r.outOfOrder}.toList();
+  int _openOf(_PersonGaps r, List<int> l) => l.where((n) => !_isCleared(r.userId, n)).length;
+  bool _supervised(_PersonGaps r) => _allFlagged(r).every((n) => _isCleared(r.userId, n));
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String get _orgName => ref.read(currentUserProvider)?.orgName ?? '';
@@ -249,16 +271,23 @@ class _ErpSkippedReceiptsReportScreenState
       }
       // Slips cancelled in Receipt Books (spoiled / torn) are accounted for.
       final cancelled = <int>{};
+      final books = <Map<String, dynamic>>[];
       try {
         final res = await client.rpc('receipt_books_status', params: {'p_org': orgId});
         for (final b in res as List) {
+          final st = ((b as Map)['start_no'] as num?)?.toInt();
+          final en = (b['end_no'] as num?)?.toInt();
+          if (st != null && en != null) {
+            books.add({'id': '${b['id']}', 'start': st, 'end': en, 'holder': '${b['user_name'] ?? ''}'});
+          }
           for (final c in ((b as Map)['cancelled'] as List?) ?? const []) {
             final n = ((c as Map)['serial'] as num?)?.toInt();
             if (n != null) cancelled.add(n);
           }
         }
       } catch (_) {}
-      var droppedUsed = 0, droppedCancelled = 0;
+      _books = books;
+      var droppedUsed = 0, droppedCancelled = 0, switches = 0;
 
       // Gap detection per user.
       final rows = <_PersonGaps>[];
@@ -268,6 +297,7 @@ class _ErpSkippedReceiptsReportScreenState
         final missing = <int>[];
         for (var i = 1; i < uniq.length; i++) {
           final gap = uniq[i] - uniq[i - 1];
+          if (gap > 1 && _differentBooks(uniq[i - 1], uniq[i])) { switches++; continue; }
           if (gap > 1 && gap <= 20) {
             for (var n = uniq[i - 1] + 1; n < uniq[i]; n++) {
               if (cancelled.contains(n)) {
@@ -288,7 +318,15 @@ class _ErpSkippedReceiptsReportScreenState
         final usedSoFar = <int>[];
         for (final e in seq) {
           final n = e.$2;
-          if (usedSoFar.any((m) => m > n && m - n <= 50)) late.add(n);
+          final higher = usedSoFar.where((m) => m > n && m - n <= 50);
+          if (higher.isNotEmpty) {
+            // A lower slip from another book (old book finished later) is not out of order.
+            if (higher.every((m) => _differentBooks(n, m))) {
+              switches++;
+            } else {
+              late.add(n);
+            }
+          }
           usedSoFar.add(n);
         }
         final outOfOrder = late.toList()..sort();
@@ -324,6 +362,7 @@ class _ErpSkippedReceiptsReportScreenState
         _names = names;
         _accountedElsewhere = droppedUsed;
         _cancelledDropped = droppedCancelled;
+        _bookSwitches = switches;
         _rows = rows;
         _cleanCount = clean;
         _loaded = true;
@@ -395,6 +434,75 @@ class _ErpSkippedReceiptsReportScreenState
           'comment': ctrl.text.trim(), 'cleared_by': user?.id, 'cleared_at': nowIso,
         });
       }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  /// Supervise: mark every open flagged slip of this person as checked (one
+  /// note), so the alert goes away. Stays visible under "Supervised".
+  Future<void> _supervise(_PersonGaps r) async {
+    final open = _allFlagged(r).where((n) => !_isCleared(r.userId, n)).toList()..sort();
+    if (open.isEmpty) return;
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Supervise — ${r.name}'),
+        content: SizedBox(
+          width: 440,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Marks ${open.length} flagged slip${open.length == 1 ? '' : 's'} as checked: '
+                '${open.take(12).join(', ')}${open.length > 12 ? ' …' : ''}',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 4),
+            Text([for (final n in open.take(6)) '$n: ${_bookLabel(n)}'].join(' · '),
+                style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 12),
+            TextField(controller: ctrl, autofocus: true, maxLines: 2,
+                decoration: const InputDecoration(
+                    labelText: 'Note (e.g. new book started, slips checked)', border: OutlineInputBorder(), isDense: true)),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Supervise')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final orgId = _orgId; if (orgId == null) return;
+    final user = ref.read(currentUserProvider);
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final note = ctrl.text.trim().isEmpty ? 'Supervised' : ctrl.text.trim();
+    try {
+      await Supabase.instance.client.from('skipped_receipt_clearances').upsert([
+        for (final n in open)
+          {
+            'id': 'skipclr_${orgId}_${r.userId}_$n',
+            'org_id': orgId, 'user_id': r.userId, 'serial_number': n,
+            'comment': note, 'cleared_by': user?.id, 'cleared_at': nowIso,
+          }
+      ], onConflict: 'org_id,user_id,serial_number');
+      setState(() {
+        for (final n in open) {
+          (_cleared[r.userId] ??= {})[n] = {'comment': note, 'cleared_by': user?.id, 'cleared_at': nowIso};
+        }
+      });
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
+    }
+  }
+
+  Future<void> _unsupervise(_PersonGaps r) async {
+    final orgId = _orgId; if (orgId == null) return;
+    final all = _allFlagged(r);
+    try {
+      await Supabase.instance.client.from('skipped_receipt_clearances').delete()
+          .eq('org_id', orgId).eq('user_id', r.userId).inFilter('serial_number', all);
+      setState(() { for (final n in all) { _cleared[r.userId]?.remove(n); } });
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
@@ -597,15 +705,15 @@ class _ErpSkippedReceiptsReportScreenState
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                  '${_rows.length} salespeople have receipt issues for $_periodLabel — '
-                  '$_totalSkipped skipped, ${_rows.fold<int>(0, (s, r) => s + r.repeated.length)} repeated, '
-                  '${_rows.fold<int>(0, (s, r) => s + r.outOfOrder.length)} out of order. '
+                  '${_rows.where((r) => !_supervised(r)).length} salespeople have open receipt issues for $_periodLabel — '
+                  '${_rows.fold<int>(0, (s, r) => s + _openOf(r, r.skipped))} skipped, ${_rows.fold<int>(0, (s, r) => s + _openOf(r, r.repeated))} repeated, '
+                  '${_rows.fold<int>(0, (s, r) => s + _openOf(r, r.outOfOrder))} out of order. '
                   'A gap can mean a collection was made but not entered (or a voided/torn slip).',
                   style: const TextStyle(fontSize: 12.5)),
             ),
             if (_clearedCount > 0)
               Padding(padding: const EdgeInsets.only(right: 10),
-                child: Text('$_clearedCount cleared',
+                child: Text('$_clearedCount supervised',
                     style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Colors.green.shade700))),
             if (_cleanCount > 0)
               Text('$_cleanCount clean',
@@ -615,6 +723,15 @@ class _ErpSkippedReceiptsReportScreenState
                       color: AppTheme.success)),
           ]),
         ),
+        if (_bookSwitches > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Not flagged: $_bookSwitches jump${_bookSwitches == 1 ? '' : 's'} between different receipt books '
+              '(an old book finished and a new one started).',
+              style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+            ),
+          ),
         if (_accountedElsewhere > 0 || _cancelledDropped > 0)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -627,7 +744,13 @@ class _ErpSkippedReceiptsReportScreenState
             ),
           ),
         const SizedBox(height: 14),
-        for (final r in _rows) _personCard(r),
+        for (final r in _rows.where((r) => !_supervised(r))) _personCard(r),
+        if (_rows.any(_supervised)) ...[
+          const SizedBox(height: 6),
+          Text('Supervised', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.green.shade700)),
+          const SizedBox(height: 6),
+          for (final r in _rows.where(_supervised)) _personCard(r),
+        ],
       ]),
     );
   }
@@ -653,17 +776,41 @@ class _ErpSkippedReceiptsReportScreenState
             decoration: BoxDecoration(
                 color: Colors.amber.shade100,
                 borderRadius: BorderRadius.circular(20)),
-            child: Text([
-                  if (r.skipped.isNotEmpty) '${r.skipped.length} skipped',
-                  if (r.repeated.isNotEmpty) '${r.repeated.length} repeated',
-                  if (r.outOfOrder.isNotEmpty) '${r.outOfOrder.length} out of order',
+            child: Text(_supervised(r) ? 'Supervised' : [
+                  if (_openOf(r, r.skipped) > 0) '${_openOf(r, r.skipped)} skipped',
+                  if (_openOf(r, r.repeated) > 0) '${_openOf(r, r.repeated)} repeated',
+                  if (_openOf(r, r.outOfOrder) > 0) '${_openOf(r, r.outOfOrder)} out of order',
                 ].join(' · '),
                 style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
-                    color: Colors.amber.shade900)),
+                    color: _supervised(r) ? Colors.green.shade800 : Colors.amber.shade900)),
           ),
+          const SizedBox(width: 8),
+          if (!_supervised(r))
+            ElevatedButton.icon(
+              onPressed: () => _supervise(r),
+              icon: const Icon(Icons.verified_outlined, size: 15),
+              label: const Text('Supervise', style: TextStyle(fontSize: 12)),
+              style: ElevatedButton.styleFrom(visualDensity: VisualDensity.compact),
+            )
+          else
+            TextButton(
+              onPressed: () => _unsupervise(r),
+              child: const Text('Re-open', style: TextStyle(fontSize: 12)),
+            ),
         ]),
+        if (_supervised(r)) Builder(builder: (_) {
+          final c = _clearanceOf(r.userId, _allFlagged(r).first);
+          final at = DateTime.tryParse('${c?['cleared_at'] ?? ''}')?.toLocal();
+          return Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+                'Supervised${at != null ? ' ${DateFormat('d MMM, h:mm a').format(at)}' : ''}'
+                '${'${c?['comment'] ?? ''}'.trim().isNotEmpty ? ' — ${c!['comment']}' : ''}',
+                style: TextStyle(fontSize: 11.5, color: Colors.green.shade800)),
+          );
+        }),
         Padding(
           padding: const EdgeInsets.only(top: 2, bottom: 8),
           child: Text('${r.receiptsLogged} receipt numbers logged in this period',
@@ -673,11 +820,11 @@ class _ErpSkippedReceiptsReportScreenState
           Wrap(spacing: 6, runSpacing: 6, children: [
             for (final n in r.skipped) _serialPill(r, n),
           ]),
-        if (r.repeated.isNotEmpty) _flagLine(
+        if (r.repeated.isNotEmpty) _flagLine(r,
             Icons.content_copy_outlined, AppTheme.danger, 'Used more than once',
             'The same slip is on two or more collections — tap a number to see who used it and when.',
             r.repeated),
-        if (r.outOfOrder.isNotEmpty) _flagLine(
+        if (r.outOfOrder.isNotEmpty) _flagLine(r,
             Icons.swap_vert, Colors.deepOrange, 'Out of order',
             'Written after this salesperson had already used a higher slip (up to 50 higher) earlier in the '
                 'period — e.g. 40480 on Monday, then 40467 on Tuesday. Tap a number to see when each was used.',
@@ -686,7 +833,7 @@ class _ErpSkippedReceiptsReportScreenState
     );
   }
 
-  Widget _flagLine(IconData icon, Color color, String title, String help, List<int> nums) => Padding(
+  Widget _flagLine(_PersonGaps r, IconData icon, Color color, String title, String help, List<int> nums) => Padding(
         padding: const EdgeInsets.only(top: 10),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
@@ -704,11 +851,14 @@ class _ErpSkippedReceiptsReportScreenState
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.06),
+                    color: _isCleared(r.userId, n) ? const Color(0xFFECFDF3) : color.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: color.withOpacity(0.35)),
+                    border: Border.all(color: _isCleared(r.userId, n) ? const Color(0xFF9AE6B4) : color.withOpacity(0.35)),
                   ),
-                  child: Text('$n', style: const TextStyle(fontSize: 12)),
+                  child: Text('$n', style: TextStyle(
+                      fontSize: 12,
+                      decoration: _isCleared(r.userId, n) ? TextDecoration.lineThrough : null,
+                      color: _isCleared(r.userId, n) ? Colors.green.shade800 : AppTheme.textPrimary)),
                 ),
               ),
           ]),
@@ -724,7 +874,11 @@ class _ErpSkippedReceiptsReportScreenState
     return showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Slip $n — used ${list.length} time${list.length == 1 ? '' : 's'}'),
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Slip $n — used ${list.length} time${list.length == 1 ? '' : 's'}'),
+          Text(_bookLabel(n)[0].toUpperCase() + _bookLabel(n).substring(1),
+              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
+        ]),
         content: SizedBox(
           width: 520,
           child: list.isEmpty
