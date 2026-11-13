@@ -976,7 +976,7 @@ class ReportPdfBuilder {
           ? 'Already paid — see above'
           : (amt == null ? '' : 'Rs ${f.format(amt)}${(r?.paidKm ?? 0) > 0 ? '  (on ${due.toStringAsFixed(2)} unpaid km)' : ''}')),
       _reimbRow('Other Allowances', ''),
-      _reimbRow('Total Amount', amt == null ? '' : 'Rs ${f.format(amt)} + other allowances'),
+      _reimbRow('Total Amount', ''), // distance amount + allowances, filled in by hand
       _reimbRow('Approved By', r?.approvedBy ?? ''),
     ];
     return [for (var i = 0; i < rows.length; i++) ...[if (i > 0) pw.SizedBox(height: 6), rows[i]]];

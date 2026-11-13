@@ -593,7 +593,7 @@ class _CombinedTripSummaryScreenState
                                     fontWeight: FontWeight.w800,
                                     color: AppTheme.primary)),
                             if (_rate != null)
-                              Text('Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round())} + allowances',
+                              Text('Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round())}',
                                   textAlign: TextAlign.right,
                                   style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
                             if (_grandAbandonedKm > 0.005)
