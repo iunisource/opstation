@@ -135,9 +135,9 @@ const Map<String, _ScreenSettings> _screenSettings = {
   '/intelligence/competitors': _ScreenSettings('Competitor Spotting', _intelKeys),
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
   // ── Logistics ──
-  '/reimbursements': _ScreenSettings('Reimbursement Approvals', ['org.reimb_rate_print', 'org.reimb_approvals', 'org.reimb_payers_only']),
-  '/reports/combined-summary': _ScreenSettings('Combined Trip Summary', ['org.reimb_rate_print']),
-  '/reports': _ScreenSettings('Reports', ['org.reimb_rate_print']),
+  '/reimbursements': _ScreenSettings('Reimbursement Approvals', ['org.reimb_rate_print', 'org.reimb_allowance_print', 'org.reimb_approvals', 'org.reimb_payers_only']),
+  '/reports/combined-summary': _ScreenSettings('Combined Trip Summary', ['org.reimb_rate_print', 'org.reimb_allowance_print']),
+  '/reports': _ScreenSettings('Reports', ['org.reimb_rate_print', 'org.reimb_allowance_print']),
   '/licences': _ScreenSettings('Licences & Compliance', ['org.compliance_reminders']),
   '/fleet': _logistics,
   '/deliveries': _logistics,

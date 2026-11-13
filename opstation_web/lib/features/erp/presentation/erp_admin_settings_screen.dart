@@ -713,6 +713,18 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.reimb_allowance_print',
+    'Allowance per day on Trip Summaries',
+    'Set an allowance per day and every Trip Summary / Combined Trip Summary (web and app) adds it for each day '
+        'on the sheet (days already paid are left out), then prints the Total Amount (distance amount + allowances). '
+        'Leave it at 0 and the Other Allowances and Total lines stay blank to fill in by hand. '
+        'Works whether or not Reimbursement approvals is on.',
+    number: _NumberField('org.reimb_allowance_day', 'Allowance per day (Rs, 0 = blank)', 0, decimal: true),
+    defaultOn: true,
+    companionWhenOff: true,
+  ),
+
+  _AdminToggle(
     'org.reimb_approvals',
     'Reimbursement approvals',
     'Every Trip Summary / Combined Trip Summary a driver or salesperson generates goes to '
@@ -1028,6 +1040,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Reimbursements', Icons.receipt_long_outlined, [
     'org.reimb_rate_print',
+    'org.reimb_allowance_print',
     'org.reimb_approvals',
     'org.reimb_payers_only',
   ]),

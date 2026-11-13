@@ -50,6 +50,7 @@ class _CombinedTripSummaryScreenState
   List<Map<String, dynamic>> _users = [];
   List<_DayRow> _rows = [];
   double? _rate; // Admin Settings → Rate per km on Trip Summaries
+  double? _allow; // Admin Settings → Allowance per day on Trip Summaries
   /// Per-trip km for Reimbursement Approvals (SQL 466): {trip, day, km, user}.
   List<Map<String, dynamic>> _tripLines = [];
   double _grandKm = 0;
@@ -208,6 +209,7 @@ class _CombinedTripSummaryScreenState
         });
       final grand = rows.fold<double>(0, (s, r) => s + r.km);
       final rate = await reimbRateForScreen(ref.read(currentUserProvider)?.orgId);
+      final allow = await reimbAllowanceForScreen(ref.read(currentUserProvider)?.orgId);
       final grandAb = rows.fold<double>(0, (s, r) => s + r.abandonedKm);
       final grandLw = rows.fold<double>(0, (s, r) => s + (r.lastWeekKm ?? 0));
 
@@ -215,6 +217,7 @@ class _CombinedTripSummaryScreenState
         _users = List<Map<String, dynamic>>.from(users);
         _rows = rows;
         _rate = rate;
+        _allow = allow;
         _tripLines = tripLines.where((l) => !(l['day'] as DateTime).isBefore(rangeStart)).toList();
         _grandKm = grand;
         _grandLastWeekKm = grandLw;
@@ -382,7 +385,9 @@ class _CombinedTripSummaryScreenState
                 color: AppTheme.primary.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8)),
             child: Text('Total: ${_grandKm.toStringAsFixed(2)} km'
-                '${_rate == null ? '' : '  ·  Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round())} @ Rs ${NumberFormat('#,##0.##').format(_rate)}/km'}',
+                '${_rate == null ? '' : '  ·  Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round())} @ Rs ${NumberFormat('#,##0.##').format(_rate)}/km'}'
+                '${_allow == null ? '' : '  ·  allowance Rs ${NumberFormat('#,##0').format((_rows.length * _allow!).round())} (${_rows.length} days)'}'
+                '${_rate == null || _allow == null ? '' : '  =  Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round() + (_rows.length * _allow!).round())}'}',
                 style: const TextStyle(
                     fontWeight: FontWeight.w700, color: AppTheme.primary)),
           ),

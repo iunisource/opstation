@@ -40,8 +40,12 @@ class ReimbInfo {
   /// and the printed explanation (replaces the DUPLICATE watermark).
   final Set<String> generatedDays;
   final String? generatedNote;
+  /// Admin Settings → allowance per day (null = not set → line left blank).
+  final double? allowancePerDay;
+  /// Days on this sheet not already paid (null = all of the sheet's days).
+  final int? unpaidDays;
   const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0,
-      this.generatedDays = const <String>{}, this.generatedNote});
+      this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays});
 }
 
 class ReportPdfBuilder {
@@ -228,7 +232,7 @@ class ReportPdfBuilder {
             ),
           pw.SizedBox(height: 18),
           if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
-          _reimbursementClaimBlock(grandTotalKm, reimb),
+          _reimbursementClaimBlock(grandTotalKm, reimb, rows.length),
           pw.SizedBox(height: 36),
           _signatureLine(),
         ],
@@ -239,7 +243,7 @@ class ReportPdfBuilder {
 
   /// Claim block for the combined summary: the distance is filled from the
   /// trips; Rate per km and Total Amount are left blank for finance.
-  static pw.Widget _reimbursementClaimBlock(double totalKm, [ReimbInfo? reimb]) {
+  static pw.Widget _reimbursementClaimBlock(double totalKm, [ReimbInfo? reimb, int days = 1]) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(
@@ -260,7 +264,7 @@ class ReportPdfBuilder {
             ),
           ),
           pw.SizedBox(height: 8),
-          ..._reimbRows(totalKm, reimb),
+          ..._reimbRows(totalKm, reimb, days),
         ],
       ),
     );
@@ -1083,7 +1087,7 @@ class ReportPdfBuilder {
             ),
           ),
           pw.SizedBox(height: 8),
-          ..._reimbRows(ctx.totalDistanceKm, reimb),
+          ..._reimbRows(ctx.totalDistanceKm, reimb, 1),
         ],
       ),
     );
@@ -1091,19 +1095,27 @@ class ReportPdfBuilder {
 
   /// Distance · Rate per km (Admin Settings) · Distance amount · Other
   /// allowances (filled by hand) · Total amount · Approved by.
-  static List<pw.Widget> _reimbRows(double km, ReimbInfo? r) {
+  static List<pw.Widget> _reimbRows(double km, ReimbInfo? r, int days) {
     final f = NumberFormat('#,##0');
+    final f2 = NumberFormat('#,##0.##');
+    final paidAll = r?.fullyPaid ?? false;
     final rate = r?.rate;
     final due = (km - (r?.paidKm ?? 0)) < 0 ? 0.0 : km - (r?.paidKm ?? 0);
-    final amt = rate == null || (r?.fullyPaid ?? false) ? null : (due * rate).round();
+    final amt = rate == null || paidAll ? null : (due * rate).round();
+    // Allowance per day (Admin Settings): days not already paid × allowance.
+    final perDay = r?.allowancePerDay;
+    final allowDays = r?.unpaidDays ?? days;
+    final allow = perDay == null || paidAll ? null : (allowDays * perDay).round();
+    final total = amt == null || allow == null ? null : amt + allow;
     final rows = <pw.Widget>[
       _reimbRow('Total Distance', '${km.toStringAsFixed(2)} km'),
-      _reimbRow('Rate per km', rate == null ? '' : 'Rs ${NumberFormat('#,##0.##').format(rate)}'),
-      _reimbRow('Distance Amount', (r?.fullyPaid ?? false)
+      _reimbRow('Rate per km', rate == null ? '' : 'Rs ${f2.format(rate)}'),
+      _reimbRow('Distance Amount', paidAll
           ? 'Already paid — see above'
           : (amt == null ? '' : 'Rs ${f.format(amt)}${(r?.paidKm ?? 0) > 0 ? '  (on ${due.toStringAsFixed(2)} unpaid km)' : ''}')),
-      _reimbRow('Other Allowances', ''),
-      _reimbRow('Total Amount', ''), // distance amount + allowances, filled in by hand
+      // Not set in settings → blank to fill in by hand.
+      _reimbRow('Other Allowances', allow == null ? '' : 'Rs ${f.format(allow)}  ($allowDays day${allowDays == 1 ? '' : 's'} × Rs ${f2.format(perDay)})'),
+      _reimbRow('Total Amount', total == null ? '' : 'Rs ${f.format(total)}'),
       _reimbRow('Approved By', r?.approvedBy ?? ''),
     ];
     return [for (var i = 0; i < rows.length; i++) ...[if (i > 0) pw.SizedBox(height: 6), rows[i]]];

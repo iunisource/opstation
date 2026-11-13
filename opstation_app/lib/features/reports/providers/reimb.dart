@@ -20,7 +20,8 @@ Future<ReimbInfo?> reimbSubmit({
   // Whatever happens below, the print still gets the rate per km from settings.
   Future<ReimbInfo?> fallback() async {
     final rate = await reimbRateForScreen(orgId);
-    return rate == null ? null : ReimbInfo(rate: rate);
+    final allow = await reimbAllowanceForScreen(orgId);
+    return rate == null && allow == null ? null : ReimbInfo(rate: rate, allowancePerDay: allow);
   }
   if (lines.isEmpty) return fallback();
   String ymd(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
@@ -42,6 +43,7 @@ Future<ReimbInfo?> reimbSubmit({
     final m = Map<String, dynamic>.from(r);
     // Older database without the rate in the reply: take it from settings.
     m['rate'] ??= await reimbRateForScreen(orgId);
+    m['allowance'] = await reimbAllowanceForScreen(orgId);
     // Admin Settings → "Rate per km on Trip Summaries" switched off → no rate / amount printed.
     if (!await reimbRatePrintOn(orgId)) m['rate'] = null;
     return reimbInfoFrom(m, lines);
@@ -65,6 +67,22 @@ Future<bool> reimbRatePrintOn(String orgId) async {
   }
 }
 
+/// Allowance per day (Admin Settings → "Allowance per day on Trip Summaries";
+/// null = not set or switched off → the line is left blank for hand entry).
+Future<double?> reimbAllowanceForScreen(String? orgId) async {
+  if (orgId == null) return null;
+  try {
+    final r = await Supabase.instance.client.from('app_config').select('key, value')
+        .eq('org_id', orgId).inFilter('key', ['org.reimb_allowance_print', 'org.reimb_allowance_day']);
+    final cfg = {for (final x in r as List) '${x['key']}': '${x['value'] ?? ''}'.trim()};
+    if (cfg['org.reimb_allowance_print'] == 'false') return null;
+    final v = double.tryParse(cfg['org.reimb_allowance_day'] ?? '');
+    return v != null && v > 0 ? v : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Rate per km to show on screens (null = not set, or printing switched off).
 Future<double?> reimbRateForScreen(String? orgId) async {
   if (orgId == null) return null;
@@ -82,8 +100,17 @@ Future<double?> reimbRateForScreen(String? orgId) async {
 ReimbInfo reimbInfoFrom(Map<String, dynamic> r, List<Map<String, dynamic>> lines) {
   final base = _reimbInfoCore(r, lines);
   final gen = _generated(r);
+  // Days of this sheet with something still unpaid (allowance is per such day).
+  final paidTrips = {for (final p in (r['paid'] as List? ?? const [])) '${(p as Map)['trip']}'};
+  final unpaid = <String>{
+    for (final l in lines)
+      if (!paidTrips.contains('${l['trip']}')) DateFormat('yyyy-MM-dd').format(l['day'] as DateTime),
+  };
+  final allDays = {for (final l in lines) DateFormat('yyyy-MM-dd').format(l['day'] as DateTime)};
   return ReimbInfo(rate: base.rate, stamp: base.stamp, fullyPaid: base.fullyPaid, approvedBy: base.approvedBy,
-      paidKm: base.paidKm, generatedDays: gen.$1, generatedNote: gen.$2);
+      paidKm: base.paidKm, generatedDays: gen.$1, generatedNote: gen.$2,
+      allowancePerDay: (r['allowance'] as num?)?.toDouble(),
+      unpaidDays: unpaid.length == allDays.length ? null : unpaid.length);
 }
 
 /// Dates already generated for reimbursement on other sheets + the note text.
