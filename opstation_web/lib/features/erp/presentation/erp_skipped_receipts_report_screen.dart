@@ -871,6 +871,128 @@ class _ErpSkippedReceiptsReportScreenState
       ..sort((a, b) => '${a['at']}'.compareTo('${b['at']}'));
     final df = DateFormat('d MMM yyyy, h:mm a');
     final nf = NumberFormat('#,##0');
+
+    // ── Pattern: nearby slips of the same book, and the order they were used.
+    DateTime? atOf(Map<String, dynamic>? u) => DateTime.tryParse('${u?['at'] ?? ''}')?.toLocal();
+    Map<String, dynamic>? firstUse(int m) {
+      final l = _uses[m];
+      if (l == null || l.isEmpty) return null;
+      return ([...l]..sort((a, b) => '${a['at']}'.compareTo('${b['at']}'))).first;
+    }
+    final book = _bookOf(n);
+    bool inBook(int m) =>
+        m > 0 && !_differentBooks(n, m) &&
+        (book == null || (m >= (book['start'] as int) && m <= (book['end'] as int)));
+    final myAt = list.isEmpty ? null : atOf(list.first);
+    final near = <int>{for (var m = n - 3; m <= n + 3; m++) if (inBook(m)) m};
+    // Higher slips of this book used BEFORE this one — the reason for "out of order".
+    final earlierHigher = <int>[];
+    if (myAt != null) {
+      for (var m = n + 1; m <= n + 50; m++) {
+        if (!inBook(m)) continue;
+        final t = atOf(firstUse(m));
+        if (t != null && t.isBefore(myAt)) earlierHigher.add(m);
+      }
+    }
+    near.addAll(earlierHigher);
+    final nearList = near.toList()..sort();
+    final usedNear = nearList.where((m) => firstUse(m) != null).toList()
+      ..sort((a, b) => atOf(firstUse(a))!.compareTo(atOf(firstUse(b))!));
+    String gapText(Duration d) {
+      final h = d.inHours, mi = d.inMinutes % 60;
+      if (d.inDays >= 1) return '${d.inDays} day${d.inDays == 1 ? '' : 's'}';
+      return h > 0 ? '${h}h ${mi}m' : '${d.inMinutes}m';
+    }
+    final sm = DateFormat('d MMM, h:mm a');
+    String? summary;
+    if (earlierHigher.isNotEmpty && myAt != null) {
+      final m = earlierHigher.first;
+      final t = atOf(firstUse(m))!;
+      final more = earlierHigher.length > 1 ? ' (and ${earlierHigher.length - 1} more higher slip${earlierHigher.length == 2 ? '' : 's'})' : '';
+      summary = '$m was used on ${sm.format(t)} — ${gapText(myAt.difference(t))} before this slip$more, '
+          'though $n comes first in the book. Usually the slip was entered late, or a page was skipped and used later.';
+    }
+    final hasPattern = usedNear.length >= 2 || summary != null;
+
+    Widget patternBox() => Container(
+          margin: const EdgeInsets.only(top: 14),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppTheme.background,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('NEARBY SLIPS', style: TextStyle(fontSize: 10, letterSpacing: 0.8, fontWeight: FontWeight.w800, color: AppTheme.textSecondary)),
+            if (summary != null) ...[
+              const SizedBox(height: 6),
+              Text(summary ?? '', style: const TextStyle(fontSize: 12, color: Colors.deepOrange, fontWeight: FontWeight.w600)),
+            ],
+            if (usedNear.length >= 2) ...[
+              const SizedBox(height: 6),
+              Text.rich(TextSpan(style: const TextStyle(fontSize: 12), children: [
+                const TextSpan(text: 'Used in this order: ', style: TextStyle(color: AppTheme.textSecondary)),
+                for (var i = 0; i < usedNear.length; i++) ...[
+                  if (i > 0) const TextSpan(text: '  →  ', style: TextStyle(color: AppTheme.textSecondary)),
+                  TextSpan(
+                    text: '${usedNear[i]}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: usedNear[i] == n ? AppTheme.primary : (earlierHigher.contains(usedNear[i]) ? Colors.deepOrange : AppTheme.textPrimary),
+                    ),
+                  ),
+                ],
+              ])),
+            ],
+            const SizedBox(height: 8),
+            for (final m in nearList)
+              Builder(builder: (_) {
+                final u = firstUse(m);
+                final t = atOf(u);
+                final who = u == null
+                    ? ''
+                    : ('${u['user_name'] ?? ''}'.trim().isNotEmpty ? '${u['user_name']}' : (_names['${u['user_id']}'] ?? ''));
+                final count = _uses[m]?.length ?? 0;
+                final tag = m == n
+                    ? 'this slip'
+                    : earlierHigher.contains(m)
+                        ? 'used before $n'
+                        : (u == null ? 'not used' : (count > 1 ? 'used $count times' : ''));
+                final tagColor = m == n
+                    ? AppTheme.primary
+                    : earlierHigher.contains(m)
+                        ? Colors.deepOrange
+                        : (u == null ? AppTheme.danger : AppTheme.textSecondary);
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    SizedBox(
+                      width: 56,
+                      child: Text('$m', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800,
+                          color: m == n ? AppTheme.primary : AppTheme.textPrimary)),
+                    ),
+                    Expanded(
+                      child: Text(
+                        u == null
+                            ? '—'
+                            : [
+                                if (t != null) sm.format(t),
+                                if ('${u['shop'] ?? ''}'.isNotEmpty) '${u['shop']}',
+                                if (who.isNotEmpty) who,
+                              ].join(' · '),
+                        style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+                      ),
+                    ),
+                    if (tag.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text(tag, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: tagColor)),
+                    ],
+                  ]),
+                );
+              }),
+          ]),
+        );
+
     return showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -880,11 +1002,14 @@ class _ErpSkippedReceiptsReportScreenState
               style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
         ]),
         content: SizedBox(
-          width: 520,
-          child: list.isEmpty
+          width: 560,
+          child: SingleChildScrollView(
+           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          list.isEmpty
               ? const Text('No collection found with this slip.')
               : ListView.separated(
                   shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
                   itemCount: list.length,
                   separatorBuilder: (_, __) => const Divider(height: 16),
                   itemBuilder: (_, i) {
@@ -906,6 +1031,9 @@ class _ErpSkippedReceiptsReportScreenState
                     ]);
                   },
                 ),
+          if (hasPattern) patternBox(),
+           ]),
+          ),
         ),
         actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
       ),
