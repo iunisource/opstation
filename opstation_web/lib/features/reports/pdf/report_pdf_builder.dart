@@ -203,7 +203,12 @@ class ReimbInfo {
   final bool fullyPaid;
   final String? approvedBy;
   final double paidKm; // km of trips already paid on an earlier claim
-  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0});
+  /// Dates (yyyy-MM-dd) already generated for reimbursement on other sheets,
+  /// and the printed explanation (replaces the DUPLICATE watermark).
+  final Set<String> generatedDays;
+  final String? generatedNote;
+  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0,
+      this.generatedDays = const <String>{}, this.generatedNote});
 }
 
 class ReportPdfBuilder {
@@ -275,6 +280,7 @@ class ReportPdfBuilder {
         pw.SizedBox(height: 14),
         _sequencedTable(ctx),
         pw.SizedBox(height: 18),
+        if (reimb?.generatedNote != null) ...[_generatedBox(reimb!.generatedNote!), pw.SizedBox(height: 10)],
         if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
         _reimbursementBlock(ctx, reimb),
         pw.SizedBox(height: 36),
@@ -316,7 +322,8 @@ class ReportPdfBuilder {
     final data = <List<String>>[
       for (final r in rows)
         [
-          DateFormat('EEE, MMM d, y').format(r.date),
+          DateFormat('EEE, MMM d, y').format(r.date) +
+              ((reimb?.generatedDays.contains(DateFormat('yyyy-MM-dd').format(r.date)) ?? false) ? '  *' : ''),
           if (showSalesperson) r.salesperson,
           r.routes,
           r.lastWeekKm == null ? '-' : r.lastWeekKm!.toStringAsFixed(2),
@@ -400,13 +407,7 @@ class ReportPdfBuilder {
                   letterSpacing: 0.8,
                   color: _muted)),
           pw.SizedBox(height: 8),
-          _reimbRow('Total Distance', '${totalKm.toStringAsFixed(2)} km'),
-          pw.SizedBox(height: 6),
-          _reimbRow('Rate per km', reimb?.rate == null ? '' : 'Rs ${NumberFormat('#,##0.##').format(reimb!.rate)}'),
-          pw.SizedBox(height: 6),
-          _reimbRow('Total Amount', _reimbAmount(totalKm, reimb)),
-          pw.SizedBox(height: 6),
-          _reimbRow('Approved By', reimb?.approvedBy ?? ''),
+          ..._reimbRows(totalKm, reimb),
         ],
       ),
     );
@@ -955,15 +956,30 @@ class ReportPdfBuilder {
                   letterSpacing: 0.8,
                   color: _muted)),
           pw.SizedBox(height: 8),
-          _reimbRow('Total Distance',
-              '${ctx.totalDistanceKm.toStringAsFixed(2)} km'),
-          pw.SizedBox(height: 6),
-          _reimbRow('Amount', _reimbAmount(ctx.totalDistanceKm, reimb)),
-          pw.SizedBox(height: 6),
-          _reimbRow('Approved By', reimb?.approvedBy ?? ''),
+          ..._reimbRows(ctx.totalDistanceKm, reimb),
         ],
       ),
     );
+  }
+
+  /// Distance · Rate per km (Admin Settings) · Distance amount · Other
+  /// allowances (filled by hand) · Total amount · Approved by.
+  static List<pw.Widget> _reimbRows(double km, ReimbInfo? r) {
+    final f = NumberFormat('#,##0');
+    final rate = r?.rate;
+    final due = (km - (r?.paidKm ?? 0)) < 0 ? 0.0 : km - (r?.paidKm ?? 0);
+    final amt = rate == null || (r?.fullyPaid ?? false) ? null : (due * rate).round();
+    final rows = <pw.Widget>[
+      _reimbRow('Total Distance', '${km.toStringAsFixed(2)} km'),
+      _reimbRow('Rate per km', rate == null ? '' : 'Rs ${NumberFormat('#,##0.##').format(rate)}'),
+      _reimbRow('Distance Amount', (r?.fullyPaid ?? false)
+          ? 'Already paid — see above'
+          : (amt == null ? '' : 'Rs ${f.format(amt)}${(r?.paidKm ?? 0) > 0 ? '  (on ${due.toStringAsFixed(2)} unpaid km)' : ''}')),
+      _reimbRow('Other Allowances', ''),
+      _reimbRow('Total Amount', amt == null ? '' : 'Rs ${f.format(amt)} + other allowances'),
+      _reimbRow('Approved By', r?.approvedBy ?? ''),
+    ];
+    return [for (var i = 0; i < rows.length; i++) ...[if (i > 0) pw.SizedBox(height: 6), rows[i]]];
   }
 
   static String _reimbAmount(double km, ReimbInfo? r) {
@@ -973,6 +989,26 @@ class ReportPdfBuilder {
     final due = (km - r.paidKm) < 0 ? 0.0 : km - r.paidKm;
     return 'Rs ${NumberFormat('#,##0').format((due * r.rate!).round())}  (@ Rs ${NumberFormat('#,##0.##').format(r.rate)}/km'
         '${r.paidKm > 0 ? ' on ${due.toStringAsFixed(2)} unpaid km' : ''})';
+  }
+
+  /// Which dates of this sheet were already generated for reimbursement.
+  static pw.Widget _generatedBox(String note) {
+    const c = PdfColor.fromInt(0xFFB45309);
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: pw.BoxDecoration(
+        color: const PdfColor.fromInt(0xFFFFFBEB),
+        border: pw.Border.all(color: c, width: 1),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        pw.Text('* ALREADY GENERATED FOR REIMBURSEMENT',
+            style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
+        pw.SizedBox(height: 4),
+        pw.Text(note, style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF78350F))),
+      ]),
+    );
   }
 
   /// "FULLY PAID" / "PARTLY PAID" box shown above the reimbursement block.

@@ -49,6 +49,7 @@ class _CombinedTripSummaryScreenState
 
   List<Map<String, dynamic>> _users = [];
   List<_DayRow> _rows = [];
+  double? _rate; // Admin Settings → Rate per km on Trip Summaries
   /// Per-trip km for Reimbursement Approvals (SQL 466): {trip, day, km, user}.
   List<Map<String, dynamic>> _tripLines = [];
   double _grandKm = 0;
@@ -206,12 +207,14 @@ class _CombinedTripSummaryScreenState
           return s != 0 ? s : a.date.compareTo(b.date);
         });
       final grand = rows.fold<double>(0, (s, r) => s + r.km);
+      final rate = await reimbRateForScreen(ref.read(currentUserProvider)?.orgId);
       final grandAb = rows.fold<double>(0, (s, r) => s + r.abandonedKm);
       final grandLw = rows.fold<double>(0, (s, r) => s + (r.lastWeekKm ?? 0));
 
       setState(() {
         _users = List<Map<String, dynamic>>.from(users);
         _rows = rows;
+        _rate = rate;
         _tripLines = tripLines.where((l) => !(l['day'] as DateTime).isBefore(rangeStart)).toList();
         _grandKm = grand;
         _grandLastWeekKm = grandLw;
@@ -282,15 +285,8 @@ class _CombinedTripSummaryScreenState
         rows: pdfRows,
         grandTotalKm: _grandKm,
         lastWeekTotalKm: _grandLastWeekKm,
-        duplicate: duplicate,
-        reimb: await reimbSubmit(
-          orgId: user?.orgId,
-          type: 'combined_summary',
-          key: key,
-          claimantId: _selectedUserId,
-          lines: _selectedUserId == null ? _tripLines : _tripLines.where((l) => l['user'] == _selectedUserId).toList(),
-          record: !isAdmin && _selectedUserId != null,
-        ),
+        duplicate: false, // replaced by the "already generated" note (SQL 470)
+        reimb: await _reimbForCombined(user?.orgId, key),
         trail: await logReportIssue(user?.orgId, 'combined_summary', key, counted: !isAdmin),
       );
       await outputPdf(bytes, 'Combined Trip Summary');
@@ -300,6 +296,27 @@ class _CombinedTripSummaryScreenState
         SnackBar(content: Text('Failed to generate PDF: $e')),
       );
     }
+  }
+
+  /// Reimbursement Approvals: every generation records the claim. One
+  /// salesperson → one claim; "all" → one claim per salesperson (same key as
+  /// generating them one by one, so nothing is doubled). Returns the stamp
+  /// info for the PDF.
+  Future<ReimbInfo?> _reimbForCombined(String? orgId, String key) async {
+    if (_selectedUserId != null) {
+      return reimbSubmit(
+        orgId: orgId, type: 'combined_summary', key: key, claimantId: _selectedUserId,
+        lines: _tripLines.where((l) => l['user'] == _selectedUserId).toList(), record: true,
+      );
+    }
+    final users = {for (final l in _tripLines) '${l['user'] ?? ''}'}..remove('');
+    for (final uid in users) {
+      await reimbSubmit(
+        orgId: orgId, type: 'combined_summary', key: key.replaceFirst('all|', '$uid|'), claimantId: uid,
+        lines: _tripLines.where((l) => l['user'] == uid).toList(), record: true,
+      );
+    }
+    return reimbSubmit(orgId: orgId, type: 'combined_summary', key: key, claimantId: null, lines: _tripLines, record: false);
   }
 
   @override
@@ -359,7 +376,8 @@ class _CombinedTripSummaryScreenState
             decoration: BoxDecoration(
                 color: AppTheme.primary.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8)),
-            child: Text('Total: ${_grandKm.toStringAsFixed(2)} km',
+            child: Text('Total: ${_grandKm.toStringAsFixed(2)} km'
+                '${_rate == null ? '' : '  ·  Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round())} @ Rs ${NumberFormat('#,##0.##').format(_rate)}/km'}',
                 style: const TextStyle(
                     fontWeight: FontWeight.w700, color: AppTheme.primary)),
           ),
@@ -512,6 +530,10 @@ class _CombinedTripSummaryScreenState
                                                 textAlign: TextAlign.right,
                                                 style: const TextStyle(
                                                     fontWeight: FontWeight.w700)),
+                                            if (_rate != null)
+                                              Text('Rs ${NumberFormat('#,##0').format((r.km * _rate!).round())}',
+                                                  textAlign: TextAlign.right,
+                                                  style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
                                             if (r.abandonedKm > 0.005)
                                               Tooltip(
                                                 message: 'A route was started and ended with no visits '
@@ -565,6 +587,10 @@ class _CombinedTripSummaryScreenState
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w800,
                                     color: AppTheme.primary)),
+                            if (_rate != null)
+                              Text('Rs ${NumberFormat('#,##0').format((_grandKm * _rate!).round())} + allowances',
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
                             if (_grandAbandonedKm > 0.005)
                               Text('incl. ${_grandAbandonedKm.toStringAsFixed(2)} km to review',
                                   style: TextStyle(

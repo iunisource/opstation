@@ -29,13 +29,82 @@ Future<ReimbInfo?> reimbSubmit({
       'p_record': record,
     });
     if (r is! Map) return null;
-    return reimbInfoFrom(Map<String, dynamic>.from(r), lines);
+    final m = Map<String, dynamic>.from(r);
+    // Admin Settings → "Rate per km on Trip Summaries" switched off → no rate / amount printed.
+    if (!await reimbRatePrintOn(orgId)) m['rate'] = null;
+    return reimbInfoFrom(m, lines);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Whether the rate per km and amounts are printed on trip summaries (default on).
+Future<bool> reimbRatePrintOn(String orgId) async {
+  try {
+    final r = await Supabase.instance.client.from('app_config').select('value')
+        .eq('org_id', orgId).eq('key', 'org.reimb_rate_print').limit(1);
+    return !((r as List).isNotEmpty && '${r.first['value']}' == 'false');
+  } catch (_) {
+    return true;
+  }
+}
+
+/// Rate per km to show on screens (null = not set, or printing switched off).
+Future<double?> reimbRateForScreen(String? orgId) async {
+  if (orgId == null) return null;
+  try {
+    if (!await reimbRatePrintOn(orgId)) return null;
+    final r = await Supabase.instance.client.from('app_config').select('value')
+        .eq('org_id', orgId).eq('key', 'org.reimb_rate_km').limit(1);
+    final v = (r as List).isEmpty ? null : double.tryParse('${r.first['value']}'.trim());
+    return v != null && v > 0 ? v : null;
   } catch (_) {
     return null;
   }
 }
 
 ReimbInfo reimbInfoFrom(Map<String, dynamic> r, List<Map<String, dynamic>> lines) {
+  final base = _reimbInfoCore(r, lines);
+  final gen = _generated(r);
+  return ReimbInfo(rate: base.rate, stamp: base.stamp, fullyPaid: base.fullyPaid, approvedBy: base.approvedBy,
+      paidKm: base.paidKm, generatedDays: gen.$1, generatedNote: gen.$2);
+}
+
+/// Dates already generated for reimbursement on other sheets + the note text.
+(Set<String>, String?) _generated(Map<String, dynamic> r) {
+  final dFmt = DateFormat('d MMM');
+  final at = DateFormat('d MMM yyyy, h:mm a');
+  final days = <String>{};
+  // one line per earlier sheet: "10 Nov — Trip Summary (approved)"
+  final bySheet = <String, Map<String, dynamic>>{};
+  for (final g in (r['generated'] as List? ?? const [])) {
+    final m = Map<String, dynamic>.from(g as Map);
+    days.add('${m['day']}'.substring(0, 10));
+    final s = bySheet.putIfAbsent('${m['claim']}', () => {...m, 'days': <String>{}});
+    (s['days'] as Set<String>).add('${m['day']}'.substring(0, 10));
+  }
+  final parts = <String>[];
+  for (final s in bySheet.values) {
+    final ds = (s['days'] as Set<String>).toList()..sort();
+    final from = DateTime.tryParse('${s['from'] ?? ''}');
+    final to = DateTime.tryParse('${s['to'] ?? ''}');
+    final sheet = s['type'] == 'combined_summary'
+        ? 'Combined Trip Summary${from != null && to != null ? ' ${dFmt.format(from)}–${dFmt.format(to)}' : ''}'
+        : 'Trip Summary';
+    final st = '${s['status'] ?? ''}';
+    parts.add('${ds.map((d) => dFmt.format(DateTime.parse(d))).join(', ')} — $sheet'
+        '${st.isEmpty ? '' : ' ($st)'}');
+  }
+  final first = DateTime.tryParse('${r['sheet_first_at'] ?? ''}')?.toLocal();
+  final count = (r['sheet_count'] as num?)?.toInt() ?? 0;
+  final lines = <String>[
+    if (count > 1 && first != null) 'This same sheet was generated before (first on ${at.format(first)}; $count times in all).',
+    ...parts,
+  ];
+  return (days, lines.isEmpty ? null : lines.join('\n'));
+}
+
+ReimbInfo _reimbInfoCore(Map<String, dynamic> r, List<Map<String, dynamic>> lines) {
   final rate = (r['rate'] as num?)?.toDouble();
   final paid = [for (final p in (r['paid'] as List? ?? const [])) Map<String, dynamic>.from(p as Map)];
   final paidTrips = {for (final p in paid) '${p['trip']}'};

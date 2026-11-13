@@ -701,6 +701,18 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.reimb_rate_print',
+    'Rate per km on Trip Summaries',
+    'The rate below is applied on every Trip Summary and Combined Trip Summary (web and app): the Reimbursement '
+        'section prints the rate, the distance amount, a line for other allowances, the total and Approved by. '
+        'The Combined Trip Summary screen shows the amount too. The same rate is used by Reimbursement approvals. '
+        'Turn OFF to leave rate and amounts blank on the print.',
+    number: _NumberField('org.reimb_rate_km', 'Rate per km (Rs, 0 = blank)', 0, decimal: true),
+    defaultOn: true,
+    companionWhenOff: true,
+  ),
+
+  _AdminToggle(
     'org.reimb_approvals',
     'Reimbursement approvals',
     'Every Trip Summary / Combined Trip Summary a driver or salesperson generates goes to '
@@ -710,7 +722,6 @@ const List<_AdminToggle> _toggles = [
         'automatically (one per claim; needs the rate per km) and the claim turns Paid when that advice is marked paid. '
         'Push alerts: Admin Settings → Notifications → Reimbursements.',
     users: _UsersField('org.reimb_approvers', 'Approvers', emptyText: 'Nobody picked — admins approve'),
-    number: _NumberField('org.reimb_rate_km', 'Rate per km (Rs, 0 = blank)', 0, decimal: true),
     choice: _ChoiceField('org.reimb_after_approval', 'After approval', [
       ('mark_paid', 'Accounts mark it paid here'),
       ('payment_advice', 'Create a Payment Advice'),
@@ -1016,6 +1027,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.fleet_alerts',
   ]),
   _ToggleGroup('Reimbursements', Icons.receipt_long_outlined, [
+    'org.reimb_rate_print',
     'org.reimb_approvals',
     'org.reimb_payers_only',
   ]),
