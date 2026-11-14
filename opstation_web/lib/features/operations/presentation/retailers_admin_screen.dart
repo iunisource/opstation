@@ -219,22 +219,57 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
     }
   }
 
-  Future<void> _showCredentials(Map<String, dynamic> c, Map<String, dynamic> data) async {
+  /// Password back to the default (their code); they set their own on next login.
+  Future<void> _resetPassword(Map<String, dynamic> c) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset password'),
+        content: Text('Reset the password for "${c['shop_name']}" back to the default (their code)?\n\n'
+            'Their current password stops working. On next login they will be asked to set a new one.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('provision-retailer', body: {'customerId': c['id'], 'reset': true});
+      final data = res.data is Map ? Map<String, dynamic>.from(res.data as Map) : null;
+      if (data == null || data['error'] != null) {
+        _snack('Could not reset: ${data?['error'] ?? 'unknown error'}');
+        return;
+      }
+      await _showCredentials(c, data, reset: true);
+      _refresh();
+    } on FunctionException catch (e) {
+      final detail = e.details is Map ? (e.details as Map)['error'] : e.details;
+      _snack('Could not reset: ${detail ?? e.reasonPhrase ?? 'failed'}');
+    } catch (e) {
+      _snack('Could not reset: ${e.toString().split('\n').first}');
+    }
+  }
+
+  Future<void> _showCredentials(Map<String, dynamic> c, Map<String, dynamic> data, {bool reset = false}) async {
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Login created'),
+        title: Text(reset ? 'Password reset' : 'Login created'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${c['shop_name']} can now sign in to the retailer portal.'),
+            Text(reset
+                ? '${c['shop_name']} can sign in again with the default password.'
+                : '${c['shop_name']} can now sign in to the retailer portal.'),
             const SizedBox(height: 12),
             _credRow('Login code', '${data['loginCode'] ?? c['code']}'),
             _credRow('Temp password', '${data['tempPassword'] ?? c['code']}'),
             const SizedBox(height: 8),
-            const Text('They will be prompted to set a new password on first login.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            Text(reset ? 'They will be asked to set a new password when they sign in.' : 'They will be prompted to set a new password on first login.',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ],
         ),
         actions: [
@@ -647,6 +682,11 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                                 onChanged: canProvision
                                     ? (v) => _toggleLogin(c, login, v)
                                     : null,
+                              ),
+                              IconButton(
+                                tooltip: 'Reset password to default',
+                                icon: const Icon(Icons.lock_reset, size: 20),
+                                onPressed: canProvision ? () => _resetPassword(c) : null,
                               ),
                             ])
                           else

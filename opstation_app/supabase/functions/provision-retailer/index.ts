@@ -19,6 +19,7 @@ const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
 interface Payload {
   customerId: string
+  reset?: boolean // reset an existing login's password back to the default
 }
 
 
@@ -76,6 +77,33 @@ serve(async (req) => {
     // masterAdmin / admin can only provision within their own org
     if (isMasterAdmin && callerRow?.org_id !== customer.org_id)
       return json({ error: 'forbidden' }, 403)
+
+    // Reset: password back to the default (the code), must change on next login.
+    if (p.reset) {
+      const { data: rows } = await admin
+        .from('users').select('id, email')
+        .eq('customer_id', customer.id).eq('role', 'retailer').limit(1)
+      const row = (rows ?? [])[0]
+      if (!row?.email) return json({ error: 'no_login' }, 404)
+      const code = String(customer.code)
+      const tempPassword = code.length >= 6 ? code : (code + '000000').slice(0, 6)
+      const { data: authId, error: rpcErr } = await admin.rpc('auth_id_for_email', { p_email: row.email })
+      if (rpcErr) return json({ error: 'lookup_failed', detail: rpcErr.message }, 500)
+      if (authId) {
+        const { error: updErr } = await admin.auth.admin.updateUserById(authId as string, {
+          password: tempPassword, email_confirm: true,
+        })
+        if (updErr) return json({ error: 'auth_update_failed', detail: updErr.message }, 500)
+      } else {
+        const { error: createErr } = await admin.auth.admin.createUser({
+          email: row.email, password: tempPassword, email_confirm: true,
+        })
+        if (createErr) return json({ error: 'auth_create_failed', detail: createErr.message }, 500)
+      }
+      const { error: flagErr } = await admin.from('users').update({ password_temporary: true }).eq('id', row.id)
+      if (flagErr) return json({ error: 'flag_failed', detail: flagErr.message }, 500)
+      return json({ ok: true, reset: true, loginCode: code, email: row.email, tempPassword })
+    }
 
     // Already provisioned?
     const { data: existingRetailer } = await admin
