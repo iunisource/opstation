@@ -15,6 +15,11 @@ class AppVersionRow {
   final String? version, model, os;
   final int? build;
   final DateTime? lastSeen;
+  final DateTime? reportedAt; // the phone reported it (app build 37+)
+  final DateTime? signinAt; // else: version as at this sign-in
+  /// True when the phone itself reported the version (current); false = from
+  /// the last sign-in, which may be older than what the phone runs now.
+  bool get confirmed => reportedAt != null;
   AppVersionRow.from(Map m)
       : userId = '${m['user_id']}',
         name = '${m['name'] ?? ''}',
@@ -25,7 +30,12 @@ class AppVersionRow {
         build = (m['build'] as num?)?.toInt(),
         model = m['device_model'] as String?,
         os = m['os_version'] as String?,
-        lastSeen = DateTime.tryParse('${m['last_seen'] ?? ''}')?.toLocal();
+        lastSeen = DateTime.tryParse('${m['last_seen'] ?? ''}')?.toLocal(),
+        // Older database (475 only): no source columns → treat as reported.
+        reportedAt = m.containsKey('reported_at')
+            ? DateTime.tryParse('${m['reported_at'] ?? ''}')?.toLocal()
+            : DateTime.tryParse('${m['last_seen'] ?? ''}')?.toLocal(),
+        signinAt = DateTime.tryParse('${m['signin_at'] ?? ''}')?.toLocal();
 
   /// "1.3.6 (34)"
   String get label {
@@ -64,8 +74,8 @@ class AppVersionInfo {
     if (s == 'unknown') return 'Unknown';
     if (isTest(r)) return 'Test build';
     if (s == 'ok') return 'Up to date';
-    final behind = (latest ?? target!) - r.build!;
-    return behind > 0 ? 'Outdated · $behind build${behind == 1 ? '' : 's'} behind' : 'Outdated';
+    // Build numbers aren't one per release, so no "N behind" — just the target.
+    return r.confirmed ? 'Outdated · needs build ${target ?? ''}' : 'Outdated (as at last sign-in)';
   }
 
   static Future<AppVersionInfo> load(String orgId) async {
@@ -271,7 +281,7 @@ class _AppVersionsScreenState extends ConsumerState<AppVersionsScreen> {
             info?.minimum != null
                 ? 'Minimum required: build ${info!.minimum} (phones below it see a "Please update" banner)'
                 : 'No minimum set: compared with the latest build (set one with the gear)',
-            'Phones report their version about every 10 minutes while the app is open',
+            'Build 37+ reports its version every ~10 min; older apps show the version from their last sign-in',
           ].join(' · '),
           style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
         ),
@@ -318,9 +328,18 @@ class _AppVersionsScreenState extends ConsumerState<AppVersionsScreen> {
       if (appRoleLabel(r.role).isNotEmpty)
         Text(appRoleLabel(r.role), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
     ]);
-    final version = Text(r.label,
-        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, fontFamily: 'monospace',
-            color: r.build == null ? AppTheme.textSecondary : null));
+    final version = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(r.label,
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, fontFamily: 'monospace',
+              color: r.build == null ? AppTheme.textSecondary : null)),
+      if (r.build != null)
+        Text(
+          r.confirmed
+              ? 'reported ${_seen(r.reportedAt)}'
+              : 'from sign-in ${r.signinAt == null ? '' : DateFormat('d MMM').format(r.signinAt!)}',
+          style: TextStyle(fontSize: 11, color: r.confirmed ? AppTheme.textSecondary : const Color(0xFFB45309)),
+        ),
+    ]);
     final phone = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text((r.model ?? '').isEmpty ? '—' : r.model!, style: const TextStyle(fontSize: 12.5)),
       if ((r.os ?? '').isNotEmpty) Text(r.os!, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
