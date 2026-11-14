@@ -7,6 +7,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/section_label.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
+import '../../../shared/widgets/update_app_banner.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dispatch/data/delivery_repository.dart';
 import '../../dispatch/models/delivery.dart';
@@ -109,6 +110,7 @@ class _DispatchHomeScreenState extends ConsumerState<DispatchHomeScreen> {
                 ),
                 const SizedBox(height: 20),
                 const TempPasswordBanner(),
+                const UpdateAppBanner(padding: EdgeInsets.only(top: 8)),
                 Row(
                   children: [
                     Expanded(

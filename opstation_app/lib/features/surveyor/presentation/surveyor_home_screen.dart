@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/section_label.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
+import '../../../shared/widgets/update_app_banner.dart';
 import '../../../shared/widgets/org_logo.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../auth/models/user_role.dart';
@@ -53,6 +54,7 @@ class SurveyorHomeScreen extends ConsumerWidget {
           const SizedBox(height: 24),
 
           const TempPasswordBanner(),
+          const UpdateAppBanner(padding: EdgeInsets.only(top: 8)),
 
           if (!isAuditor) ...[
             const SectionLabel('Actions'),

@@ -181,6 +181,7 @@ import '../../features/deliveries/presentation/dispatch_dashboard_screen.dart' d
 import '../../features/fleet/fleet_screen.dart' deferred as _s169;
 import '../../features/licences/licences_screen.dart' deferred as _s170;
 import '../../features/reimbursements/reimbursements_screen.dart' deferred as _s171;
+import '../../features/operations/presentation/app_versions_screen.dart' deferred as _s172;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -324,7 +325,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             final permScopedOps = const {
               '/dashboard', '/team', '/routes', '/operations/route-roster', '/operations/time-in-market', '/live-map',
               '/operations/retailers', '/reports', '/reimbursements', '/compliance', '/operations/files',
-              '/operations/notifications',
+              '/operations/notifications', '/operations/app-versions',
             }.contains(loc);
             // Management (Assets / Asset Report / Facility) is registry-gated
             // and lives outside /erp/ — the menu showed it, but this check used
@@ -488,6 +489,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/facility', builder: (_, __) => _deferred('_s075', _s075.loadLibrary, () => _s075.ErpFacilityScreen())),
           GoRoute(path: '/licences', builder: (_, state) => _deferred('_s170', _s170.loadLibrary, () => _s170.LicencesScreen(openId: state.uri.queryParameters['i']))),
           GoRoute(path: '/reimbursements', builder: (_, state) => _deferred('_s171', _s171.loadLibrary, () => _s171.ReimbursementsScreen(openId: state.uri.queryParameters['c']))),
+          GoRoute(path: '/operations/app-versions', builder: (_, state) => _deferred('_s172', _s172.loadLibrary, () => _s172.AppVersionsScreen())),
           GoRoute(path: '/orgs', builder: (_, __) => _deferred('_s064', _s064.loadLibrary, () => _s064.OrgsScreen())),
           GoRoute(path: '/orgs/profile', builder: (_, st) => _deferred('_s152', _s152.loadLibrary,
               () => _s152.OrgProfileScreen(key: ValueKey(st.uri.queryParameters['id']), orgId: st.uri.queryParameters['id'] ?? ''))),
@@ -992,6 +994,7 @@ final Map<String, Future<void> Function()> _allScreens = {
   '_s169': _s169.loadLibrary,
   '_s170': _s170.loadLibrary,
   '_s171': _s171.loadLibrary,
+  '_s172': _s172.loadLibrary,
 };
 
 /// Once the first screen is up, download the other screens' code one by one

@@ -136,6 +136,7 @@ const Map<String, _ScreenSettings> _screenSettings = {
   '/hr/payroll': _ScreenSettings('Payroll', [], ['payroll']),
   // ── Logistics ──
   '/reimbursements': _ScreenSettings('Reimbursement Approvals', ['org.reimb_rate_print', 'org.reimb_allowance_print', 'org.reimb_approvals', 'org.reimb_payers_only']),
+  '/operations/app-versions': _ScreenSettings('App Versions', ['org.app_update_banner']),
   '/reports/combined-summary': _ScreenSettings('Combined Trip Summary', ['org.reimb_rate_print', 'org.reimb_allowance_print']),
   '/reports': _ScreenSettings('Reports', ['org.reimb_rate_print', 'org.reimb_allowance_print']),
   '/licences': _ScreenSettings('Licences & Compliance', ['org.compliance_reminders']),

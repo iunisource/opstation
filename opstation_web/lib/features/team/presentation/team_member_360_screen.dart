@@ -4,6 +4,7 @@ import 'dart:html' as html;
 import '../../../core/utils/place_name.dart';
 import 'package:flutter/material.dart';
 import '../../operations/presentation/time_in_market.dart';
+import '../../operations/presentation/app_versions_screen.dart' show AppVersionInfo, appStatusPill;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
@@ -2538,8 +2539,15 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
   }
   final _df = DateFormat('d MMM yyyy, h:mm a');
   final Map<String, String?> _places = {};
+  AppVersionInfo? _ver; // org's app versions (SQL 475) — this person's status
 
   Future<List<Map<String, dynamic>>> _load() async {
+    try {
+      final org = ref.read(currentUserProvider)?.orgId;
+      if (org != null) _ver = await AppVersionInfo.load(org);
+    } catch (_) {
+      _ver = null; // SQL 475 not run yet
+    }
     final rows = await Supabase.instance.client.rpc('user_devices', params: {'p_user': widget.userId});
     final list = [for (final r in rows as List) Map<String, dynamic>.from(r as Map)];
     await _loadLog();
@@ -2631,6 +2639,38 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
+              if (_ver != null && _ver!.rows.any((r) => r.userId == widget.userId)) ...[
+                () {
+                  final r = _ver!.rows.firstWhere((r) => r.userId == widget.userId);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 14),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Icon(Icons.system_update_outlined, color: AppTheme.textSecondary),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Wrap(spacing: 10, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                            Text('App version ${r.label}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                            appStatusPill(_ver!, r),
+                          ]),
+                          const SizedBox(height: 4),
+                          Text(
+                            [
+                              if (_ver!.latest != null) 'Latest in use: build ${_ver!.latest}',
+                              if (_ver!.minimum != null) 'Minimum: build ${_ver!.minimum}',
+                              if (r.lastSeen != null) 'Last reported ${_at(r.lastSeen!.toIso8601String())}',
+                              if (r.build == null) 'Shows after this person opens the updated app',
+                            ].join(' · '),
+                            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                          ),
+                        ]),
+                      ),
+                    ]),
+                  );
+                }(),
+              ],
               if (_log.isNotEmpty) ...[
                 const Text('Phone changes', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 8),

@@ -13,6 +13,7 @@ import '../database/app_database_provider.dart';
 import '../../shared/widgets/org_logo.dart' show orgLogoUrlProvider;
 import '../../features/surveyor/services/survey_feedback.dart' show auditLocationOnProvider;
 import 'device_guard.dart';
+import '../../shared/widgets/update_app_banner.dart' show appUpdateNeededProvider;
 import '../utils/customer_locations.dart';
 import '../utils/receipt_books.dart';
 import '../utils/location_check.dart';
@@ -85,6 +86,7 @@ class OrgConfigSync with WidgetsBindingObserver {
         _ref.invalidate(customerDeactivateAccessProvider);
       }
       if (changed.contains('org.logo_url')) _ref.invalidate(orgLogoUrlProvider);
+      if (changed.any((k) => k.startsWith('org.app_'))) _ref.invalidate(appUpdateNeededProvider);
       if (changed.contains('org.audit_location_tracking')) _ref.invalidate(auditLocationOnProvider);
       if (changed.contains('org.customer_targets_enabled')) {
         _ref.invalidate(salespersonTargetsEnabledProvider);

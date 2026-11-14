@@ -701,6 +701,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.app_update_banner',
+    'Ask old apps to update',
+    'Phones on an app build older than the minimum below show a "Please update Opstation" banner with a Play Store '
+        'button on their home screen. It only warns: nobody is blocked from working. Operations → App Versions lists '
+        'who is on which version. This setting is for this organization only.',
+    number: _NumberField('org.app_min_build', 'Minimum app build number', 0),
+  ),
+
+  _AdminToggle(
     'org.reimb_rate_print',
     'Rate per km on Trip Summaries',
     'The rate below is applied on every Trip Summary and Combined Trip Summary (web and app): the Reimbursement '
@@ -1037,6 +1046,9 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
   ]),
   _ToggleGroup('Logistics & Fleet', Icons.local_shipping_outlined, [
     'org.fleet_alerts',
+  ]),
+  _ToggleGroup('App Updates', Icons.system_update_outlined, [
+    'org.app_update_banner',
   ]),
   _ToggleGroup('Reimbursements', Icons.receipt_long_outlined, [
     'org.reimb_rate_print',

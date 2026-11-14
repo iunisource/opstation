@@ -9,6 +9,7 @@ import '../../features/admin/providers/admin_dashboard_realtime.dart';
 import 'role_home_scaffold.dart';
 import 'section_label.dart';
 import 'temp_password_banner.dart';
+import 'update_app_banner.dart';
 
 /// Shared org-level admin dashboard body.
 ///
@@ -63,6 +64,7 @@ class AdminDashboardBody extends ConsumerWidget {
         const SizedBox(height: 20),
 
         const TempPasswordBanner(),
+        const UpdateAppBanner(padding: EdgeInsets.only(top: 8)),
 
         // Today header banner
         Material(

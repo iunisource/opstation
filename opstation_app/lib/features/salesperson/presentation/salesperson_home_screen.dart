@@ -19,6 +19,7 @@ import '../../../shared/widgets/opstation_header.dart';
 import '../../../core/sync/sync_controller.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
+import '../../../shared/widgets/update_app_banner.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../orders/presentation/order_create_modal.dart';
 import 'dialogs/adhoc_collection_dialog.dart';
@@ -635,6 +636,7 @@ class _SalespersonHomeScreenState extends ConsumerState<SalespersonHomeScreen>
             child: _HeroHeader(firstName: firstName, dateStr: dateStr),
           ),
           const Padding(padding: EdgeInsets.fromLTRB(16, 12, 16, 0), child: TempPasswordBanner()),
+          const UpdateAppBanner(padding: EdgeInsets.fromLTRB(16, 12, 16, 0)),
           if (ref.watch(deviceBlockedProvider) != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),

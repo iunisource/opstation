@@ -9,6 +9,7 @@ import '../../../core/database/app_database_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
+import '../../../shared/widgets/update_app_banner.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dispatch/data/delivery_repository.dart';
@@ -266,6 +267,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
                 ),
                 const SizedBox(height: 24),
                 const TempPasswordBanner(),
+                const UpdateAppBanner(padding: EdgeInsets.only(top: 8)),
                 if (data.inProgress != null) ...[
                   const _SectionTitle(
                       'IN PROGRESS', AppColors.warningDark),

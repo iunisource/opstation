@@ -105,9 +105,28 @@ class DeviceGuard {
     }
   }
 
+  /// Tell the server which app version this phone runs (App Versions screen,
+  /// SQL 475). Called with every check — about every 10 minutes.
+  static Future<void> _reportVersion(String d) async {
+    try {
+      final a = await _about();
+      if (a.$3 == null) return;
+      await Supabase.instance.client.rpc('report_app_version', params: {
+        'p_device': d,
+        'p_app': a.$3,
+        'p_model': a.$1,
+        'p_os': a.$2,
+      });
+    } catch (_) {
+      // Offline, or the server doesn't have update 475 yet.
+    }
+  }
+
   /// May this phone run routes now? Updates [blocked], [message] and the banner.
   static Future<void> check(Ref ref) async {
     final d = await id();
+    // ignore: unawaited_futures
+    _reportVersion(d);
     try {
       String? state;
       try {

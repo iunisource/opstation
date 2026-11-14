@@ -1797,6 +1797,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     if (show('/operations/time-in-market')) _menuItem(context, 'Time in Market', Icons.timelapse_outlined, '/operations/time-in-market', location),
     if (show('/operations/files')) _menuItem(context, 'Files', Icons.folder_shared_outlined, '/operations/files', location),
     if (show('/operations/notifications')) _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
+    if (show('/operations/app-versions')) _menuItem(context, 'App Versions', Icons.system_update_outlined, '/operations/app-versions', location),
   ];
 
   return <Widget>[
@@ -1821,7 +1822,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isAdminTier) ...[
           if (modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
-            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/reimbursements', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings'],
+            ['/dashboard', '/team', '/customers', '/routes', '/operations/route-roster', '/deliveries', '/live-map', '/reports', '/reports/combined-summary', '/reimbursements', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications', '/operations/retailers', '/settings', '/operations/app-versions'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/dashboard', location),
               _menuItem(context, 'Team', Icons.people_outline, '/team', location, badge: devicePending),
@@ -1842,6 +1843,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Notifications', Icons.campaign_outlined, '/operations/notifications', location),
               if (user?.role == WebUserRole.masterAdmin)
                 _menuItem(context, 'App Settings', Icons.settings_outlined, '/settings', location),
+              _menuItem(context, 'App Versions', Icons.system_update_outlined, '/operations/app-versions', location),
             ],
             badge: customerSupervisePending + devicePending + reimbTodo,
           ),
@@ -1887,7 +1889,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isErpUser && opsErpItems.isNotEmpty && modules.contains('operations'))
           _navMenu(context, 'Operations', Icons.local_shipping_outlined, location,
             const ['/dashboard', '/team', '/customers', '/routes', '/deliveries', '/operations/route-roster', '/live-map', '/operations/retailers',
-             '/reports', '/reports/combined-summary', '/reimbursements', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications'],
+             '/reports', '/reports/combined-summary', '/reimbursements', '/compliance', '/operations/time-in-market', '/operations/files', '/operations/notifications',
+             '/operations/app-versions'],
             opsErpItems,
             badge: devicePending + reimbTodo),
 
