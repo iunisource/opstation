@@ -71,8 +71,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         _db.from('reimb_trip_paid').select('trip_id, claim_id, paid_on').eq('org_id', org).limit(20000),
         _db.rpc('reimb_can_approve', params: {'p_org': org}),
         _db.rpc('reimb_can_pay', params: {'p_org': org}),
-        _db.from('app_config').select('key, value').eq('org_id', org)
-            .inFilter('key', ['org.reimb_rate_km', 'org.reimb_after_approval']).isFilter('branch_id', null),
+        _db.from('app_config').select('key, value, branch_id').eq('org_id', org)
+            .inFilter('key', ['org.reimb_rate_km', 'org.reimb_after_approval']),
         _db.from('users').select('id, role').eq('org_id', org),
       ]);
       if (!mounted) return;
@@ -86,7 +86,14 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
       _paidTrips
         ..clear()
         ..addAll({for (final p in r[2] as List) '${p['trip_id']}': Map<String, dynamic>.from(p as Map)});
-      final cfg = {for (final x in r[5] as List) '${x['key']}': '${x['value'] ?? ''}'.trim()};
+      // The org-wide row (no branch) wins; a row saved with a branch is used otherwise.
+      final cfg = <String, String>{};
+      final rows = [for (final x in r[5] as List) Map<String, dynamic>.from(x as Map)]
+        ..sort((a, b) => (a['branch_id'] == null ? 1 : 0).compareTo(b['branch_id'] == null ? 1 : 0));
+      for (final x in rows) {
+        final v = '${x['value'] ?? ''}'.trim();
+        if (v.isNotEmpty) cfg['${x['key']}'] = v; // later (org-wide) rows overwrite branch rows
+      }
       final rate = double.tryParse(cfg['org.reimb_rate_km'] ?? '');
       final paMode = cfg['org.reimb_after_approval'] == 'payment_advice';
       setState(() {
