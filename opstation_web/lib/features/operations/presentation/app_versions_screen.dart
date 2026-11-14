@@ -46,9 +46,13 @@ class AppVersionInfo {
   /// The build to compare against: the minimum if set, else the latest.
   int? get target => minimum ?? latest;
 
+  /// A build far above the real releases (a test / debug install).
+  bool isTest(AppVersionRow r) => r.build != null && latest != null && r.build! > latest! + _testGap;
+
   /// 'ok' | 'old' | 'unknown'
   String statusOf(AppVersionRow r) {
     if (r.build == null) return 'unknown';
+    if (isTest(r)) return 'ok';
     final t = target;
     if (t == null) return 'ok';
     return r.build! < t ? 'old' : 'ok';
@@ -58,6 +62,7 @@ class AppVersionInfo {
   String labelOf(AppVersionRow r) {
     final s = statusOf(r);
     if (s == 'unknown') return 'Unknown';
+    if (isTest(r)) return 'Test build';
     if (s == 'ok') return 'Up to date';
     final behind = (latest ?? target!) - r.build!;
     return behind > 0 ? 'Outdated · $behind build${behind == 1 ? '' : 's'} behind' : 'Outdated';
@@ -79,11 +84,20 @@ class AppVersionInfo {
       if (v.isNotEmpty) cfg['${x['key']}'] = v;
     }
     final min = cfg['org.app_update_banner'] == 'true' ? int.tryParse(cfg['org.app_min_build'] ?? '') : null;
-    int? latest;
-    for (final r in rows) {
-      if (r.build != null && (latest == null || r.build! > latest)) latest = r.build;
+    return AppVersionInfo(rows, latestRelease(rows), min != null && min > 0 ? min : null);
+  }
+
+  static const _testGap = 50;
+
+  /// Newest real build in use. A test / debug install (e.g. build 2027 next to
+  /// 35–37) is ignored: any build far above the next one down doesn't count.
+  static int? latestRelease(List<AppVersionRow> rows) {
+    final builds = {for (final r in rows) if (r.build != null && r.build! > 0) r.build!}.toList()
+      ..sort((a, b) => b.compareTo(a));
+    while (builds.length > 1 && builds[0] - builds[1] > _testGap) {
+      builds.removeAt(0);
     }
-    return AppVersionInfo(rows, latest, min != null && min > 0 ? min : null);
+    return builds.isEmpty ? null : builds.first;
   }
 }
 
