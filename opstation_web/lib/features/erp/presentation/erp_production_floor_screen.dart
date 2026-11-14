@@ -178,7 +178,10 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     final onFloorJobs = jobs.where((j) => j['on_floor'] == true && openJob(j)).toList();
     final finishedAwaiting = jobs.where((j) => j['on_floor'] != true && j['floor_finished_at'] != null && openJob(j)).toList();
 
-    return Container(color: AppTheme.background, padding: context.pagePadding, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    // The header (title, counts, Running now) scrolls away with the lists, so
+    // the lists get the whole screen — on a phone the band alone could fill it.
+    return Container(color: AppTheme.background, padding: context.pagePadding, child: NestedScrollView(
+      headerSliverBuilder: (_, __) => [SliverToBoxAdapter(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Title, count chips and controls all flow. In a Row they overflowed the
       // moment the window narrowed; the chips ended up stacking one letter high.
       Wrap(
@@ -214,12 +217,13 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       ]),
       if (_viewMode != 2 && !_loading) _runningNowBand(onFloorJobs, finishedAwaiting),
       const SizedBox(height: 16),
-      Expanded(child: _viewMode == 2
+      ]))],
+      body: _viewMode == 2
         ? _historyView()
         : _loading ? const Center(child: CircularProgressIndicator())
           : jobs.isEmpty ? const Center(child: Text('No jobs to show. Create one in Job Card.', style: TextStyle(color: AppTheme.textSecondary)))
-          : _viewMode == 0 ? _kanbanView(queued, inProg, done) : _gridView([...queued, ...inProg, ...done, ...voided])),
-    ]));
+          : _viewMode == 0 ? _kanbanView(queued, inProg, done) : _gridView([...queued, ...inProg, ...done, ...voided]),
+    ));
   }
 
   Widget _statChip(String label, Object value, Color c) => Container(

@@ -109,8 +109,8 @@ class _State extends ConsumerState<TimeInMarketScreen> {
             );
         return AlertDialog(
           title: const Text('Time in Market settings'),
-          content: SizedBox(
-            width: 380,
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               Row(children: [
                 Expanded(child: f('start', 'Working day from', '09:30')),
@@ -174,17 +174,24 @@ class _State extends ConsumerState<TimeInMarketScreen> {
     final early = list.where((d) => d.earlyClose(s)).length;
     Widget chip(String label, bool on, VoidCallback f) => ChoiceChip(label: Text(label), selected: on, onSelected: (_) => f());
 
+    final mobile = context.isMobile;
+    // One scroll for the whole page: on a phone the header and figures used to
+    // stay fixed and left little room for the list.
     return Container(
       color: AppTheme.background,
+      child: SingleChildScrollView(
       padding: context.pagePadding,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 10, runSpacing: 8, children: [
-          const Text('Time in Market', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          Text('Time in Market', style: TextStyle(fontSize: mobile ? 18 : 20, fontWeight: FontWeight.w800)),
           IconButton(tooltip: 'Refresh', onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh, size: 20)),
           if (_isAdmin)
             IconButton(tooltip: 'Settings', onPressed: _settings, icon: const Icon(Icons.tune, size: 20)),
-          OutlinedButton.icon(onPressed: _loading || list.isEmpty ? null : _print,
-              icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
+          mobile
+              ? IconButton(tooltip: 'Print / PDF', onPressed: _loading || list.isEmpty ? null : _print,
+                  icon: const Icon(Icons.print_outlined, size: 20))
+              : OutlinedButton.icon(onPressed: _loading || list.isEmpty ? null : _print,
+                  icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         ]),
         Text('How each salesperson\'s and driver\'s day was spent · day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)}, '
             'gaps over ${s.gapMin} min flagged',
@@ -229,28 +236,28 @@ class _State extends ConsumerState<TimeInMarketScreen> {
             _kpi('$early', 'closed early', bad: early > 0),
           ]),
         const SizedBox(height: 12),
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-                  ? Center(child: Text(_error!, style: const TextStyle(color: AppTheme.danger)))
-                  : list.isEmpty
-                      ? const Center(child: Text('No routes or deliveries in this period.',
-                          style: TextStyle(color: AppTheme.textSecondary)))
-                      : SingleChildScrollView(child: Column(children: [
-                          TimDayList(days: list, s: s, orgName: ref.read(currentUserProvider)?.orgName),
-                          const SizedBox(height: 8),
-                          const Text('Worked out from route / delivery start and end and the time each stop was marked. '
-                              'Time spent inside each shop is not measured.',
-                              style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
-                        ])),
-        ),
+        if (_loading)
+          const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
+        else if (_error != null)
+          Padding(padding: const EdgeInsets.all(30), child: Center(child: Text(_error!, style: const TextStyle(color: AppTheme.danger))))
+        else if (list.isEmpty)
+          const Padding(
+              padding: EdgeInsets.all(40),
+              child: Center(child: Text('No routes or deliveries in this period.', style: TextStyle(color: AppTheme.textSecondary))))
+        else ...[
+          TimDayList(days: list, s: s, orgName: ref.read(currentUserProvider)?.orgName),
+          const SizedBox(height: 8),
+          const Text('Worked out from route / delivery start and end and the time each stop was marked. '
+              'Time spent inside each shop is not measured.',
+              style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        ],
       ]),
+      ),
     );
   }
 
   Widget _kpi(String v, String l, {bool bad = false, bool warn = false}) => Container(
-        width: 170,
+        width: context.isMobile ? (MediaQuery.of(context).size.width - 36) / 2 : 170,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.border)),

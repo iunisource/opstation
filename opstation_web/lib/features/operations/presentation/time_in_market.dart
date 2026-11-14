@@ -465,7 +465,9 @@ class TimTimeline extends StatelessWidget {
             child: Text(l, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))));
       }
       final ticks = <Widget>[];
-      final step = (hi - lo) > 12 * 60 ? 120 : 60;
+      // Fewer hour labels on a narrow (phone) screen so they don't overlap.
+      final perHour = w / ((hi - lo) / 60);
+      final step = perHour < 22 ? 180 : (perHour < 40 || (hi - lo) > 12 * 60) ? 120 : 60;
       for (var h = lo; h <= hi; h += step) {
         ticks.add(Positioned(left: (x(h) - 14).clamp(0.0, w - 30), top: 0,
             child: Text(TimSettings.hm(h), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))));
