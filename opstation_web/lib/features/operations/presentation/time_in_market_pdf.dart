@@ -8,6 +8,7 @@ import 'package:printing/printing.dart' show PdfGoogleFonts;
 
 import '../../../core/format/money.dart';
 import '../../../core/pdf/pdf_output.dart';
+import '../../../core/utils/place_name.dart';
 import 'time_in_market.dart';
 
 /// Time in Market print — laid out like the screen (one card per day), not a
@@ -26,6 +27,21 @@ Future<void> printTimDays(
     theme = pw.ThemeData.withFont(base: await PdfGoogleFonts.notoSansRegular(), bold: await PdfGoogleFonts.notoSansBold());
   } catch (_) {}
   final doc = pw.Document(title: fileName, theme: theme);
+
+  // Start / end places (area name + GPS), like the visit report and trip
+  // summary. Names are looked up for a single day or a short list; a long
+  // list (or a failed lookup) shows the GPS only.
+  final lookup = detail || days.length <= 15;
+  final places = <TimDay, (String?, String?)>{};
+  Future<String?> where((double, double)? p) async {
+    if (p == null) return null;
+    final gps = '${p.$1.toStringAsFixed(5)}, ${p.$2.toStringAsFixed(5)}';
+    final n = lookup ? await placeName(p.$1, p.$2) : null;
+    return n == null ? gps : '$n ($gps)';
+  }
+  for (final d in days) {
+    places[d] = (await where(d.startAt), await where(d.endAt));
+  }
   const pageW = 595.28 - 56; // A4 portrait minus margins
   final now = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
 
@@ -80,8 +96,8 @@ Future<void> printTimDays(
       _legend(s, days.any((d) => d.role == 'driver'), days.any((d) => d.role != 'driver')),
       pw.SizedBox(height: 8),
       for (final d in days) ...[
-        _card(d, s, pageW),
-        if (detail) ..._detail(d, s),
+        _card(d, s, pageW, places[d]),
+        if (detail) ..._detail(d, s, null), // places are on the card above
       ],
       pw.SizedBox(height: 4),
       pw.Text('Worked out from route / delivery start and end and the time each stop was marked. '
@@ -158,7 +174,7 @@ pw.Widget _tag(String t, Color c) => pw.Container(
 
 /// One day as a card: name / date, the figures, flags, timeline, and (detail)
 /// the day in order plus the summary.
-pw.Widget _card(TimDay d, TimSettings s, double pageW) {
+pw.Widget _card(TimDay d, TimSettings s, double pageW, (String?, String?)? at) {
   final inner = pageW - 20;
   final lg = d.longestGap(s);
   final head = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
@@ -191,6 +207,14 @@ pw.Widget _card(TimDay d, TimSettings s, double pageW) {
     pw.Row(children: [for (final (t, c) in timFlags(d, s)) _tag(t, c)]),
     pw.SizedBox(height: 6),
     _timeline(d, s, inner),
+    if (at != null && (at.$1 != null || at.$2 != null)) ...[
+      pw.SizedBox(height: 3),
+      pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        if (at.$1 != null) pw.Expanded(child: _place('Started at', at.$1!)),
+        if (at.$1 != null && at.$2 != null) pw.SizedBox(width: 10),
+        if (at.$2 != null) pw.Expanded(child: _place('Ended at', at.$2!)),
+      ]),
+    ],
   ]);
 
   return pw.Container(
@@ -200,6 +224,13 @@ pw.Widget _card(TimDay d, TimSettings s, double pageW) {
     child: head,
   );
 }
+
+pw.Widget _place(String label, String text) => pw.RichText(
+      text: pw.TextSpan(style: const pw.TextStyle(fontSize: 7, color: _muted), children: [
+        pw.TextSpan(text: '$label  ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+        pw.TextSpan(text: text),
+      ]),
+    );
 
 /// The day as a bar, like on screen.
 pw.Widget _timeline(TimDay day, TimSettings s, double w) {
@@ -252,7 +283,7 @@ pw.Widget _timeline(TimDay day, TimSettings s, double w) {
 }
 
 /// "The day, in order" + "Summary" (side by side), like the expanded tile.
-List<pw.Widget> _detail(TimDay day, TimSettings s) {
+List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
   final gaps = day.gaps(s);
   pw.Widget line(String t, String text, {bool gap = false, PdfColor? dot, PdfColor? color}) => pw.Container(
         padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -272,7 +303,10 @@ List<pw.Widget> _detail(TimDay day, TimSettings s) {
         ]),
       );
   final lines = <pw.Widget>[];
-  if (day.start != null) lines.add(line(timClock(day.start), day.role == 'driver' ? 'Delivery started' : 'Route started'));
+  String withPlace(String t, String? p) => p == null ? t : '$t · $p';
+  if (day.start != null) {
+    lines.add(line(timClock(day.start), withPlace(day.role == 'driver' ? 'Delivery started' : 'Route started', at?.$1)));
+  }
   var gi = 0;
   for (final ev in day.sorted) {
     while (gi < gaps.length && !gaps[gi].to.isAfter(ev.at)) {
@@ -286,7 +320,7 @@ List<pw.Widget> _detail(TimDay day, TimSettings s) {
         dot: _pc(timKindColor(ev.kind))));
   }
   if (day.end != null && !day.open) {
-    lines.add(line(timClock(day.end), day.role == 'driver' ? 'Delivery completed' : 'Route ended'));
+    lines.add(line(timClock(day.end), withPlace(day.role == 'driver' ? 'Delivery completed' : 'Route ended', at?.$2)));
   } else if (day.open) {
     lines.add(line('', 'Still out', color: _blue));
   }

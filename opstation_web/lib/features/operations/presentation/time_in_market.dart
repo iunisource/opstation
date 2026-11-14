@@ -104,8 +104,12 @@ class TimDay {
   final bool open;
   final List<TimEvent> events;
   final int totalStops; // planned shops / drops (0 = unknown)
+  // Where the route started / ended (GPS of the first trip's start and the
+  // last trip's end) — null when not recorded (e.g. deliveries).
+  final (double, double)? startAt;
+  final (double, double)? endAt;
   TimDay(this.userId, this.name, this.role, this.date, this.routes, this.start, this.end, this.open,
-      this.events, this.totalStops);
+      this.events, this.totalStops, {this.startAt, this.endAt});
 
   late final List<TimEvent> sorted = [...events]..sort((a, b) => a.at.compareTo(b.at));
   DateTime? get first => sorted.isEmpty ? null : sorted.first.at;
@@ -227,7 +231,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (var k = 0; k < sales.length; k += 100) {
       final chunk = sales.sublist(k, (k + 100).clamp(0, sales.length));
       trips.addAll(await _paged((f, t) => c.from('trips')
-          .select('id, user_id, route_id, route_name, started_at, ended_at')
+          .select('id, user_id, route_id, route_name, started_at, ended_at, start_lat, start_lng, end_lat, end_lng')
           .eq('org_id', orgId).inFilter('user_id', chunk)
           .gte('started_at', s).lt('started_at', e).range(f, t)));
     }
@@ -256,12 +260,22 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       final off = t['route_id'] == 'offroute';
       if (!off) {
         a.routes.add('${t['route_name'] ?? 'Route'}');
-        if (a.start == null || st.isBefore(a.start!)) a.start = st;
+        (double, double)? pt(String la, String lo) {
+          final x = (t[la] as num?)?.toDouble(), y = (t[lo] as num?)?.toDouble();
+          return (x == null || y == null || (x == 0 && y == 0)) ? null : (x, y);
+        }
+        if (a.start == null || st.isBefore(a.start!)) {
+          a.start = st;
+          a.startAt = pt('start_lat', 'start_lng') ?? a.startAt;
+        }
         if (t['ended_at'] == null) {
           a.open = true;
         } else {
           final en = local(t['ended_at']);
-          if (a.end == null || en.isAfter(a.end!)) a.end = en;
+          if (a.end == null || en.isAfter(a.end!)) {
+            a.end = en;
+            a.endAt = pt('end_lat', 'end_lng') ?? a.endAt;
+          }
         }
         a.stops += stopsByRoute['${t['route_id']}'] ?? 0;
       }
@@ -340,7 +354,8 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
   final out = [
     for (final a in days.values)
       TimDay(a.uid, a.name, a.role, a.date, a.routes.toSet().toList(), a.start, a.end,
-          a.open && DateUtils.isSameDay(a.date, DateTime.now()), a.events, a.stops),
+          a.open && DateUtils.isSameDay(a.date, DateTime.now()), a.events, a.stops,
+          startAt: a.startAt, endAt: a.endAt),
   ]..sort((x, y) {
       final d = y.date.compareTo(x.date);
       return d != 0 ? d : x.name.toLowerCase().compareTo(y.name.toLowerCase());
@@ -353,6 +368,7 @@ class _Acc {
   final DateTime date;
   final List<String> routes = [];
   DateTime? start, end;
+  (double, double)? startAt, endAt;
   bool open = false;
   int stops = 0;
   final List<TimEvent> events = [];
