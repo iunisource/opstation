@@ -49,7 +49,7 @@ serve(async (req) => {
   try {
     const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    // Verify caller is masterAdmin or superAdmin (same as create-team-user)
+    // Verify caller is superAdmin, or masterAdmin / admin of the customer's org
     const token = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '')
     if (!token) return json({ error: 'missing_auth' }, 401)
     const { data: callerAuth, error: callerErr } = await admin.auth.getUser(token)
@@ -70,10 +70,10 @@ serve(async (req) => {
 
     const callerRow = await callerRoleInOrg(admin, callerAuth.user.email, customer.org_id ?? null)
     const isSuperAdmin = callerRow?.role === 'superAdmin'
-    const isMasterAdmin = callerRow?.role === 'masterAdmin'
+    const isMasterAdmin = callerRow?.role === 'masterAdmin' || callerRow?.role === 'admin'
     if (!isSuperAdmin && !isMasterAdmin) return json({ error: 'forbidden' }, 403)
 
-    // masterAdmin can only provision within their own org
+    // masterAdmin / admin can only provision within their own org
     if (isMasterAdmin && callerRow?.org_id !== customer.org_id)
       return json({ error: 'forbidden' }, 403)
 

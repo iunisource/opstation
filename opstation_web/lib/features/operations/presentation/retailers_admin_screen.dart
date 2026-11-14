@@ -82,10 +82,13 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
 
   /// Preload customers that already have a retailer login, so the screen
   /// opens showing existing accounts rather than a blank search.
+  bool _showingExisting = true; // list = existing accounts (not a search)
+  String? _loadError;
+
   Future<void> _loadExisting() async {
     final orgId = _orgId;
     if (orgId == null) return;
-    setState(() => _searching = true);
+    setState(() { _searching = true; _loadError = null; _showingExisting = true; });
     try {
       final client = Supabase.instance.client;
       final loginRows = await client
@@ -121,9 +124,15 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _searching = false);
+      setState(() {
+        _searching = false;
+        _loadError = 'Could not load retailer accounts. ${e.toString().split('\n').first}';
+      });
     }
   }
+
+  /// After a create / block etc.: refresh whatever is on screen.
+  Future<void> _refresh() => _searchCtrl.text.trim().isEmpty ? _loadExisting() : _search();
 
   @override
   void dispose() {
@@ -140,8 +149,9 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
   Future<void> _search() async {
     final orgId = _orgId;
     final q = _searchCtrl.text.trim();
-    if (orgId == null || q.isEmpty) return;
-    setState(() => _searching = true);
+    if (orgId == null) return;
+    if (q.isEmpty) return _loadExisting();
+    setState(() { _searching = true; _showingExisting = false; _loadError = null; });
     try {
       final client = Supabase.instance.client;
       final rows = await client
@@ -200,7 +210,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
         return;
       }
       await _showCredentials(c, data);
-      _search(); // refresh login status
+      _refresh(); // refresh login status
     } on FunctionException catch (e) {
       final detail = e.details is Map ? (e.details as Map)['error'] : e.details;
       _snack('Could not create login: ${detail ?? e.reasonPhrase ?? 'failed'}');
@@ -447,8 +457,15 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
   @override
   Widget build(BuildContext context) {
     final role = ref.watch(currentUserProvider)?.role;
-    final canProvision =
-        role == WebUserRole.masterAdmin || role == WebUserRole.superAdmin;
+    final canProvision = role == WebUserRole.masterAdmin || role == WebUserRole.superAdmin || role == WebUserRole.admin;
+    // The signed-in user may not be ready on first open (or the org is
+    // switched) — load the existing accounts as soon as it is.
+    ref.listen(currentUserProvider, (prev, next) {
+      if (next?.orgId != null && next?.orgId != prev?.orgId) {
+        _searchCtrl.clear();
+        _loadExisting();
+      }
+    });
 
     return Container(
       color: AppTheme.background,
@@ -465,7 +482,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
           if (!canProvision) ...[
             const SizedBox(height: 8),
             const Text(
-                'Note: creating logins requires a master-admin account.',
+                'Note: creating logins requires an admin account.',
                 style: TextStyle(fontSize: 12, color: AppTheme.warning)),
           ],
           const SizedBox(height: 16),
@@ -486,14 +503,46 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
                     : IconButton(icon: const Icon(Icons.arrow_forward), onPressed: _search),
               ),
               onSubmitted: (_) => _search(),
+              onChanged: (v) {
+                if (v.trim().isEmpty && !_showingExisting) _loadExisting();
+              },
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
+          if (!_searching && _loadError == null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(children: [
+                Text(
+                  _showingExisting
+                      ? 'Retailer accounts (${_results.length})'
+                      : 'Search results (${_results.length})',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                ),
+                if (!_showingExisting) ...[
+                  const SizedBox(width: 10),
+                  TextButton(
+                    onPressed: () {
+                      _searchCtrl.clear();
+                      _loadExisting();
+                    },
+                    child: const Text('Show all accounts'),
+                  ),
+                ],
+              ]),
+            ),
           Expanded(
             child: _results.isEmpty
-                ? const Center(
-                    child: Text('No retailer accounts yet. Search for a customer to create one.',
-                        style: TextStyle(color: AppTheme.textSecondary)))
+                ? Center(
+                    child: Text(
+                        _loadError ??
+                            (_searching
+                                ? ''
+                                : _showingExisting
+                                    ? 'No retailer accounts yet. Search for a customer to create one.'
+                                    : 'No customer matches this search.'),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _loadError != null ? AppTheme.danger : AppTheme.textSecondary)))
                 : ListView.separated(
                     itemCount: _results.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
