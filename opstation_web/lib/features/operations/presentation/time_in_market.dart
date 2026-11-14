@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import 'time_in_market_pdf.dart';
 
 /// Time in Market — how each salesperson's / driver's day was spent, worked
 /// out from data already collected: route (or delivery) start and end, and
@@ -584,7 +585,8 @@ class TimDayList extends StatefulWidget {
   final List<TimDay> days;
   final TimSettings s;
   final bool showName; // page: name + route; 360: date + route
-  const TimDayList({super.key, required this.days, required this.s, this.showName = true});
+  final String? orgName; // for the print header
+  const TimDayList({super.key, required this.days, required this.s, this.showName = true, this.orgName});
   @override
   State<TimDayList> createState() => _TimDayListState();
 }
@@ -645,7 +647,22 @@ class _TimDayListState extends State<TimDayList> {
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
-                child: TimDayDetail(day: d, s: s),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton.icon(
+                      onPressed: () => printTimDays([d], s,
+                          orgName: widget.orgName,
+                          detail: true,
+                          rangeLabel: DateFormat('EEE, d MMM yyyy').format(d.date),
+                          fileName: 'Time in Market - ${d.name} - ${DateFormat('d MMM yyyy').format(d.date)}'),
+                      icon: const Icon(Icons.print_outlined, size: 16),
+                      label: const Text('Print this day'),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  TimDayDetail(day: d, s: s),
+                ]),
               ),
           ]),
         ),

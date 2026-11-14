@@ -1,18 +1,13 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart' show PdfGoogleFonts;
 
-import '../../../core/pdf/pdf_output.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
 import 'time_in_market.dart';
+import 'time_in_market_pdf.dart';
 
 /// Operations → Time in Market: each salesperson's / driver's day from
 /// route (delivery) start and end and the time of every visit (drop).
@@ -158,71 +153,12 @@ class _State extends ConsumerState<TimeInMarketScreen> {
     }
   }
 
-  Future<void> _print() async {
-    final days = _visible;
-    if (days.isEmpty) return;
-    pw.ThemeData? theme;
-    try {
-      theme = pw.ThemeData.withFont(base: await PdfGoogleFonts.notoSansRegular(), bold: await PdfGoogleFonts.notoSansBold());
-    } catch (_) {}
-    final s = _s;
-    final doc = pw.Document(title: 'Time in Market', theme: theme);
-    final head = pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800);
-    pw.Widget c(String t, {bool bold = false, PdfColor? col, pw.TextAlign a = pw.TextAlign.left}) => pw.Padding(
-        padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 5),
-        child: pw.Text(t, textAlign: a, style: pw.TextStyle(fontSize: 8, color: col,
-            fontWeight: bold ? pw.FontWeight.bold : null)));
-    final range = _d(_from) == _d(_to)
-        ? DateFormat('d MMM yyyy').format(_from)
-        : '${DateFormat('d MMM').format(_from)} – ${DateFormat('d MMM yyyy').format(_to)}';
-    doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4.landscape,
-      margin: const pw.EdgeInsets.all(24),
-      footer: (ctx) => pw.Row(children: [
-        pw.Text('Printed ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}',
-            style: pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
-        pw.Spacer(),
-        pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}', style: pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
-      ]),
-      build: (ctx) => [
-        if ((ref.read(currentUserProvider)?.orgName ?? '').isNotEmpty)
-          pw.Text(ref.read(currentUserProvider)!.orgName!, style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
-        pw.Text('Time in Market — $range', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
-        pw.Text('Day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)} · late after ${TimSettings.hm(s.lateAfter)} · '
-            'early before ${TimSettings.hm(s.earlyBefore)} · gaps over ${s.gapMin} min',
-            style: pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
-        pw.SizedBox(height: 8),
-        pw.Table(
-          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
-          columnWidths: const {0: pw.FlexColumnWidth(3), 11: pw.FlexColumnWidth(3)},
-          children: [
-            pw.TableRow(repeat: true, decoration: const pw.BoxDecoration(color: PdfColors.grey200), children: [
-              for (final h in ['Name · route', 'Date', 'Start', 'First stop', 'Last stop', 'End', 'In market',
-                'Stops', 'Per hr', 'Per stop', 'Longest gap', 'Flags'])
-                pw.Padding(padding: const pw.EdgeInsets.all(4), child: pw.Text(h, style: head)),
-            ]),
-            for (final d in days)
-              pw.TableRow(children: [
-                c('${d.name}${d.routes.isEmpty ? '' : ' · ${d.routes.join(', ')}'}', bold: true),
-                c(DateFormat('d MMM').format(d.date)),
-                c(timClock(d.start)),
-                c(timClock(d.first), col: d.lateStart(s) ? PdfColors.red700 : null),
-                c(timClock(d.last)),
-                c(d.open ? 'out' : timClock(d.end), col: d.earlyClose(s) ? PdfColors.red700 : null),
-                c(timDur(d.inMarket)),
-                c(d.totalStops > 0 ? '${d.visits}/${d.totalStops}' : '${d.visits}'),
-                c(d.perHour.toStringAsFixed(1)),
-                c(timDur(d.avgPerStop(s))),
-                c(timDur(d.longestGap(s))),
-                c(timFlags(d, s).map((f) => f.$1).join(', ')),
-              ]),
-          ],
-        ),
-      ],
-    ));
-    final Uint8List bytes = await doc.save();
-    await outputPdf(bytes, 'Time in Market');
-  }
+  String get _rangeLabel => _d(_from) == _d(_to)
+      ? DateFormat('d MMM yyyy').format(_from)
+      : '${DateFormat('d MMM').format(_from)} – ${DateFormat('d MMM yyyy').format(_to)}';
+
+  Future<void> _print() => printTimDays(_visible, _s,
+      orgName: ref.read(currentUserProvider)?.orgName, rangeLabel: _rangeLabel);
 
   @override
   Widget build(BuildContext context) {
@@ -302,7 +238,7 @@ class _State extends ConsumerState<TimeInMarketScreen> {
                       ? const Center(child: Text('No routes or deliveries in this period.',
                           style: TextStyle(color: AppTheme.textSecondary)))
                       : SingleChildScrollView(child: Column(children: [
-                          TimDayList(days: list, s: s),
+                          TimDayList(days: list, s: s, orgName: ref.read(currentUserProvider)?.orgName),
                           const SizedBox(height: 8),
                           const Text('Worked out from route / delivery start and end and the time each stop was marked. '
                               'Time spent inside each shop is not measured.',
