@@ -602,7 +602,8 @@ class TimDayList extends StatefulWidget {
   final TimSettings s;
   final bool showName; // page: name + route; 360: date + route
   final String? orgName; // for the print header
-  const TimDayList({super.key, required this.days, required this.s, this.showName = true, this.orgName});
+  final bool expandAll; // open every day (e.g. a single day in a pop-up)
+  const TimDayList({super.key, required this.days, required this.s, this.showName = true, this.orgName, this.expandAll = false});
   @override
   State<TimDayList> createState() => _TimDayListState();
 }
@@ -611,6 +612,12 @@ class _TimDayListState extends State<TimDayList> {
   final Set<String> _open = {};
 
   String _key(TimDay d) => '${d.userId}|${d.date.toIso8601String()}';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.expandAll) _open.addAll(widget.days.map(_key));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -781,4 +788,86 @@ class _TimPersonTabState extends State<TimPersonTab> {
           Text(l, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
         ]),
       );
+}
+
+
+/// Time in Market for one person and a date range, in a pop-up (used by
+/// Reimbursement Approvals to check the days of a claim).
+Future<void> showTimeInMarketDialog(
+  BuildContext context, {
+  required String orgId,
+  required String userId,
+  required String name,
+  required DateTime from,
+  required DateTime to,
+  String? orgName,
+}) {
+  final single = DateUtils.isSameDay(from, to);
+  final label = single
+      ? DateFormat('EEE, d MMM yyyy').format(from)
+      : '${DateFormat('d MMM').format(from)} – ${DateFormat('d MMM yyyy').format(to)}';
+  final load = () async {
+    final s = await TimSettings.load(orgId);
+    final days = await loadTimDays(orgId, from, to, userId: userId);
+    return (s, days);
+  }();
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 980, maxHeight: MediaQuery.of(ctx).size.height * 0.92),
+        child: FutureBuilder<(TimSettings, List<TimDay>)>(
+          future: load,
+          builder: (ctx, snap) {
+            final data = snap.data;
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 10, 14),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Time in Market · $name', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                      Text(label, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
+                    ]),
+                  ),
+                  if (data != null && data.$2.isNotEmpty)
+                    OutlinedButton.icon(
+                      onPressed: () => printTimDays(data.$2, data.$1,
+                          orgName: orgName, rangeLabel: label, detail: single,
+                          fileName: 'Time in Market - $name - $label'),
+                      icon: const Icon(Icons.print_outlined, size: 16),
+                      label: const Text('Print'),
+                    ),
+                  IconButton(onPressed: () => Navigator.pop(ctx), icon: const Icon(Icons.close)),
+                ]),
+                const SizedBox(height: 10),
+                Flexible(
+                  child: snap.connectionState != ConnectionState.done
+                      ? const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator()))
+                      : snap.hasError || data == null
+                          ? const Padding(
+                              padding: EdgeInsets.all(30),
+                              child: Text('Could not load Time in Market. Please try again.',
+                                  style: TextStyle(color: AppTheme.danger)))
+                          : data.$2.isEmpty
+                              ? const Padding(
+                                  padding: EdgeInsets.all(30),
+                                  child: Text('No route or delivery found on these days.',
+                                      style: TextStyle(color: AppTheme.textSecondary)))
+                              : SingleChildScrollView(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: TimDayList(
+                                      days: data.$2, s: data.$1, showName: false,
+                                      orgName: orgName, expandAll: data.$2.length == 1),
+                                ),
+                ),
+              ]),
+            );
+          },
+        ),
+      ),
+    ),
+  );
 }

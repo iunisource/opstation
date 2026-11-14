@@ -97,31 +97,95 @@ Future<double?> reimbRateForScreen(String? orgId) async {
   }
 }
 
+/// What the PDF prints. Trips on an APPROVED / PAID claim are locked (SQL
+/// 473): they are listed but excluded — 0 km, Rs 0 — with the reason.
 ReimbInfo reimbInfoFrom(Map<String, dynamic> r, List<Map<String, dynamic>> lines) {
-  final base = _reimbInfoCore(r, lines);
-  final gen = _generated(r);
-  // Days of this sheet with something still unpaid (allowance is per such day).
-  final paidTrips = {for (final p in (r['paid'] as List? ?? const [])) '${(p as Map)['trip']}'};
-  final unpaid = <String>{
-    for (final l in lines)
-      if (!paidTrips.contains('${l['trip']}')) DateFormat('yyyy-MM-dd').format(l['day'] as DateTime),
-  };
-  final allDays = {for (final l in lines) DateFormat('yyyy-MM-dd').format(l['day'] as DateTime)};
-  return ReimbInfo(rate: base.rate, stamp: base.stamp, fullyPaid: base.fullyPaid, approvedBy: base.approvedBy,
-      paidKm: base.paidKm, generatedDays: gen.$1, generatedNote: gen.$2,
-      allowancePerDay: (r['allowance'] as num?)?.toDouble(),
-      unpaidDays: unpaid.length == allDays.length ? null : unpaid.length);
+  final rate = (r['rate'] as num?)?.toDouble();
+  final ymd = DateFormat('yyyy-MM-dd');
+  // Older databases send only "paid".
+  final src = (r['excluded'] as List?) ?? (r['paid'] as List?) ?? const [];
+  final excl = [for (final e in src) Map<String, dynamic>.from(e as Map)];
+  final lockedTrips = {for (final e in excl) '${e['trip']}'};
+  var lockedKm = 0.0;
+  final lockedDays = <String>{}, openDays = <String>{};
+  for (final l in lines) {
+    final d = ymd.format(l['day'] as DateTime);
+    if (lockedTrips.contains('${l['trip']}')) {
+      lockedKm += ((l['km'] as num?) ?? 0).toDouble();
+      lockedDays.add(d);
+    } else {
+      openDays.add(d);
+    }
+  }
+  final gen = _generated(r, lockedTrips);
+  final allLocked = lines.isNotEmpty && openDays.isEmpty && lockedDays.isNotEmpty;
+  return ReimbInfo(
+    rate: rate,
+    stamp: excl.isEmpty ? null : _excludedNote(excl, lines),
+    fullyPaid: allLocked,
+    approvedBy: null, // approved days are excluded; the box above says who approved them
+    paidKm: lockedKm,
+    excludedDays: lockedDays,
+    generatedDays: gen.$1,
+    generatedNote: gen.$2,
+    allowancePerDay: (r['allowance'] as num?)?.toDouble(),
+    unpaidDays: lockedDays.isEmpty ? null : openDays.length,
+  );
 }
 
-/// Dates already generated for reimbursement on other sheets + the note text.
-(Set<String>, String?) _generated(Map<String, dynamic> r) {
+/// "2 – 13 Nov (10 days, 1,075.7 km): Combined Trip Summary, approved by
+/// Mian Hamza on 14 Nov · Rs 10,763 · paid 15 Nov" — one line per claim.
+String _excludedNote(List<Map<String, dynamic>> excl, List<Map<String, dynamic>> lines) {
+  final dFmt = DateFormat('d MMM');
+  final kmOf = {for (final l in lines) '${l['trip']}': ((l['km'] as num?) ?? 0).toDouble()};
+  final byClaim = <String, List<Map<String, dynamic>>>{};
+  for (final e in excl) {
+    (byClaim['${e['claim'] ?? ''}'] ??= []).add(e);
+  }
+  final out = <String>[];
+  for (final g in byClaim.values) {
+    final days = {for (final e in g) DateTime.parse('${e['day']}'.substring(0, 10))}.toList()..sort();
+    final km = g.fold<double>(0, (s, e) => s + (kmOf['${e['trip']}'] ?? ((e['km'] as num?) ?? 0).toDouble()));
+    final when = days.length <= 3
+        ? days.map(dFmt.format).join(', ')
+        : '${dFmt.format(days.first)} - ${dFmt.format(days.last)}';
+    final e = g.first;
+    final from = DateTime.tryParse('${e['from'] ?? ''}');
+    final to = DateTime.tryParse('${e['to'] ?? ''}');
+    final sheet = e['type'] == 'combined_summary'
+        ? 'Combined Trip Summary${from != null && to != null ? ' ${dFmt.format(from)}-${dFmt.format(to)}' : ''}'
+        : e['type'] == 'trip_summary'
+            ? 'Trip Summary'
+            : 'an earlier claim';
+    final at = DateTime.tryParse('${e['at'] ?? ''}')?.toLocal();
+    final paidOn = DateTime.tryParse('${e['paid_on'] ?? ''}');
+    final amount = (e['amount'] as num?)?.toDouble();
+    final parts = <String>[
+      [
+        sheet,
+        if ((e['by'] ?? '') != '') 'approved by ${e['by']}${at != null ? ' on ${dFmt.format(at)}' : ''}'
+        else if (e['status'] == 'approved') 'approved',
+      ].join(', '),
+      if (amount != null && amount > 0) 'Rs ${NumberFormat('#,##0').format(amount)}',
+      if ((e['advice'] ?? '') != '') '${e['advice']}',
+      if (e['status'] == 'paid' || paidOn != null) 'paid${paidOn != null ? ' ${dFmt.format(paidOn)}' : ''}',
+    ];
+    out.add('$when (${days.length} day${days.length == 1 ? '' : 's'}, ${km.toStringAsFixed(1)} km): ${parts.join(', ')}');
+  }
+  return out.join('\n');
+}
+
+/// Dates already generated for reimbursement on other sheets + the note text
+/// (trips already approved are left out — they are in the excluded note).
+(Set<String>, String?) _generated(Map<String, dynamic> r, [Set<String> skipTrips = const {}]) {
   final dFmt = DateFormat('d MMM');
   final at = DateFormat('d MMM yyyy, h:mm a');
   final days = <String>{};
-  // one line per earlier sheet: "10 Nov — Trip Summary (approved)"
+  // one line per earlier sheet: "10 Nov — Trip Summary (pending)"
   final bySheet = <String, Map<String, dynamic>>{};
   for (final g in (r['generated'] as List? ?? const [])) {
     final m = Map<String, dynamic>.from(g as Map);
+    if (skipTrips.contains('${m['trip']}')) continue;
     days.add('${m['day']}'.substring(0, 10));
     final s = bySheet.putIfAbsent('${m['claim']}', () => {...m, 'days': <String>{}});
     (s['days'] as Set<String>).add('${m['day']}'.substring(0, 10));
@@ -145,52 +209,4 @@ ReimbInfo reimbInfoFrom(Map<String, dynamic> r, List<Map<String, dynamic>> lines
     ...parts,
   ];
   return (days, lines.isEmpty ? null : lines.join('\n'));
-}
-
-ReimbInfo _reimbInfoCore(Map<String, dynamic> r, List<Map<String, dynamic>> lines) {
-  final rate = (r['rate'] as num?)?.toDouble();
-  final paid = [for (final p in (r['paid'] as List? ?? const [])) Map<String, dynamic>.from(p as Map)];
-  final paidTrips = {for (final p in paid) '${p['trip']}'};
-  final fmt = DateFormat('d MMM');
-  final fmtY = DateFormat('d MMM yyyy');
-  final days = <DateTime>{};
-  final unpaidDays = <DateTime>{};
-  var paidKm = 0.0;
-  for (final l in lines) {
-    if (paidTrips.contains('${l['trip']}')) paidKm += ((l['km'] as num?) ?? 0).toDouble();
-    final d = l['day'] as DateTime;
-    final day = DateTime(d.year, d.month, d.day);
-    days.add(day);
-    if (!paidTrips.contains('${l['trip']}')) unpaidDays.add(day);
-  }
-  final approvedBy = r['status'] == 'approved' || r['status'] == 'paid' ? r['approved_by'] as String? : null;
-  if (r['status'] == 'paid' || (paid.isNotEmpty && unpaidDays.isEmpty)) {
-    final String text;
-    if (r['status'] == 'paid') {
-      text = [
-        'FULLY PAID — Rs ${NumberFormat('#,##0').format(r['paid_amount'] ?? 0)}',
-        if (r['paid_on'] != null) 'on ${fmtY.format(DateTime.parse('${r['paid_on']}'))}',
-        if ((r['paid_method'] ?? '') != '') '${r['paid_method']}',
-        if ((r['paid_ref'] ?? '') != '') 'ref ${r['paid_ref']}',
-        if (approvedBy != null) 'approved by $approvedBy',
-      ].join(' · ');
-    } else {
-      final on = {for (final p in paid) if (p['paid_on'] != null) fmtY.format(DateTime.parse('${p['paid_on']}'))};
-      final refs = {for (final p in paid) if ((p['ref'] ?? '') != '') '${p['ref']}'};
-      text = 'FULLY PAID — all ${days.length} day${days.length == 1 ? '' : 's'} already paid'
-          '${on.isEmpty ? '' : ' on ${on.join(', ')}'}${refs.isEmpty ? '' : ' (ref ${refs.join(', ')})'}';
-    }
-    return ReimbInfo(rate: rate, stamp: text, fullyPaid: true, approvedBy: approvedBy);
-  }
-  if (paid.isNotEmpty) {
-    final paidDays = (days.difference(unpaidDays).toList()..sort()).map(fmt.format).join(', ');
-    final un = (unpaidDays.toList()..sort()).map(fmt.format).join(', ');
-    return ReimbInfo(
-      rate: rate,
-      paidKm: paidKm,
-      stamp: 'PARTLY PAID — ${days.length - unpaidDays.length} of ${days.length} days already paid ($paidDays). Unpaid: $un.',
-      approvedBy: approvedBy,
-    );
-  }
-  return ReimbInfo(rate: rate, approvedBy: approvedBy);
 }

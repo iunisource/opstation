@@ -199,10 +199,12 @@ class CombinedSummaryRow {
 /// Reimbursement status printed on trip summaries (SQL 466).
 class ReimbInfo {
   final double? rate; // Rs per km (null = left blank)
-  final String? stamp; // "FULLY PAID …" / "PARTLY PAID …"
-  final bool fullyPaid;
+  final String? stamp; // why days are excluded (already approved), one line per claim
+  final bool fullyPaid; // every day already approved → nothing to claim
   final String? approvedBy;
-  final double paidKm; // km of trips already paid on an earlier claim
+  final double paidKm; // km of trips already approved / paid (excluded)
+  /// Dates (yyyy-MM-dd) with a trip already approved → marked † and excluded.
+  final Set<String> excludedDays;
   /// Dates (yyyy-MM-dd) already generated for reimbursement on other sheets,
   /// and the printed explanation (replaces the DUPLICATE watermark).
   final Set<String> generatedDays;
@@ -212,7 +214,7 @@ class ReimbInfo {
   /// Days on this sheet not already paid (null = all of the sheet's days).
   final int? unpaidDays;
   const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0,
-      this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays});
+      this.excludedDays = const <String>{}, this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays});
 }
 
 class ReportPdfBuilder {
@@ -327,7 +329,9 @@ class ReportPdfBuilder {
       for (final r in rows)
         [
           DateFormat('EEE, MMM d, y').format(r.date) +
-              ((reimb?.generatedDays.contains(DateFormat('yyyy-MM-dd').format(r.date)) ?? false) ? '  *' : ''),
+              ((reimb?.excludedDays.contains(DateFormat('yyyy-MM-dd').format(r.date)) ?? false)
+                  ? '  (approved)'
+                  : (reimb?.generatedDays.contains(DateFormat('yyyy-MM-dd').format(r.date)) ?? false) ? '  *' : ''),
           if (showSalesperson) r.salesperson,
           r.routes,
           r.lastWeekKm == null ? '-' : r.lastWeekKm!.toStringAsFixed(2),
@@ -339,6 +343,22 @@ class ReportPdfBuilder {
         '',
         '${lastWeekTotal.toStringAsFixed(2)} km',
         '${grandTotalKm.toStringAsFixed(2)} km',
+      ],
+      if ((reimb?.paidKm ?? 0) > 0) ...[
+        [
+          'EXCLUDED (already approved)',
+          if (showSalesperson) '',
+          '',
+          '',
+          '- ${reimb!.paidKm.toStringAsFixed(2)} km',
+        ],
+        [
+          'TOTAL TO CLAIM',
+          if (showSalesperson) '',
+          '',
+          '',
+          '${(grandTotalKm - reimb!.paidKm).clamp(0, double.infinity).toStringAsFixed(2)} km',
+        ],
       ],
     ];
     final distIdx = showSalesperson ? 4 : 3;
@@ -971,24 +991,29 @@ class ReportPdfBuilder {
   static List<pw.Widget> _reimbRows(double km, ReimbInfo? r, int days) {
     final f = NumberFormat('#,##0');
     final f2 = NumberFormat('#,##0.##');
-    final paidAll = r?.fullyPaid ?? false;
+    final nothing = r?.fullyPaid ?? false;
+    final locked = r?.paidKm ?? 0;
     final rate = r?.rate;
-    final due = (km - (r?.paidKm ?? 0)) < 0 ? 0.0 : km - (r?.paidKm ?? 0);
-    final amt = rate == null || paidAll ? null : (due * rate).round();
-    // Allowance per day (Admin Settings): days not already paid × allowance.
+    final due = (km - locked) < 0 ? 0.0 : km - locked;
+    final amt = rate == null || nothing ? null : (due * rate).round();
+    // Allowance per day (Admin Settings): days not already approved × allowance.
     final perDay = r?.allowancePerDay;
     final allowDays = r?.unpaidDays ?? days;
-    final allow = perDay == null || paidAll ? null : (allowDays * perDay).round();
+    final allow = perDay == null || nothing ? null : (allowDays * perDay).round();
     final total = amt == null || allow == null ? null : amt + allow;
     final rows = <pw.Widget>[
       _reimbRow('Total Distance', '${km.toStringAsFixed(2)} km'),
+      if (locked > 0) ...[
+        _reimbRow('Already approved', '- ${locked.toStringAsFixed(2)} km  (see box above)'),
+        _reimbRow('Distance to Claim', '${due.toStringAsFixed(2)} km'),
+      ],
       _reimbRow('Rate per km', rate == null ? '' : 'Rs ${f2.format(rate)}'),
-      _reimbRow('Distance Amount', paidAll
-          ? 'Already paid — see above'
-          : (amt == null ? '' : 'Rs ${f.format(amt)}${(r?.paidKm ?? 0) > 0 ? '  (on ${due.toStringAsFixed(2)} unpaid km)' : ''}')),
+      _reimbRow('Distance Amount', nothing ? 'Nothing to claim' : (amt == null ? '' : 'Rs ${f.format(amt)}')),
       // Not set in settings → blank to fill in by hand.
-      _reimbRow('Other Allowances', allow == null ? '' : 'Rs ${f.format(allow)}  ($allowDays day${allowDays == 1 ? '' : 's'} × Rs ${f2.format(perDay)})'),
-      _reimbRow('Total Amount', total == null ? '' : 'Rs ${f.format(total)}'),
+      _reimbRow('Other Allowances', nothing
+          ? 'Nothing to claim'
+          : allow == null ? '' : 'Rs ${f.format(allow)}  ($allowDays day${allowDays == 1 ? '' : 's'} × Rs ${f2.format(perDay)})'),
+      _reimbRow('Total Amount', nothing ? 'Nothing to claim' : total == null ? '' : 'Rs ${f.format(total)}'),
       _reimbRow('Approved By', r?.approvedBy ?? ''),
     ];
     return [for (var i = 0; i < rows.length; i++) ...[if (i > 0) pw.SizedBox(height: 6), rows[i]]];
@@ -1023,17 +1048,27 @@ class ReportPdfBuilder {
     );
   }
 
-  /// "FULLY PAID" / "PARTLY PAID" box shown above the reimbursement block.
+  /// "† EXCLUDED — ALREADY APPROVED" box: which days, and the claim that
+  /// approved them (shown above the reimbursement block).
   static pw.Widget _paidStamp(ReimbInfo r) {
-    final c = r.fullyPaid ? const PdfColor.fromInt(0xFF047857) : const PdfColor.fromInt(0xFF6D28D9);
+    const c = PdfColor.fromInt(0xFF475569);
     return pw.Container(
       width: double.infinity,
       padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: c, width: 1.4),
+        color: const PdfColor.fromInt(0xFFF8FAFC),
+        border: pw.Border.all(color: const PdfColor.fromInt(0xFFCBD5E1), width: 1),
         borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
       ),
-      child: pw.Text(r.stamp ?? '', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: c)),
+      child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        pw.Text(
+            r.fullyPaid
+                ? 'NOTHING TO CLAIM - ALL DAYS ALREADY APPROVED FOR REIMBURSEMENT'
+                : 'EXCLUDED - ALREADY APPROVED FOR REIMBURSEMENT',
+            style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
+        pw.SizedBox(height: 4),
+        pw.Text(r.stamp ?? '', style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF334155))),
+      ]),
     );
   }
 

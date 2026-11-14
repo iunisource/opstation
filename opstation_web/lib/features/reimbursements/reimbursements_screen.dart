@@ -10,6 +10,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/friendly_error.dart';
 import '../auth/auth_controller.dart';
 import '../fleet/fleet_common.dart' show openPrint, esc;
+import '../operations/presentation/time_in_market.dart' show showTimeInMarketDialog;
 
 SupabaseClient get _db => Supabase.instance.client;
 
@@ -257,7 +258,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     final pe = c['status'] == 'pending' && _paidElsewhere(c).isNotEmpty;
     final all = pe && _unpaidKm(c) <= 0.0001;
     final p = pe
-        ? (all ? 'Already approved / paid' : 'Partly paid before', const Color(0xFF6D28D9), const Color(0xFFF5F3FF))
+        ? (all ? 'Nothing to claim' : 'Some days already approved', const Color(0xFF475569), const Color(0xFFF1F5F9))
         : _pill('${c['status']}');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -310,13 +311,13 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     ]);
     final doc = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(c['doc_type'] == 'combined_summary' ? 'Combined Trip Summary' : 'Trip Summary', style: const TextStyle(fontSize: 12.5)),
-      Text('${c['trips']} trip${c['trips'] == 1 ? '' : 's'}${c['repeat_of'] != null ? ' · generated again' : ''}',
-          style: TextStyle(fontSize: 11.5, color: c['repeat_of'] != null ? const Color(0xFF6D28D9) : AppTheme.textSecondary)),
+      Text('${c['trips']} trip${c['trips'] == 1 ? '' : 's'}',
+          style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
     ]);
     final money = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(amt == null ? '—' : _rs(amt), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
       Text(pe.isNotEmpty && c['status'] == 'pending'
-              ? '${_dayCount(pe)} day(s) already approved / paid'
+              ? '${_dayCount(pe)} day(s) already approved · excluded'
               : (c['status'] == 'paid' ? 'paid ${_fd(c['paid_on'], 'd MMM')}' : (_rate == null || c['status'] == 'rejected' ? '' : '@ Rs ${NumberFormat('#,##0.##').format(c['rate'] ?? _rate)}/km')),
           style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
     ]);
@@ -366,16 +367,17 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     final lines = _lines[c['id']] ?? const <Map<String, dynamic>>[];
     final pe = _paidElsewhere(c);
     final peDays = {for (final l in pe) _fd(l['day'], 'd MMM')};
-    final peRefs = {
-      for (final l in pe)
-        () {
-          final oc = _coveredBy(c, l['trip_id'] as String?)!;
-          return oc['status'] == 'paid'
-              ? 'paid ${_fd(oc['paid_on'])}${(oc['paid_ref'] ?? '') != '' ? ' — ${oc['paid_ref']}' : ''}'
-              : 'approved ${_fd(oc['decided_at'])}, not paid yet';
-        }(),
-    };
     final amt = _amount(c);
+    final rate = (c['rate'] as num?)?.toDouble() ?? _rate;
+    final from = DateTime.tryParse('${c['date_from'] ?? ''}');
+    final to = DateTime.tryParse('${c['date_to'] ?? ''}') ?? from;
+    void tim(DateTime a, DateTime b) {
+      final org = _org;
+      if (org == null) return;
+      showTimeInMarketDialog(context,
+          orgId: org, userId: '${c['claimant_id']}', name: '${c['claimant_name'] ?? ''}',
+          from: a, to: b, orgName: ref.read(currentUserProvider)?.orgName);
+    }
     await showDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
@@ -427,17 +429,23 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   ElevatedButton.icon(
                     onPressed: () async { Navigator.pop(ctx); await _markPaid(c); },
                     icon: const Icon(Icons.payments_outlined, size: 16), label: const Text('Mark paid')),
+                if (from != null)
+                  OutlinedButton.icon(
+                    onPressed: () => tim(from, to!),
+                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1E3A8A)),
+                    icon: const Icon(Icons.schedule, size: 16),
+                    label: Text('Time in Market · ${_dates(c)}')),
               ]),
               if (pe.isNotEmpty && c['status'] != 'paid') ...[
                 const SizedBox(height: 12),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFED7AA))),
+                  decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFCBD5E1))),
                   child: Text(
-                    '${peDays.length} of these days (${peDays.join(', ')}) were already approved or paid on an earlier claim (${peRefs.join('; ')}). '
-                    'They are left out of the amount.',
-                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF9A3412))),
+                    '${peDays.length} day${peDays.length == 1 ? ' was' : 's were'} already approved on another claim (${peDays.join(', ')}). '
+                    '${peDays.length == 1 ? 'It is' : 'They are'} excluded: 0 km, Rs 0. The reason is shown against each day below.',
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF334155))),
                 ),
               ],
               if (c['status'] == 'pending' && (c['note'] ?? '') != '') ...[
@@ -472,9 +480,9 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
               _box(Wrap(spacing: 24, runSpacing: 10, children: [
                 _kv('Document', c['doc_type'] == 'combined_summary' ? 'Combined Trip Summary' : 'Trip Summary'),
                 if (_role(c).isNotEmpty) _kv('Role', _role(c)),
-                _kv('Distance', _km(c['km'] as num?)),
-                if (pe.isNotEmpty) _kv('Unpaid distance', _km(_unpaidKm(c))),
-                _kv('Rate', c['rate'] != null ? 'Rs ${NumberFormat('#,##0.##').format(c['rate'])} / km' : (_rate == null ? '—' : 'Rs ${NumberFormat('#,##0.##').format(_rate)} / km')),
+                if (pe.isNotEmpty) _kv('Days to pay', '${_dayCount(lines) - _dayCount(pe)} of ${_dayCount(lines)}'),
+                _kv(pe.isNotEmpty ? 'Distance to pay' : 'Distance', pe.isNotEmpty ? _km(_unpaidKm(c)) : _km(c['km'] as num?)),
+                _kv('Rate', rate != null ? 'Rs ${NumberFormat('#,##0.##').format(rate)} / km' : 'Not set (Admin Settings)'),
                 _kv(c['status'] == 'paid' ? 'Paid' : 'Amount', amt == null ? '—' : _rs(amt)),
                 if (c['advice_number'] != null) _kv('Payment Advice', '${c['advice_number']}'),
                 _kv('Generated', '${c['generated_count'] ?? 1}×'),
@@ -488,35 +496,94 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                 ],
               ])),
               _box(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Days (${_dayCount(lines)})', style: const TextStyle(fontWeight: FontWeight.w700)),
+                Row(children: [
+                  Text('Days (${_dayCount(lines)})', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const Spacer(),
+                  const Text('Check any day in Time in Market', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                ]),
                 const SizedBox(height: 6),
                 for (final l in lines)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(children: [
-                      SizedBox(width: 120, child: Text(_fd(l['day'], 'EEE, d MMM'), style: const TextStyle(fontSize: 12.5))),
-                      SizedBox(width: 90, child: Text(_km(l['km'] as num?), style: const TextStyle(fontSize: 12.5))),
-                      () {
-                        final p = _paidTrips[l['trip_id']];
-                        final other = _coveredBy(c, l['trip_id'] as String?);
-                        if (p == null && other != null) {
-                          return const Text('Approved on an earlier claim', style: TextStyle(fontSize: 11.5, color: Color(0xFF1D4ED8), fontWeight: FontWeight.w600));
-                        }
-                        if (p == null) {
-                          return Text(c['status'] == 'rejected' ? '' : 'Unpaid', style: const TextStyle(fontSize: 11.5, color: Color(0xFFB45309), fontWeight: FontWeight.w600));
-                        }
-                        final own = p['claim_id'] == c['id'];
-                        return Text(own ? 'Paid ${_fd(p['paid_on'], 'd MMM')}' : 'Paid ${_fd(p['paid_on'], 'd MMM')} (earlier claim)',
-                            style: const TextStyle(fontSize: 11.5, color: Color(0xFF047857), fontWeight: FontWeight.w600));
-                      }(),
-                    ]),
-                  ),
+                  () {
+                    final other = _coveredBy(c, l['trip_id'] as String?);
+                    final p = _paidTrips[l['trip_id']];
+                    final own = p != null && p['claim_id'] == c['id'];
+                    final excluded = other != null;
+                    final day = DateTime.tryParse('${l['day']}');
+                    final km = (l['km'] as num?)?.toDouble() ?? 0;
+                    final String note;
+                    final Color noteColor;
+                    if (excluded) {
+                      note = 'Already approved · ${_claimLabel(other!)}';
+                      noteColor = const Color(0xFF64748B);
+                    } else if (own) {
+                      note = 'Paid ${_fd(p!['paid_on'], 'd MMM')}';
+                      noteColor = const Color(0xFF047857);
+                    } else {
+                      note = c['status'] == 'rejected' ? '' : (c['status'] == 'pending' ? 'To approve' : 'Approved on this claim');
+                      noteColor = c['status'] == 'pending' ? const Color(0xFFB45309) : const Color(0xFF1D4ED8);
+                    }
+                    final dim = excluded ? const Color(0xFF94A3B8) : null;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 6),
+                      decoration: BoxDecoration(
+                        color: excluded ? const Color(0xFFF8FAFC) : null,
+                        border: const Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
+                      ),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                        SizedBox(width: 110, child: Text(_fd(l['day'], 'EEE, d MMM'), style: TextStyle(fontSize: 12.5, color: dim))),
+                        SizedBox(
+                          width: 80,
+                          child: Text(_km(km), textAlign: TextAlign.right,
+                              style: TextStyle(fontSize: 12.5, color: dim, decoration: excluded ? TextDecoration.lineThrough : null)),
+                        ),
+                        SizedBox(
+                          width: 80,
+                          child: Text(excluded || rate == null ? '—' : _rs((km * rate).round()), textAlign: TextAlign.right,
+                              style: TextStyle(fontSize: 12.5, color: dim)),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text(note, style: TextStyle(fontSize: 11.5, color: noteColor, fontWeight: FontWeight.w600)),
+                        ),
+                        if (day != null)
+                          TextButton.icon(
+                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+                            onPressed: () => tim(day, day),
+                            icon: const Icon(Icons.schedule, size: 15),
+                            label: const Text('Time in Market', style: TextStyle(fontSize: 12)),
+                          ),
+                      ]),
+                    );
+                  }(),
+                if (pe.isNotEmpty || rate != null) ...[
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    if (pe.isNotEmpty)
+                      Text('Excluded ${_dayCount(pe)} day${_dayCount(pe) == 1 ? '' : 's'} · ${_km(pe.fold<double>(0, (s, l) => s + ((l['km'] as num?) ?? 0).toDouble()))}',
+                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    const Spacer(),
+                    Text('To pay  ${_km(_unpaidKm(c))}${amt == null ? '' : '  ·  ${_rs(amt)}'}',
+                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800)),
+                  ]),
+                ],
               ])),
             ]),
           ),
         ),
       ),
     );
+  }
+
+  /// "Combined Trip Summary 2–13 Nov, approved by Mian Hamza on 14 Nov, paid 15 Nov"
+  String _claimLabel(Map o) {
+    final sheet = o['doc_type'] == 'combined_summary'
+        ? 'Combined Trip Summary ${_dates(o)}'
+        : o['doc_type'] == 'trip_summary' ? 'Trip Summary ${_dates(o)}' : 'an earlier claim';
+    return [
+      sheet,
+      if ((o['decided_by_name'] ?? '') != '') 'approved by ${o['decided_by_name']} on ${_fd(o['decided_at'], 'd MMM')}',
+      if (o['status'] == 'paid' || o['paid_on'] != null) 'paid ${_fd(o['paid_on'], 'd MMM')}',
+    ].join(', ');
   }
 
   Widget _box(Widget child) => Container(
