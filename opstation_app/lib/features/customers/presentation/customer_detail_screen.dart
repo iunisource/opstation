@@ -524,7 +524,7 @@ class _VisitHistoryRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _label(statusName),
+                  statusName == 'noLocation' ? (visit.capturedLat == null ? 'No GPS' : 'No location') : _label(statusName),
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,

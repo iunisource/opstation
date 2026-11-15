@@ -909,7 +909,9 @@ class _StopCardState extends State<_StopCard> {
                   ],
                 ),
               ),
-              if (status != null) _statusBadge(status, collections.fold<int>(0, (s, v) => s + v.amount)),
+              if (status != null)
+                _statusBadge(status, collections.fold<int>(0, (s, v) => s + v.amount),
+                    collections.isEmpty ? null : collections.last),
             ],
           ),
           if (collections.isNotEmpty) ...[
@@ -1012,13 +1014,15 @@ class _StopCardState extends State<_StopCard> {
     );
   }
 
-  Widget _statusBadge(VisitStatus s, int collected) {
-    final o = visitOutcomeOf(s, collected);
+  Widget _statusBadge(VisitStatus s, int collected, [Visit? v]) {
+    final o = visitOutcomeOf(s, collected, v);
     switch (o) {
       case VisitOutcome.visited:
         return StatusBadge(label: o.label, tone: StatusBadgeTone.success);
       case VisitOutcome.outsideGeofence:
         return StatusBadge(label: o.label, tone: StatusBadgeTone.warning);
+      case VisitOutcome.noGps:
+      case VisitOutcome.noLocation:
       case VisitOutcome.notVerified:
         return StatusBadge(label: o.label, tone: StatusBadgeTone.danger);
       case VisitOutcome.skipped:

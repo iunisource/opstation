@@ -423,7 +423,7 @@ class _TimelineRow extends StatelessWidget {
   }
 
   String _subtitleFor(VisitStatus s, Visit? last, [int collected = 0, Customer? cust]) {
-    final o = visitOutcomeOf(s, collected);
+    final o = visitOutcomeOf(s, collected, last);
     final at = last == null ? '' : ' · ${DateFormat('HH:mm').format(last.timestamp)}';
     switch (o) {
       case VisitOutcome.notVisited:
@@ -442,6 +442,9 @@ class _TimelineRow extends StatelessWidget {
           }
         }
         return place.isEmpty ? 'Visited$at' : 'Visited at $place$at';
+      case VisitOutcome.noGps:
+      case VisitOutcome.noLocation:
+        return '${o.label}$at';
       case VisitOutcome.outsideGeofence:
       case VisitOutcome.notVerified:
         final d = last?.distanceMeters?.round();

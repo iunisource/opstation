@@ -1326,7 +1326,7 @@ class ReportPdfBuilder {
 
   /// Visit Report status under the rules without "Skip".
   static String _outcomeTag(VisitStatus s, int collected, Visit? v) {
-    final o = visitOutcomeOf(s, collected);
+    final o = visitOutcomeOf(s, collected, v);
     final base = o.label.toUpperCase();
     if (o == VisitOutcome.outsideGeofence || o == VisitOutcome.notVerified) {
       final d = v?.distanceMeters;
@@ -1350,7 +1350,7 @@ class ReportPdfBuilder {
         }
         return 'OUTSIDE GF';
       case VisitStatus.noLocation:
-        return 'NO LOCATION';
+        return v != null && v.capturedLat == null ? 'NO GPS' : 'NO LOCATION';
       case VisitStatus.skipped:
         final d = v?.distanceMeters;
         if (d != null) {

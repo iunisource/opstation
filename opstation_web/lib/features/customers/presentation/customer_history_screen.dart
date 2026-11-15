@@ -330,13 +330,15 @@ class _VisitCard extends StatelessWidget {
 
     // Rules without "Skip": Visited / Outside geofence (money, not at the
     // shop) / Not verified (no money, not at the shop). Old skips keep theirs.
-    final outcome = visitOutcomeLabel(status, visit['amount'] as num?);
+    final outcome = visitOutcomeLabel(status, visit['amount'] as num?, hasGps: visitHasGps(visit));
     // Visited at another of the customer's locations (SQL 409), e.g. Godown.
     final place = '${visit['location_name'] ?? ''}'.trim();
     final (icon, color, label) = switch (outcome) {
       'Visited' => (Icons.check_circle, AppTheme.success, place.isEmpty ? outcome : 'Visited · $place'),
       'Outside geofence' => (Icons.warning_amber_rounded, AppTheme.warning, outcome),
       'Not verified' => (Icons.gps_off_outlined, AppTheme.danger, outcome),
+      'No GPS' => (Icons.gps_off_outlined, AppTheme.danger, outcome),
+      'No Location' => (Icons.location_off_outlined, AppTheme.danger, outcome),
       'Skipped' => (Icons.skip_next, AppTheme.textSecondary, outcome),
       _ => (Icons.circle_outlined, AppTheme.textSecondary, outcome),
     };

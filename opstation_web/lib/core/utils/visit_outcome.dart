@@ -3,16 +3,21 @@
 ///   not verified (outside / no location) + money  → Outside geofence
 ///   not verified, no money                        → Not verified
 /// Old visits recorded as "skipped" keep that label; no visit = Not visited.
-String visitOutcomeLabel(String? status, num? collected) {
+///   no location check + money: [hasGps] false (the phone had no GPS) → No GPS;
+///   [hasGps] true (the shop had no saved location) → No Location.
+String visitOutcomeLabel(String? status, num? collected, {bool? hasGps}) {
   final s = status ?? '';
   final amt = collected ?? 0;
   switch (s) {
     case 'verified':
       return 'Visited';
     case 'outside':
+      return amt > 0 ? 'Outside geofence' : 'Not verified';
     case 'noLocation':
     case 'no_location':
-      return amt > 0 ? 'Outside geofence' : 'Not verified';
+      if (amt <= 0) return 'Not verified';
+      if (hasGps == null) return 'Outside geofence';
+      return hasGps ? 'No Location' : 'No GPS';
     case 'skipped':
       return 'Skipped';
     case 'pending':
@@ -31,3 +36,6 @@ String? awayLabel(num? meters) {
   if (meters < 1000) return '${meters.round()} m away';
   return '${(meters / 1000).toStringAsFixed(meters < 10000 ? 1 : 0)} km away';
 }
+
+/// Did the visit capture GPS? (null = not known from this row).
+bool? visitHasGps(Map v) => v.containsKey('captured_lat') ? v['captured_lat'] != null && v['captured_lng'] != null : null;

@@ -250,7 +250,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (var k = 0; k < ids.length; k += 150) {
       final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
       visits.addAll(await _paged((f, t) => c.from('visits')
-          .select('trip_id, timestamp, status, amount, customer_id, distance_meters, customers(shop_name)')
+          .select('trip_id, timestamp, status, amount, customer_id, distance_meters, captured_lat, captured_lng, customers(shop_name)')
           .inFilter('trip_id', chunk).range(f, t)));
     }
     final stopsByRoute = <String, int>{};
@@ -300,7 +300,11 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       final noLoc = status == 'noLocation' || status == 'no_location';
       final kind = status == 'verified'
           ? 'visited'
-          : status == 'skipped' ? 'skipped' : (amt > 0 ? (noLoc ? 'no_location' : 'outside') : 'not_verified');
+          : status == 'skipped'
+              ? 'skipped'
+              : (amt > 0
+                  ? (noLoc ? (v['captured_lat'] == null ? 'no_gps' : 'no_location') : 'outside')
+                  : 'not_verified');
       acc(uid, dayOf(at)).events.add(TimEvent(at, '${(v['customers'] as Map?)?['shop_name'] ?? 'Shop'}', kind, amt,
           (v['distance_meters'] as num?)?.toDouble()));
     }
@@ -393,6 +397,7 @@ Color timKindColor(String k) => switch (k) {
       'visited' || 'delivered' => AppTheme.success,
       'outside' => Colors.amber.shade700,
       'no_location' => AppTheme.danger,
+      'no_gps' => AppTheme.danger,
       'failed' => AppTheme.danger,
       _ => const Color(0xFF94A3B8),
     };
@@ -402,6 +407,7 @@ String timKindLabel(String k) => switch (k) {
       'delivered' => 'Delivered',
       'outside' => 'Outside geofence',
       'no_location' => 'No Location',
+      'no_gps' => 'No GPS',
       'failed' => 'Failed',
       'skipped' => 'Skipped',
       _ => 'Not verified',
@@ -563,7 +569,7 @@ class TimDayDetail extends StatelessWidget {
       Wrap(spacing: 14, runSpacing: 4, children: [
         for (final k in day.role == 'driver'
             ? const ['delivered', 'outside', 'failed']
-            : const ['visited', 'outside', 'no_location', 'not_verified'])
+            : const ['visited', 'outside', 'no_gps', 'no_location', 'not_verified'])
           Row(mainAxisSize: MainAxisSize.min, children: [
             Container(width: 10, height: 10, decoration: BoxDecoration(color: timKindColor(k), shape: BoxShape.circle)),
             const SizedBox(width: 4),

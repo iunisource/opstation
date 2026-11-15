@@ -515,7 +515,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
     // Visit results for this run.
     final outcome = <String, int>{};
     for (final v in t.visits) {
-      final l = visitOutcomeLabel(v.status, v.amount);
+      final l = visitOutcomeLabel(v.status, v.amount, hasGps: v.point != null);
       outcome[l] = (outcome[l] ?? 0) + 1;
     }
     Color outColor(String l) {
@@ -523,6 +523,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         case 'Visited': return AppTheme.success;
         case 'Outside geofence': return const Color(0xFFEA580C);
         case 'Not verified': return const Color(0xFFDC2626);
+        case 'No GPS':
+        case 'No Location': return const Color(0xFFDC2626);
         default: return AppTheme.textSecondary;
       }
     }
@@ -1289,7 +1291,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                   const SizedBox(height: 6),
                   Wrap(spacing: 14, runSpacing: 4, children: [
                     _kv('Visit', '#${v.no}${v.at == null ? '' : ' · ${fmt.format(v.at!)}'}'),
-                    _kv('Result', visitOutcomeLabel(v.status, v.amount)),
+                    _kv('Result', visitOutcomeLabel(v.status, v.amount, hasGps: v.point != null)),
                     _kv('Collected', 'Rs ${nf.format(v.amount)}'),
                     if (v.receipt.isNotEmpty) _kv('CR#', v.receipt),
                     if (v.distance != null && v.distance! > 0) _kv('From shop', '${v.distance!.round()} m'),
@@ -1463,16 +1465,17 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   static Color _flagColor(_FlagVisit f) {
-    final label = visitOutcomeLabel(f.status, f.amount);
+    final label = visitOutcomeLabel(f.status, f.amount, hasGps: f.point != null);
     if (label == 'Outside geofence') return const Color(0xFFEA580C);
     if (label == 'Skipped') return const Color(0xFF64748B);
     return const Color(0xFFDC2626); // not verified
   }
 
   static IconData _flagIcon(_FlagVisit f) {
-    final label = visitOutcomeLabel(f.status, f.amount);
+    final label = visitOutcomeLabel(f.status, f.amount, hasGps: f.point != null);
     if (label == 'Outside geofence') return Icons.wrong_location;
     if (label == 'Skipped') return Icons.block;
+    if (label == 'No Location') return Icons.location_off;
     return Icons.gps_off;
   }
 
@@ -1517,7 +1520,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                         style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                     const SizedBox(height: 6),
                     Wrap(spacing: 14, runSpacing: 4, children: [
-                      _kv('Result', visitOutcomeLabel(f.status, f.amount)),
+                      _kv('Result', visitOutcomeLabel(f.status, f.amount, hasGps: f.point != null)),
                       if (f.at != null) _kv('Time', fmt.format(f.at!)),
                       _kv('Collected', 'Rs ${nf.format(f.amount)}'),
                       _kv('From shop', f.distance != null && f.distance! > 0
@@ -1933,7 +1936,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
                     child: GestureDetector(
                       onTap: () => _showFlagSheet(g, title: g.length > 1 ? '${g.length} visits at this spot' : null),
                       child: Tooltip(
-                        message: '${g.first.userName} · ${g.first.shop} · ${visitOutcomeLabel(g.first.status, g.first.amount)}',
+                        message: '${g.first.userName} · ${g.first.shop} · ${visitOutcomeLabel(g.first.status, g.first.amount, hasGps: g.first.point != null)}',
                         child: Stack(clipBehavior: Clip.none, children: [
                           Positioned.fill(child: _flagPin(g.first)),
                           if (g.length > 1)

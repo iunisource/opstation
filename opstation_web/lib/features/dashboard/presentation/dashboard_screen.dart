@@ -897,6 +897,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                 status: status,
                 customerId: cid,
                 distance: (m['distance_meters'] as num?)?.toDouble(),
+                hasGps: visitHasGps(m),
               ));
           grand += amount;
         } else {
@@ -909,6 +910,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                 amount: amount,
                 distance: (m['distance_meters'] as num?)?.toDouble(),
                 noLocation: status == 'noLocation' || status == 'no_location',
+                hasGps: visitHasGps(m),
               ));
         }
       }
@@ -1112,7 +1114,8 @@ class _SalespersonExpansion extends StatelessWidget {
     final visited = sp.visits.where((v) => v.status == 'verified').length;
     bool noLoc(String st) => st == 'noLocation' || st == 'no_location';
     final outside = sp.visits.where((v) => v.status != 'verified' && !noLoc(v.status)).length;
-    final noLocation = sp.visits.where((v) => noLoc(v.status)).length;
+    final noGps = sp.visits.where((v) => noLoc(v.status) && v.hasGps != true).length;
+    final noLocation = sp.visits.where((v) => noLoc(v.status) && v.hasGps == true).length;
     final skipped =
         sp.otherStops.where((o) => o.status == 'skipped').length;
     final notVisited =
@@ -1121,6 +1124,7 @@ class _SalespersonExpansion extends StatelessWidget {
     final parts = <String>[
       '$visited visited',
       if (outside > 0) '$outside outside geofence',
+      if (noGps > 0) '$noGps no GPS',
       if (noLocation > 0) '$noLocation no location',
       if (notVerified > 0) '$notVerified not verified',
       if (skipped > 0) '$skipped skipped',
@@ -1202,7 +1206,9 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
           children: [
             Padding(
                 padding: const EdgeInsets.only(top: 1),
-                child: _statusIcon(v.status)),
+                child: (v.status == 'noLocation' || v.status == 'no_location') && v.hasGps != true
+                    ? const Icon(Icons.gps_off, color: AppTheme.danger, size: 16)
+                    : _statusIcon(v.status)),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -1220,10 +1226,8 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                   Text(
                     [
                       DateFormat('HH:mm').format(v.timestamp),
-                      // Shop without a saved location: say so (red pin), not "Outside geofence".
-                      (v.status == 'noLocation' || v.status == 'no_location') && v.amount > 0
-                          ? 'No Location'
-                          : visitOutcomeLabel(v.status, v.amount),
+                      // No GPS on the phone / shop without a saved location (red), not "Outside geofence".
+                      visitOutcomeLabel(v.status, v.amount, hasGps: v.hasGps),
                       if (v.status != 'verified' && awayLabel(v.distance) != null) awayLabel(v.distance)!,
                     ].join(' \u00b7 '),
                     style: const TextStyle(
@@ -1360,7 +1364,7 @@ class _OtherStopRowState extends State<_OtherStopRow> {
         ? 'Skipped'
         : isOutside
             ? (o.noLocation
-                ? 'No Location · Rs ${_fmtNumber(o.amount)}'
+                ? '${o.hasGps == true ? 'No Location' : 'No GPS'} · Rs ${_fmtNumber(o.amount)}'
                 : 'Outside geofence${awayLabel(o.distance) == null ? '' : ' (${awayLabel(o.distance)})'} · Rs ${_fmtNumber(o.amount)}')
             : (isNotVisited ? 'Not visited' : 'Not verified');
     return InkWell(
@@ -1426,6 +1430,7 @@ class _VisitRow {
   final String status;
   final String? customerId;
   final double? distance; // metres from the shop (visits.distance_meters)
+  final bool? hasGps; // the phone captured GPS for this visit
   const _VisitRow({
     required this.customerName,
     required this.amount,
@@ -1433,6 +1438,7 @@ class _VisitRow {
     required this.status,
     this.customerId,
     this.distance,
+    this.hasGps,
   });
 }
 
@@ -1441,8 +1447,9 @@ class _OtherStop {
   final String status; // 'skipped' | 'not_visited' | 'no_collection' (not verified) | 'outside_collected'
   final int amount;
   final double? distance; // metres from the shop, when marked outside
-  final bool noLocation; // shop has no saved location (red pin)
-  const _OtherStop({required this.customerName, required this.status, this.amount = 0, this.distance, this.noLocation = false});
+  final bool noLocation; // no location check: phone had no GPS, or the shop had no saved location
+  final bool? hasGps; // which of the two (true = shop had no saved location)
+  const _OtherStop({required this.customerName, required this.status, this.amount = 0, this.distance, this.noLocation = false, this.hasGps});
 }
 
 String _fmtNumber(int n) {
@@ -1565,6 +1572,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
               timestamp: ts,
               status: (m['status'] as String?) ?? '',
               distance: (m['distance_meters'] as num?)?.toDouble(),
+              hasGps: visitHasGps(m),
             ));
       }
 

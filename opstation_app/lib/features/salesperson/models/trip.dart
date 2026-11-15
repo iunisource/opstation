@@ -42,15 +42,20 @@ extension VisitStatusX on VisitStatus {
 ///   not verified, no money                        → Not verified
 /// Old visits recorded as "Skipped" keep that label; untouched stops are
 /// Not visited.
-enum VisitOutcome { visited, outsideGeofence, notVerified, skipped, notVisited }
+///   no location check + money: phone had no GPS → No GPS;
+///                              shop had no saved location → No Location
+enum VisitOutcome { visited, outsideGeofence, noGps, noLocation, notVerified, skipped, notVisited }
 
-VisitOutcome visitOutcomeOf(VisitStatus s, int collected) {
+VisitOutcome visitOutcomeOf(VisitStatus s, int collected, [Visit? v]) {
   switch (s) {
     case VisitStatus.verified:
       return VisitOutcome.visited;
     case VisitStatus.outside:
-    case VisitStatus.noLocation:
       return collected > 0 ? VisitOutcome.outsideGeofence : VisitOutcome.notVerified;
+    case VisitStatus.noLocation:
+      if (collected <= 0) return VisitOutcome.notVerified;
+      if (v == null) return VisitOutcome.outsideGeofence;
+      return (v.capturedLat == null || v.capturedLng == null) ? VisitOutcome.noGps : VisitOutcome.noLocation;
     case VisitStatus.skipped:
       return VisitOutcome.skipped;
     case VisitStatus.pending:
@@ -65,6 +70,10 @@ extension VisitOutcomeX on VisitOutcome {
         return 'Visited';
       case VisitOutcome.outsideGeofence:
         return 'Outside geofence';
+      case VisitOutcome.noGps:
+        return 'No GPS';
+      case VisitOutcome.noLocation:
+        return 'No Location';
       case VisitOutcome.notVerified:
         return 'Not verified';
       case VisitOutcome.skipped:

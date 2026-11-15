@@ -1142,7 +1142,7 @@ class ReportPdfBuilder {
 
   /// Visit Report status under the rules without "Skip".
   static String _outcomeTag(String s, int collected, Map<String, dynamic>? v) {
-    final base = visitOutcomeLabel(s, collected).toUpperCase();
+    final base = visitOutcomeLabel(s, collected, hasGps: v == null ? null : visitHasGps(v)).toUpperCase();
     if (s == 'outside' || s == 'noLocation' || s == 'no_location') {
       final d = (v?['distance_meters'] as num?)?.toDouble();
       if (d != null && d > 0) {
@@ -1165,7 +1165,7 @@ class ReportPdfBuilder {
         }
         return 'OUTSIDE GF';
       case 'noLocation':
-        return 'NO LOCATION';
+        return v != null && visitHasGps(v) == false ? 'NO GPS' : 'NO LOCATION';
       case 'skipped':
         if (d != null) {
           final km = d / 1000.0;
