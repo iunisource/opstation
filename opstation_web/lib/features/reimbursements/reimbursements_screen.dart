@@ -11,6 +11,7 @@ import '../../core/utils/friendly_error.dart';
 import '../auth/auth_controller.dart';
 import '../fleet/fleet_common.dart' show openPrint, esc;
 import '../operations/presentation/time_in_market.dart' show showTimeInMarketDialog;
+import '../reports/visit_report_open.dart';
 
 SupabaseClient get _db => Supabase.instance.client;
 
@@ -506,7 +507,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                 Row(children: [
                   Text('Days (${_dayCount(lines)})', style: const TextStyle(fontWeight: FontWeight.w700)),
                   const Spacer(),
-                  const Text('Check any day in Time in Market', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                  const Text('Check any day: Visit report · Time in Market', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
                 ]),
                 const SizedBox(height: 6),
                 for (final l in lines)
@@ -552,6 +553,14 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                         Expanded(
                           child: Text(note, style: TextStyle(fontSize: 11.5, color: noteColor, fontWeight: FontWeight.w600)),
                         ),
+                        if ((l['trip_id'] ?? '') != '')
+                          TextButton.icon(
+                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+                            onPressed: () => openVisitReportForTrip(context, '${l['trip_id']}',
+                                orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation'),
+                            icon: const Icon(Icons.description_outlined, size: 15),
+                            label: const Text('Visit report', style: TextStyle(fontSize: 12)),
+                          ),
                         if (day != null)
                           TextButton.icon(
                             style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
