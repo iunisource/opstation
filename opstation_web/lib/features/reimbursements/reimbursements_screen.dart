@@ -12,6 +12,9 @@ import '../auth/auth_controller.dart';
 import '../fleet/fleet_common.dart' show openPrint, esc;
 import '../operations/presentation/time_in_market.dart' show showTimeInMarketDialog;
 import '../reports/visit_report_open.dart';
+import '../reports/pdf/report_pdf_builder.dart' show ReportPdfBuilder, CombinedSummaryRow, ReimbInfo;
+import '../../core/pdf/pdf_output.dart';
+import 'adjust_trip_dialog.dart';
 
 SupabaseClient get _db => Supabase.instance.client;
 
@@ -44,6 +47,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   List<Map<String, dynamic>> _claims = [];
   final Map<String, List<Map<String, dynamic>>> _lines = {};
   final Map<String, Map<String, dynamic>> _paidTrips = {}; // trip id -> {claim_id, paid_on}
+  // Approver adjustments (SQL 478): claim id -> trip id -> reimb_adjustments row.
+  final Map<String, Map<String, Map<String, dynamic>>> _adj = {};
   Map<String, String> _roles = {};
   bool _loading = true, _missing = false, _canApprove = false, _canPay = false;
   double? _rate;
@@ -77,6 +82,12 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         _db.from('users').select('id, role').eq('org_id', org),
       ]);
       if (!mounted) return;
+      _adj.clear();
+      try {
+        for (final a in await _db.from('reimb_adjustments').select().eq('org_id', org).limit(20000)) {
+          (_adj['${a['claim_id']}'] ??= {})['${a['trip_id']}'] = Map<String, dynamic>.from(a);
+        }
+      } catch (_) {} // SQL 478 not run yet
       _lines.clear();
       for (final l in r[1] as List) {
         _lines.putIfAbsent('${l['claim_id']}', () => []).add(Map<String, dynamic>.from(l as Map));
@@ -441,6 +452,20 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   ElevatedButton.icon(
                     onPressed: () async { Navigator.pop(ctx); await _markPaid(c); },
                     icon: const Icon(Icons.payments_outlined, size: 16), label: const Text('Mark paid')),
+                if (lines.length == 1 && (lines.first['trip_id'] ?? '') != '' &&
+                    ((_canApprove && (c['status'] == 'pending' || c['status'] == 'rejected')) || _adj[c['id']] != null))
+                  OutlinedButton.icon(
+                    onPressed: () => _adjustTrip(ctx, c, lines.first),
+                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1E3A8A)),
+                    icon: const Icon(Icons.edit_road_outlined, size: 16),
+                    label: Text(_canApprove && (c['status'] == 'pending' || c['status'] == 'rejected')
+                        ? (_adj[c['id']] != null ? 'Adjusted trip · change' : 'Adjust trip')
+                        : 'Trip adjustment')),
+                if (lines.length > 1 && (_adj[c['id']]?.isNotEmpty ?? false))
+                  OutlinedButton.icon(
+                    onPressed: () => _printAdjustedCombined(c),
+                    icon: const Icon(Icons.print_outlined, size: 16),
+                    label: const Text('Print adjusted Combined Summary')),
                 if (from != null)
                   OutlinedButton.icon(
                     onPressed: () => tim(from, to!),
@@ -548,6 +573,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                       noteColor = c['status'] == 'pending' ? const Color(0xFFB45309) : const Color(0xFF1D4ED8);
                     }
                     final dim = excluded ? const Color(0xFF94A3B8) : null;
+                    final adj = _adj[c['id']]?['${l['trip_id']}'];
+                    final canAdj = _canApprove && (c['status'] == 'pending' || c['status'] == 'rejected') && !excluded;
                     return Container(
                       padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 6),
                       decoration: BoxDecoration(
@@ -557,9 +584,16 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                         SizedBox(width: 110, child: Text(_fd(l['day'], 'EEE, d MMM'), style: TextStyle(fontSize: 12.5, color: dim))),
                         SizedBox(
-                          width: 80,
-                          child: Text(_km(km), textAlign: TextAlign.right,
-                              style: TextStyle(fontSize: 12.5, color: dim, decoration: excluded ? TextDecoration.lineThrough : null)),
+                          width: adj != null ? 150 : 80,
+                          child: Text.rich(
+                            TextSpan(children: [
+                              if (adj != null)
+                                TextSpan(text: '${_km(adj['original_km'] as num?)} ',
+                                    style: const TextStyle(decoration: TextDecoration.lineThrough, color: AppTheme.textSecondary)),
+                              TextSpan(text: _km(km)),
+                            ]),
+                            textAlign: TextAlign.right,
+                            style: TextStyle(fontSize: 12.5, color: dim, decoration: excluded ? TextDecoration.lineThrough : null)),
                         ),
                         SizedBox(
                           width: 80,
@@ -568,8 +602,21 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                         ),
                         const SizedBox(width: 14),
                         Expanded(
-                          child: Text(note, style: TextStyle(fontSize: 11.5, color: noteColor, fontWeight: FontWeight.w600)),
+                          child: Text.rich(TextSpan(children: [
+                            TextSpan(text: note, style: TextStyle(fontSize: 11.5, color: noteColor, fontWeight: FontWeight.w600)),
+                            if (adj != null)
+                              TextSpan(
+                                text: '${note.isEmpty ? '' : '  ·  '}Adjusted: ${_adjSummary(adj)}',
+                                style: const TextStyle(fontSize: 11.5, color: Color(0xFFB91C1C), fontWeight: FontWeight.w600)),
+                          ])),
                         ),
+                        if (lines.length > 1 && (l['trip_id'] ?? '') != '' && (canAdj || adj != null))
+                          TextButton.icon(
+                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+                            onPressed: () => _adjustTrip(ctx, c, l),
+                            icon: const Icon(Icons.edit_road_outlined, size: 15),
+                            label: Text(canAdj ? 'Adjust' : 'Adjustment', style: const TextStyle(fontSize: 12)),
+                          ),
                         if ((l['trip_id'] ?? '') != '')
                           TextButton.icon(
                             style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
@@ -605,6 +652,96 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         ),
       ),
     );
+  }
+
+  /// "1 visit, return leg left out"
+  String _adjSummary(Map a) {
+    final n = (a['excluded'] as List? ?? const []).length;
+    return [
+      if (n > 0) '$n visit${n == 1 ? '' : 's'}',
+      if (a['exclude_return'] == true) 'return leg',
+    ].join(', ') + ' left out';
+  }
+
+  /// Adjust one trip of [c] (or view / print its adjustment). Closes the claim
+  /// pop-up, reloads and reopens it; "Save & approve" opens Approve after.
+  Future<void> _adjustTrip(BuildContext claimCtx, Map<String, dynamic> c, Map<String, dynamic> line) async {
+    final tripId = '${line['trip_id']}';
+    final canEdit = _canApprove && (c['status'] == 'pending' || c['status'] == 'rejected');
+    final res = await showAdjustTripDialog(
+      context,
+      claim: c,
+      tripId: tripId,
+      lineKm: (line['km'] as num?)?.toDouble() ?? 0,
+      existing: _adj[c['id']]?[tripId],
+      rate: (c['rate'] as num?)?.toDouble() ?? _rate,
+      orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      canEdit: canEdit,
+    );
+    if (res == null || !mounted) return;
+    if (claimCtx.mounted) Navigator.pop(claimCtx);
+    await _load();
+    if (!mounted) return;
+    final fresh = _claims.where((x) => x['id'] == c['id']).firstOrNull;
+    if (fresh == null) return;
+    if (res == 'approve') {
+      await _approve(fresh);
+    } else {
+      _snack('Trip adjusted — the claim now uses the new distance');
+      _open(fresh);
+    }
+  }
+
+  /// Combined Trip Summary of the claim with the approver's adjustments: one
+  /// row per day (adjusted km), and what was left out on each day and why.
+  Future<void> _printAdjustedCombined(Map<String, dynamic> c) async {
+    try {
+      final lines = _lines[c['id']] ?? const <Map<String, dynamic>>[];
+      final tripIds = [for (final l in lines) if ((l['trip_id'] ?? '') != '') '${l['trip_id']}'];
+      final routes = <String, String>{};
+      if (tripIds.isNotEmpty) {
+        for (final t in await _db.from('trips').select('id, route_name').inFilter('id', tripIds)) {
+          routes['${t['id']}'] = '${t['route_name'] ?? ''}';
+        }
+      }
+      final adj = _adj[c['id']] ?? const {};
+      final byDay = <String, List<Map<String, dynamic>>>{};
+      for (final l in lines) {
+        (byDay['${l['day']}'.substring(0, 10)] ??= []).add(l);
+      }
+      final days = byDay.keys.toList()..sort();
+      final rows = <CombinedSummaryRow>[
+        for (final d in days)
+          CombinedSummaryRow(
+            date: DateTime.parse(d),
+            salesperson: '${c['claimant_name'] ?? ''}',
+            routes: [
+              for (final l in byDay[d]!)
+                '${routes['${l['trip_id']}'] ?? ''}${adj['${l['trip_id']}'] != null ? ' (adjusted)' : ''}'.trim(),
+            ].where((x) => x.isNotEmpty).join(', '),
+            km: byDay[d]!.fold<double>(0, (s, l) => s + ((l['km'] as num?) ?? 0).toDouble()),
+          ),
+      ];
+      final total = rows.fold<double>(0, (s, r) => s + r.km);
+      final notes = [
+        for (final l in lines)
+          if (adj['${l['trip_id']}'] != null)
+            reimbAdjustNote(adj['${l['trip_id']}']!, dayLabel: _fd(l['day'], 'EEE d MMM')),
+      ];
+      final bytes = await ReportPdfBuilder.buildCombinedTripSummary(
+        orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+        periodLabel: _dates(c),
+        salespersonLabel: '${c['claimant_name'] ?? ''}',
+        showSalesperson: false,
+        rows: rows,
+        grandTotalKm: total,
+        reimb: ReimbInfo(rate: (c['rate'] as num?)?.toDouble() ?? _rate),
+        adjustNote: notes.join('\n'),
+      );
+      await outputPdf(bytes, 'Combined Trip Summary (adjusted)');
+    } catch (e) {
+      _snack(friendlyError('Could not print', e));
+    }
   }
 
   /// "Combined Trip Summary 2–13 Nov, approved by Mian Hamza on 14 Nov, paid 15 Nov"

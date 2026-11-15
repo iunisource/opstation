@@ -267,6 +267,7 @@ class ReportPdfBuilder {
     bool duplicate = false,
     List<String> trail = const [],
     ReimbInfo? reimb,
+    String? adjustNote, // "Adjusted by approver" box (Reimbursement Approvals)
   }) async {
     final trip = ctx.trip;
     final doc = pw.Document();
@@ -286,6 +287,7 @@ class ReportPdfBuilder {
         pw.SizedBox(height: 14),
         _sequencedTable(ctx),
         pw.SizedBox(height: 18),
+        if (adjustNote != null) ...[_adjustBox(adjustNote), pw.SizedBox(height: 10)],
         if (reimb?.generatedNote != null) ...[_generatedBox(reimb!.generatedNote!), pw.SizedBox(height: 10)],
         if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
         _reimbursementBlock(ctx, reimb),
@@ -313,6 +315,7 @@ class ReportPdfBuilder {
     bool duplicate = false,
     List<String> trail = const [],
     ReimbInfo? reimb,
+    String? adjustNote, // "Adjusted by approver" box (Reimbursement Approvals)
   }) async {
     final doc = pw.Document();
     final lastWeekTotal = lastWeekTotalKm ??
@@ -402,6 +405,7 @@ class ReportPdfBuilder {
             border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
           ),
         pw.SizedBox(height: 18),
+        if (adjustNote != null) ...[_adjustBox(adjustNote), pw.SizedBox(height: 10)],
         if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
         _reimbursementClaimBlock(grandTotalKm, reimb, rows.length),
         pw.SizedBox(height: 36),
@@ -1068,6 +1072,26 @@ class ReportPdfBuilder {
             style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
         pw.SizedBox(height: 4),
         pw.Text(r.stamp ?? '', style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF334155))),
+      ]),
+    );
+  }
+
+  /// "ADJUSTED BY APPROVER" — what was left out of the trip and why.
+  static pw.Widget _adjustBox(String note) {
+    const c = PdfColor.fromInt(0xFFB91C1C);
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: pw.BoxDecoration(
+        color: const PdfColor.fromInt(0xFFFEF2F2),
+        border: pw.Border.all(color: const PdfColor.fromInt(0xFFFCA5A5), width: 1),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        pw.Text('ADJUSTED BY APPROVER',
+            style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
+        pw.SizedBox(height: 4),
+        pw.Text(note, style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF7F1D1D))),
       ]),
     );
   }
