@@ -426,9 +426,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                     onPressed: () async { Navigator.pop(ctx); await _approve(c); },
                     style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669), foregroundColor: Colors.white),
                     icon: const Icon(Icons.check, size: 16),
-                    label: Text(_paMode
-                        ? 'Approve & create Payment Advice${amt == null ? '' : ' (${_rs(amt)})'}'
-                        : (amt == null ? 'Approve' : 'Approve ${_rs(amt)}'))),
+                    label: Text(_paMode ? 'Approve & create Payment Advice' : 'Approve')),
                 ],
                 if (c['status'] == 'rejected' && _canApprove)
                   OutlinedButton.icon(
