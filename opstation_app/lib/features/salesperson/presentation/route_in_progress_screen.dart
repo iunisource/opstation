@@ -1039,6 +1039,7 @@ class _VisitMeta extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parts = <String>[];
+    if (visit.isAdhoc) parts.add('Ad-hoc receipt');
     if (visit.amount > 0) parts.add('Rs ${visit.amount}');
     if (visit.receiptNumber != null) parts.add('CR# ${visit.receiptNumber}');
     if (visit.distanceMeters != null) {

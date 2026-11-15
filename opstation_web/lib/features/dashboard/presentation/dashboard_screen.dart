@@ -898,6 +898,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                 customerId: cid,
                 distance: (m['distance_meters'] as num?)?.toDouble(),
                 hasGps: visitHasGps(m),
+                raw: m,
               ));
           grand += amount;
         } else {
@@ -1229,7 +1230,8 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                       // No GPS on the phone / shop without a saved location (red), not "Outside geofence".
                       visitOutcomeLabel(v.status, v.amount, hasGps: v.hasGps),
                       if (v.status != 'verified' && awayLabel(v.distance) != null) awayLabel(v.distance)!,
-                    ].join(' \u00b7 '),
+                    ].join(' \u00b7 ') +
+                        (v.raw == null ? '' : visitExtras(v.raw!, visitOutcomeLabel(v.status, v.amount, hasGps: v.hasGps))),
                     style: const TextStyle(
                         fontSize: 11, color: AppTheme.textSecondary),
                   ),
@@ -1431,6 +1433,7 @@ class _VisitRow {
   final String? customerId;
   final double? distance; // metres from the shop (visits.distance_meters)
   final bool? hasGps; // the phone captured GPS for this visit
+  final Map<String, dynamic>? raw; // the visit row (ad-hoc / GPS accuracy)
   const _VisitRow({
     required this.customerName,
     required this.amount,
@@ -1439,6 +1442,7 @@ class _VisitRow {
     this.customerId,
     this.distance,
     this.hasGps,
+    this.raw,
   });
 }
 
@@ -1573,6 +1577,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
               status: (m['status'] as String?) ?? '',
               distance: (m['distance_meters'] as num?)?.toDouble(),
               hasGps: visitHasGps(m),
+              raw: m,
             ));
       }
 

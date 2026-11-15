@@ -441,14 +441,14 @@ class _TimelineRow extends StatelessWidget {
                 cust.id, cust.latitude, cust.longitude, vv.capturedLat, vv.capturedLng);
           }
         }
-        return place.isEmpty ? 'Visited$at' : 'Visited at $place$at';
+        return (place.isEmpty ? 'Visited$at' : 'Visited at $place$at') + visitExtras(last, o);
       case VisitOutcome.noGps:
       case VisitOutcome.noLocation:
-        return '${o.label}$at';
+        return '${o.label}$at${visitExtras(last, o)}';
       case VisitOutcome.outsideGeofence:
       case VisitOutcome.notVerified:
         final d = last?.distanceMeters?.round();
-        return '${o.label}${d != null && d > 0 ? ' · ${d}m away' : ''}$at';
+        return '${o.label}${d != null && d > 0 ? ' · ${d}m away' : ''}$at${visitExtras(last, o)}';
     }
   }
 }

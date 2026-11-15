@@ -202,7 +202,12 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
     // (permission granted + location on, but no fix yet) is allowed through so
     // reps inside dense buildings aren't stuck. Re-checks live so a rep can't
     // grant, open the dialog, then toggle location off before submitting.
-    final gate = await ref.read(deviceGpsServiceProvider).getFixResult();
+    // Coordinates are mandatory (any accuracy): high fix → coarse fix →
+    // last-known (≤5 min). No reading at all → the visit is not saved.
+    final polled = _currentFix;
+    final gate = (polled.available && polled.lat != null && polled.lng != null)
+        ? await ref.read(deviceGpsServiceProvider).getFixResult(timeout: const Duration(seconds: 8))
+        : await ref.read(deviceGpsServiceProvider).getFixMandatory();
     if (!mounted) return;
     _lastGpsOutcome = gate.outcome;
     if (gate.outcome == GpsOutcome.serviceDisabled) {
@@ -238,6 +243,14 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
             lng: gate.fix!.lng,
             accuracyMeters: gate.fix!.accuracy)
         : _currentFix;
+    if (fix.lat == null || fix.lng == null) {
+      setState(() {
+        _submitting = false;
+        _errorText = 'GPS is not responding, so the visit was not saved. '
+            'Step outside or near a window for a few seconds, then tap the button again.';
+      });
+      return;
+    }
     try {
       await ref.read(tripControllerProvider.notifier).markVisit(
         customer: widget.customer,

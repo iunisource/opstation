@@ -98,6 +98,34 @@ class DeviceGpsService {
     }
   }
 
+  /// A position for a visit / receipt — coordinates are mandatory, accuracy is
+  /// not. Tries a high-accuracy fix, then a coarser one (network / Wi-Fi
+  /// positioning, which works in dense markets), then the phone's last-known
+  /// position from the last 5 minutes. Only when all of these fail does it
+  /// return [GpsOutcome.timeout] (the visit is then NOT saved). Permission /
+  /// GPS-off outcomes are returned as they are.
+  Future<GpsFixResult> getFixMandatory() async {
+    final first = await getFixResult(timeout: const Duration(seconds: 20));
+    if (first.ok || first.outcome != GpsOutcome.timeout) return first;
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.low,
+        timeLimit: const Duration(seconds: 15),
+      );
+      return GpsFixResult(GpsOutcome.success,
+          fix: DeviceFix(lat: pos.latitude, lng: pos.longitude, accuracy: pos.accuracy));
+    } catch (_) {}
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      final at = last?.timestamp;
+      if (last != null && at != null && DateTime.now().difference(at.toLocal()).abs() <= const Duration(minutes: 5)) {
+        return GpsFixResult(GpsOutcome.success,
+            fix: DeviceFix(lat: last.latitude, lng: last.longitude, accuracy: last.accuracy), isStale: true);
+      }
+    } catch (_) {}
+    return const GpsFixResult(GpsOutcome.timeout);
+  }
+
   /// Backwards-compatible helper — returns just the fix or null. Prefer
   /// [getFixResult] so the caller can surface the real failure reason.
   Future<DeviceFix?> getFix({

@@ -408,11 +408,16 @@ class TripController extends AsyncNotifier<TripState> {
     String? receiptNumber,
     String? notes,
     List<String> photoPaths = const [],
+    bool adhoc = false, // entered with "Ad-hoc collection"
   }) async {
     if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
     final active = s?.active;
     if (s == null || active == null) throw StateError('No active trip.');
+    // Coordinates are mandatory for every visit / receipt.
+    if (capturedLat == null || capturedLng == null) {
+      throw ArgumentError('GPS is not responding, so this was not saved. Step outside for a few seconds and try again.');
+    }
     // Nothing collected → no receipt slip is used. Don't keep a CR#, so the
     // slip stays free for the next visit where money is collected.
     if (amount <= 0) receiptNumber = null;
@@ -483,6 +488,7 @@ class TripController extends AsyncNotifier<TripState> {
       receiptNumber: receiptNumber,
       notes: notes,
       photoPaths: remotePaths, // Cloud paths, not local — web admin reads these
+      skipReason: adhoc ? kAdhocMarker : null,
       userId: active.userId,
       userName: active.userName,
       userRole: active.userRole,
@@ -569,6 +575,9 @@ class TripController extends AsyncNotifier<TripState> {
   Future<Visit> recordAdHocCollection({
     required Customer customer,
     required int amount,
+    required double capturedLat,
+    required double capturedLng,
+    required double? accuracyMeters,
     String? receiptNumber,
     String? notes,
   }) async {
@@ -577,21 +586,26 @@ class TripController extends AsyncNotifier<TripState> {
     if (s == null) throw StateError('Trip state not ready.');
 
     if (s.active != null) {
-      // A route is running → attach to it (no location).
+      // A route is running → attach to it, with where the rep actually was
+      // (verified / outside geofence worked out like any visit).
       return markVisit(
         customer: customer,
-        capturedLat: null,
-        capturedLng: null,
-        accuracyMeters: null,
+        capturedLat: capturedLat,
+        capturedLng: capturedLng,
+        accuracyMeters: accuracyMeters,
         amount: amount,
         receiptNumber: receiptNumber,
         notes: notes,
+        adhoc: true,
       );
     }
 
     return _recordStandaloneOffRoute(
       customer: customer,
       amount: amount,
+      capturedLat: capturedLat,
+      capturedLng: capturedLng,
+      accuracyMeters: accuracyMeters,
       receiptNumber: receiptNumber,
       notes: notes,
     );
@@ -604,6 +618,9 @@ class TripController extends AsyncNotifier<TripState> {
   Future<Visit> _recordStandaloneOffRoute({
     required Customer customer,
     required int amount,
+    required double capturedLat,
+    required double capturedLng,
+    required double? accuracyMeters,
     String? receiptNumber,
     String? notes,
   }) async {
@@ -660,18 +677,32 @@ class TripController extends AsyncNotifier<TripState> {
       }
     }
 
+    // Verified / outside geofence, worked out like any visit.
+    await CustomerLocations.ensureLoaded(ref.read(appDatabaseProvider));
+    final nearest = CustomerLocations.nearest(
+        customer.id, customer.latitude, customer.longitude, capturedLat, capturedLng);
+    final VisitStatus status;
+    double? distance;
+    if (nearest == null) {
+      status = VisitStatus.noLocation; // the shop has no saved location
+    } else {
+      distance = nearest.distanceMeters;
+      status = distance <= s.geofenceRadiusMeters ? VisitStatus.verified : VisitStatus.outside;
+    }
+
     final visit = Visit(
       id: _newId('visit'),
       customerId: customer.id,
-      status: VisitStatus.noLocation,
+      status: status,
       timestamp: now,
-      capturedLat: null,
-      capturedLng: null,
-      accuracyMeters: null,
-      distanceMeters: null,
+      capturedLat: capturedLat,
+      capturedLng: capturedLng,
+      accuracyMeters: accuracyMeters,
+      distanceMeters: distance,
       amount: amount,
       receiptNumber: receiptNumber,
       notes: notes,
+      skipReason: kAdhocMarker,
       photoPaths: const [],
       userId: trip.userId,
       userName: trip.userName,

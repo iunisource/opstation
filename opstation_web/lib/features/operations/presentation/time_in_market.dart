@@ -5,7 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/place_name.dart';
-import '../../../core/utils/visit_outcome.dart' show awayLabel;
+import '../../../core/utils/visit_outcome.dart' show awayLabel, visitIsAdhoc;
 import 'time_in_market_pdf.dart';
 
 /// Time in Market — how each salesperson's / driver's day was spent, worked
@@ -85,12 +85,20 @@ class TimEvent {
   final String kind; // visited | outside | not_verified | skipped | delivered | failed
   final int amount;
   final double? distance; // metres from the shop when marked (outside geofence)
-  const TimEvent(this.at, this.place, this.kind, this.amount, [this.distance]);
+  final bool adhoc; // entered with "Ad-hoc collection"
+  final double? accuracy; // GPS accuracy in metres
+  const TimEvent(this.at, this.place, this.kind, this.amount, [this.distance, this.adhoc = false, this.accuracy]);
 
-  /// "Outside geofence · 85 m away"
+  /// "Outside geofence · 85 m away · Ad-hoc receipt · rough GPS (±90 m)"
   String get kindText {
     final away = kind == 'outside' ? awayLabel(distance) : null;
-    return away == null ? timKindLabel(kind) : '${timKindLabel(kind)} · $away';
+    final parts = <String>[
+      timKindLabel(kind),
+      if (away != null) away,
+      if (adhoc) 'Ad-hoc receipt',
+      if (kind != 'visited' && kind != 'delivered' && (accuracy ?? 0) > 50) 'rough GPS (±${accuracy!.round()} m)',
+    ];
+    return parts.join(' · ');
   }
 }
 
@@ -250,7 +258,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (var k = 0; k < ids.length; k += 150) {
       final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
       visits.addAll(await _paged((f, t) => c.from('visits')
-          .select('trip_id, timestamp, status, amount, customer_id, distance_meters, captured_lat, captured_lng, customers(shop_name)')
+          .select('trip_id, timestamp, status, amount, customer_id, distance_meters, captured_lat, captured_lng, accuracy_meters, skip_reason, customers(shop_name)')
           .inFilter('trip_id', chunk).range(f, t)));
     }
     final stopsByRoute = <String, int>{};
@@ -306,7 +314,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
                   ? (noLoc ? (v['captured_lat'] == null ? 'no_gps' : 'no_location') : 'outside')
                   : 'not_verified');
       acc(uid, dayOf(at)).events.add(TimEvent(at, '${(v['customers'] as Map?)?['shop_name'] ?? 'Shop'}', kind, amt,
-          (v['distance_meters'] as num?)?.toDouble()));
+          (v['distance_meters'] as num?)?.toDouble(), visitIsAdhoc(v), (v['accuracy_meters'] as num?)?.toDouble()));
     }
   }
 

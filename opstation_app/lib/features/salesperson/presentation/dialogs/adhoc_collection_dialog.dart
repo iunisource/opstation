@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/utils/receipt_books.dart';
 import '../widgets/receipt_book_hint.dart';
 import '../../../../core/services/sound_controller.dart';
+import '../../../../core/services/device_gps_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/salesperson_repository.dart';
 import '../../models/customer.dart';
@@ -18,7 +19,9 @@ import '../../providers/trip_controller.dart';
 /// The scenario: a customer from an inactive route (or no route at all) sends a
 /// payment while the salesperson is elsewhere. This lets the rep record that
 /// receipt against ANY customer — search, pick, enter CR# + amount + an optional
-/// remark — with no location gate. The SMS still fires and the collection joins
+/// remark. The rep's GPS is captured (mandatory, any accuracy; he need not be
+/// at the shop) and the receipt counts as Visited / Outside geofence like any
+/// visit, labelled "Ad-hoc receipt". The SMS still fires and the collection joins
 /// the ongoing route summary, or starts a fresh "Off-route collections" summary
 /// if no route is active (both handled by [TripController.recordAdHocCollection]).
 class AdHocCollectionDialog extends ConsumerStatefulWidget {
@@ -165,10 +168,30 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
       _submitting = true;
       _errorText = null;
     });
+    // Where the rep is when the receipt is entered — mandatory, any accuracy.
+    final gps = await ref.read(deviceGpsServiceProvider).getFixMandatory();
+    if (!mounted) return;
+    final fix = gps.fix;
+    if (fix == null) {
+      setState(() {
+        _submitting = false;
+        _errorText = switch (gps.outcome) {
+          GpsOutcome.serviceDisabled => 'Turn on your device location (GPS), then try again.',
+          GpsOutcome.permissionBlocked =>
+            'Location permission is blocked. Enable it for Opstation in your phone Settings, then try again.',
+          GpsOutcome.permissionDenied => 'Location permission is required. Please allow it and try again.',
+          _ => 'GPS is not responding, so the receipt was not saved. Step outside or near a window for a few seconds, then try again.',
+        };
+      });
+      return;
+    }
     try {
       await ref.read(tripControllerProvider.notifier).recordAdHocCollection(
             customer: customer,
             amount: amount,
+            capturedLat: fix.lat,
+            capturedLng: fix.lng,
+            accuracyMeters: fix.accuracy,
             receiptNumber: _crCtrl.text.trim(),
             notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           );

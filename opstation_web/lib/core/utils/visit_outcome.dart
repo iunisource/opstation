@@ -39,3 +39,19 @@ String? awayLabel(num? meters) {
 
 /// Did the visit capture GPS? (null = not known from this row).
 bool? visitHasGps(Map v) => v.containsKey('captured_lat') ? v['captured_lat'] != null && v['captured_lng'] != null : null;
+
+/// Entered with "Ad-hoc collection" in the app (skip_reason = 'adhoc' on a
+/// visit that isn't a skip).
+bool visitIsAdhoc(Map v) => '${v['status'] ?? ''}' != 'skipped' && '${v['skip_reason'] ?? ''}' == 'adhoc';
+
+/// " · Ad-hoc receipt" and, when the visit didn't count as Visited and the GPS
+/// reading was rough (worse than 50 m), " · rough GPS (±90 m)". [outcome] is
+/// the label from [visitOutcomeLabel].
+String visitExtras(Map v, String outcome) {
+  final acc = (v['accuracy_meters'] as num?)?.toDouble();
+  final parts = <String>[
+    if (visitIsAdhoc(v)) 'Ad-hoc receipt',
+    if (outcome != 'Visited' && acc != null && acc > 50) 'rough GPS (±${acc.round()} m)',
+  ];
+  return parts.isEmpty ? '' : ' · ${parts.join(' · ')}';
+}

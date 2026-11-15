@@ -342,6 +342,7 @@ class _VisitCard extends StatelessWidget {
       'Skipped' => (Icons.skip_next, AppTheme.textSecondary, outcome),
       _ => (Icons.circle_outlined, AppTheme.textSecondary, outcome),
     };
+    final labelX = label + visitExtras(visit, outcome); // " · Ad-hoc receipt", rough GPS
 
     return Container(
       decoration: BoxDecoration(
@@ -367,7 +368,7 @@ class _VisitCard extends StatelessWidget {
                       color: color.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text(label,
+                    child: Text(labelX,
                         style: TextStyle(
                             fontSize: 10,
                             color: color,

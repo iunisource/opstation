@@ -84,6 +84,22 @@ extension VisitOutcomeX on VisitOutcome {
   }
 }
 
+/// skip_reason on a NON-skipped visit = an ad-hoc receipt (a payment entered
+/// for a shop that isn't on the running route, via "Ad-hoc collection").
+const kAdhocMarker = 'adhoc';
+
+/// Extra words after a visit's result: " · Ad-hoc receipt" and, when the
+/// visit didn't count as Visited and the GPS reading was rough (worse than
+/// 50 m), " · rough GPS (±90 m)".
+String visitExtras(Visit? v, VisitOutcome o) {
+  if (v == null) return '';
+  final parts = <String>[
+    if (v.isAdhoc) 'Ad-hoc receipt',
+    if (o != VisitOutcome.visited && (v.accuracyMeters ?? 0) > 50) 'rough GPS (±${v.accuracyMeters!.round()} m)',
+  ];
+  return parts.isEmpty ? '' : ' · ${parts.join(' · ')}';
+}
+
 /// One visit record against one customer inside one trip.
 class Visit {
   final String id;
@@ -116,6 +132,9 @@ class Visit {
 
   /// Only populated when [status] == [VisitStatus.skipped].
   final String? skipReason;
+
+  /// Entered with "Ad-hoc collection" (not from a route stop).
+  bool get isAdhoc => status != VisitStatus.skipped && skipReason == kAdhocMarker;
 
   /// Who recorded the visit (denormalized from trip/actor).
   final String userId;

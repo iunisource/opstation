@@ -1327,7 +1327,8 @@ class ReportPdfBuilder {
   /// Visit Report status under the rules without "Skip".
   static String _outcomeTag(VisitStatus s, int collected, Visit? v) {
     final o = visitOutcomeOf(s, collected, v);
-    final base = o.label.toUpperCase();
+    final extra = visitExtras(v, o).replaceFirst(' · ', '').replaceAll(' · ', '\n').toUpperCase();
+    final base = o.label.toUpperCase() + (extra.isEmpty ? '' : '\n$extra');
     if (o == VisitOutcome.outsideGeofence || o == VisitOutcome.notVerified) {
       final d = v?.distanceMeters;
       if (d != null && d > 0) {

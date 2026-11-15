@@ -259,7 +259,8 @@ class TeamReportPdf {
                   final name = cust?['shop_name'] as String? ?? '(unknown)';
                   final code = cust?['code'] as String? ?? '';
                   final st = v['status'] as String? ?? '';
-                  final stLabel = visitOutcomeLabel(st, v['amount'] as num?, hasGps: visitHasGps(v));
+                  final stLabel0 = visitOutcomeLabel(st, v['amount'] as num?, hasGps: visitHasGps(v));
+                  final stLabel = stLabel0 + visitExtras(v, stLabel0);
                   final stColor = switch (st) {
                     'verified' => PdfColors.green700,
                     'outside' => PdfColors.orange700,
