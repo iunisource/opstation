@@ -89,7 +89,7 @@ class TimEvent {
 
   /// "Outside geofence · 85 m away"
   String get kindText {
-    final away = kind == 'visited' || kind == 'delivered' ? null : awayLabel(distance);
+    final away = kind == 'outside' ? awayLabel(distance) : null;
     return away == null ? timKindLabel(kind) : '${timKindLabel(kind)} · $away';
   }
 }
@@ -297,9 +297,10 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       if (!byUser.containsKey(uid)) continue;
       final status = '${v['status'] ?? ''}';
       final amt = (v['amount'] as num?)?.toInt() ?? 0;
+      final noLoc = status == 'noLocation' || status == 'no_location';
       final kind = status == 'verified'
           ? 'visited'
-          : status == 'skipped' ? 'skipped' : (amt > 0 ? 'outside' : 'not_verified');
+          : status == 'skipped' ? 'skipped' : (amt > 0 ? (noLoc ? 'no_location' : 'outside') : 'not_verified');
       acc(uid, dayOf(at)).events.add(TimEvent(at, '${(v['customers'] as Map?)?['shop_name'] ?? 'Shop'}', kind, amt,
           (v['distance_meters'] as num?)?.toDouble()));
     }
@@ -391,6 +392,7 @@ class _Acc {
 Color timKindColor(String k) => switch (k) {
       'visited' || 'delivered' => AppTheme.success,
       'outside' => Colors.amber.shade700,
+      'no_location' => AppTheme.danger,
       'failed' => AppTheme.danger,
       _ => const Color(0xFF94A3B8),
     };
@@ -399,6 +401,7 @@ String timKindLabel(String k) => switch (k) {
       'visited' => 'Visited',
       'delivered' => 'Delivered',
       'outside' => 'Outside geofence',
+      'no_location' => 'No Location',
       'failed' => 'Failed',
       'skipped' => 'Skipped',
       _ => 'Not verified',
@@ -560,7 +563,7 @@ class TimDayDetail extends StatelessWidget {
       Wrap(spacing: 14, runSpacing: 4, children: [
         for (final k in day.role == 'driver'
             ? const ['delivered', 'outside', 'failed']
-            : const ['visited', 'outside', 'not_verified'])
+            : const ['visited', 'outside', 'no_location', 'not_verified'])
           Row(mainAxisSize: MainAxisSize.min, children: [
             Container(width: 10, height: 10, decoration: BoxDecoration(color: timKindColor(k), shape: BoxShape.circle)),
             const SizedBox(width: 4),

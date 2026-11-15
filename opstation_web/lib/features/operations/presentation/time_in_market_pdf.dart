@@ -135,7 +135,7 @@ pw.Widget _dot(PdfColor c, {double size = 7}) =>
 
 pw.Widget _legend(TimSettings s, bool drivers, bool sales) {
   final kinds = <String>{
-    if (sales) ...['visited', 'outside', 'not_verified'],
+    if (sales) ...['visited', 'outside', 'no_location', 'not_verified'],
     if (drivers) ...['delivered', 'outside', 'failed'],
   };
   pw.Widget item(pw.Widget mark, String t) => pw.Padding(

@@ -908,6 +908,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                     : (amount > 0 ? 'outside_collected' : 'no_collection'),
                 amount: amount,
                 distance: (m['distance_meters'] as num?)?.toDouble(),
+                noLocation: status == 'noLocation' || status == 'no_location',
               ));
         }
       }
@@ -1109,7 +1110,9 @@ class _SalespersonExpansion extends StatelessWidget {
 
   String _subtitle(_SalespersonCollection sp) {
     final visited = sp.visits.where((v) => v.status == 'verified').length;
-    final outside = sp.visits.where((v) => v.status != 'verified').length;
+    bool noLoc(String st) => st == 'noLocation' || st == 'no_location';
+    final outside = sp.visits.where((v) => v.status != 'verified' && !noLoc(v.status)).length;
+    final noLocation = sp.visits.where((v) => noLoc(v.status)).length;
     final skipped =
         sp.otherStops.where((o) => o.status == 'skipped').length;
     final notVisited =
@@ -1118,6 +1121,7 @@ class _SalespersonExpansion extends StatelessWidget {
     final parts = <String>[
       '$visited visited',
       if (outside > 0) '$outside outside geofence',
+      if (noLocation > 0) '$noLocation no location',
       if (notVerified > 0) '$notVerified not verified',
       if (skipped > 0) '$skipped skipped',
       if (notVisited > 0) '$notVisited not visited',
@@ -1216,7 +1220,10 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                   Text(
                     [
                       DateFormat('HH:mm').format(v.timestamp),
-                      visitOutcomeLabel(v.status, v.amount),
+                      // Shop without a saved location: say so (red pin), not "Outside geofence".
+                      (v.status == 'noLocation' || v.status == 'no_location') && v.amount > 0
+                          ? 'No Location'
+                          : visitOutcomeLabel(v.status, v.amount),
                       if (v.status != 'verified' && awayLabel(v.distance) != null) awayLabel(v.distance)!,
                     ].join(' \u00b7 '),
                     style: const TextStyle(
@@ -1352,7 +1359,9 @@ class _OtherStopRowState extends State<_OtherStopRow> {
     final label = isSkip
         ? 'Skipped'
         : isOutside
-            ? 'Outside geofence${awayLabel(o.distance) == null ? '' : ' (${awayLabel(o.distance)})'} · Rs ${_fmtNumber(o.amount)}'
+            ? (o.noLocation
+                ? 'No Location · Rs ${_fmtNumber(o.amount)}'
+                : 'Outside geofence${awayLabel(o.distance) == null ? '' : ' (${awayLabel(o.distance)})'} · Rs ${_fmtNumber(o.amount)}')
             : (isNotVisited ? 'Not visited' : 'Not verified');
     return InkWell(
       onTap: () => setState(() => _expanded = !_expanded),
@@ -1432,7 +1441,8 @@ class _OtherStop {
   final String status; // 'skipped' | 'not_visited' | 'no_collection' (not verified) | 'outside_collected'
   final int amount;
   final double? distance; // metres from the shop, when marked outside
-  const _OtherStop({required this.customerName, required this.status, this.amount = 0, this.distance});
+  final bool noLocation; // shop has no saved location (red pin)
+  const _OtherStop({required this.customerName, required this.status, this.amount = 0, this.distance, this.noLocation = false});
 }
 
 String _fmtNumber(int n) {
