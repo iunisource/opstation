@@ -326,7 +326,11 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
       Text(amt == null ? '—' : _rs(amt), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
       Text(pe.isNotEmpty && c['status'] == 'pending'
               ? '${_dayCount(pe)} day(s) already approved · excluded'
-              : (c['status'] == 'paid' ? 'paid ${_fd(c['paid_on'], 'd MMM')}' : (_rate == null || c['status'] == 'rejected' ? '' : '@ Rs ${NumberFormat('#,##0.##').format(c['rate'] ?? _rate)}/km')),
+              : (c['status'] == 'paid'
+                  ? 'paid ${_fd(c['paid_on'], 'd MMM')}'
+                  : ((c['adjust_note'] ?? '') != '' && c['status'] == 'approved'
+                      ? 'changed from ${_rs(c['claimed_amount'] as num?)}'
+                      : (_rate == null || c['status'] == 'rejected' ? '' : '@ Rs ${NumberFormat('#,##0.##').format(c['rate'] ?? _rate)}/km'))),
           style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
     ]);
     final gen = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -475,6 +479,17 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                       style: const TextStyle(fontSize: 12.5, color: Color(0xFF1D4ED8))),
                 ),
               ],
+              if ((c['adjust_note'] ?? '') != '' && (c['status'] == 'approved' || c['status'] == 'paid')) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFFDE68A))),
+                  child: Text(
+                    'Amount changed by ${c['decided_by_name'] ?? '—'}: ${_rs(c['claimed_amount'] as num?)} → ${_rs(c['amount'] as num?)}. Reason: ${c['adjust_note']}',
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF92400E))),
+                ),
+              ],
               if (c['status'] == 'rejected' && (c['reject_reason'] ?? '') != '') ...[
                 const SizedBox(height: 12),
                 Container(
@@ -492,6 +507,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                 _kv(pe.isNotEmpty ? 'Distance to pay' : 'Distance', pe.isNotEmpty ? _km(_unpaidKm(c)) : _km(c['km'] as num?)),
                 _kv('Rate', rate != null ? 'Rs ${NumberFormat('#,##0.##').format(rate)} / km' : 'Not set (Admin Settings)'),
                 _kv(c['status'] == 'paid' ? 'Paid' : 'Amount', amt == null ? '—' : _rs(amt)),
+                if ((c['adjust_note'] ?? '') != '' && c['claimed_amount'] != null && c['status'] != 'pending')
+                  _kv('Worked out', _rs(c['claimed_amount'] as num?)),
                 if (c['advice_number'] != null) _kv('Payment Advice', '${c['advice_number']}'),
                 _kv('Generated', '${c['generated_count'] ?? 1}×'),
                 _kv('First generated', _fd(c['first_generated_at'], 'd MMM, h:mm a')),
@@ -670,9 +687,85 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   }
 
   // ── actions ───────────────────────────────────────────────────────────────
+  /// Approve with the worked-out amount pre-filled; the approver may change it
+  /// (e.g. a visit not justified) — a changed amount needs a reason.
   Future<void> _approve(Map c) async {
+    final calc = c['status'] == 'pending' || c['status'] == 'rejected'
+        ? (_rate == null ? null : (_unpaidKm(c) * _rate!).round())
+        : null;
+    final amtCtl = TextEditingController(text: calc == null ? '' : '$calc');
+    final noteCtl = TextEditingController();
+    String? err;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => StatefulBuilder(builder: (d, setD) {
+        final typed = num.tryParse(amtCtl.text.trim());
+        final changed = calc != null && typed != null && typed.round() != calc;
+        return AlertDialog(
+          title: Text('Approve — ${c['claimant_name'] ?? ''}'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                '${_dates(c)} · ${_km(_unpaidKm(c))}'
+                '${calc == null ? ' · no rate per km set — enter the amount' : ' × Rs ${NumberFormat('#,##0.##').format(_rate)}/km = ${_rs(calc)}'}',
+                style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: amtCtl,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                onChanged: (_) => setD(() => err = null),
+                decoration: const InputDecoration(labelText: 'Amount to approve (Rs)', isDense: true, border: OutlineInputBorder()),
+              ),
+              if (changed) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: noteCtl,
+                  maxLines: 2,
+                  onChanged: (_) => setD(() => err = null),
+                  decoration: InputDecoration(
+                    labelText: 'Reason for changing the amount *',
+                    hintText: 'e.g. 2 visits not justified',
+                    helperText: 'Worked out: ${_rs(calc)} · changing by ${_rs((typed!.round() - calc!).abs())}',
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+              if (err != null) ...[
+                const SizedBox(height: 8),
+                Text(err!, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5)),
+              ],
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669), foregroundColor: Colors.white),
+              onPressed: () {
+                final v = num.tryParse(amtCtl.text.trim());
+                if (amtCtl.text.trim().isNotEmpty && (v == null || v < 0)) return setD(() => err = 'Enter a valid amount.');
+                if (changed && noteCtl.text.trim().isEmpty) return setD(() => err = 'Enter the reason for changing the amount.');
+                Navigator.pop(d, true);
+              },
+              child: Text(_paMode ? 'Approve & create Payment Advice' : 'Approve'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (ok != true) return;
+    final typed = num.tryParse(amtCtl.text.trim());
     try {
-      await _db.rpc('reimb_decide', params: {'p_claim': c['id'], 'p_approve': true});
+      await _db.rpc('reimb_decide', params: {
+        'p_claim': c['id'],
+        'p_approve': true,
+        if (typed != null) 'p_amount': typed,
+        if (noteCtl.text.trim().isNotEmpty) 'p_adjust_note': noteCtl.text.trim(),
+      });
       _snack(_paMode ? 'Approved — Payment Advice created' : 'Approved — ${c['claimant_name'] ?? ''}');
       await _load();
     } catch (e) {
