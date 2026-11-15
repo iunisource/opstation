@@ -23,3 +23,11 @@ String visitOutcomeLabel(String? status, num? collected) {
       return s;
   }
 }
+
+/// "85 m away" / "1.2 km away" — how far from the shop a visit was marked
+/// (visits.distance_meters). Null when unknown or zero.
+String? awayLabel(num? meters) {
+  if (meters == null || meters <= 0) return null;
+  if (meters < 1000) return '${meters.round()} m away';
+  return '${(meters / 1000).toStringAsFixed(meters < 10000 ? 1 : 0)} km away';
+}

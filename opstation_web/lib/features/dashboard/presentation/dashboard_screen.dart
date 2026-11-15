@@ -896,6 +896,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                 timestamp: ts,
                 status: status,
                 customerId: cid,
+                distance: (m['distance_meters'] as num?)?.toDouble(),
               ));
           grand += amount;
         } else {
@@ -906,6 +907,7 @@ class _CollectionBreakdownViewState extends State<_CollectionBreakdownView> {
                     ? 'skipped'
                     : (amount > 0 ? 'outside_collected' : 'no_collection'),
                 amount: amount,
+                distance: (m['distance_meters'] as num?)?.toDouble(),
               ));
         }
       }
@@ -1212,7 +1214,11 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${DateFormat('HH:mm').format(v.timestamp)} \u00b7 ${visitOutcomeLabel(v.status, v.amount)}',
+                    [
+                      DateFormat('HH:mm').format(v.timestamp),
+                      visitOutcomeLabel(v.status, v.amount),
+                      if (v.status != 'verified' && awayLabel(v.distance) != null) awayLabel(v.distance)!,
+                    ].join(' \u00b7 '),
                     style: const TextStyle(
                         fontSize: 11, color: AppTheme.textSecondary),
                   ),
@@ -1346,7 +1352,7 @@ class _OtherStopRowState extends State<_OtherStopRow> {
     final label = isSkip
         ? 'Skipped'
         : isOutside
-            ? 'Outside geofence · Rs ${_fmtNumber(o.amount)}'
+            ? 'Outside geofence${awayLabel(o.distance) == null ? '' : ' (${awayLabel(o.distance)})'} · Rs ${_fmtNumber(o.amount)}'
             : (isNotVisited ? 'Not visited' : 'Not verified');
     return InkWell(
       onTap: () => setState(() => _expanded = !_expanded),
@@ -1410,12 +1416,14 @@ class _VisitRow {
   final DateTime timestamp;
   final String status;
   final String? customerId;
+  final double? distance; // metres from the shop (visits.distance_meters)
   const _VisitRow({
     required this.customerName,
     required this.amount,
     required this.timestamp,
     required this.status,
     this.customerId,
+    this.distance,
   });
 }
 
@@ -1423,7 +1431,8 @@ class _OtherStop {
   final String customerName;
   final String status; // 'skipped' | 'not_visited' | 'no_collection' (not verified) | 'outside_collected'
   final int amount;
-  const _OtherStop({required this.customerName, required this.status, this.amount = 0});
+  final double? distance; // metres from the shop, when marked outside
+  const _OtherStop({required this.customerName, required this.status, this.amount = 0, this.distance});
 }
 
 String _fmtNumber(int n) {
@@ -1545,6 +1554,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
               amount: (m['amount'] as int?) ?? 0,
               timestamp: ts,
               status: (m['status'] as String?) ?? '',
+              distance: (m['distance_meters'] as num?)?.toDouble(),
             ));
       }
 

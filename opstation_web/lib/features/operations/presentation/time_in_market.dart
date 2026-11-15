@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/place_name.dart';
+import '../../../core/utils/visit_outcome.dart' show awayLabel;
 import 'time_in_market_pdf.dart';
 
 /// Time in Market — how each salesperson's / driver's day was spent, worked
@@ -82,7 +84,14 @@ class TimEvent {
   final String place;
   final String kind; // visited | outside | not_verified | skipped | delivered | failed
   final int amount;
-  const TimEvent(this.at, this.place, this.kind, this.amount);
+  final double? distance; // metres from the shop when marked (outside geofence)
+  const TimEvent(this.at, this.place, this.kind, this.amount, [this.distance]);
+
+  /// "Outside geofence · 85 m away"
+  String get kindText {
+    final away = kind == 'visited' || kind == 'delivered' ? null : awayLabel(distance);
+    return away == null ? timKindLabel(kind) : '${timKindLabel(kind)} · $away';
+  }
 }
 
 class TimGap {
@@ -241,7 +250,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (var k = 0; k < ids.length; k += 150) {
       final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
       visits.addAll(await _paged((f, t) => c.from('visits')
-          .select('trip_id, timestamp, status, amount, customer_id, customers(shop_name)')
+          .select('trip_id, timestamp, status, amount, customer_id, distance_meters, customers(shop_name)')
           .inFilter('trip_id', chunk).range(f, t)));
     }
     final stopsByRoute = <String, int>{};
@@ -291,7 +300,8 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       final kind = status == 'verified'
           ? 'visited'
           : status == 'skipped' ? 'skipped' : (amt > 0 ? 'outside' : 'not_verified');
-      acc(uid, dayOf(at)).events.add(TimEvent(at, '${(v['customers'] as Map?)?['shop_name'] ?? 'Shop'}', kind, amt));
+      acc(uid, dayOf(at)).events.add(TimEvent(at, '${(v['customers'] as Map?)?['shop_name'] ?? 'Shop'}', kind, amt,
+          (v['distance_meters'] as num?)?.toDouble()));
     }
   }
 
@@ -313,7 +323,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (var k = 0; k < ids.length; k += 150) {
       final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
       stops.addAll(await _paged((f, t) => c.from('delivery_stops')
-          .select('delivery_id, customer_name, status, delivered_at, verification, amount, cash_received')
+          .select('delivery_id, customer_name, status, delivered_at, verification, amount, cash_received, distance_meters')
           .inFilter('delivery_id', chunk).range(f, t)));
     }
     final stopCount = <String, int>{};
@@ -347,7 +357,8 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       final ver = '${st['verification'] ?? ''}';
       final kind = failed ? 'failed' : (ver == 'verified' ? 'delivered' : 'outside');
       final amt = (st['cash_received'] as num?)?.toInt() ?? 0;
-      acc(uid, dayOf(at)).events.add(TimEvent(at, '${st['customer_name'] ?? 'Drop'}', kind, amt));
+      acc(uid, dayOf(at)).events.add(TimEvent(at, '${st['customer_name'] ?? 'Drop'}', kind, amt,
+          (st['distance_meters'] as num?)?.toDouble()));
     }
   }
 
@@ -454,7 +465,7 @@ class TimTimeline extends StatelessWidget {
       }
       for (final ev in day.sorted) {
         kids.add(Positioned(left: x(m(ev.at)) - 6, top: 19, child: Tooltip(
-          message: '${timClock(ev.at)} · ${ev.place} · ${timKindLabel(ev.kind)}${ev.amount > 0 ? ' · Rs ${money(ev.amount)}' : ''}',
+          message: '${timClock(ev.at)} · ${ev.place} · ${ev.kindText}${ev.amount > 0 ? ' · Rs ${money(ev.amount)}' : ''}',
           child: Container(width: 12, height: 12, decoration: BoxDecoration(
               color: timKindColor(ev.kind), shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2))),
         )));
@@ -500,7 +511,7 @@ class TimDayDetail extends StatelessWidget {
             gap: true));
       }
       lines.add(_line(timClock(ev.at),
-          '${ev.place} · ${timKindLabel(ev.kind)}${ev.amount > 0 ? ' · Rs ${money(ev.amount)}' : ''}',
+          '${ev.place} · ${ev.kindText}${ev.amount > 0 ? ' · Rs ${money(ev.amount)}' : ''}',
           dot: timKindColor(ev.kind)));
     }
     if (day.end != null && !day.open) {
@@ -569,6 +580,26 @@ class TimDayDetail extends StatelessWidget {
       ]),
       const SizedBox(height: 8),
       TimTimeline(day: day, s: s),
+      if (day.startAt != null || day.endAt != null)
+        FutureBuilder<(String?, String?)>(
+          future: timPlaces(day),
+          builder: (context, snap) {
+            final p = snap.data ?? (timGps(day.startAt), timGps(day.endAt));
+            Widget one(String label, String text) => Text.rich(
+                  TextSpan(style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary), children: [
+                    TextSpan(text: '$label  ', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    TextSpan(text: text),
+                  ]),
+                );
+            return Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Wrap(spacing: 18, runSpacing: 4, children: [
+                if (p.$1 != null) one('Started at', p.$1!),
+                if (p.$2 != null) one('Ended at', p.$2!),
+              ]),
+            );
+          },
+        ),
       const SizedBox(height: 14),
       if (wide)
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -872,4 +903,22 @@ Future<void> showTimeInMarketDialog(
       ),
     ),
   );
+}
+
+
+/// "31.47680, 74.24280" (null when unknown).
+String? timGps((double, double)? p) => p == null ? null : '${p.$1.toStringAsFixed(5)}, ${p.$2.toStringAsFixed(5)}';
+
+/// Start / end place of a day: "Johar Town, Lahore (31.47680, 74.24280)", or
+/// the GPS alone when the area name can't be looked up.
+Future<(String?, String?)> timPlaces(TimDay d) async {
+  Future<String?> one((double, double)? p) async {
+    if (p == null) return null;
+    String? n;
+    try {
+      n = await placeName(p.$1, p.$2);
+    } catch (_) {}
+    return n == null ? timGps(p) : '$n (${timGps(p)})';
+  }
+  return (await one(d.startAt), await one(d.endAt));
 }

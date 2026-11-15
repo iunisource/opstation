@@ -316,7 +316,7 @@ List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
           gap: true));
     }
     lines.add(line(timClock(ev.at),
-        '${ev.place} · ${timKindLabel(ev.kind)}${ev.amount > 0 ? ' · Rs ${money(ev.amount)}' : ''}',
+        '${ev.place} · ${ev.kindText}${ev.amount > 0 ? ' · Rs ${money(ev.amount)}' : ''}',
         dot: _pc(timKindColor(ev.kind))));
   }
   if (day.end != null && !day.open) {
