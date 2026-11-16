@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/widgets/salesperson_picker.dart';
 import '../../auth/auth_controller.dart';
 import '../pdf/report_pdf_builder.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
@@ -379,15 +380,9 @@ class _CombinedTripSummaryScreenState
               }
             },
           ),
-          DropdownButton<String>(
-            hint: const Text('All salespersons'),
+          SalespersonPicker(
+            users: _users,
             value: _selectedUserId,
-            items: [
-              const DropdownMenuItem(
-                  value: null, child: Text('All salespersons')),
-              ..._users.map((u) => DropdownMenuItem(
-                  value: u['id'] as String, child: Text(u['name'] as String))),
-            ],
             onChanged: (v) {
               setState(() => _selectedUserId = v);
               _load();
