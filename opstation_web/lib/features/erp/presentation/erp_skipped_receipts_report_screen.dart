@@ -589,6 +589,51 @@ class _ErpSkippedReceiptsReportScreenState
 
   final _searchCtrl = TextEditingController();
 
+  /// Nearby-slips pop-up for [n] from any date: when the report for that
+  /// period hasn't been generated, the slips around [n] (and the receipt
+  /// books) are loaded first.
+  Future<void> _openSlip(int n) async {
+    final orgId = _orgId;
+    if (orgId == null) return;
+    final client = Supabase.instance.client;
+    try {
+      if (_books.isEmpty) {
+        final books = <Map<String, dynamic>>[];
+        for (final b in await client.rpc('receipt_books_status', params: {'p_org': orgId}) as List) {
+          final st = ((b as Map)['start_no'] as num?)?.toInt();
+          final en = (b['end_no'] as num?)?.toInt();
+          if (st != null && en != null) {
+            books.add({'id': '${b['id']}', 'start': st, 'end': en, 'holder': '${b['user_name'] ?? ''}'});
+          }
+        }
+        _books = books;
+      }
+      final need = [for (var m = n - 3; m <= n + 50; m++) if (m > 0 && !_uses.containsKey(m)) m];
+      if (need.isNotEmpty) {
+        final rows = await client
+            .from('visits')
+            .select('user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
+            .eq('org_id', orgId)
+            .gt('amount', 0)
+            .inFilter('receipt_number', [for (final m in need) '$m'])
+            .limit(2000);
+        for (final v in rows as List) {
+          final cust = v['customers'];
+          for (final m in _receiptSlipNumbers('${v['receipt_number'] ?? ''}')) {
+            (_uses[m] ??= []).add({
+              'user_id': v['user_id'],
+              'user_name': '${v['user_name'] ?? ''}'.trim().isEmpty ? (_names['${v['user_id']}'] ?? '') : v['user_name'],
+              'at': v['timestamp'],
+              'shop': cust is Map ? cust['shop_name'] : null,
+              'amount': v['amount'],
+            });
+          }
+        }
+      }
+    } catch (_) {}
+    if (mounted) _showUses(n);
+  }
+
   /// Every collection with this receipt number (or containing it), any date,
   /// any salesperson — to verify a slip. Tap a result for its nearby slips.
   Future<void> _searchReceipt(String raw) async {
@@ -645,14 +690,7 @@ class _ErpSkippedReceiptsReportScreenState
                         return InkWell(
                           onTap: slips.isEmpty
                               ? null
-                              : () {
-                                  if (_uses.containsKey(slips.first)) {
-                                    _showUses(slips.first);
-                                  } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                                        content: Text('Generate the report for that period to see this slip\'s nearby slips.')));
-                                  }
-                                },
+                              : () => _openSlip(slips.first),
                           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             SizedBox(
                               width: 90,
