@@ -1,3 +1,4 @@
+import 'receipt_fix.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -141,6 +142,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   List<Map<String, dynamic>> _team = [];
   // Collections whose CR# is from no book (holders of books, since their first book).
   List<Map<String, dynamic>> _outside = [];
+  bool _isAdmin = false; // admins / master admins can correct or release a CR# (SQL 479)
   String _status = 'open'; // open | closed | all
   String _query = '';
   bool _busy = false;
@@ -233,6 +235,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
       setState(() {
         _flowOn = on;
         _canIssue = isAdmin || (me != null && issuers.contains(me.id));
+        _isAdmin = isAdmin;
         _books = books;
         _team = team;
         _outside = outside;
@@ -572,6 +575,15 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           ]),
         ),
         actions: [
+          if (c == null && uses.isNotEmpty && _isAdmin)
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                final org = ref.read(currentUserProvider)?.orgId;
+                if (org != null && await receiptFixForSerial(context, org, n)) _load();
+              },
+              child: const Text('Correct / release CR#'),
+            ),
           if (c != null && _canIssue)
             TextButton(
               onPressed: () {
@@ -778,6 +790,14 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                 title: Text('CR# ${(v['receipt_number'] ?? '').toString().isEmpty ? '(blank)' : v['receipt_number']} · '
                     'Rs ${money((v['amount'] as num?) ?? 0)}'),
                 subtitle: Text('${v['user_name'] ?? ''} · ${(v['customers'] as Map?)?['shop_name'] ?? ''} · ${_fmt(v['timestamp'])}'),
+                trailing: _isAdmin && v['id'] != null
+                    ? TextButton(
+                        onPressed: () async {
+                          if (await receiptFixDialog(context, v)) _load();
+                        },
+                        child: const Text('Correct / release'),
+                      )
+                    : null,
               ),
           ],
         ),

@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import 'receipt_fix.dart';
 
 /// Skipped Receipt Serials — salesperson-wise.
 ///
@@ -589,6 +590,11 @@ class _ErpSkippedReceiptsReportScreenState
 
   final _searchCtrl = TextEditingController();
 
+  bool get _isAdmin {
+    final r = ref.read(currentUserProvider)?.role;
+    return r == WebUserRole.superAdmin || r == WebUserRole.masterAdmin || r == WebUserRole.admin;
+  }
+
   /// Nearby-slips pop-up for [n] from any date: when the report for that
   /// period hasn't been generated, the slips around [n] (and the receipt
   /// books) are loaded first.
@@ -645,7 +651,7 @@ class _ErpSkippedReceiptsReportScreenState
     try {
       rows = List<Map<String, dynamic>>.from(await Supabase.instance.client
           .from('visits')
-          .select('user_id, user_name, receipt_number, amount, timestamp, status, trip_id, customers(shop_name, code)')
+          .select('id, user_id, user_name, receipt_number, amount, timestamp, status, trip_id, customers(shop_name, code)')
           .eq('org_id', orgId)
           .ilike('receipt_number', '%$q%')
           .order('timestamp', ascending: false)
@@ -711,6 +717,19 @@ class _ErpSkippedReceiptsReportScreenState
                             ),
                             Text('Rs ${nf.format((v['amount'] as num?) ?? 0)}',
                                 style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            if (_isAdmin)
+                              IconButton(
+                                tooltip: 'Correct / release this CR#',
+                                visualDensity: VisualDensity.compact,
+                                icon: const Icon(Icons.edit_note, size: 20),
+                                onPressed: () async {
+                                  if (await receiptFixDialog(context, v)) {
+                                    if (ctx.mounted) Navigator.pop(ctx);
+                                    _uses.clear(); // re-read nearby slips next time
+                                    _searchReceipt(q);
+                                  }
+                                },
+                              ),
                           ]),
                         );
                       },
