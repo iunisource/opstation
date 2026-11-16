@@ -7,6 +7,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/place_name.dart';
 import '../../../core/utils/visit_outcome.dart' show awayLabel, visitIsAdhoc;
 import 'time_in_market_pdf.dart';
+import '../../reports/pdf/report_pdf_builder.dart' show TripReportContext;
+import '../../team/services/trip_sessions.dart';
 
 /// Time in Market — how each salesperson's / driver's day was spent, worked
 /// out from data already collected: route (or delivery) start and end, and
@@ -65,13 +67,13 @@ class TimSettings {
       keys['early']!: hm(earlyBefore), keys['gap']!: '$gapMin',
     };
     for (final e in vals.entries) {
-      final ex = await c.from('app_config').select('key').eq('org_id', orgId).eq('key', e.key)
-          .isFilter('branch_id', null).maybeSingle();
-      if (ex == null) {
+      // The setting row may have been saved with a branch — update whatever
+      // row(s) exist for the org; insert only when there is none at all.
+      final ex = await c.from('app_config').select('key').eq('org_id', orgId).eq('key', e.key).limit(1);
+      if ((ex as List).isEmpty) {
         await c.from('app_config').insert({'org_id': orgId, 'key': e.key, 'value': e.value});
       } else {
-        await c.from('app_config').update({'value': e.value}).eq('org_id', orgId).eq('key', e.key)
-            .isFilter('branch_id', null);
+        await c.from('app_config').update({'value': e.value}).eq('org_id', orgId).eq('key', e.key);
       }
     }
   }
@@ -125,8 +127,15 @@ class TimDay {
   // last trip's end) — null when not recorded (e.g. deliveries).
   final (double, double)? startAt;
   final (double, double)? endAt;
+  // Raw trips of the day + their visits, for the distance (salespeople only).
+  final List<Map<String, dynamic>> trips;
+  final Map<String, List<Map<String, dynamic>>> visitsByTrip;
+  /// Road distance of the day in km, same as the Trip Summary (abandoned trips
+  /// left out). null until [timLoadDistances] has run, or for drivers.
+  double? km;
   TimDay(this.userId, this.name, this.role, this.date, this.routes, this.start, this.end, this.open,
-      this.events, this.totalStops, {this.startAt, this.endAt});
+      this.events, this.totalStops,
+      {this.startAt, this.endAt, this.trips = const [], this.visitsByTrip = const {}});
 
   late final List<TimEvent> sorted = [...events]..sort((a, b) => a.at.compareTo(b.at));
   DateTime? get first => sorted.isEmpty ? null : sorted.first.at;
@@ -241,6 +250,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
         () => _Acc(uid, '${u['name'] ?? ''}', '${u['role'] ?? ''}', d));
   }
 
+  final visitsByTrip = <String, List<Map<String, dynamic>>>{};
   // Salespeople: trips + visits.
   final sales = [for (final u in users) if (u['role'] == 'salesperson') '${u['id']}'];
   if (sales.isNotEmpty) {
@@ -248,7 +258,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (var k = 0; k < sales.length; k += 100) {
       final chunk = sales.sublist(k, (k + 100).clamp(0, sales.length));
       trips.addAll(await _paged((f, t) => c.from('trips')
-          .select('id, user_id, route_id, route_name, started_at, ended_at, start_lat, start_lng, end_lat, end_lng')
+          .select('id, org_id, user_id, route_id, route_name, started_at, ended_at, start_lat, start_lng, end_lat, end_lng')
           .eq('org_id', orgId).inFilter('user_id', chunk)
           .gte('started_at', s).lt('started_at', e).range(f, t)));
     }
@@ -274,6 +284,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       if (!byUser.containsKey(uid) || t['started_at'] == null) continue;
       final st = local(t['started_at']);
       final a = acc(uid, dayOf(st));
+      a.trips.add(t); // for the day's distance (worked out when printing)
       final off = t['route_id'] == 'offroute';
       if (!off) {
         a.routes.add('${t['route_name'] ?? 'Route'}');
@@ -296,6 +307,9 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
         }
         a.stops += stopsByRoute['${t['route_id']}'] ?? 0;
       }
+    }
+    for (final v in visits) {
+      (visitsByTrip['${v['trip_id']}'] ??= []).add(v);
     }
     for (final v in visits) {
       final t = tripById['${v['trip_id']}'];
@@ -379,7 +393,8 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     for (final a in days.values)
       TimDay(a.uid, a.name, a.role, a.date, a.routes.toSet().toList(), a.start, a.end,
           a.open && DateUtils.isSameDay(a.date, DateTime.now()), a.events, a.stops,
-          startAt: a.startAt, endAt: a.endAt),
+          startAt: a.startAt, endAt: a.endAt,
+          trips: a.trips, visitsByTrip: visitsByTrip),
   ]..sort((x, y) {
       final d = y.date.compareTo(x.date);
       return d != 0 ? d : x.name.toLowerCase().compareTo(y.name.toLowerCase());
@@ -396,6 +411,7 @@ class _Acc {
   bool open = false;
   int stops = 0;
   final List<TimEvent> events = [];
+  final List<Map<String, dynamic>> trips = [];
   _Acc(this.uid, this.name, this.role, this.date);
 }
 
@@ -542,7 +558,7 @@ class TimDayDetail extends StatelessWidget {
       if (day.routeOpen != null) ('Route open (start → end)', timDur(day.routeOpen), null),
       ('Time in gaps over ${s.gapMin} min', timDur(day.lostToGaps(s)), gaps.isEmpty ? null : AppTheme.danger),
       ('Stops · per hour in market', '${day.visits} · ${day.perHour.toStringAsFixed(1)}', null),
-      ('Average time per stop (shop + travel, long gaps left out)', timDur(day.avgPerStop(s)), null),
+      ('Average time per stop (incl. travel from last stop)', timDur(day.avgPerStop(s)), null),
       if (day.totalStops > 0) ('Planned stops not marked', '${(day.totalStops - day.visits).clamp(0, 100000)} of ${day.totalStops}', null),
       if (day.collected > 0) ('Collected', 'Rs ${money(day.collected)}', null),
     ];
@@ -938,4 +954,37 @@ Future<(String?, String?)> timPlaces(TimDay d) async {
     return n == null ? timGps(p) : '$n (${timGps(p)})';
   }
   return (await one(d.startAt), await one(d.endAt));
+}
+
+/// Works out each salesperson day's distance the same way the Combined Trip
+/// Summary does: quick restarts merged, abandoned trips (no visits) left out,
+/// road distance per trip (saved per trip on the server, straight lines if not
+/// available). A few trips at a time. Never throws.
+Future<void> timLoadDistances(List<TimDay> days) async {
+  final jobs = <(TimDay, Map<String, dynamic>)>[];
+  for (final d in days) {
+    if (d.km != null || d.role == 'driver' || d.trips.isEmpty) continue;
+    d.km = 0;
+    final sessions = TripSessions.collapse(d.trips, (id) => (d.visitsByTrip[id] ?? const []).length);
+    for (final t in sessions) {
+      if (t['_abandoned'] == true) continue;
+      jobs.add((d, t));
+    }
+  }
+  for (var i = 0; i < jobs.length; i += 6) {
+    final part = jobs.sublist(i, i + 6 > jobs.length ? jobs.length : i + 6);
+    await Future.wait([
+      for (final (d, t) in part)
+        () async {
+          try {
+            final ctx = await TripReportContext.buildRoad(
+              trip: t,
+              visits: d.visitsByTrip['${t['id']}'] ?? const <Map<String, dynamic>>[],
+              customersById: const {},
+            );
+            d.km = (d.km ?? 0) + ctx.totalDistanceKm;
+          } catch (_) {}
+        }(),
+    ]);
+  }
 }

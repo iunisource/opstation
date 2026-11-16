@@ -42,6 +42,10 @@ Future<void> printTimDays(
   for (final d in days) {
     places[d] = (await where(d.startAt), await where(d.endAt));
   }
+  // Road distance per day (same figure as the Trip Summary).
+  await timLoadDistances(days);
+  final kmDays = days.where((d) => d.km != null).toList();
+  final totalKm = kmDays.fold<double>(0, (a, d) => a + (d.km ?? 0));
   const pageW = 595.28 - 56; // A4 portrait minus margins
   final now = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
 
@@ -87,6 +91,7 @@ Future<void> printTimDays(
           _kpi('${days.length}', 'days out'),
           _kpi(timDur(avgIn), 'avg time in market'),
           _kpi(timDur(timAvgPerStop(days, s)), 'avg time per stop'),
+          if (kmDays.isNotEmpty) _kpi('${totalKm.toStringAsFixed(1)} km', 'total distance'),
           _kpi('$late', 'late starts', bad: late > 0),
           _kpi('$gaps', 'long gaps', warn: gaps > 0),
           _kpi('$early', 'closed early', bad: early > 0, last: true),
@@ -97,7 +102,7 @@ Future<void> printTimDays(
       pw.SizedBox(height: 8),
       for (final d in days) ...[
         _card(d, s, pageW, places[d]),
-        if (detail) ..._detail(d, s, null), // places are on the card above
+        if (detail) ..._detail(d, s, places[d]),
       ],
       pw.SizedBox(height: 4),
       pw.Text('Worked out from route / delivery start and end and the time each stop was marked. '
@@ -148,8 +153,8 @@ pw.Widget _legend(TimSettings s, bool drivers, bool sales) {
       );
   return pw.Wrap(runSpacing: 3, children: [
     for (final k in kinds) item(_dot(_pc(timKindColor(k))), timKindLabel(k)),
-    item(pw.Container(width: 12, height: 7, color: const PdfColor.fromInt(0x33B91C1C)), 'Gap over ${s.gapMin} min'),
-    item(pw.Container(width: 12, height: 7, color: const PdfColor.fromInt(0x221E3A8A)),
+    item(pw.Container(width: 12, height: 7, color: const PdfColor.fromInt(0xFFF1D2D2)), 'Gap over ${s.gapMin} min'),
+    item(pw.Container(width: 12, height: 7, color: const PdfColor.fromInt(0xFFE1E5EF)),
         'Working day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)}'),
   ]);
 }
@@ -202,6 +207,7 @@ pw.Widget _card(TimDay d, TimSettings s, double pageW, (String?, String?)? at) {
       _fig('Per hour', d.perHour.toStringAsFixed(1)),
       _fig('Per stop', timDur(d.avgPerStop(s))),
       _fig('Longest gap', timDur(lg), bad: (lg?.inMinutes ?? 0) > s.gapMin),
+      if (d.km != null) _fig('Distance', '${d.km!.toStringAsFixed(1)} km'),
     ]),
     pw.SizedBox(height: 4),
     pw.Row(children: [for (final (t, c) in timFlags(d, s)) _tag(t, c)]),
@@ -247,20 +253,20 @@ pw.Widget _timeline(TimDay day, TimSettings s, double w) {
     pw.Positioned(left: 0, top: 13, child: pw.Container(width: w, height: 4,
         decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0xFFEEF2F7), borderRadius: pw.BorderRadius.circular(2)))),
     pw.Positioned(left: x(s.dayStart), top: 11, child: pw.Container(width: wd(x(s.dayEnd) - x(s.dayStart)), height: 8,
-        decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0x141E3A8A),
-            border: pw.Border.all(color: const PdfColor.fromInt(0x591E3A8A), width: 0.5), borderRadius: pw.BorderRadius.circular(2)))),
+        decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0xFFEDF0F6),
+            border: pw.Border.all(color: const PdfColor.fromInt(0xFFB1BAD6), width: 0.5), borderRadius: pw.BorderRadius.circular(2)))),
   ];
   if (day.start != null) {
     final en = day.end ?? (day.open ? DateTime.now() : day.last) ?? day.start!;
     kids.add(pw.Positioned(left: x(m(day.start!)), top: 13, child: pw.Container(
         width: wd(x(m(en)) - x(m(day.start!))), height: 4,
-        decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0x591E3A8A), borderRadius: pw.BorderRadius.circular(2)))));
+        decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0xFFB1BAD6), borderRadius: pw.BorderRadius.circular(2)))));
   }
   for (final g in day.gaps(s)) {
     kids.add(pw.Positioned(left: x(m(g.from)), top: 10, child: pw.Container(
         width: wd(x(m(g.to)) - x(m(g.from))), height: 10,
-        decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0x29B91C1C),
-            border: pw.Border.all(color: const PdfColor.fromInt(0x80B91C1C), width: 0.5), borderRadius: pw.BorderRadius.circular(2)))));
+        decoration: pw.BoxDecoration(color: const PdfColor.fromInt(0xFFF4DBDB),
+            border: pw.Border.all(color: const PdfColor.fromInt(0xFFDC8E8E), width: 0.5), borderRadius: pw.BorderRadius.circular(2)))));
   }
   for (final ev in day.sorted) {
     kids.add(pw.Positioned(left: x(m(ev.at)) - 3.5, top: 11.5, child: pw.Container(width: 7, height: 7,
@@ -288,7 +294,7 @@ List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
   pw.Widget line(String t, String text, {bool gap = false, PdfColor? dot, PdfColor? color}) => pw.Container(
         padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: pw.BoxDecoration(
-          color: gap ? const PdfColor.fromInt(0x10B91C1C) : null,
+          color: gap ? const PdfColor.fromInt(0xFFFDEEEE) : null,
           border: const pw.Border(
             left: pw.BorderSide(color: _line, width: 0.5),
             right: pw.BorderSide(color: _line, width: 0.5),
@@ -330,7 +336,7 @@ List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
     if (day.routeOpen != null) ('Route open (start to end)', timDur(day.routeOpen), false),
     ('Time in gaps over ${s.gapMin} min', timDur(day.lostToGaps(s)), gaps.isNotEmpty),
     ('Stops · per hour in market', '${day.visits} · ${day.perHour.toStringAsFixed(1)}', false),
-    ('Average time per stop', timDur(day.avgPerStop(s)), false),
+    ('Average time per stop (incl. travel from last stop)', timDur(day.avgPerStop(s)), false),
     if (day.totalStops > 0) ('Planned stops not marked', '${(day.totalStops - day.visits).clamp(0, 100000)} of ${day.totalStops}', false),
     if (day.collected > 0) ('Collected', 'Rs ${money(day.collected)}', false),
   ];
