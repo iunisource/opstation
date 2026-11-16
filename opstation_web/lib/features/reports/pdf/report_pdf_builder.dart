@@ -326,12 +326,15 @@ class ReportPdfBuilder {
     final doc = pw.Document();
     final lastWeekTotal = lastWeekTotalKm ??
         rows.fold<double>(0, (s, r) => s + (r.lastWeekKm ?? 0));
+    // No last-week figures (e.g. an approved claim printed from Reimbursement
+    // Approvals) → leave the column out instead of a column of dashes.
+    final showLast = lastWeekTotalKm != null || rows.any((r) => r.lastWeekKm != null);
 
     final headers = <String>[
       'DATE',
       if (showSalesperson) 'SALESPERSON',
       'ROUTE(S)',
-      'LAST WEEK (KM)',
+      if (showLast) 'LAST WEEK (KM)',
       'DISTANCE (KM)',
     ];
     final data = <List<String>>[
@@ -343,14 +346,14 @@ class ReportPdfBuilder {
                   : (reimb?.generatedDays.contains(DateFormat('yyyy-MM-dd').format(r.date)) ?? false) ? '  *' : ''),
           if (showSalesperson) r.salesperson,
           r.routes,
-          r.lastWeekKm == null ? '-' : r.lastWeekKm!.toStringAsFixed(2),
+          if (showLast) r.lastWeekKm == null ? '-' : r.lastWeekKm!.toStringAsFixed(2),
           r.km.toStringAsFixed(2),
         ],
       [
         'TOTAL',
         if (showSalesperson) '',
         '',
-        '${lastWeekTotal.toStringAsFixed(2)} km',
+        if (showLast) '${lastWeekTotal.toStringAsFixed(2)} km',
         '${grandTotalKm.toStringAsFixed(2)} km',
       ],
       if ((reimb?.paidKm ?? 0) > 0) ...[
@@ -358,19 +361,19 @@ class ReportPdfBuilder {
           'EXCLUDED (already approved)',
           if (showSalesperson) '',
           '',
-          '',
+          if (showLast) '',
           '- ${reimb!.paidKm.toStringAsFixed(2)} km',
         ],
         [
           'TOTAL TO CLAIM',
           if (showSalesperson) '',
           '',
-          '',
+          if (showLast) '',
           '${(grandTotalKm - reimb!.paidKm).clamp(0, double.infinity).toStringAsFixed(2)} km',
         ],
       ],
     ];
-    final distIdx = showSalesperson ? 4 : 3;
+    final distIdx = (showSalesperson ? 4 : 3) - (showLast ? 0 : 1);
 
     doc.addPage(pw.MultiPage(
       pageTheme: _pageTheme(duplicate, reimb),
@@ -396,7 +399,7 @@ class ReportPdfBuilder {
             data: data,
             cellAlignment: pw.Alignment.centerLeft,
             cellAlignments: {
-              distIdx - 1: pw.Alignment.centerRight,
+              if (showLast) distIdx - 1: pw.Alignment.centerRight,
               distIdx: pw.Alignment.centerRight,
             },
             headerStyle: pw.TextStyle(
