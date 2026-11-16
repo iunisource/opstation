@@ -460,3 +460,75 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
     );
   }
 }
+
+/// Print one claim day's Trip Summary as it stands on the claim: the
+/// approver's adjustment applied (if any), allowance and Approved By.
+Future<void> printClaimTripSummary(
+  BuildContext context, {
+  required String tripId,
+  required double lineKm,
+  Map<String, dynamic>? existing,
+  double? rate,
+  double allowanceDefault = 0,
+  required String orgName,
+  String? approvedBy,
+}) async {
+  final db = Supabase.instance.client;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  try {
+    final t = await db.from('trips').select().eq('id', tripId).maybeSingle();
+    if (t == null) {
+      messenger?.showSnackBar(const SnackBar(content: Text('This trip was not found.')));
+      return;
+    }
+    messenger?.showSnackBar(const SnackBar(content: Text('Preparing the summary…'), duration: Duration(seconds: 2)));
+    final visits = List<Map<String, dynamic>>.from(
+        await db.from('visits').select().eq('trip_id', tripId).order('timestamp', ascending: true));
+    final ids = {for (final v in visits) if (v['customer_id'] != null) v['customer_id'] as String}.toList();
+    final custs = <String, Map<String, dynamic>>{};
+    for (var i = 0; i < ids.length; i += 400) {
+      final chunk = ids.sublist(i, i + 400 > ids.length ? ids.length : i + 400);
+      for (final c in await db.from('customers').select('id, shop_name, code').inFilter('id', chunk)) {
+        custs[c['id'] as String] = Map<String, dynamic>.from(c);
+      }
+    }
+    final excluded = {
+      for (final e in (existing?['excluded'] as List? ?? const [])) '${(e as Map)['visit']}',
+    };
+    final noReturn = existing?['exclude_return'] == true;
+    final places = await tripPlaceNames(Map<String, dynamic>.from(t));
+    var ctx = await TripReportContext.buildRoad(
+      trip: Map<String, dynamic>.from(t),
+      visits: visits.where((v) => !excluded.contains('${v['id']}')).toList(),
+      customersById: custs,
+      startAddress: places.$1,
+      endAddress: places.$2,
+    );
+    final adjusted = existing != null;
+    ctx = TripReportContext(
+      trip: ctx.trip, visits: ctx.visits, customersById: ctx.customersById,
+      startAddress: ctx.startAddress, endAddress: ctx.endAddress,
+      orderedVerifiedVisits: ctx.orderedVerifiedVisits, distanceKm: ctx.distanceKm,
+      returnDistanceKm: noReturn ? 0 : ctx.returnDistanceKm,
+      // The claim's figure, so the print matches what is approved.
+      totalDistanceKm: lineKm,
+      usedGoogle: ctx.usedGoogle,
+    );
+    final allow = (existing?['allowance'] as num?)?.toDouble() ?? allowanceDefault;
+    final bytes = await ReportPdfBuilder.buildTripSummary(
+      ctx: ctx,
+      orgName: orgName,
+      reimb: ReimbInfo(
+        rate: rate,
+        allowancePerDay: allow > 0 || (existing?['allowance'] != null) ? allow : null,
+        unpaidDays: 1,
+        approvedBy: approvedBy,
+      ),
+      adjustNote: adjusted ? reimbAdjustNote(existing!, reasons: false, defaultAllowance: allowanceDefault) : null,
+    );
+    await outputPdf(bytes, adjusted ? 'Trip Summary (adjusted)' : 'Trip Summary',
+        date: DateTime.tryParse('${t['started_at'] ?? ''}')?.toLocal());
+  } catch (e) {
+    messenger?.showSnackBar(SnackBar(content: Text(friendlyError('Could not print', e))));
+  }
+}

@@ -488,11 +488,22 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                     label: Text(_canApprove && (c['status'] == 'pending' || c['status'] == 'rejected')
                         ? (_adj[c['id']] != null ? 'Adjusted trip · change' : 'Adjust trip')
                         : 'Trip adjustment')),
-                if (lines.length > 1 && (_adj[c['id']]?.isNotEmpty ?? false))
+                if (lines.isNotEmpty)
                   OutlinedButton.icon(
-                    onPressed: () => _printAdjustedCombined(c),
+                    onPressed: () => lines.length > 1 || c['doc_type'] == 'combined_summary'
+                        ? _printAdjustedCombined(c)
+                        : printClaimTripSummary(
+                            context,
+                            tripId: '${lines.first['trip_id']}',
+                            lineKm: (lines.first['km'] as num?)?.toDouble() ?? 0,
+                            existing: _adj[c['id']]?['${lines.first['trip_id']}'],
+                            rate: (c['rate'] as num?)?.toDouble() ?? _rate,
+                            allowanceDefault: _allowDefault,
+                            orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+                            approvedBy: c['status'] == 'approved' || c['status'] == 'paid' ? '${c['decided_by_name'] ?? ''}' : null,
+                          ),
                     icon: const Icon(Icons.print_outlined, size: 16),
-                    label: const Text('Print adjusted Combined Summary')),
+                    label: Text((_adj[c['id']]?.isNotEmpty ?? false) ? 'Print / PDF (adjusted)' : 'Print / PDF')),
                 if (from != null)
                   OutlinedButton.icon(
                     onPressed: () => tim(from, to!),
@@ -797,11 +808,12 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
             allowancePerDay: _allowDefault > 0 ? _allowDefault : null,
             unpaidDays: atDefault,
             allowanceTotal: _allowance(c) > 0 || _allowDefault > 0 ? _allowance(c) : null,
+            approvedBy: c['status'] == 'approved' || c['status'] == 'paid' ? '${c['decided_by_name'] ?? ''}' : null,
           );
         }(),
-        adjustNote: notes.join('\n'),
+        adjustNote: notes.isEmpty ? null : notes.join('\n'),
       );
-      await outputPdf(bytes, 'Combined Trip Summary (adjusted)');
+      await outputPdf(bytes, notes.isEmpty ? 'Combined Trip Summary' : 'Combined Trip Summary (adjusted)');
     } catch (e) {
       _snack(friendlyError('Could not print', e));
     }
