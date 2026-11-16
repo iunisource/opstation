@@ -52,6 +52,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   Map<String, String> _roles = {};
   bool _loading = true, _missing = false, _canApprove = false, _canPay = false;
   double? _rate;
+  double _allowDefault = 0; // Admin Settings allowance per day (0 = none / off)
   bool _paMode = false; // Admin Settings: approving creates a Payment Advice
   String _tab = 'pending';
   String _q = '';
@@ -78,7 +79,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         _db.rpc('reimb_can_approve', params: {'p_org': org}),
         _db.rpc('reimb_can_pay', params: {'p_org': org}),
         _db.from('app_config').select('key, value, branch_id').eq('org_id', org)
-            .inFilter('key', ['org.reimb_rate_km', 'org.reimb_after_approval']),
+            .inFilter('key', ['org.reimb_rate_km', 'org.reimb_after_approval', 'org.reimb_allowance_print', 'org.reimb_allowance_day']),
         _db.from('users').select('id, role').eq('org_id', org),
       ]);
       if (!mounted) return;
@@ -113,6 +114,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         _canApprove = r[3] == true;
         _canPay = r[4] == true;
         _rate = rate != null && rate > 0 ? rate : null;
+        final ad = double.tryParse(cfg['org.reimb_allowance_day'] ?? '') ?? 0;
+        _allowDefault = cfg['org.reimb_allowance_print'] == 'false' || ad < 0 ? 0 : ad;
         _paMode = paMode;
         _roles = {for (final u in r[6] as List) '${u['id']}': '${u['role'] ?? ''}'};
         _loading = false;
@@ -162,10 +165,36 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         .fold<double>(0, (s, l) => s + ((l['km'] as num?) ?? 0).toDouble());
   }
 
+  /// The day's allowance on [c] (approver's figure, else the default), or
+  /// null when that day is already approved on another claim.
+  double? _dayAllowance(Map c, String day) {
+    final ls = (_lines[c['id']] ?? const <Map<String, dynamic>>[]).where((l) => '${l['day']}'.startsWith(day)).toList();
+    if (ls.isEmpty || ls.every((l) => _coveredBy(c, l['trip_id'] as String?) != null)) return null;
+    final adj = [
+      for (final l in ls)
+        if ((_adj[c['id']]?['${l['trip_id']}']?['allowance']) != null)
+          ((_adj[c['id']]!['${l['trip_id']}']!['allowance']) as num).toDouble(),
+    ];
+    return adj.isEmpty ? _allowDefault : adj.reduce((a, b) => a > b ? a : b);
+  }
+
+  /// Allowance of the whole claim (days not approved elsewhere).
+  double _allowance(Map c) {
+    final days = {for (final l in _lines[c['id']] ?? const <Map<String, dynamic>>[]) '${l['day']}'.substring(0, 10)};
+    return days.fold<double>(0, (s, d) => s + (_dayAllowance(c, d) ?? 0));
+  }
+
+  /// Worked out: distance × rate + allowance (null when neither is set).
+  num? _workedOut(Map c) {
+    final allow = _allowance(c);
+    if (_rate == null && allow <= 0) return null;
+    return (_unpaidKm(c) * (_rate ?? 0)).round() + allow.round();
+  }
+
   num? _amount(Map c) {
     if (c['status'] == 'paid') return c['paid_amount'] as num?;
     if (c['status'] != 'pending' && c['amount'] != null) return c['amount'] as num;
-    return _rate == null ? null : (_unpaidKm(c) * _rate!).round();
+    return _workedOut(c);
   }
 
   String _dates(Map c) {
@@ -528,6 +557,10 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                 if (_role(c).isNotEmpty) _kv('Role', _role(c)),
                 if (pe.isNotEmpty) _kv('Days to pay', '${_dayCount(lines) - _dayCount(pe)} of ${_dayCount(lines)}'),
                 _kv(pe.isNotEmpty ? 'Distance to pay' : 'Distance', pe.isNotEmpty ? _km(_unpaidKm(c)) : _km(c['km'] as num?)),
+                if ((c['status'] == 'pending' || c['status'] == 'rejected') ? _allowance(c) > 0 : ((c['allowance_amount'] as num?) ?? 0) > 0)
+                  _kv('Allowance', _rs(((c['status'] == 'pending' || c['status'] == 'rejected')
+                      ? _allowance(c)
+                      : (c['allowance_amount'] as num).toDouble()).round())),
                 _kv('Rate', rate != null ? 'Rs ${NumberFormat('#,##0.##').format(rate)} / km' : 'Not set (Admin Settings)'),
                 _kv(c['status'] == 'paid' ? 'Paid' : 'Amount', amt == null ? '—' : _rs(amt)),
                 if ((c['adjust_note'] ?? '') != '' && c['claimed_amount'] != null && c['status'] != 'pending')
@@ -602,7 +635,13 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                         Expanded(
                           child: Text.rich(TextSpan(children: [
                             TextSpan(text: note, style: TextStyle(fontSize: 11.5, color: noteColor, fontWeight: FontWeight.w600)),
-                            if (adj != null)
+                            if (!excluded && (_dayAllowance(c, '${l['day']}'.substring(0, 10)) ?? 0) + _allowDefault > 0)
+                              TextSpan(
+                                text: '${note.isEmpty ? '' : '  ·  '}allowance ${_rs((_dayAllowance(c, '${l['day']}'.substring(0, 10)) ?? 0).round())}',
+                                style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: adj?['allowance'] != null ? const Color(0xFFB91C1C) : AppTheme.textSecondary)),
+                            if (adj != null && _adjSummary(adj).isNotEmpty)
                               TextSpan(
                                 text: '${note.isEmpty ? '' : '  ·  '}Adjusted: ${_adjSummary(adj)}',
                                 style: const TextStyle(fontSize: 11.5, color: Color(0xFFB91C1C), fontWeight: FontWeight.w600)),
@@ -655,10 +694,11 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   /// "1 visit, return leg left out"
   String _adjSummary(Map a) {
     final n = (a['excluded'] as List? ?? const []).length;
-    return [
+    final parts = [
       if (n > 0) '$n visit${n == 1 ? '' : 's'}',
       if (a['exclude_return'] == true) 'return leg',
-    ].join(', ') + ' left out';
+    ];
+    return parts.isEmpty ? '' : '${parts.join(', ')} left out';
   }
 
   /// Adjust one trip of [c] (or view / print its adjustment). Closes the claim
@@ -673,6 +713,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
       lineKm: (line['km'] as num?)?.toDouble() ?? 0,
       existing: _adj[c['id']]?[tripId],
       rate: (c['rate'] as num?)?.toDouble() ?? _rate,
+      allowanceDefault: _allowDefault,
       orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
       canEdit: canEdit,
     );
@@ -724,7 +765,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
       final notes = [
         for (final l in lines)
           if (adj['${l['trip_id']}'] != null)
-            reimbAdjustNote(adj['${l['trip_id']}']!, dayLabel: _fd(l['day'], 'EEE d MMM')),
+            reimbAdjustNote(adj['${l['trip_id']}']!, dayLabel: _fd(l['day'], 'EEE d MMM'), reasons: false,
+                defaultAllowance: _allowDefault),
       ];
       final bytes = await ReportPdfBuilder.buildCombinedTripSummary(
         orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
@@ -733,7 +775,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         showSalesperson: false,
         rows: rows,
         grandTotalKm: total,
-        reimb: ReimbInfo(rate: (c['rate'] as num?)?.toDouble() ?? _rate),
+        reimb: ReimbInfo(rate: (c['rate'] as num?)?.toDouble() ?? _rate,
+            allowanceTotal: _allowance(c) > 0 || _allowDefault > 0 ? _allowance(c) : null),
         adjustNote: notes.join('\n'),
       );
       await outputPdf(bytes, 'Combined Trip Summary (adjusted)');
@@ -825,9 +868,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   /// Approve with the worked-out amount pre-filled; the approver may change it
   /// (e.g. a visit not justified) — a changed amount needs a reason.
   Future<void> _approve(Map c) async {
-    final calc = c['status'] == 'pending' || c['status'] == 'rejected'
-        ? (_rate == null ? null : (_unpaidKm(c) * _rate!).round())
-        : null;
+    final calc = c['status'] == 'pending' || c['status'] == 'rejected' ? _workedOut(c) : null;
+    final allowTotal = _allowance(c);
     final amtCtl = TextEditingController(text: calc == null ? '' : '$calc');
     final noteCtl = TextEditingController();
     String? err;
@@ -842,8 +884,12 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
             constraints: const BoxConstraints(maxWidth: 420),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(
-                '${_dates(c)} · ${_km(_unpaidKm(c))}'
-                '${calc == null ? ' · no rate per km set — enter the amount' : ' × Rs ${NumberFormat('#,##0.##').format(_rate)}/km = ${_rs(calc)}'}',
+                [
+                  '${_dates(c)} · ${_km(_unpaidKm(c))}'
+                      '${_rate == null ? '' : ' × Rs ${NumberFormat('#,##0.##').format(_rate)}/km = ${_rs((_unpaidKm(c) * _rate!).round())}'}',
+                  if (allowTotal > 0) 'Allowance ${_rs(allowTotal.round())}',
+                  calc == null ? 'No rate per km set — enter the amount' : 'Worked out ${_rs(calc)}',
+                ].join('\n'),
                 style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
               ),
               const SizedBox(height: 12),

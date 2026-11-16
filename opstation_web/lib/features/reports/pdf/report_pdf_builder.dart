@@ -213,8 +213,11 @@ class ReimbInfo {
   final double? allowancePerDay;
   /// Days on this sheet not already paid (null = all of the sheet's days).
   final int? unpaidDays;
+  /// Allowance total set by the approver (days can differ); overrides per-day × days.
+  final double? allowanceTotal;
   const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0,
-      this.excludedDays = const <String>{}, this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays});
+      this.excludedDays = const <String>{}, this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays,
+      this.allowanceTotal});
 }
 
 class ReportPdfBuilder {
@@ -1003,7 +1006,11 @@ class ReportPdfBuilder {
     // Allowance per day (Admin Settings): days not already approved × allowance.
     final perDay = r?.allowancePerDay;
     final allowDays = r?.unpaidDays ?? days;
-    final allow = perDay == null || nothing ? null : (allowDays * perDay).round();
+    final allow = nothing
+        ? null
+        : r?.allowanceTotal != null
+            ? r!.allowanceTotal!.round()
+            : perDay == null ? null : (allowDays * perDay).round();
     final total = amt == null || allow == null ? null : amt + allow;
     final rows = <pw.Widget>[
       _reimbRow('Total Distance', '${km.toStringAsFixed(2)} km'),
@@ -1016,7 +1023,11 @@ class ReportPdfBuilder {
       // Not set in settings → blank to fill in by hand.
       _reimbRow('Other Allowances', nothing
           ? 'Nothing to claim'
-          : allow == null ? '' : 'Rs ${f.format(allow)}  ($allowDays day${allowDays == 1 ? '' : 's'} × Rs ${f2.format(perDay)})'),
+          : allow == null
+              ? ''
+              : r?.allowanceTotal != null || perDay == null
+                  ? 'Rs ${f.format(allow)}'
+                  : 'Rs ${f.format(allow)}  ($allowDays day${allowDays == 1 ? '' : 's'} × Rs ${f2.format(perDay)})'),
       _reimbRow('Total Amount', nothing ? 'Nothing to claim' : total == null ? '' : 'Rs ${f.format(total)}'),
       _reimbRow('Approved By', r?.approvedBy ?? ''),
     ];
