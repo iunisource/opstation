@@ -696,7 +696,7 @@ class _TimDayDetailState extends State<TimDayDetail> {
           border: const Border(bottom: BorderSide(color: AppTheme.border)),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SizedBox(width: 46, child: Text(t, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+          SizedBox(width: 70, child: Text(t, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           if (dot != null) ...[
             Padding(padding: const EdgeInsets.only(top: 4, right: 6),
                 child: Container(width: 8, height: 8, decoration: BoxDecoration(color: dot, shape: BoxShape.circle))),

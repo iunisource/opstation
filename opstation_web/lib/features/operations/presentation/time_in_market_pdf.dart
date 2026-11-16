@@ -303,7 +303,7 @@ List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
           ),
         ),
         child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-          pw.SizedBox(width: 30, child: pw.Text(t, style: const pw.TextStyle(fontSize: 8, color: _muted))),
+          pw.SizedBox(width: 42, child: pw.Text(t, style: const pw.TextStyle(fontSize: 8, color: _muted))),
           if (dot != null) pw.Padding(padding: const pw.EdgeInsets.only(top: 2.5, right: 5), child: _dot(dot, size: 5.5)),
           pw.Expanded(child: pw.Text(text, style: pw.TextStyle(fontSize: 8.2,
               fontWeight: gap ? pw.FontWeight.bold : null, color: gap ? _red : color))),
