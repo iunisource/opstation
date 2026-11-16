@@ -149,6 +149,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   Future<void> _clearSupervision() async {
     if (!_isAdmin) return;
     final id = _current?['id'] as String?; if (id == null) return;
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('Clear supervision?'),
+      content: const Text('Remove the supervised mark on this JV? This does not affect the ledger.'),
+      actions: [TextButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(false), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(context, rootNavigator: true).pop(true), child: const Text('Clear'))],
+    ));
+    if (ok != true) return;
     try {
       await Supabase.instance.client.from('journal_entries').update({
         'supervised_by': null, 'supervised_at': null, 'supervised_by_name': null,
@@ -164,39 +171,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
 
-  Widget _jvSuperviseBlock() {
-    final supervisedAt = _current?['supervised_at'] as String?;
-    final by = _current?['supervised_by_name'] as String?;
-    if (supervisedAt != null) {
-      String when = supervisedAt;
-      try { when = DateFormat('d MMM yyyy').format(DateTime.parse(supervisedAt).toLocal()); } catch (_) {}
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(color: Colors.green.withOpacity(0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.green.withOpacity(0.35))),
-        child: Row(children: [
-          const Icon(Icons.verified_user, size: 16, color: Colors.green),
-          const SizedBox(width: 8),
-          Expanded(child: Text('Supervised${by != null && by.isNotEmpty ? ' by $by' : ''} · $when', style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w600))),
-          if (_isAdmin) TextButton(onPressed: _clearSupervision, child: const Text('Clear', style: TextStyle(fontSize: 12))),
-        ]),
-      );
-    }
-    if (!_isAdmin) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
-        child: const Row(children: [
-          Icon(Icons.verified_user_outlined, size: 15, color: Colors.orange), SizedBox(width: 8),
-          Text('Awaiting supervision', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-        ]),
-      );
-    }
-    return OutlinedButton.icon(
-      onPressed: _superviseBusy ? null : _supervise,
-      icon: _superviseBusy ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.verified_user_outlined, size: 16),
-      label: const Text('Supervise', style: TextStyle(fontSize: 12)),
-    );
-  }
+
 
   // Cold-refresh access fix: currentUserProvider can populate without notifying
   // accessProvider's watch, so accessProvider stays parked on its first (null-user)
@@ -1088,6 +1063,34 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
               const Tooltip(message: 'This JV was posted before. With void flow on it can\'t be deleted — post it again, then use Void.',
                 child: Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Icon(Icons.info_outline, size: 18, color: Colors.orange))),
             const SizedBox(width: 8),
+            // Supervise sits in the header, same as GRN / PI / SI.
+            if (_jvSuperviseFlow && _current != null && !_isVoided) ...[
+              if (_current!['supervised_at'] == null) ...[
+                if (_isAdmin)
+                  OutlinedButton.icon(
+                    icon: _superviseBusy
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                    label: const Text('Supervise', style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                    onPressed: _superviseBusy ? null : _supervise)
+                else
+                  const Tooltip(message: 'Awaiting supervision',
+                      child: Icon(Icons.verified_user_outlined, size: 18, color: Colors.orange)),
+              ] else
+                Tooltip(
+                  message: [
+                    if ('${_current!['supervised_by_name'] ?? ''}'.isNotEmpty) 'By ${_current!['supervised_by_name']}',
+                    if (DateTime.tryParse('${_current!['supervised_at']}') != null)
+                      DateFormat('d MMM yyyy').format(DateTime.parse('${_current!['supervised_at']}').toLocal()),
+                  ].join(' · '),
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                    label: const Text('Supervised', style: TextStyle(color: AppTheme.success, fontSize: 12)),
+                    onPressed: _isAdmin ? _clearSupervision : null),
+                ),
+              const SizedBox(width: 8),
+            ],
             if (!_isLocked && canWrite) ...[
               OutlinedButton(onPressed: _saving ? null : () => _save(post: false), child: const Text('Save Draft', style: TextStyle(fontSize: 12))),
               const SizedBox(width: 8),
@@ -1220,10 +1223,6 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
                   style: TextStyle(fontSize: 12, color: Colors.orange.shade900, fontWeight: FontWeight.w600))),
               ]),
             ),
-          ],
-          if (_jvSuperviseFlow && _current != null) ...[
-            const SizedBox(height: 20),
-            _jvSuperviseBlock(),
           ],
           // Support documents show under EITHER review flow (supervision or approval).
           if (_jvSuperviseFlow || _jvApproveFlow) ...[
