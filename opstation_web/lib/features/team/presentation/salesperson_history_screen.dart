@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 class SalespersonHistoryScreen extends ConsumerStatefulWidget {
   final String userId;
@@ -380,7 +381,7 @@ class _TripCard extends StatelessWidget {
     final closeReason = trip['close_reason'] as String?;
     final isActive = endedAt == null;
     final dfDate = DateFormat('d MMM y');
-    final dfTime = DateFormat('HH:mm');
+    final dfTime = DateFormat(orgTime('HH:mm'));
     final amount =
         visits.fold<int>(0, (s, v) => s + ((v['amount'] as int?) ?? 0));
     final verifiedCount =
@@ -605,7 +606,7 @@ class _VisitRow extends StatelessWidget {
                 ]),
                 const SizedBox(height: 4),
                 if (ts != null)
-                  Text(DateFormat('HH:mm · d MMM').format(ts),
+                  Text(DateFormat(orgTime('HH:mm · d MMM')).format(ts),
                       style: const TextStyle(
                           fontSize: 11, color: AppTheme.textSecondary)),
                 if (lat != null && lng != null) ...[

@@ -17,6 +17,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart' show assetsDueCountProvider, assetSupervisePendingProvider, assetSuggestionCountProvider;
 import '../../erp/services/asset_pdf.dart';
+import '../../../core/format/time_format.dart';
 
 /// Public asset page (static, Firebase-hosted). The QR encodes
 /// "$_kAssetViewBase?t=<public_token>"; the page fetches the asset-view
@@ -388,7 +389,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
 
   String _when(dynamic ts) {
     final d = DateTime.tryParse('${ts ?? ''}');
-    return d == null ? '' : DateFormat('d MMM y, h:mm a').format(d.toLocal());
+    return d == null ? '' : DateFormat(orgTime('d MMM y, h:mm a')).format(d.toLocal());
   }
 
   Future<void> _supervise(List<String> ids) async {
@@ -713,7 +714,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
           '${parts.isEmpty ? '' : '  ·  ${parts.join('  ·  ')}'}'
           '${(h['note'] as String?)?.isNotEmpty == true ? '  —  ${h['note']}' : ''}';
       final whenStr = [
-        if (when != null) DateFormat('d MMM y, h:mm a').format(when),
+        if (when != null) DateFormat(orgTime('d MMM y, h:mm a')).format(when),
         if (h['performed_by'] != null)
           'by ${_userNames[h['performed_by']] ?? '—'}',
       ].join('  ·  ');
@@ -2321,7 +2322,7 @@ class _ErpAssetsScreenState extends ConsumerState<ErpAssetsScreen> {
                         fontSize: 12, color: AppTheme.textSecondary)),
               Text(
                 [
-                  if (when != null) DateFormat('d MMM y, h:mm a').format(when),
+                  if (when != null) DateFormat(orgTime('d MMM y, h:mm a')).format(when),
                   if (h['performed_by'] != null)
                     'by ${_userNames[h['performed_by']] ?? '—'}',
                 ].join('  ·  '),

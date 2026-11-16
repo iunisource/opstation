@@ -14,6 +14,7 @@ import '../widgets/voucher_docs_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 /// Sales Return Invoice (SRI) — Stage 2 of sales return flow.
 /// Created from a confirmed SRN. User sets price + discount per item.
@@ -777,7 +778,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
             const SizedBox(width: 8),
             Expanded(child: Text(
               _detail['supervised_at'] != null
-                  ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
+                  ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
                   : (_isAdmin
                       ? 'Awaiting supervision. Review this invoice, then tap "Supervise" above. (Non-blocking — it posts regardless.)'
                       : 'Awaiting admin supervision. This does not block posting.'),
@@ -980,7 +981,7 @@ class _SriAuditTrail extends StatelessWidget {
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final a = e['action'] as String? ?? '-'; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final d = e['details'] as String? ?? ''; Color color; switch (a) { case 'created': color = AppTheme.primary; break; case 'issued': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(a, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (d.isNotEmpty) Text(d, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            ...entries.map((e) { final a = e['action'] as String? ?? '-'; final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final d = e['details'] as String? ?? ''; Color color; switch (a) { case 'created': color = AppTheme.primary; break; case 'issued': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(a, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (d.isNotEmpty) Text(d, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
           ]));
       });
   }

@@ -193,7 +193,7 @@ class _State extends ConsumerState<TimeInMarketScreen> {
               : OutlinedButton.icon(onPressed: _loading || list.isEmpty ? null : _print,
                   icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
         ]),
-        Text('How each salesperson\'s and driver\'s day was spent · day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)}, '
+        Text('How each salesperson\'s and driver\'s day was spent · day ${TimSettings.clock(s.dayStart)}–${TimSettings.clock(s.dayEnd)}, '
             'gaps over ${s.gapMin} min flagged',
             style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
         const SizedBox(height: 12),

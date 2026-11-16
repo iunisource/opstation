@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/time_format.dart';
 
 /// Confirm page behind the Approve / Reject buttons in a PO or Payment Advice
 /// notification email:  https://<app>/#/act/<token>?a=approve|reject
@@ -144,7 +145,7 @@ class _EmailActionScreenState extends State<EmailActionScreen> {
   static String _dt(Object? v, {bool time = true}) {
     final d = DateTime.tryParse('${v ?? ''}');
     if (d == null) return '—';
-    return DateFormat(time ? 'd MMM yyyy, HH:mm' : 'd MMM yyyy').format(d.toLocal());
+    return DateFormat(time ? orgTime('d MMM yyyy, HH:mm') : 'd MMM yyyy').format(d.toLocal());
   }
 
   bool get _isPo => _doc?['kind'] == 'po';

@@ -8,6 +8,7 @@ import 'package:opstation_web/core/utils/visit_outcome.dart';
 
 import '../../../core/format/money.dart';
 import '../../../core/utils/route_distances.dart';
+import '../../../core/format/time_format.dart';
 
 /// Web port of mobile's TripReportContext.
 /// Pre-computed data for a trip report. [build] uses straight lines;
@@ -522,7 +523,7 @@ class ReportPdfBuilder {
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
               pw.Text(
-                  '$orgName - $title - Generated ${DateFormat('MMM d, y HH:mm').format(DateTime.now())}',
+                  '$orgName - $title - Generated ${DateFormat(orgTime('MMM d, y HH:mm')).format(DateTime.now())}',
                   style: pw.TextStyle(fontSize: 8, color: _muted)),
               pw.Text('Page ${c.pageNumber} of ${c.pagesCount}',
                   style: pw.TextStyle(fontSize: 8, color: _muted)),
@@ -562,10 +563,10 @@ class ReportPdfBuilder {
     final endLat = (trip['end_lat'] as num?)?.toDouble();
     final endLng = (trip['end_lng'] as num?)?.toDouble();
 
-    final startTime = DateFormat('hh:mm a - MMM d, y').format(startedAt);
+    final startTime = DateFormat(orgTime('hh:mm a - MMM d, y')).format(startedAt);
     final endTime = endedAt == null
         ? 'In progress'
-        : DateFormat('hh:mm a - MMM d, y').format(endedAt);
+        : DateFormat(orgTime('hh:mm a - MMM d, y')).format(endedAt);
     final startLoc = startAddr ?? _coordsOrDash(startLat, startLng);
     final endLoc = endAddr ?? _coordsOrDash(endLat, endLng);
 
@@ -763,7 +764,7 @@ class ReportPdfBuilder {
         _outcomeTag(status, collected, v),
         status == 'pending' ? '-' : '$collected',
         receipts.isEmpty ? '-' : receipts.join(', '),
-        DateFormat('hh:mm a').format((lines[i]['first_at'] as DateTime).toLocal()),
+        DateFormat(orgTime('hh:mm a')).format((lines[i]['first_at'] as DateTime).toLocal()),
         _notesFor(status, v),
       ]);
     }
@@ -915,7 +916,7 @@ class ReportPdfBuilder {
         (c?['code'] as String?) ?? '-',
         (c?['shop_name'] as String?) ?? '-',
         km.toStringAsFixed(2),
-        DateFormat('hh:mm a')
+        DateFormat(orgTime('hh:mm a'))
             .format(DateTime.parse(v['timestamp'] as String).toLocal()),
       ]);
     }
@@ -928,7 +929,7 @@ class ReportPdfBuilder {
         ctx.returnDistanceKm.toStringAsFixed(2),
         ctx.trip['ended_at'] == null
             ? '-'
-            : DateFormat('hh:mm a').format(
+            : DateFormat(orgTime('hh:mm a')).format(
                 DateTime.parse(ctx.trip['ended_at'] as String).toLocal()),
       ]);
     }

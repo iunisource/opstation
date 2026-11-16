@@ -8,6 +8,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Sale vs Recovery — one row per Salesman × Market (route).
 ///
@@ -555,7 +556,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
     b.write('<div class="sign"><div>Prepared by${_userLabel.isEmpty ? '' : ' — ${_esc(_userLabel)}'}</div><div>Checked by</div><div>Approved by</div></div>');
     b.write('<div class="foot"><span>Total counts each customer once (a customer on two markets appears in both rows).'
         ' Recovery/Receivable % = Recovery ÷ (Opening + Sale).</span>'
-        '<span>Printed ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}</span></div>');
+        '<span>Printed ${DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now())}</span></div>');
     b.write('</body></html>');
     final doc = b.toString();
     try {

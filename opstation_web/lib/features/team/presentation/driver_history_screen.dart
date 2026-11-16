@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 class DriverHistoryScreen extends ConsumerStatefulWidget {
   final String userId;
@@ -357,7 +358,7 @@ class _DeliveryCard extends StatelessWidget {
         : null;
     final createdBy = delivery['created_by_name'] as String? ?? '—';
     final dfDate = DateFormat('d MMM y');
-    final dfTime = DateFormat('HH:mm');
+    final dfTime = DateFormat(orgTime('HH:mm'));
 
     final delivered =
         stops.where((s) => s['status'] == 'delivered').length;
@@ -608,7 +609,7 @@ class _StopRow extends StatelessWidget {
                 ],
                 if (deliveredAt != null) ...[
                   const SizedBox(height: 4),
-                  Text(DateFormat('HH:mm · d MMM').format(deliveredAt),
+                  Text(DateFormat(orgTime('HH:mm · d MMM')).format(deliveredAt),
                       style: const TextStyle(
                           fontSize: 11,
                           color: AppTheme.textSecondary)),

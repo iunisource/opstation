@@ -13,6 +13,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import '../../../core/format/time_format.dart';
 
 /// Field Orders review queue. Salespeople submit orders from the mobile app;
 /// an admin reviews here, may edit qty / remove / add lines, then Approves
@@ -493,16 +494,16 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
         ? ['Submitted', 'Customer', 'Salesperson', '$status by', 'On', _filter == 'approved' ? 'SO #' : 'Reason']
         : ['Submitted', 'Customer', 'Salesperson', 'Notes'];
     final rows = _orders.map((o) {
-      final sub = o['submitted_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '-';
+      final sub = o['submitted_at'] != null ? DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '-';
       final cust = _custNames[o['customer_id']] ?? '-';
       final sp = _spNames[o['salesperson_id']] ?? '-';
       if (!reviewed) return [sub, cust, sp, (o['notes'] as String?) ?? ''];
       if (_filter == 'cancelled') {
-        final on = o['cancelled_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['cancelled_at'] as String).toLocal()) : '-';
+        final on = o['cancelled_at'] != null ? DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.parse(o['cancelled_at'] as String).toLocal()) : '-';
         return [sub, cust, sp, sp, on, (o['cancel_reason'] as String?) ?? ''];
       }
       final by = _spNames[o['reviewed_by']] ?? '-';
-      final on = o['reviewed_at'] != null ? DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal()) : '-';
+      final on = o['reviewed_at'] != null ? DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.parse(o['reviewed_at'] as String).toLocal()) : '-';
       final last = _filter == 'rejected'
           ? ((o['reject_reason'] as String?) ?? '')
           : (soNums[o['sales_order_id']] ?? '-');
@@ -519,7 +520,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       footer: (ctx) => pw.Padding(padding: const pw.EdgeInsets.only(top: 8),
         child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
           pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
-          pw.Text('Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+          pw.Text('Generated ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now())}', style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
         ])),
       build: (ctx) => [
         pw.Text('Field Orders - $status$rangeLabel', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
@@ -628,7 +629,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
       itemBuilder: (_, i) {
         final o = _orders[i];
         final sel = _selected?['id'] == o['id'];
-        final when = o['submitted_at'] != null ? DateFormat('d MMM, HH:mm').format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '';
+        final when = o['submitted_at'] != null ? DateFormat(orgTime('d MMM, HH:mm')).format(DateTime.parse(o['submitted_at'] as String).toLocal()) : '';
         return InkWell(onTap: () => _openOrder(o), borderRadius: BorderRadius.circular(10), child: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(color: sel ? AppTheme.primary.withOpacity(0.06) : Colors.white,
@@ -671,7 +672,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
               child: Text(
                 '${o['status'] == 'approved' ? 'Approved' : 'Rejected'} by '
                 '${_spNames[o['reviewed_by']] ?? '—'} · '
-                '${DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['reviewed_at'] as String).toLocal())}',
+                '${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.parse(o['reviewed_at'] as String).toLocal())}',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: o['status'] == 'approved' ? AppTheme.success : AppTheme.danger),
               ),
@@ -680,7 +681,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
               padding: const EdgeInsets.only(top: 3),
               child: Text(
                 'Cancelled by the salesperson'
-                '${o['cancelled_at'] != null ? ' · ${DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(o['cancelled_at'] as String).toLocal())}' : ''}'
+                '${o['cancelled_at'] != null ? ' · ${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.parse(o['cancelled_at'] as String).toLocal())}' : ''}'
                 '${(o['cancel_reason'] as String?)?.isNotEmpty == true ? ' · ${o['cancel_reason']}' : ''}',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
               ),
@@ -689,7 +690,7 @@ class _ErpFieldOrdersScreenState extends ConsumerState<ErpFieldOrdersScreen> {
               padding: const EdgeInsets.only(top: 3),
               child: Text(
                 'Changed by the salesperson after sending'
-                '${o['edited_at'] != null ? ' · last on ${DateFormat('d MMM, HH:mm').format(DateTime.parse(o['edited_at'] as String).toLocal())}' : ''}',
+                '${o['edited_at'] != null ? ' · last on ${DateFormat(orgTime('d MMM, HH:mm')).format(DateTime.parse(o['edited_at'] as String).toLocal())}' : ''}',
                 style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textSecondary),
               ),
             ),

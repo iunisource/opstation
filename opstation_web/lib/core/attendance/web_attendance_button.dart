@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/auth_controller.dart';
 import '../theme/app_theme.dart';
 import '../utils/friendly_error.dart';
+import '../format/time_format.dart';
 
 /// Top-bar attendance button for ERP users (SQL 460, Admin Settings →
 /// "Web check-in on office Wi-Fi").
@@ -211,7 +212,7 @@ class _WebAttendanceButtonState extends ConsumerState<WebAttendanceButton> with 
   static String _fmt(String? hhmm) {
     final m = _min(hhmm);
     if (m == null) return hhmm ?? '';
-    return DateFormat('h:mm a').format(DateTime(2000, 1, 1, m ~/ 60, m % 60));
+    return DateFormat(orgTime('h:mm a')).format(DateTime(2000, 1, 1, m ~/ 60, m % 60));
   }
 
   String _worked() {
@@ -349,7 +350,7 @@ class _WebAttendanceButtonState extends ConsumerState<WebAttendanceButton> with 
               child: Text(shiftLine, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
         netChip(),
         const SizedBox(height: 10),
-        Text(DateFormat('h:mm a').format(DateTime.now()),
+        Text(DateFormat(orgTime('h:mm a')).format(DateTime.now()),
             style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: -0.5)),
         const SizedBox(height: 10),
         if (_in == null) ...[

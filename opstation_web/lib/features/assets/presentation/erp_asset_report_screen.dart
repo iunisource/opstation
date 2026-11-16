@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Asset Report (Management ▸ Asset Report, permission /assets/report).
 /// Search + filter the register by category, custodian, condition, branch and
@@ -383,7 +384,7 @@ class _State extends ConsumerState<ErpAssetReportScreen> {
 
   void _print(List<Map<String, dynamic>> rows) {
     final org = ref.read(currentUserProvider)?.orgName ?? '';
-    final gen = DateFormat('d MMM yyyy, HH:mm').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.now());
     final filters = <String>[
       if (_search.text.trim().isNotEmpty) 'Search: “${_search.text.trim()}”',
       if (_fCat != 'all') 'Category: ${_cat[_fCat] ?? _fCat}',

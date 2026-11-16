@@ -16,6 +16,7 @@ import 'package:printing/printing.dart' show networkImage;
 import '../pdf/payment_advice_pdf.dart';
 import '../../../core/pdf/pdf_output.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 /// Payment Advice — a non-financial processing slip listing parties to pay,
 /// their bank details, amount due and amount to be paid, with a grand total.
@@ -2123,7 +2124,7 @@ class _ErpPaymentAdviceScreenState
         ref.read(currentUserProvider)?.name ??
         '—';
     final createdAt = a?['created_at'] != null
-        ? DateFormat('d MMM yyyy, HH:mm')
+        ? DateFormat(orgTime('d MMM yyyy, HH:mm'))
             .format(DateTime.tryParse(a!['created_at'] as String)!.toLocal())
         : '—';
     final status = (a?['status'] as String?) ?? 'approved';
@@ -2134,7 +2135,7 @@ class _ErpPaymentAdviceScreenState
     final approvedBy = (a?['approved_by_name'] as String?) ??
         (isApproved ? createdBy : null);
     final approvedAt = a?['approved_at'] != null
-        ? DateFormat('d MMM yyyy, HH:mm')
+        ? DateFormat(orgTime('d MMM yyyy, HH:mm'))
             .format(DateTime.tryParse(a!['approved_at'] as String)!.toLocal())
         : (isApproved ? createdAt : null);
     final vertical = MediaQuery.of(context).size.width < 600;
@@ -2185,7 +2186,7 @@ class _ErpPaymentAdviceScreenState
               'REJECTED BY',
               (a?['rejected_by_name'] as String?) ?? '—',
               a?['rejected_at'] != null
-                  ? DateFormat('d MMM yyyy, HH:mm').format(
+                  ? DateFormat(orgTime('d MMM yyyy, HH:mm')).format(
                       DateTime.tryParse(a!['rejected_at'] as String)!.toLocal())
                   : '—')
         else
@@ -2788,7 +2789,7 @@ class _PaAuditTrail extends StatelessWidget {
                         Text(
                           r['performed_at'] == null
                               ? ''
-                              : DateFormat('d MMM yyyy, HH:mm').format(
+                              : DateFormat(orgTime('d MMM yyyy, HH:mm')).format(
                                   DateTime.parse(r['performed_at'] as String).toLocal()),
                           style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
                         ),

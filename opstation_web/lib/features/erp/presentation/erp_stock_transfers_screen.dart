@@ -13,6 +13,7 @@ import '../services/voucher_pdf.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 String _stStatusLabel(String s) {
   switch (s) {
@@ -1604,7 +1605,7 @@ class _StockTransferVoucherScreenState
   String? _fmtDT(String? iso) {
     if (iso == null) return null;
     final d = DateTime.tryParse(iso);
-    return d == null ? null : DateFormat('d MMM yyyy HH:mm').format(d.toLocal());
+    return d == null ? null : DateFormat(orgTime('d MMM yyyy HH:mm')).format(d.toLocal());
   }
 
   Future<void> _printTransfer() async {

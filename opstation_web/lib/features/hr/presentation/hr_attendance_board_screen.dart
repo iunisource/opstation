@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Attendance Board — an Andon-style visual-management display for an executive
 /// or floor wall screen. Each employee is a card whose colour signals state at
@@ -218,7 +219,7 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
             )),
           )
         : null;
-    final updated = Text('Updated ${DateFormat('h:mm:ss a').format(_lastRefresh)}', style: const TextStyle(color: Colors.white38, fontSize: 12));
+    final updated = Text('Updated ${DateFormat(orgTime('h:mm:ss a')).format(_lastRefresh)}', style: const TextStyle(color: Colors.white38, fontSize: 12));
     final actionBtns = Row(mainAxisSize: MainAxisSize.min, children: [
       _ghostBtn(Icons.refresh, () => _load()),
       const SizedBox(width: 6),

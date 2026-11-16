@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import '../../../core/format/time_format.dart';
 
 /// One party row on a Payment Advice slip.
 class PaymentAdvicePdfLine {
@@ -91,7 +92,7 @@ class PaymentAdvicePdf {
 
     final doc = pw.Document(title: 'Payment Advice $adviceNumber', theme: theme);
     final dFmt = DateFormat('d MMM yyyy');
-    final dtFmt = DateFormat('d MMM yyyy, HH:mm');
+    final dtFmt = DateFormat(orgTime('d MMM yyyy, HH:mm'));
     final dShort = DateFormat('d MMM yy');
 
     pw.Widget cell(String t,

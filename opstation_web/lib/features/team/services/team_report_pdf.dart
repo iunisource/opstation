@@ -4,6 +4,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:opstation_web/core/utils/visit_outcome.dart';
 import 'package:printing/printing.dart';
+import '../../../core/format/time_format.dart';
 
 /// Team report PDFs — same design language as IntelligencePdfService:
 /// org header bar with title + date, grey bordered tables, page footer.
@@ -56,7 +57,7 @@ class TeamReportPdf {
     final pdf = pw.Document();
     final theme = await _loadTheme();
     final df = DateFormat('d MMM yyyy');
-    final tf = DateFormat('HH:mm');
+    final tf = DateFormat(orgTime('HH:mm'));
     final totAmt = rows.fold<int>(0, (s, r) => s + ((r['amount'] as int?) ?? 0));
     pdf.addPage(
       pw.MultiPage(
@@ -150,7 +151,7 @@ class TeamReportPdf {
     final pdf = pw.Document();
     final theme = await _loadTheme();
     final df = DateFormat('d MMM yyyy');
-    final tf = DateFormat('HH:mm');
+    final tf = DateFormat(orgTime('HH:mm'));
 
     final started = trip['started_at'] != null
         ? DateTime.parse(trip['started_at'] as String).toLocal()

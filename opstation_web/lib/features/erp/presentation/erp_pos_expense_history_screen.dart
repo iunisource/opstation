@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpPosExpenseHistoryScreen extends ConsumerStatefulWidget {
   const ErpPosExpenseHistoryScreen({super.key});
@@ -141,7 +142,7 @@ class _ErpPosExpenseHistoryScreenState extends ConsumerState<ErpPosExpenseHistor
                   final note = e['note'] as String? ?? '-';
                   final branch = e['pos_sessions']?['branches']?['name'] as String? ?? '-';
                   final cashier = e['users']?['name'] as String? ?? '-';
-                  final ts = e['created_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
+                  final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
                   return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
                     Expanded(flex: 2, child: Text(ts, style: const TextStyle(fontSize: 12))),
                     Expanded(flex: 2, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.red.shade100)), child: Text(cat, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.red.shade700)))),

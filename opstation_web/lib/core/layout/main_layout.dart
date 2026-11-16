@@ -30,6 +30,7 @@ import '../../features/billing/presentation/trial_banner.dart';
 import 'erp_global_search.dart';
 import 'screen_settings_gear.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
+import 'package:opstation_web/core/format/time_format.dart';
 
 // ─── Providers ────────────────────────────────────────────────────────────────
 
@@ -1156,6 +1157,13 @@ Widget _navLayoutToggle(WidgetRef ref, NavLayout current) {
   );
 }
 
+/// The org's clock format (Admin Settings → 24-hour time), read once per org.
+final orgTimeFormatProvider = FutureProvider<bool>((ref) async {
+  final org = ref.watch(currentUserProvider)?.orgId;
+  await OrgTimeFormat.load(org, force: true);
+  return OrgTimeFormat.use24;
+});
+
 class MainLayout extends ConsumerStatefulWidget {
   final Widget child;
   const MainLayout({super.key, required this.child});
@@ -1191,7 +1199,9 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
-    if (auth.isLoading) {
+    // Times everywhere follow the org's clock format, so read it first.
+    final timeFmt = ref.watch(orgTimeFormatProvider);
+    if (auth.isLoading || (timeFmt.isLoading && !timeFmt.hasValue)) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final user = auth.valueOrNull;

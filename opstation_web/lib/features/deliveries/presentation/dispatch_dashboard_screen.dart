@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../fleet/vehicle_profile.dart';
+import '../../../core/format/time_format.dart';
 
 /// Logistics → Dispatch Dashboard.
 ///  • Every driver on a map (truck icon) at their latest delivery location.
@@ -266,7 +267,7 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
   static String _money(num? v) => 'Rs ${NumberFormat('#,##0').format(v ?? 0)}';
   static String _time(dynamic v) {
     final d = DateTime.tryParse('${v ?? ''}');
-    return d == null ? '' : DateFormat('h:mm a').format(d.toLocal());
+    return d == null ? '' : DateFormat(orgTime('h:mm a')).format(d.toLocal());
   }
 
   static String _stopLabel(Map<String, dynamic> st) {

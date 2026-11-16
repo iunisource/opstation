@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Audit status of a surveyed shop (SQL 441), shown on the Placement Audit and
 /// Competitor Spotting screens: the auditor's latest audit compared with the
@@ -141,7 +142,7 @@ class SurveyAuditIndex {
     return Tooltip(
       message: latest == null
           ? 'No audit yet'
-          : '${latest['auditor_name'] ?? 'Auditor'} · ${when == null ? '' : DateFormat('d MMM yyyy, h:mm a').format(when)}'
+          : '${latest['auditor_name'] ?? 'Auditor'} · ${when == null ? '' : DateFormat(orgTime('d MMM yyyy, h:mm a')).format(when)}'
               '${flagged ? ' · location flagged' : ''}${list.length > 1 ? ' · ${list.length} audits' : ''}',
       child: InkWell(
         borderRadius: BorderRadius.circular(5),
@@ -293,7 +294,7 @@ class _TrailDialogState extends State<_TrailDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final df = DateFormat('d MMM yyyy, h:mm a');
+    final df = DateFormat(orgTime('d MMM yyyy, h:mm a'));
     return AlertDialog(
       title: Text('Audit trail · ${widget.shopName}'),
       content: SizedBox(

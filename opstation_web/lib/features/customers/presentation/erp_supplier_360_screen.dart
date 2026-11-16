@@ -15,6 +15,7 @@ import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../../core/pdf/price_list_pdf.dart';
+import '../../../core/format/time_format.dart';
 
 /// Supplier Profile (Supplier 360) — the purchase-side mirror of Customer 360.
 ///  • Overview   : contact card, outstanding payable, purchase summary
@@ -772,7 +773,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
       partyLabel: 'Supplier',
       partyName: _name,
       priceLabel: 'Purchase Price',
-      genTime: DateFormat('d MMM y · h:mm a').format(now),
+      genTime: DateFormat(orgTime('d MMM y · h:mm a')).format(now),
       rows: [
         for (final r in _prices)
           PriceListRow(
@@ -850,7 +851,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                             style: TextStyle(fontWeight: FontWeight.w700,
                                 color: isLatest ? AppTheme.primary : null)),
                         subtitle: Text([
-                          if (at != null) DateFormat('d MMM y · h:mm a').format(at),
+                          if (at != null) DateFormat(orgTime('d MMM y · h:mm a')).format(at),
                           if (who.isNotEmpty) 'by $who',
                           if (note.isNotEmpty) note,
                         ].join('  ·  '), style: const TextStyle(fontSize: 12)),
@@ -1390,7 +1391,7 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
                     ],
                     const SizedBox(height: 8),
                     Row(children: [
-                      Text(created == null ? '' : DateFormat('d MMM y, h:mm a').format(created.toLocal()), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      Text(created == null ? '' : DateFormat(orgTime('d MMM y, h:mm a')).format(created.toLocal()), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                       const Spacer(),
                       if (open) TextButton(onPressed: () => _resolveComplaint(c), child: const Text('Mark resolved')),
                     ]),

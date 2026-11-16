@@ -9,6 +9,7 @@ import '../../../core/share/share_file.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../../../core/pdf/rtl_text_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/time_format.dart';
 
 /// Shared PDF generator for ERP vouchers (SO, DO, SI, PO, GRN, PI, etc.)
 class VoucherPdf {
@@ -619,7 +620,7 @@ class VoucherPdf {
         child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
           pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',
               style: pw.TextStyle(fontSize: 9, color: _muted)),
-          pw.Text('Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}',
+          pw.Text('Generated ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now())}',
               style: pw.TextStyle(fontSize: 9, color: _muted)),
         ]),
       ),

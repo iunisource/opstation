@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart' show receiptSlipPendingProvider;
+import '../../../core/format/time_format.dart';
 
 /// Reports → Receipt Books (SQL 411).
 ///
@@ -629,7 +630,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
 
   String _fmt(Object? iso) {
     final t = DateTime.tryParse('${iso ?? ''}');
-    return t == null ? '' : DateFormat('d MMM yyyy, h:mm a').format(t.toLocal());
+    return t == null ? '' : DateFormat(orgTime('d MMM yyyy, h:mm a')).format(t.toLocal());
   }
 
   // ── UI ─────────────────────────────────────────────────────────────────────

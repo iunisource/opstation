@@ -8,6 +8,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Financials → Duplicate References (SQL 406).
 ///
@@ -26,7 +27,7 @@ class ErpDuplicateRefsScreen extends ConsumerStatefulWidget {
 class _State extends ConsumerState<ErpDuplicateRefsScreen> {
   SupabaseClient get _db => Supabase.instance.client;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
-  final _dtf = DateFormat('d MMM yyyy, h:mm a');
+  final _dtf = DateFormat(orgTime('d MMM yyyy, h:mm a'));
   final _df = DateFormat('d MMM yyyy');
 
   int _tab = 0; // 0 pending · 1 archive

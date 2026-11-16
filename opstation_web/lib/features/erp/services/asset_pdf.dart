@@ -4,6 +4,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import '../../../core/format/time_format.dart';
 
 /// Printable asset datasheet — spec, placement, custody history and the
 /// maintenance log for a single asset. Styled to match VoucherPdf.
@@ -67,7 +68,7 @@ class AssetPdf {
               pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',
                   style: pw.TextStyle(fontSize: 9, color: _muted)),
               pw.Text(
-                  'Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}'
+                  'Generated ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now())}'
                   '${generatedBy != null ? ' · $generatedBy' : ''}',
                   style: pw.TextStyle(fontSize: 9, color: _muted)),
             ]),

@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/friendly_error.dart';
 import '../../core/utils/place_name.dart';
 import '../reports/pdf/report_pdf_builder.dart';
+import '../../core/format/time_format.dart';
 
 /// "Adjusted by approver" text for one trip's adjustment row
 /// (reimb_adjustments): who, when, what was left out and the km change.
@@ -170,7 +171,7 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
   String _shop(Map v) => '${(_custs[v['customer_id']] ?? const {})['shop_name'] ?? 'Shop'}';
   String _time(Map v) {
     final d = DateTime.tryParse('${v['timestamp'] ?? ''}')?.toLocal();
-    return d == null ? '' : DateFormat('HH:mm').format(d);
+    return d == null ? '' : DateFormat(orgTime('HH:mm')).format(d);
   }
 
   List<Map<String, dynamic>> _excludedJson() => [

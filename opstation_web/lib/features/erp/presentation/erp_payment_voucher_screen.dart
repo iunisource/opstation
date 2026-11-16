@@ -18,6 +18,7 @@ import '../../../core/pdf/cash_voucher_print.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpPaymentVoucherScreen extends ConsumerStatefulWidget {
   const ErpPaymentVoucherScreen({super.key});
@@ -429,7 +430,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     final lines = _lines.where((l) => l.accountId != null && (double.tryParse(l.amtCtrl.text) ?? 0) != 0).toList();
     String when(dynamic iso) {
       final d = DateTime.tryParse('${iso ?? ''}');
-      return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+      return d == null ? '' : DateFormat(orgTime('d MMM yyyy, HH:mm')).format(d.toLocal());
     }
     String preparedBy = '', preparedAt = '';
     for (final e in _auditTrail) {

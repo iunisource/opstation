@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../services/autopilot.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/format/time_format.dart';
 
 /// Intelligence Dashboard — placement score by salesman and by market (route).
 ///
@@ -861,7 +862,7 @@ class _IntelligenceDashboardScreenState
   }
 
   void _print() {
-    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final period = (_from == null && _to == null)
         ? 'All time (latest audit per shop-SKU)'
         : '${_from != null ? DateFormat('d MMM yy').format(_from!) : '…'} – ${_to != null ? DateFormat('d MMM yy').format(_to!) : '…'}';
@@ -2479,7 +2480,7 @@ class _IntelligenceDashboardScreenState
         ? (_routesWithData[_filterRouteId] ?? 'Market')
         : 'All markets (company-wide)';
     final orgName = ref.read(currentUserProvider)?.orgName ?? '';
-    final generated = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final generated = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final periodLabel = _range == 'all'
         ? 'All time'
         : (_from != null && _to != null

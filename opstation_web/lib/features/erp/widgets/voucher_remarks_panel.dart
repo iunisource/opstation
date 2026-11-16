@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/format/time_format.dart';
 
 /// Internal remarks trail for a voucher (screen-only — never printed).
 /// Any user can add a remark; the full trail is kept and shown here. Rows are
@@ -218,7 +219,7 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
                       ],
                       Text(r['user_name'] as String? ?? '—', style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700)),
                       const Spacer(),
-                      Text(r['created_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(r['created_at'] as String).toLocal()) : '',
+                      Text(r['created_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(r['created_at'] as String).toLocal()) : '',
                           style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
                     ]),
                     const SizedBox(height: 2),

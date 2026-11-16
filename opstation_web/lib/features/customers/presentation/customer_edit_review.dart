@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Customer edits / field locations waiting for a supervisor
 /// (Admin Settings → Supervision for customer edits; Salesperson can add shop
@@ -229,7 +230,7 @@ String _show(String field, Object? v) {
 
 String _who(Map r) {
   final d = DateTime.tryParse('${r['changed_at'] ?? ''}')?.toLocal();
-  return '${r['changed_by_name'] ?? 'Someone'}${d == null ? '' : ' · ${DateFormat('d MMM y, h:mm a').format(d)}'}';
+  return '${r['changed_by_name'] ?? 'Someone'}${d == null ? '' : ' · ${DateFormat(orgTime('d MMM y, h:mm a')).format(d)}'}';
 }
 
 double _meters(double la1, double lo1, double la2, double lo2) {

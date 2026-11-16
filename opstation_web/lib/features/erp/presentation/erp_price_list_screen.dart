@@ -10,6 +10,7 @@ import 'package:excel/excel.dart' as xls;
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import '../../../core/format/time_format.dart';
 
 /// Price List Generator — pick Main Group / Group / Sub Group (each All or a
 /// multi-select), a margin %, and a cost source (Purchase = cost price,
@@ -872,7 +873,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                                   '${r['title']} · ${r['item_count'] ?? 0} items'
                                   '${(r['edited_count'] ?? 0) > 0 ? ' · ${r['edited_count']} edited' : ''}'
                                   ' · ${st['source_label'] ?? st['source'] ?? ''} ${st['margin'] ?? ''}%'
-                                  '\n${r['created_by_name'] ?? '—'} · ${when == null ? '' : DateFormat('d MMM y, h:mm a').format(when)}'
+                                  '\n${r['created_by_name'] ?? '—'} · ${when == null ? '' : DateFormat(orgTime('d MMM y, h:mm a')).format(when)}'
                                   '${r['updated_at'] != null ? ' · updated${r['updated_by_name'] != null ? ' by ${r['updated_by_name']}' : ''} ${DateFormat('d MMM y').format(DateTime.parse('${r['updated_at']}').toLocal())}' : ''}'
                                   '${(r['notes'] as String?)?.isNotEmpty == true ? '\n${r['notes']}' : ''}',
                                   style: const TextStyle(fontSize: 11.5, height: 1.35),
@@ -943,8 +944,8 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
           Text('Saved: ${s['name']}', style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF312E81))),
           Text('${s['title']} · ${s['item_count'] ?? 0} items · ${st['source_label'] ?? st['source'] ?? ''}, '
               '${st['margin'] ?? ''}% ${st['method_label'] ?? ''} · saved by ${s['created_by_name'] ?? '—'}'
-              '${when == null ? '' : ' on ${DateFormat('d MMM y, h:mm a').format(when)}'}'
-              '${s['updated_at'] != null ? ' · last updated${s['updated_by_name'] != null ? ' by ${s['updated_by_name']}' : ''} on ${DateFormat('d MMM y, h:mm a').format(DateTime.parse('${s['updated_at']}').toLocal())}' : ''}',
+              '${when == null ? '' : ' on ${DateFormat(orgTime('d MMM y, h:mm a')).format(when)}'}'
+              '${s['updated_at'] != null ? ' · last updated${s['updated_by_name'] != null ? ' by ${s['updated_by_name']}' : ''} on ${DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.parse('${s['updated_at']}').toLocal())}' : ''}',
               style: const TextStyle(fontSize: 11.5, color: Color(0xFF4338CA))),
           if ((s['notes'] as String?)?.isNotEmpty == true)
             Padding(padding: const EdgeInsets.only(top: 3),
@@ -1016,7 +1017,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     final org = ref.read(currentUserProvider)?.orgName ?? '';
     // Customer-facing document: heading + org + generated timestamp ONLY.
     // Never print margin %, cost source, or group scope (confidential).
-    final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
+    final stamp = DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.now());
 
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
@@ -1068,7 +1069,7 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
     if (rows.isEmpty) return;
     final title = _outTitle;
     final org = ref.read(currentUserProvider)?.orgName ?? '';
-    final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
+    final stamp = DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.now());
     final excel = xls.Excel.createExcel();
     final sheetName = title;
     final sheet = excel[sheetName];

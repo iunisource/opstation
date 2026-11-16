@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/format/time_format.dart';
 
 /// Attendance Review → "Punches to screen" (SQL 461). Web check-ins that look
 /// like someone punched for a colleague. They already count; Approve keeps the
@@ -51,7 +52,7 @@ class _WebPunchScreeningState extends State<WebPunchScreening> {
     if (hhmm == null || !hhmm.contains(':')) return hhmm ?? '';
     final p = hhmm.split(':');
     final h = int.tryParse(p[0]) ?? 0, m = int.tryParse(p[1]) ?? 0;
-    return DateFormat('h:mm a').format(DateTime(2000, 1, 1, h, m));
+    return DateFormat(orgTime('h:mm a')).format(DateTime(2000, 1, 1, h, m));
   }
 
   /// Name the connection this punch came from and add it as an office network.

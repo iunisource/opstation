@@ -9,6 +9,7 @@ import '../../../core/modules/app_modules.dart';
 import '../../../core/theme/app_theme.dart';
 import 'orgs_screen.dart' show showOrgModulesDialog;
 import 'storage_usage_widgets.dart';
+import '../../../core/format/time_format.dart';
 
 /// Super Admin → Organizations → one org's profile.
 /// Shows how the org USES Opstation — engagement, activity rhythm, module
@@ -27,7 +28,7 @@ class _OrgProfileScreenState extends State<OrgProfileScreen> {
   String? _err;
   bool _loading = true;
   final _date = DateFormat('d MMM y');
-  final _dateTime = DateFormat('d MMM y, h:mm a');
+  final _dateTime = DateFormat(orgTime('d MMM y, h:mm a'));
 
   static const _ink = Color(0xFF0F172A);
 

@@ -18,6 +18,7 @@ import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/product_picker.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpPurchaseScreen extends ConsumerStatefulWidget {
   const ErpPurchaseScreen({super.key, this.focusId, this.seedProductId, this.seedQty, this.seedBranchId});
@@ -873,7 +874,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Rejected by ${_detail['rejected_by_name'] ?? '—'}'
-              '${at != null ? ' · ${DateFormat('d MMM yyyy, HH:mm').format(at)}' : ''}',
+              '${at != null ? ' · ${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(at)}' : ''}',
               style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.red.shade800)),
           const SizedBox(height: 3),
           Text('${_detail['reject_reason'] ?? ''}', style: const TextStyle(fontSize: 13)),
@@ -1083,7 +1084,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final me = ref.read(currentUserProvider)?.id;
     final isRequester = me != null && me == _detail['close_req_by'];
     final c = pending ? Colors.deepOrange : Colors.blueGrey;
-    String fmt(DateTime d) => DateFormat('d MMM yyyy, HH:mm').format(d);
+    String fmt(DateTime d) => DateFormat(orgTime('d MMM yyyy, HH:mm')).format(d);
     final buttons = <Widget>[
       if (pending && _isAdmin) ...[
         OutlinedButton(onPressed: () => _decideClose(false),
@@ -1161,7 +1162,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   String? _footerWithApproval(String? base) {
     final name = _detail['approved_by_name'] as String?;
     final at = _detail['approved_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['approved_at'] as String).toLocal()) : null;
+        ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['approved_at'] as String).toLocal()) : null;
     if (name == null || at == null) return base;
     final line = 'Approved by $name on $at';
     return (base == null || base.isEmpty) ? line : '$base\n$line';
@@ -1215,7 +1216,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       remarks: (_detail['remarks'] as String?)?.trim().isNotEmpty == true ? _detail['remarks'] as String? : null,
       preparedBy: _meta.preparedBy,
       createdAt: _detail['created_at'] != null
-          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+          ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal())
           : null,
       footerNote: _footerWithApproval(_meta.purchaseFooterNote ?? _meta.footerNote),
     );
@@ -1810,7 +1811,7 @@ class _PoAuditTrail extends StatelessWidget {
             const SizedBox(height: 8),
             ...entries.map((e) {
               final action = e['action'] as String? ?? '-';
-              final ts = e['performed_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
+              final ts = e['performed_at'] != null ? DateFormat(orgTime('d MMM HH:mm')).format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
               final details = e['details'] as String? ?? '';
               Color color;
               switch (action) { case 'created': case 'saved': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': case 'cancelled': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; }

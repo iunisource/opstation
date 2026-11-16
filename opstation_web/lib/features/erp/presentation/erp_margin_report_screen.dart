@@ -8,6 +8,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpMarginReportScreen extends ConsumerStatefulWidget {
   const ErpMarginReportScreen({super.key});
@@ -363,7 +364,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
       '<td class="num">${_fmtMoney(_totCost)}</td>'
       '<td class="num ${_totMargin < 0 ? 'neg' : ''}">${_fmtMoney(_totMargin)}</td><td></td></tr>');
     b.write('</tbody></table>');
-    final ts = DateFormat('d MMM yyyy, HH:mm').format(DateTime.now());
+    final ts = DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.now());
     b.write('<div class="foot">Created by ${_esc(_userName.isEmpty ? '—' : _userName)} &nbsp;•&nbsp; Created at $ts</div>');
     b.write('</body></html>');
     final blob = html.Blob([b.toString()], 'text/html;charset=utf-8');

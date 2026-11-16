@@ -11,6 +11,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -1295,7 +1296,7 @@ class _VisitDetailRowState extends State<_VisitDetailRow> {
                   const SizedBox(height: 2),
                   Text(
                     [
-                      DateFormat('HH:mm').format(v.timestamp),
+                      DateFormat(orgTime('HH:mm')).format(v.timestamp),
                       // No GPS on the phone / shop without a saved location (red), not "Outside geofence".
                       visitOutcomeLabel(v.status, v.amount, hasGps: v.hasGps),
                       if (v.status != 'verified' && awayLabel(v.distance) != null) awayLabel(v.distance)!,
@@ -1793,8 +1794,8 @@ class _ActiveRouteExpansionState extends State<_ActiveRouteExpansion> {
     final stopsLabel = '${visited.length} visited'
         '${remaining.isNotEmpty ? " \u00b7 ${remaining.length} remaining" : ""}';
     final timeLabel = r.endedAt != null
-        ? ' \u00b7 ended ${DateFormat('HH:mm').format(r.endedAt!)}'
-        : (r.startedAt != null ? ' \u00b7 since ${DateFormat('HH:mm').format(r.startedAt!)}' : '');
+        ? ' \u00b7 ended ${DateFormat(orgTime('HH:mm')).format(r.endedAt!)}'
+        : (r.startedAt != null ? ' \u00b7 since ${DateFormat(orgTime('HH:mm')).format(r.startedAt!)}' : '');
     final subtitle = '${r.userName} \u00b7 $stopsLabel$timeLabel';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),

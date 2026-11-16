@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/visit_outcome.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 class LiveMapScreen extends ConsumerStatefulWidget {
   /// Opens with this trip (route run) highlighted: start, visits in order, end.
@@ -465,7 +466,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   void _showEndSheet(_TripEnds t, {required bool start}) {
-    final fmt = DateFormat('h:mm a');
+    final fmt = DateFormat(orgTime('h:mm a'));
     final when = start ? t.startedAt : t.endedAt;
     showModalBottomSheet(
       context: context,
@@ -502,7 +503,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   Widget _focusCard(_FocusTrip t) {
-    final fmt = DateFormat('h:mm a');
+    final fmt = DateFormat(orgTime('h:mm a'));
     String dur = '';
     if (t.startedAt != null && t.endedAt != null) {
       final m = t.endedAt!.difference(t.startedAt!).inMinutes;
@@ -654,7 +655,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
 
   /// Picked salesperson with no route run on the day: their last position.
   Widget _userCard(_UserLoc u) {
-    final fmt = DateFormat('h:mm a · d MMM');
+    final fmt = DateFormat(orgTime('h:mm a · d MMM'));
     final flagged = _visibleFlagged;
     return Card(
       elevation: 5,
@@ -1133,7 +1134,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   String _freshnessLabel(DateTime ts) {
-    if (!_isToday) return DateFormat('h:mm a').format(ts);
+    if (!_isToday) return DateFormat(orgTime('h:mm a')).format(ts);
     final diff = DateTime.now().difference(ts);
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
@@ -1230,7 +1231,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         SizedBox(
           width: 118,
           child: Text(
-            at == null ? '' : '${DateFormat('h:mm a').format(at.$2)}${next == null ? '' : ' → #${next.no}'}',
+            at == null ? '' : '${DateFormat(orgTime('h:mm a')).format(at.$2)}${next == null ? '' : ' → #${next.no}'}',
             style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
           ),
         ),
@@ -1256,7 +1257,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   void _showVisitSheet(List<_FocusVisit> all, {_FocusVisit? first}) {
     // The tapped visit first, then any others at the same spot.
     final g = first == null ? all : [first, ...all.where((v) => v != first)];
-    final fmt = DateFormat('h:mm a');
+    final fmt = DateFormat(orgTime('h:mm a'));
     final nf = NumberFormat('#,##0');
     showModalBottomSheet(
       context: context,
@@ -1492,7 +1493,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
       );
 
   void _showFlagSheet(List<_FlagVisit> list, {String? title}) {
-    final fmt = DateFormat('h:mm a');
+    final fmt = DateFormat(orgTime('h:mm a'));
     final nf = NumberFormat('#,##0');
     showModalBottomSheet(
       context: context,
@@ -1622,7 +1623,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
               Expanded(child: Text(u.userName, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500))),
               if (!_isToday)
-                Text(DateFormat('h:mm a').format(u.timestamp),
+                Text(DateFormat(orgTime('h:mm a')).format(u.timestamp),
                     style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
               if (_showTracks) ...[
                 const SizedBox(width: 8),
@@ -2090,7 +2091,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
         ),
         if (_lastRefresh != null && _isToday && !compact) ...[
           const SizedBox(width: 12),
-          Text('updated ${DateFormat('h:mm a').format(_lastRefresh!)}',
+          Text('updated ${DateFormat(orgTime('h:mm a')).format(_lastRefresh!)}',
               style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
         ],
       ]);
@@ -2506,7 +2507,7 @@ class _DetailsSheet extends StatelessWidget {
           const SizedBox(height: 14),
           if (cust != null) _kv(user.role == 'driver' ? 'Last stop' : 'Last visit', cust),
           if (cust != null) const SizedBox(height: 8),
-          _kv('Time', DateFormat('h:mm a · d MMM y').format(user.timestamp)),
+          _kv('Time', DateFormat(orgTime('h:mm a · d MMM y')).format(user.timestamp)),
           const SizedBox(height: 8),
           _kv('Coordinates', '${user.lat.toStringAsFixed(5)}, ${user.lng.toStringAsFixed(5)}'),
           if (user.status != null) ...[

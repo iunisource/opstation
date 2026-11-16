@@ -9,6 +9,7 @@ import '../../../core/utils/visit_outcome.dart' show awayLabel, visitIsAdhoc;
 import 'time_in_market_pdf.dart';
 import '../../reports/pdf/report_pdf_builder.dart' show TripReportContext;
 import '../../team/services/trip_sessions.dart';
+import '../../../core/format/time_format.dart';
 
 /// Time in Market — how each salesperson's / driver's day was spent, worked
 /// out from data already collected: route (or delivery) start and end, and
@@ -41,6 +42,15 @@ class TimSettings {
 
   static String hm(int minutes) =>
       '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+
+  /// For showing a time of day in the org's clock format (Admin Settings →
+  /// 24-hour time). [short] = whole-hour axis labels ("9 AM"). [hm] stays the
+  /// edit format of the settings fields.
+  static String clock(int minutes, {bool short = false}) {
+    if (OrgTimeFormat.use24) return hm(minutes);
+    final t = DateTime(2000, 1, 1, minutes ~/ 60, minutes % 60);
+    return DateFormat(short && t.minute == 0 ? 'h a' : 'h:mm a').format(t);
+  }
 
   static Future<TimSettings> load(String orgId) async {
     try {
@@ -210,7 +220,7 @@ String timDur(Duration? d) {
   return '${m ~/ 60}h ${(m % 60).toString().padLeft(2, '0')}m';
 }
 
-String timClock(DateTime? t) => t == null ? '—' : DateFormat('HH:mm').format(t);
+String timClock(DateTime? t) => t == null ? '—' : DateFormat(orgTime('HH:mm')).format(t);
 
 // ── Loading ──────────────────────────────────────────────────────────────────
 
@@ -514,7 +524,7 @@ class TimTimeline extends StatelessWidget {
       final step = perHour < 22 ? 180 : (perHour < 40 || (hi - lo) > 12 * 60) ? 120 : 60;
       for (var h = lo; h <= hi; h += step) {
         ticks.add(Positioned(left: (x(h) - 14).clamp(0.0, w - 30), top: 0,
-            child: Text(TimSettings.hm(h), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))));
+            child: Text(TimSettings.clock(h, short: true), style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))));
       }
       return Column(children: [
         SizedBox(height: 40, child: Stack(clipBehavior: Clip.none, children: kids)),
@@ -607,7 +617,7 @@ class TimDayDetail extends StatelessWidget {
         Row(mainAxisSize: MainAxisSize.min, children: [
           Container(width: 14, height: 10, color: AppTheme.primary.withOpacity(0.15)),
           const SizedBox(width: 4),
-          Text('Day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)}',
+          Text('Day ${TimSettings.clock(s.dayStart)}–${TimSettings.clock(s.dayEnd)}',
               style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
         ]),
       ]),

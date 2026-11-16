@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
 import 'survey_audit_status.dart' show photoBucket, photoName;
+import '../../../core/format/time_format.dart';
 
 /// "Pending corrections (n)" on the Placement Audit and Competitor Spotting
 /// screens (SQL 444). Shown only to users who may approve auditor corrections,
@@ -178,7 +179,7 @@ class _PendingDialogState extends State<_PendingDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final df = DateFormat('d MMM yyyy, h:mm a');
+    final df = DateFormat(orgTime('d MMM yyyy, h:mm a'));
     return AlertDialog(
       title: Text('Pending corrections (${_rows.length})'),
       content: SizedBox(

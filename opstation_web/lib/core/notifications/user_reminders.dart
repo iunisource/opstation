@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme/app_theme.dart';
 import '../../features/auth/auth_controller.dart';
+import '../format/time_format.dart';
 
 /// Personal, user-created reminders ("remind me every 2 hours to check the
 /// Purchase Dashboard"). OFF by default — nothing fires until a user adds one
@@ -394,7 +395,7 @@ class _ManageRemindersDialogState extends State<_ManageRemindersDialog> {
   String _scheduleLabel(Map<String, dynamic> r) {
     final interval = r['interval_minutes'] as int?;
     final next = DateTime.tryParse('${r['remind_at']}')?.toLocal();
-    final nextStr = next == null ? '' : DateFormat('d MMM HH:mm').format(next);
+    final nextStr = next == null ? '' : DateFormat(orgTime('d MMM HH:mm')).format(next);
     if (interval != null) return 'Every ${_fmtInterval(interval)} · next $nextStr';
     return 'Once · $nextStr';
   }
@@ -477,7 +478,7 @@ class _ManageRemindersDialogState extends State<_ManageRemindersDialog> {
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const Icon(Icons.event, size: 15, color: AppTheme.primary),
                     const SizedBox(width: 4),
-                    Text(DateFormat('d MMM HH:mm').format(_onceAt),
+                    Text(DateFormat(orgTime('d MMM HH:mm')).format(_onceAt),
                         style: const TextStyle(
                             fontSize: 13, fontWeight: FontWeight.w600,
                             color: AppTheme.primary)),

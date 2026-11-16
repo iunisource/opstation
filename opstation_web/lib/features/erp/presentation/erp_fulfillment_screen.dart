@@ -24,6 +24,7 @@ import 'shop_product_matching.dart';
 import 'shop_fulfilled_summary.dart';
 import 'shop_dispatch.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
+import '../../../core/format/time_format.dart';
 
 /// Sales → Fulfillment: orders from connected online stores (Shopify).
 /// New → Picking (scan each item) → Packed → Fulfilled (sent back to the
@@ -1496,7 +1497,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
               '${s['shop_domain']}',
               if (s['is_active'] != true) 'disconnected',
               if (s['is_active'] == true) (s['webhooks_ok'] == true ? 'live updates on' : 'live updates off (10-min sync)'),
-              if (s['last_sync_at'] != null) 'synced ${DateFormat('d MMM, HH:mm').format(DateTime.parse(s['last_sync_at'] as String).toLocal())}',
+              if (s['last_sync_at'] != null) 'synced ${DateFormat(orgTime('d MMM, HH:mm')).format(DateTime.parse(s['last_sync_at'] as String).toLocal())}',
               if ((s['last_error'] as String?)?.isNotEmpty == true) 'last problem: ${s['last_error']}',
             ].join(' · '), style: const TextStyle(fontSize: 11.5)),
             trailing: _isAdmin
@@ -2213,7 +2214,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                 const SizedBox(height: 3),
                 Text([
                   _storeName(o['store_id'] as String?),
-                  if (placed != null) 'placed ${DateFormat('d MMM yyyy, HH:mm').format(placed)} (${_ago(placed)})',
+                  if (placed != null) 'placed ${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(placed)} (${_ago(placed)})',
                   if ((o['payment_methods'] as String?)?.isNotEmpty == true) '${o['payment_methods']}',
                   'total ${_money(o)}',
                 ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
@@ -2224,7 +2225,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
                       '${o['label_verified_at'] != null ? ' · courier label matches' : ''}'),
                 if (canWork && o['reopened_at'] != null)
                   _banner(Colors.deepPurple, Icons.undo, 'Un-fulfilled in Shopify '
-                      '${DateFormat('d MMM, HH:mm').format(DateTime.parse('${o['reopened_at']}').toLocal())} — back in the queue. '
+                      '${DateFormat(orgTime('d MMM, HH:mm')).format(DateTime.parse('${o['reopened_at']}').toLocal())} — back in the queue. '
                       'Picked items were kept; use Restart to count again.'),
                 if (canWork && '${o['ext_fulfillment'] ?? ''}'.toUpperCase() == 'FULFILLED')
                   _bookedBanner(o),
@@ -2289,7 +2290,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
             if (o['picked_by_name'] != null) 'Picked by ${o['picked_by_name']}',
             if (o['packed_at'] != null)
               'Packed ${o['packed_by_name'] != null ? 'by ${o['packed_by_name']} ' : ''}'
-                  '${DateFormat('d MMM, HH:mm').format(DateTime.parse(o['packed_at'] as String).toLocal())}',
+                  '${DateFormat(orgTime('d MMM, HH:mm')).format(DateTime.parse(o['packed_at'] as String).toLocal())}',
           ].join(' · '), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
         ])),
         // sticky action bar

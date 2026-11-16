@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/pdf/pdf_output.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 /// Sales → Fulfillment → Summary: fulfilled online-store orders with a date
 /// range and filters, an item summary (average price across the selected
@@ -273,7 +274,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(28),
       footer: (ctx) => pw.Align(alignment: pw.Alignment.centerRight,
-          child: pw.Text('Printed by ${_t(widget.userName)}, ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}   ·   ${ctx.pageNumber}/${ctx.pagesCount}'
+          child: pw.Text('Printed by ${_t(widget.userName)}, ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now())}   ·   ${ctx.pageNumber}/${ctx.pagesCount}'
               .replaceAll('·', '-'), style: const pw.TextStyle(fontSize: 7.5, color: grey))),
       build: (_) => [
         pw.Text(single ? 'Fulfilled order ${_t(orders.first['order_no'])}' : 'Fulfilled orders summary',
@@ -754,7 +755,7 @@ class _ShopFulfilledSummaryState extends State<ShopFulfilledSummary> {
                     Row(children: [
                       Text('${o['order_no'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w800)),
                       const SizedBox(width: 8),
-                      Text(t == null ? '' : DateFormat('d MMM, HH:mm').format(t), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                      Text(t == null ? '' : DateFormat(orgTime('d MMM, HH:mm')).format(t), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
                       if (o['so_id'] != null) ...[
                         const SizedBox(width: 8),
                         Container(

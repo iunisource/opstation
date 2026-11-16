@@ -20,6 +20,7 @@ import 'salesperson_history_screen.dart';
 import '../services/trip_sessions.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import 'package:opstation_web/features/reports/pdf/report_pdf_builder.dart';
+import '../../../core/format/time_format.dart';
 
 /// Expand a receipt-number field into every slip number it represents.
 /// Salespeople routinely staple several slips to one collection and type
@@ -1454,7 +1455,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
               style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
           const SizedBox(height: 2),
           Text(
-              '${_custCode(cid).isNotEmpty ? '${_custCode(cid)} · ' : ''}${v['route_name'] ?? '—'} · ${DateFormat('d MMM yyyy · HH:mm').format(t)}',
+              '${_custCode(cid).isNotEmpty ? '${_custCode(cid)} · ' : ''}${v['route_name'] ?? '—'} · ${DateFormat(orgTime('d MMM yyyy · HH:mm')).format(t)}',
               style: const TextStyle(
                   fontSize: 11, color: AppTheme.textSecondary)),
           if (showCoords) ...[
@@ -1647,7 +1648,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       if (t.isAfter(m['last'] as DateTime)) m['last'] = t;
     }
     final days = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
-    final tf = DateFormat('HH:mm');
+    final tf = DateFormat(orgTime('HH:mm'));
     return Column(children: [
       _rangeSearchBar('Search shop name or code...'),
       Expanded(
@@ -2537,7 +2538,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
       ]),
     );
   }
-  final _df = DateFormat('d MMM yyyy, h:mm a');
+  final _df = DateFormat(orgTime('d MMM yyyy, h:mm a'));
   final Map<String, String?> _places = {};
   AppVersionInfo? _ver; // org's app versions (SQL 475) — this person's status
 

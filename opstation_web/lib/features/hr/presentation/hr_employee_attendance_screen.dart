@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/attendance_deduction.dart';
+import '../../../core/format/time_format.dart';
 
 /// Full-screen, filterable, printable attendance report for a single employee.
 /// Opened from the employee profile "Attendance record" button
@@ -559,7 +560,7 @@ ${kpi('Attendance', rate.toStringAsFixed(0) + '%')}
 <thead><tr><th>Date</th><th>Day</th><th>Status</th><th>In</th><th>Out</th><th style="text-align:right">Hours</th><th style="text-align:center">Late</th></tr></thead>
 <tbody>${rowsHtml.isEmpty ? '<tr><td colspan="7" style="text-align:center;color:#888;padding:16px">No records for this range</td></tr>' : rowsHtml}</tbody>
 </table>
-<div class="foot">Generated ${esc(DateFormat('d MMM yyyy HH:mm').format(DateTime.now()))}</div>
+<div class="foot">Generated ${esc(DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now()))}</div>
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
 

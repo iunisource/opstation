@@ -9,6 +9,7 @@ import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../dashboard/presentation/dashboard_screen.dart' show showActiveRoutesDialog;
 import 'route_location_coverage.dart';
+import '../../../core/format/time_format.dart';
 
 class RoutesScreen extends ConsumerStatefulWidget {
   const RoutesScreen({super.key});
@@ -892,7 +893,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     }
     final changes = groups.values.toList();
     if (!mounted) return;
-    final df = DateFormat('d MMM y, h:mm a');
+    final df = DateFormat(orgTime('d MMM y, h:mm a'));
 
     Widget header(String t) => Padding(
           padding: const EdgeInsets.only(top: 14, bottom: 4),

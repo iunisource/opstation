@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'erp_customer_360_screen.dart';
 import 'erp_supplier_360_screen.dart';
+import '../../../core/format/time_format.dart';
 
 /// CRM Follow-ups cockpit — every open follow-up across all shops, with
 /// assignee + due filters. Reads `customer_activities` (due_date not null,
@@ -627,7 +628,7 @@ class _FollowUpsScreenState extends ConsumerState<FollowUpsScreen> {
         'week': 'Next 7 days',
         'completed': 'Completed',
       };
-      final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
       String esc(String s) => s
           .replaceAll('&', '&amp;')
           .replaceAll('<', '&lt;')

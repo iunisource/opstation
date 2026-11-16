@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 /// Opens the product lifecycle timeline: every recorded BOM save for [productId],
 /// newest first, with a diff of what changed versus the previous version.
@@ -200,7 +201,7 @@ class _ProductLifecycleDialogState extends State<_ProductLifecycleDialog> {
             ),
             const SizedBox(width: 8),
             Expanded(child: Text(
-              at != null ? DateFormat('d MMM y · h:mm a').format(at) : '',
+              at != null ? DateFormat(orgTime('d MMM y · h:mm a')).format(at) : '',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             )),
             if (who.isNotEmpty)

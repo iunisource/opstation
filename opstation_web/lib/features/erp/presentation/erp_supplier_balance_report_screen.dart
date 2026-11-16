@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Supplier Balance Report — the payables mirror of the Customer Balance
 /// Report. Lists suppliers with their net Accounts-Payable balance at three
@@ -282,7 +283,7 @@ class _ErpSupplierBalanceReportScreenState
       }
     }
 
-    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final genTime = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final spanLabel = _span == '3W' ? '3 Weeks' : '3 Months';
     final statusLabel = _statusFilter == 'active'
         ? 'Active'

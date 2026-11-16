@@ -19,6 +19,7 @@ import '../../../core/utils/friendly_error.dart';
 import '../services/batch_tracking.dart';
 import '../services/customer_discounts.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import '../../../core/format/time_format.dart';
 
 // Cash actually collected for a transaction: the Cash tender from
 // payment_details, or a legacy fallback for old rows without tenders.
@@ -466,10 +467,10 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                               final q = _sessionSearch.toLowerCase();
                               final filteredTxns = q.isEmpty ? txns : txns.where((t) { return matchesQuery('${t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? ''} ${t['pos_customers']?['phone'] ?? ''} ${t['transaction_number'] ?? ''}', q); }).toList();
                               final openedAt = s['opened_at'] != null
-                                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['opened_at'] as String).toLocal())
+                                  ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(s['opened_at'] as String).toLocal())
                                   : '-';
                               final closedAt = s['closed_at'] != null
-                                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(s['closed_at'] as String).toLocal())
+                                  ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(s['closed_at'] as String).toLocal())
                                   : '-';
                               return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               InkWell(
@@ -514,7 +515,7 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
                               if (expanded) Container(color: const Color(0xFFF9FAFB), padding: const EdgeInsets.only(bottom: 4), child: Column(children: [
                                 if (!_sessionTxns.containsKey(sid)) const Padding(padding: EdgeInsets.all(12), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
                                 else if (filteredTxns.isEmpty) const Padding(padding: EdgeInsets.fromLTRB(52,8,20,8), child: BranchEmptyHint('No invoices', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
-                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return InkWell(onTap: () async { try { final ti2 = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String); final ci2 = (ti2 as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': i['discount_type'] as String? ?? 'fixed'}).toList(); if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: ci2, orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: s['branches']?['name'] as String? ?? '', cashierName: '', footerNote: null)); } catch (_) {} }, child: Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${money(tot.abs())}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])));  }),
+                                else ...filteredTxns.map((t) { final isRet = t['transaction_type'] == 'return'; final tot = (t['total'] as num?)?.toDouble() ?? 0; final cu = ((t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String); final ph = t['pos_customers']?['phone'] as String? ?? ''; final tr = t['transaction_number'] as String? ?? ''; final ti = t['transacted_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : ''; return InkWell(onTap: () async { try { final ti2 = await Supabase.instance.client.from('pos_transaction_items').select('*, products(name)').eq('transaction_id', t['id'] as String); final ci2 = (ti2 as List).map((i) => {'name': i['products']?['name'] ?? '-', 'quantity': (i['quantity'] as num?)?.toDouble() ?? 0.0, 'unit_price': (i['unit_price'] as num?)?.toDouble() ?? 0.0, 'discount': (i['discount'] as num?)?.toDouble() ?? 0.0, 'discount_type': i['discount_type'] as String? ?? 'fixed'}).toList(); if (mounted) await showDialog(context: context, builder: (_) => _ReceiptDialog(transaction: Map<String, dynamic>.from(t), items: ci2, orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation', branchName: s['branches']?['name'] as String? ?? '', cashierName: '', footerNote: null)); } catch (_) {} }, child: Padding(padding: const EdgeInsets.fromLTRB(48,7,20,7), child: Row(children: [Icon(isRet ? Icons.reply : Icons.receipt_outlined, size: 13, color: isRet ? Colors.orange : AppTheme.primary), const SizedBox(width: 8), Expanded(child: Wrap(spacing: 8, children: [Text(cu, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)), if (ph.isNotEmpty) Text(ph, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), if (tr.isNotEmpty) Container(padding: const EdgeInsets.symmetric(horizontal:5,vertical:1), decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.08), borderRadius: BorderRadius.circular(3)), child: Text(tr, style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.w600))), Text(ti, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary))])), Text('${isRet ? '-' : ''}Rs. ${money(tot.abs())}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isRet ? Colors.orange : AppTheme.primary))])));  }),
                               ])),
                               ]);
                             });
@@ -2042,7 +2043,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final e in _expenses) {
       final ea = (e['amount'] as num?)?.toDouble() ?? 0; totalExpenses += ea;
       final ec = e['category'] as String? ?? '-'; final en = e['note'] as String? ?? '';
-      final et = e['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+      final et = e['created_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
       expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(ea)}</td></tr>';
     }
     double cashSales = 0;
@@ -2053,7 +2054,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final p in _sessionPayments) {
       final pa = (p['total_amount'] as num?)?.toDouble() ?? 0; totalPayments += pa;
       final pv = p['voucher_number'] as String? ?? '-';
-      final pt = p['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
+      final pt = p['created_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
       final plines = (p['cpv_voucher_lines'] as List?) ?? const [];
       if (plines.isEmpty) {
         final pn = p['notes'] as String? ?? '';
@@ -2078,7 +2079,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     for (final p in _sessionReceipts) {
       final pa = (p['total_amount'] as num?)?.toDouble() ?? 0; totalReceipts += pa;
       final pv = p['voucher_number'] as String? ?? '-';
-      final pt = p['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
+      final pt = p['created_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(p['created_at'] as String).toLocal()) : '';
       final plines = (p['crv_voucher_lines'] as List?) ?? const [];
       if (plines.isEmpty) {
         final pn = p['notes'] as String? ?? '';
@@ -2098,8 +2099,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final branch = _session['branches']?['name'] as String? ?? '-';
     final user = ref.read(currentUserProvider);
     final cashier = user?.name ?? user?.id ?? '-';
-    final openedAt = _session['opened_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_session['opened_at'] as String).toLocal()) : '-';
-    final closedAt = _session['closed_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_session['closed_at'] as String).toLocal()) : 'Open';
+    final openedAt = _session['opened_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_session['opened_at'] as String).toLocal()) : '-';
+    final closedAt = _session['closed_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_session['closed_at'] as String).toLocal()) : 'Open';
 
     // Renders a discount table cell: the amount with its % (of gross) beneath.
     String discCell(double amount, double gross) {
@@ -2113,7 +2114,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     String txnRows = '';
     for (final t in sales) {
       final tid = t['id'] as String;
-      final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+      final time = t['transacted_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
       final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
       final method = t['payment_method'] as String? ?? '';
       final totalNum = (t['total'] as num?)?.toDouble() ?? 0;
@@ -2181,7 +2182,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     }
     String retRows = '';
     for (final t in returns) {
-      final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+      final time = t['transacted_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
       final refId = t['reference_transaction_id'] as String? ?? '';
       final refNum = (origNumbers[refId]?.isNotEmpty == true) ? origNumbers[refId]! : (refId.isEmpty ? '-' : refId);
       final total = money(((t['total'] as num?)?.toDouble() ?? 0).abs());
@@ -2289,7 +2290,7 @@ ${payRows.isNotEmpty ? section('Vendor payments (from till)', '${_sessionPayment
 ${expRows.isNotEmpty ? section('Expenses', '${_expenses.length}', '<table><thead><tr><th>Time</th><th>Category</th><th>Note</th><th class="num">Amount</th></tr></thead><tbody>$expRows<tr class="total-row"><td colspan="3">TOTAL EXPENSES</td><td class="num neg">-${money(totalExpenses)}</td></tr></tbody></table>') : ''}
 ${rcvRows.isNotEmpty ? section('Customer receipts (into till)', '${_sessionReceipts.length}', '<table><thead><tr><th>Time</th><th>CRV Ref.</th><th>Received from / Description</th><th class="num">Amount</th></tr></thead><tbody>$rcvRows<tr class="total-row"><td colspan="3">TOTAL RECEIPTS</td><td class="num pos">+${money(totalReceipts)}</td></tr></tbody></table>') : ''}
 ${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table><thead><tr><th>Time</th><th>Customer</th><th>Original bill</th><th class="num">Refund</th></tr></thead><tbody>$retRows<tr class="total-row"><td colspan="3">TOTAL REFUNDS</td><td class="num neg">-${money(totalReturns)}</td></tr></tbody></table>') : ''}
-<div class="foot">Printed ${DateFormat('d MMM yyyy, h:mm a').format(DateTime.now())}</div>
+<div class="foot">Printed ${DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now())}</div>
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';
 
@@ -2848,7 +2849,7 @@ ${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table
                           final amt = (e['amount'] as num?)?.toDouble() ?? 0;
                           final cat = e['category'] as String? ?? '-';
                           final note = e['note'] as String? ?? '';
-                          final time = e['created_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
+                          final time = e['created_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
                           return Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.red.shade100)),
                             child: Row(children: [
                               Icon(Icons.receipt_long_outlined, size: 16, color: Colors.red.shade700),
@@ -2870,7 +2871,7 @@ ${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table
                         final t = _transactions[i];
                         final isReturn = t['transaction_type'] == 'return';
                         final total = (t['total'] as num?)?.toDouble() ?? 0;
-                        final time = t['transacted_at'] != null ? DateFormat('HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+                        final time = t['transacted_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
                         final customer = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
                         return GestureDetector(
                           // Returns are openable too — their receipt loads the
@@ -3470,7 +3471,7 @@ class _ReceiptDialog extends StatelessWidget {
         // info strip
         '<div class="meta">'
         '${cell(isReturn ? 'Returned by' : 'Billed to', _e(customer), _e(phone))}'
-        '${cell('Date', DateFormat('d MMM yyyy').format(at), DateFormat('h:mm a').format(at))}'
+        '${cell('Date', DateFormat('d MMM yyyy').format(at), DateFormat(orgTime('h:mm a')).format(at))}'
         '${cell(isReturn ? 'Refund' : 'Payment', _e(method), _e(split))}'
         '${cell('Served by', _e(cashierName.isEmpty ? '-' : cashierName))}'
         '</div>'
@@ -3492,7 +3493,7 @@ class _ReceiptDialog extends StatelessWidget {
         '</table></div></div>'
         '<div class="spacer"></div>'
         '<div class="foot"><div><b>Thank you for your business.</b>${contact.isNotEmpty ? '<br>${_e(contact)}' : ''}</div>'
-        '<div style="text-align:right">${ref.isNotEmpty ? '${_e(ref)}<br>' : ''}Printed ${_e(DateFormat('d MMM yyyy, h:mm a').format(DateTime.now()))}</div></div>'
+        '<div style="text-align:right">${ref.isNotEmpty ? '${_e(ref)}<br>' : ''}Printed ${_e(DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now()))}</div></div>'
         '</div><script>window.onload=function(){window.print();}</script></body></html>';
   }
 
@@ -3504,7 +3505,7 @@ class _ReceiptDialog extends StatelessWidget {
     final method = (transaction['payment_method'] as String? ?? 'cash').toUpperCase();
     final tenderSplit = _tenderSummary(transaction);
     final splitHtml = tenderSplit.isNotEmpty ? '<p style="text-align:center;font-size:11px;color:#444;margin:2px 0">$tenderSplit</p>' : '';
-    final ts = transaction['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat('d MMM yyyy  HH:mm').format(DateTime.now());
+    final ts = transaction['transacted_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(transaction['transacted_at'] as String).toLocal()) : DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.now());
     final hasCustomCompany = posConfig['pos.company_name']?.isNotEmpty == true;
     final company = hasCustomCompany ? posConfig['pos.company_name']! : orgName;
     final ntn = posConfig['pos.ntn'] ?? '';
@@ -3782,7 +3783,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
               itemBuilder: (_, i) {
                 final t = filtered[i]; final sel = _selectedTxn?['id'] == t['id'];
                 final total = (t['total'] as num?)?.toDouble() ?? 0;
-                final ts = t['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
+                final ts = t['transacted_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '';
                 final custName = (t['pos_customers']?['name'] ?? t['customers']?['shop_name'] ?? 'Walk-in') as String;
                 return ListTile(dense: true, selected: sel, selectedTileColor: AppTheme.primary.withOpacity(0.08),
                   title: Row(children: [

@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// AI Connector — generate/revoke the per-org token that connects this
 /// organization's Opstation data (read-only) to ChatGPT and Claude as a remote
@@ -261,7 +262,7 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
     final createdDt = DateTime.tryParse('${t['created_at']}');
     final usedDt = DateTime.tryParse('${t['last_used_at']}');
     final created = createdDt != null ? DateFormat('d MMM yyyy').format(createdDt.toLocal()) : '';
-    final used = usedDt != null ? DateFormat('d MMM yyyy HH:mm').format(usedDt.toLocal()) : 'never used';
+    final used = usedDt != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(usedDt.toLocal()) : 'never used';
     return Opacity(
       opacity: revoked ? 0.5 : 1,
       child: Padding(

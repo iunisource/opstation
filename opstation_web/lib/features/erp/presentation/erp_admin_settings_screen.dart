@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:html' as html;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import '../../../core/format/time_format.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -701,6 +702,13 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.time_24h',
+    '24-hour time',
+    'How times are shown on every screen and print for this organization. OFF: 12-hour (2:30 PM). '
+        'ON: 24-hour (14:30). Others see the change the next time they open or reload Opstation.',
+  ),
+
+  _AdminToggle(
     'org.web_update_prompt',
     'New version pop-up on the web',
     'When a new version of Opstation is published, web users see "A new version of Opstation is out" with a '
@@ -1041,6 +1049,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.pa_approval_watermark',
   ]),
   _ToggleGroup('Documents & Printing', Icons.description_outlined, [
+    'org.time_24h',
     'org.show_org_name_sales',
     'org.show_org_name_purchase',
     'org.voucher_dates_editable',
@@ -1537,6 +1546,10 @@ class _ErpAdminSettingsScreenState
     });
     try {
       await _persist(key, val.toString());
+      if (key == 'org.time_24h') {
+        OrgTimeFormat.use24 = val; // this browser at once; others on reload
+        ref.invalidate(orgTimeFormatProvider);
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _values[key] = !val); // revert on failure

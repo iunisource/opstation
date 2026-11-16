@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/scan_bar.dart';
+import '../../../core/format/time_format.dart';
 
 /// Sales → Fulfillment → Handover: when the courier comes (once a day), every
 /// box is scanned as it is handed over — its packing slip or courier label.
@@ -200,7 +201,7 @@ class _ShopDispatchState extends State<ShopDispatch> {
       build: (_) => [
         pw.Text('Courier handover${courier == null ? '' : ' - ${_t(courier)}'}',
             style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-        pw.Text(_t('${DateFormat('d MMM yyyy, HH:mm').format(at)}  |  Handed over by ${widget.userName}'),
+        pw.Text(_t('${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(at)}  |  Handed over by ${widget.userName}'),
             style: const pw.TextStyle(fontSize: 9, color: grey)),
         pw.SizedBox(height: 8),
         pw.Text(_t('${boxes.length} boxes  |  COD to collect: ${_money.format(cod)}'),
@@ -317,7 +318,7 @@ class _ShopDispatchState extends State<ShopDispatch> {
               itemBuilder: (_) => [
                 for (final d in _history)
                   PopupMenuItem(value: d, child: Text(
-                      '${DateFormat('d MMM, HH:mm').format(DateTime.parse('${d['created_at']}').toLocal())} · '
+                      '${DateFormat(orgTime('d MMM, HH:mm')).format(DateTime.parse('${d['created_at']}').toLocal())} · '
                       '${d['courier'] ?? 'All couriers'} · ${d['handed_over']} boxes')),
               ],
               child: const Padding(padding: EdgeInsets.all(6),

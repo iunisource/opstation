@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// QC Station — a shop-floor kiosk. Pick a job, an operator taps their RFID card,
 /// then taps a QC checkpoint: it records a qc_inspection and prints a 2"x1" label.
@@ -177,7 +178,7 @@ window.__qcbt = window.__qcbt || {
     t('Item: ' + product + '\n');
     t('No. : #' + seq.toString() + (target != null ? '/$target' : '') + '\n');
     t('QC  : ' + operator + '\n');
-    t('Time: ' + DateFormat('d MMM yyyy  HH:mm').format(at) + '\n');
+    t('Time: ' + DateFormat(orgTime('d MMM yyyy  HH:mm')).format(at) + '\n');
     t('--------------------------------\n');
     b.addAll([0x0A, 0x0A, 0x0A]);    // feed
     final qcbt = js_util.getProperty(html.window, '__qcbt');
@@ -397,7 +398,7 @@ window.__qcbt = window.__qcbt || {
     String esc(String s) => s
         .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final seqLine = target != null ? '#$seq / $target' : '#$seq';
-    final when = DateFormat('d MMM yyyy  HH:mm').format(at);
+    final when = DateFormat(orgTime('d MMM yyyy  HH:mm')).format(at);
     final specLine = spec.trim().isEmpty ? '' : '<div class="spec">${esc(spec)}</div>';
 
     final doc =
@@ -799,7 +800,7 @@ window.__qcbt = window.__qcbt || {
           itemBuilder: (_, i) {
             final r = _recent[i];
             final ts = DateTime.tryParse((r['inspected_at'] ?? '').toString())?.toLocal();
-            final when = ts != null ? DateFormat('d MMM  HH:mm').format(ts) : '';
+            final when = ts != null ? DateFormat(orgTime('d MMM  HH:mm')).format(ts) : '';
             final seq = r['seq_no'];
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 5),

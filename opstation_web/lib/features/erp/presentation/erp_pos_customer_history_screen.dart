@@ -9,6 +9,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// POS Customer History — search POS quick customers and view their
 /// full transaction history (acts as a lightweight ledger).
@@ -190,7 +191,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
                         final isReturn = t['transaction_type'] == 'return';
                         final total = (t['total'] as num?)?.toDouble() ?? 0;
                         final disc = (t['discount'] as num?)?.toDouble() ?? 0;
-                        final ts = t['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '-';
+                        final ts = t['transacted_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '-';
                         final items = _itemsByTxn[t['id'] as String] ?? [];
                         final branch = t['pos_sessions']?['branches']?['name'] as String? ?? '-';
                         final payment = t['payment_method'] as String? ?? '-';
@@ -235,7 +236,7 @@ class _ErpPosCustomerHistoryScreenState extends ConsumerState<ErpPosCustomerHist
     final disc = (t['discount'] as num?)?.toDouble() ?? 0;
     final subtotal = items.fold(0.0, (s, i) => s + ((i['quantity'] as num?)?.toDouble() ?? 0) * ((i['unit_price'] as num?)?.toDouble() ?? 0));
     final payment = (t['payment_method'] as String? ?? 'cash').toUpperCase();
-    final ts = t['transacted_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '-';
+    final ts = t['transacted_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(t['transacted_at'] as String).toLocal()) : '-';
     final orgName = ref.read(currentUserProvider)?.orgName ?? 'Opstation';
     final rows = items.map((i) {
       final q = (i['quantity'] as num?)?.toDouble() ?? 0;

@@ -13,6 +13,7 @@ import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart' show bomSupervisePendingProvider;
 import 'product_lifecycle_view.dart';
 import '../widgets/voucher_docs_panel.dart';
+import '../../../core/format/time_format.dart';
 
 class _BomLine {
   static int _seq = 0;
@@ -240,7 +241,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         const Icon(Icons.report_gmailerrorred, color: Color(0xFFB91C1C), size: 20),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Rejected by ${b['rejected_by_name'] ?? 'supervisor'}${when == null ? '' : ' · ${DateFormat('d MMM y, h:mm a').format(when)}'}',
+          Text('Rejected by ${b['rejected_by_name'] ?? 'supervisor'}${when == null ? '' : ' · ${DateFormat(orgTime('d MMM y, h:mm a')).format(when)}'}',
               style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF991B1B), fontSize: 13)),
           const SizedBox(height: 3),
           Text('${b['reject_reason'] ?? ''}', style: const TextStyle(fontSize: 13, color: Color(0xFF7F1D1D))),
@@ -692,7 +693,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
     final specs = _specsCtrl.text.trim();
     final specsSection = specs.isEmpty ? ''
         : '<h2>Production specs</h2><div style="white-space:pre-wrap;border:1px solid #999;padding:6px 8px;font-size:11.5px">${esc(specs)}</div>';
-    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final genTime = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
 
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BOM ${esc(code)}</title>'
         '<style>@page{margin:0}'
@@ -929,7 +930,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
               else if (_isSupervised(_current!))
                 Tooltip(
                   message: 'Supervised by ${_current!['supervised_by_name'] ?? '—'}'
-                      '${DateTime.tryParse('${_current!['supervised_at']}') == null ? '' : ' on ${DateFormat('d MMM y, h:mm a').format(DateTime.parse('${_current!['supervised_at']}').toLocal())}'}',
+                      '${DateTime.tryParse('${_current!['supervised_at']}') == null ? '' : ' on ${DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.parse('${_current!['supervised_at']}').toLocal())}'}',
                   child: Container(
                     margin: const EdgeInsets.only(right: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

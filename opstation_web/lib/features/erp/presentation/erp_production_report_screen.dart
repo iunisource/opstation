@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/permissions/access_control.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Production Report (Manufacturing ▸ Production Report,
 /// permission /manufacturing/production-report).
@@ -739,7 +740,7 @@ class _State extends ConsumerState<ErpProductionReportScreen> {
 
   void _print(List<_Run> rows, bool showCost) {
     final org = ref.read(currentUserProvider)?.orgName ?? '';
-    final gen = DateFormat('d MMM yyyy, HH:mm').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.now());
     final produced = rows.fold<double>(0, (s, r) => s + r.produced);
     final rejected = rows.fold<double>(0, (s, r) => s + r.rejected);
     final cost = rows.fold<double>(0, (s, r) => s + (r.cost ?? 0));

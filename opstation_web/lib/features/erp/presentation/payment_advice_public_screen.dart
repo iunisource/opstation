@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/format/time_format.dart';
 
 /// Public, no-login copy of a Payment Advice, opened by scanning the QR code on
 /// the printed slip:  https://<app>/#/pa/<public_token>
@@ -139,7 +140,7 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
   static String _dt(Object? v, {bool time = true}) {
     final d = DateTime.tryParse('${v ?? ''}');
     if (d == null) return '—';
-    return DateFormat(time ? 'd MMM yyyy, HH:mm' : 'd MMM yyyy').format(d.toLocal());
+    return DateFormat(time ? orgTime('d MMM yyyy, HH:mm') : 'd MMM yyyy').format(d.toLocal());
   }
 
   @override
@@ -328,7 +329,7 @@ class _PaymentAdvicePublicScreenState extends State<PaymentAdvicePublicScreen> {
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               Flexible(
                 child: Text(
-                    'Live copy · last updated ${DateFormat('d MMM yyyy, HH:mm:ss').format(_updatedAt ?? DateTime.now())}',
+                    'Live copy · last updated ${DateFormat(orgTime('d MMM yyyy, HH:mm:ss')).format(_updatedAt ?? DateTime.now())}',
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: _muted, fontSize: 11.5)),
               ),

@@ -20,6 +20,7 @@ import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpSupplierLedgerScreen extends ConsumerStatefulWidget {
   /// Account to open (global search / deep link) — wins over the last-viewed one.
@@ -1264,7 +1265,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     final sup = _selectedSupplier!;
     final supplierName = (sup['name'] as String?) ?? '';
     final supplierCode = (sup['code'] as String?) ?? '';
-    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final genTime = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final period = (_dateFrom != null || _dateTo != null)
       ? (_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today')
       : '';

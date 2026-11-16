@@ -8,6 +8,7 @@ import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
 import 'dart:html' as html;
+import '../../../core/format/time_format.dart';
 
 class ErpReportBuilderScreen extends ConsumerStatefulWidget {
   const ErpReportBuilderScreen({super.key});
@@ -1138,7 +1139,7 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       buf.write('</tbody></table>');
     }
 
-    final ts = DateFormat('d MMM yyyy, HH:mm').format(DateTime.now());
+    final ts = DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.now());
     buf.write('<div class="foot">Created by ${_esc(_userName.isEmpty ? '—' : _userName)} &nbsp;•&nbsp; Created at $ts</div>');
     buf.write('</body></html>');
 

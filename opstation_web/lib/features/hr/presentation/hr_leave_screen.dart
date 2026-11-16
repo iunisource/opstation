@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/permissions/access_control.dart';
 import '../../../core/layout/main_layout.dart' show leavePendingCountProvider;
+import '../../../core/format/time_format.dart';
 
 class HrLeaveScreen extends ConsumerStatefulWidget {
   const HrLeaveScreen({super.key, this.focusId});
@@ -510,7 +511,7 @@ class _State extends ConsumerState<HrLeaveScreen> {
 
   String _when(dynamic ts) {
     final d = ts == null ? null : DateTime.tryParse('$ts');
-    return d == null ? '' : DateFormat('d MMM yyyy, h:mm a').format(d.toLocal());
+    return d == null ? '' : DateFormat(orgTime('d MMM yyyy, h:mm a')).format(d.toLocal());
   }
 
   /// Who posted the request and when, and who approved / rejected it.

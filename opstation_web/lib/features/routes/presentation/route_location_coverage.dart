@@ -15,6 +15,7 @@ import '../../../core/pdf/pdf_output.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../customers/presentation/erp_customer_360_screen.dart';
+import '../../../core/format/time_format.dart';
 
 /// Routes → "Location coverage": for every active route, how many of its
 /// active shops have a saved location, and exactly which ones are missing.
@@ -369,7 +370,7 @@ Future<void> _routePdf(BuildContext context, _RouteLoc r, String? orgName, {requ
               child: pw.Text('${r.name} — shops without location (continued)',
                   style: pw.TextStyle(fontSize: 8, color: PdfColors.grey600))),
       footer: (ctx) => pw.Row(children: [
-        pw.Text('Printed ${DateFormat('d MMM yyyy, h:mm a').format(now)}',
+        pw.Text('Printed ${DateFormat(orgTime('d MMM yyyy, h:mm a')).format(now)}',
             style: pw.TextStyle(fontSize: 7.5, color: PdfColors.grey600)),
         pw.Spacer(),
         pw.Text('Page ${ctx.pageNumber} of ${ctx.pagesCount}',

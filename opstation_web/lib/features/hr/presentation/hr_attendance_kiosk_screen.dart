@@ -12,6 +12,7 @@ import 'package:intl/intl.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Full-screen attendance kiosk. An employee presents their ID card; the QR
 /// (which encodes the employee_code) is read by the device camera, a hardware
@@ -488,7 +489,7 @@ class _HrAttendanceKioskScreenState extends ConsumerState<HrAttendanceKioskScree
 
   Widget _clock() {
     return Column(children: [
-      Text(DateFormat('hh:mm a').format(DateTime.now()),
+      Text(DateFormat(orgTime('hh:mm a')).format(DateTime.now()),
           style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w800)),
       Text(DateFormat('EEEE, d MMMM yyyy').format(DateTime.now()),
           style: const TextStyle(color: Colors.white60, fontSize: 14)),

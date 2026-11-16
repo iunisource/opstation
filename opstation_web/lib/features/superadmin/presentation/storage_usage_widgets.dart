@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 /// Super Admin: storage used by one org + its support-document retention
 /// ("overwrite tenure"). Backed by SQL 350 (org_storage_usage,
@@ -342,7 +343,7 @@ class _OrgStoragePanelState extends State<OrgStoragePanel> {
           if (d['retention_days'] == null) 'Currently: kept forever.'
           else 'Currently: ${d['retention_days']} days — ${due?['files'] ?? 0} file(s) due now.',
           if (lastAt != null)
-            'Last run ${DateFormat('d MMM y, h:mm a').format(lastAt.toLocal())}: '
+            'Last run ${DateFormat(orgTime('d MMM y, h:mm a')).format(lastAt.toLocal())}: '
                 '${last?['files'] ?? 0} file(s), ${fmtBytes(last?['bytes'] as num?)} freed'
                 '${(last?['note'] as String?)?.isNotEmpty == true ? ' (${last?['note']})' : ''}.',
         ].join('  '),
@@ -360,7 +361,7 @@ String _lastRunLine(Map? last, {String unit = 'file(s)', String verb = 'freed'})
   final at = DateTime.tryParse('${last?['run_at'] ?? ''}');
   if (at == null) return '';
   final note = (last?['note'] as String?) ?? '';
-  return 'Last run ${DateFormat('d MMM y, h:mm a').format(at.toLocal())}: '
+  return 'Last run ${DateFormat(orgTime('d MMM y, h:mm a')).format(at.toLocal())}: '
       '${last?['files'] ?? 0} $unit, ${fmtBytes(last?['bytes'] as num?)} $verb'
       '${note.isNotEmpty ? ' ($note)' : ''}.';
 }

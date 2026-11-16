@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Duty Roster (Manufacturing ▸ Duty Roster, SQL 319).
 ///
@@ -1400,7 +1401,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       }
       b.write('</tr>');
     }
-    b.write('</tbody></table><div class="foot">Printed ${DateFormat('d MMM y, h:mm a').format(DateTime.now())}</div></body></html>');
+    b.write('</tbody></table><div class="foot">Printed ${DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.now())}</div></body></html>');
     _sendToPrinter(b.toString());
   }
 
@@ -1483,7 +1484,7 @@ class _ErpDutyRosterScreenState extends ConsumerState<ErpDutyRosterScreen> {
       b.write('<div class="notes"><div class="nh">Notes</div><div class="nb">${esc(_chartNotes.trim()).replaceAll('\n', '<br>')}</div></div>');
     }
     b.write('<div class="sig"><div>Prepared by</div><div>Production Manager</div><div>Approved by</div></div>'
-        '<div class="foot">Printed ${DateFormat('d MMM y, h:mm a').format(DateTime.now())}</div></body></html>');
+        '<div class="foot">Printed ${DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.now())}</div></body></html>');
     _sendToPrinter(b.toString());
   }
 

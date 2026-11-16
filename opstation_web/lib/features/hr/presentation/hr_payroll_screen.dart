@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Payroll — generate monthly payroll from each employee's basic salary and
 /// attendance, keep a record of past runs, edit per-employee allowances /
@@ -665,7 +666,7 @@ class _State extends ConsumerState<HrPayrollScreen> {
 
   String _when(dynamic iso) {
     final d = DateTime.tryParse('${iso ?? ''}');
-    return d == null ? '—' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+    return d == null ? '—' : DateFormat(orgTime('d MMM yyyy, HH:mm')).format(d.toLocal());
   }
 
   /// Approver's signature: the one captured at approval, else their current one.

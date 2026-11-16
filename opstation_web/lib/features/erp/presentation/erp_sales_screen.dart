@@ -24,6 +24,7 @@ import '../widgets/voucher_remarks_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -608,7 +609,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final cust = _detail['customers'] as Map?;
     final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
+        ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     await VoucherPdf.printVoucher(
       watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
@@ -1530,7 +1531,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               customerPhone: _detail['customers']?['phone'] as String?,
               preparedBy: _meta.preparedBy,
               createdAt: _detail['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal())
                   : null,
             ),
             const SizedBox(height: 16),
@@ -1992,7 +1993,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final cust = _linkedSo['customers'] as Map?;
     final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
+        ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     final soVoucher = _linkedSo['voucher_number'] as String?;
     final pdfRefs = <String, String>{
       if (soVoucher != null) 'SO #': soVoucher,
@@ -3343,7 +3344,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               customerPhone: _linkedSo['customers']?['phone'] as String?,
               preparedBy: _meta.preparedBy,
               createdAt: _detail['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal())
                   : null,
             ),
             const SizedBox(height: 16),
@@ -3860,7 +3861,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     // Customer details may be direct on the invoice or nested via the SO.
     final cust = (_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?);
     final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
+        ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     final soVoucher = _detail['sales_orders']?['voucher_number'] as String?;
     final doVoucher = _detail['delivery_orders']?['voucher_number'] as String?;
     final refs = <String, String>{};
@@ -3894,7 +3895,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       relatedRefs: refs.isNotEmpty ? refs : null,
       approvedBy: _detail['reviewed_by_name'] as String?,
       approvedAt: _detail['reviewed_at'] != null
-          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['reviewed_at'] as String).toLocal()) : null,
+          ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['reviewed_at'] as String).toLocal()) : null,
       approvedSignatureUrl: _detail['reviewer_signature_url'] as String?,
       stampUrl: _detail['review_stamp_url'] as String?,
     );
@@ -4937,7 +4938,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               customerPhone: ((_detail['customers'] as Map?) ?? (_detail['sales_orders']?['customers'] as Map?))?['phone'] as String?,
               preparedBy: _meta.preparedBy,
               createdAt: _detail['created_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+                  ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal())
                   : null,
             ),
             const SizedBox(height: 16),
@@ -4953,7 +4954,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   const SizedBox(width: 8),
                   Expanded(child: Text(
                     _detail['supervised_at'] != null
-                        ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
+                        ? 'Supervised by ${_detail['supervised_by_name'] ?? 'admin'} on ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['supervised_at'] as String).toLocal())}.'
                         : (_canSupervise
                             ? 'Awaiting supervision. Review this invoice, then tap "Supervise" above. (Non-blocking — it posts regardless.)'
                             : 'Awaiting admin supervision. This does not block posting.'),
@@ -5291,7 +5292,7 @@ class _AuditTrailList extends StatelessWidget {
               final action = e['action'] as String? ?? '-';
               final user = e['_userName'] as String? ?? '-';
               final at = e['performed_at'] as String?;
-              final dt = at != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(at).toLocal()) : '-';
+              final dt = at != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(at).toLocal()) : '-';
               final details = e['details'] as String?;
               final color = _actionColor(action);
               return Padding(

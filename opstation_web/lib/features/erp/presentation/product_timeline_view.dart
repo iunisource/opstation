@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 /// Product timeline (Products screen ▸ timeline icon).
 ///
@@ -53,7 +54,7 @@ class _ProductTimelineDialogState extends State<_ProductTimelineDialog> {
   bool _historyAvailable = true;
 
   final _df = DateFormat('d MMM y');
-  final _dtf = DateFormat('d MMM y, h:mm a');
+  final _dtf = DateFormat(orgTime('d MMM y, h:mm a'));
 
   String get _pid => '${widget.product['id']}';
   SupabaseClient get _c => Supabase.instance.client;

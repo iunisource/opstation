@@ -20,6 +20,7 @@ import '../widgets/voucher_remarks_panel.dart';
 import '../widgets/void_flow.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 /// GRN — Goods Receipt Note.
 /// Acts like DO but in reverse: receives stock from supplier against a confirmed PO.
@@ -781,7 +782,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       // Middle sign-off becomes "Supervised By" when the GRN supervise flow is on.
       checkedByLabel: _superviseEnabled ? 'Supervised By' : null,
       checkedByName: _detail['supervised_by_name'] as String?,
-      checkedByAt: _detail['supervised_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['supervised_at'] as String).toLocal()) : null,
+      checkedByAt: _detail['supervised_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['supervised_at'] as String).toLocal()) : null,
       checkedBySignatureUrl: _detail['supervised_signature_url'] as String?,
       checkedByStampUrl: _detail['supervised_stamp_url'] as String?,
     );
@@ -1115,7 +1116,7 @@ class _GrnAuditTrail extends StatelessWidget {
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; case 'supervised': color = AppTheme.success; break; case 'unsupervised': color = AppTheme.textSecondary; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; case 'supervised': color = AppTheme.success; break; case 'unsupervised': color = AppTheme.textSecondary; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
           ]));
       });
   }

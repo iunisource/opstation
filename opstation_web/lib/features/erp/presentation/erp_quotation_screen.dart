@@ -19,6 +19,7 @@ import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 // ============================================================================
 // QUOTATION VOUCHER  (Sales module)
@@ -544,7 +545,7 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
                       if ('${r['detail'] ?? ''}'.isNotEmpty) '${r['detail']}',
                       [
                         if ('${r['by_name'] ?? ''}'.isNotEmpty) '${r['by_name']}',
-                        DateFormat('dd MMM yyyy, h:mm a').format(DateTime.parse('${r['at']}').toLocal()),
+                        DateFormat(orgTime('dd MMM yyyy, h:mm a')).format(DateTime.parse('${r['at']}').toLocal()),
                       ].join(' · '),
                     ].join('\n')),
                   ),

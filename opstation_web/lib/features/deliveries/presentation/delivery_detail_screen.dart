@@ -10,6 +10,7 @@ import 'package:printing/printing.dart';
 import '../../../core/storage/photo_url.dart';
 import '../../../core/theme/app_theme.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import '../../../core/format/time_format.dart';
 
 /// Read-only-ish detail page for a single delivery. Pulls the
 /// delivery row plus its stops from Supabase, shows everything that
@@ -101,7 +102,7 @@ class _DeliveryDetailScreenState
   String _fmtTime(dynamic v) {
     if (v == null) return '—';
     try {
-      return DateFormat('d MMM · HH:mm').format(
+      return DateFormat(orgTime('d MMM · HH:mm')).format(
           DateTime.parse(v as String).toLocal());
     } catch (_) {
       return '—';
@@ -603,7 +604,7 @@ class _StopRow extends StatelessWidget {
   String _fmtTime(dynamic v) {
     if (v == null) return '—';
     try {
-      return DateFormat('d MMM · HH:mm').format(
+      return DateFormat(orgTime('d MMM · HH:mm')).format(
           DateTime.parse(v as String).toLocal());
     } catch (_) {
       return '—';

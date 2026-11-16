@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../auth/auth_controller.dart';
+import '../../core/format/time_format.dart';
 
 /// Shared bits for Logistics → Fleet (SQL 463).
 
@@ -133,7 +134,7 @@ void openPrint(String title, String bodyHtml) {
         '</style></head><body>'
         '<div class="no-print"><button onclick="window.print()">&#x1F5A8; Print / Save as PDF</button></div>')
     ..write(bodyHtml)
-    ..write('<div class="meta" style="margin-top:18px">Printed ${esc(DateFormat('d MMM yyyy, h:mm a').format(DateTime.now()))} · Opstation</div>')
+    ..write('<div class="meta" style="margin-top:18px">Printed ${esc(DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now()))} · Opstation</div>')
     ..write('</body></html>');
   final blob = html.Blob([b.toString()], 'text/html;charset=utf-8');
   html.window.open(html.Url.createObjectUrlFromBlob(blob), '_blank');

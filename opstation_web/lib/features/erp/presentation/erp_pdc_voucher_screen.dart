@@ -14,6 +14,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 /// PDC Voucher — post-dated / cheque-in-hand register.
 ///
@@ -693,7 +694,7 @@ class _ErpPdcVoucherScreenState extends ConsumerState<ErpPdcVoucherScreen> {
     String esc(String? x) => (x ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     String when(dynamic iso) {
       final d = DateTime.tryParse('${iso ?? ''}');
-      return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+      return d == null ? '' : DateFormat(orgTime('d MMM yyyy, HH:mm')).format(d.toLocal());
     }
     // Prepared by: stored name, else look the creator up.
     var preparedBy = (v['created_by_name'] as String?)?.trim() ?? '';

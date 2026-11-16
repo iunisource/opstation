@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/widgets/product_picker.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Field Returns queue. A salesperson asks for a return from the app (shop,
 /// products, reason, optional invoice and photo). The office checks it here,
@@ -313,7 +314,7 @@ class _ErpFieldReturnsScreenState extends ConsumerState<ErpFieldReturnsScreen> {
 
   String _dt(String? iso) {
     final d = iso == null ? null : DateTime.tryParse(iso)?.toLocal();
-    return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d);
+    return d == null ? '' : DateFormat(orgTime('d MMM yyyy, HH:mm')).format(d);
   }
 
   @override

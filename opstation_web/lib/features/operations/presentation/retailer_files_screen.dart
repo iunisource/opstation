@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// The three audiences a shared file can be visible to. Keys match the values
 /// stored in shared_files.visible_to (a text[]), so any combination is valid —
@@ -41,7 +42,7 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
 
   bool _loading = true;
   List<Map<String, dynamic>> _files = [];
-  final _df = DateFormat('d MMM y, h:mm a');
+  final _df = DateFormat(orgTime('d MMM y, h:mm a'));
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
 

@@ -9,6 +9,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpInventoryLedgerScreen extends ConsumerStatefulWidget {
   /// Optional product id to preselect (deep link, e.g. from global search).
@@ -481,7 +482,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         final refId = m['reference_id'] as String?;
         final vno = refId != null ? (_voucherNumbers[refId] ?? '') : '';
         final dateStr = m['moved_at'] != null
-            ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '';
+            ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(m['moved_at'] as String).toLocal()) : '';
         if (!matchesQuery('$type $notes $refType $vno $dateStr', q)) return false;
         return true;
       }).toList();
@@ -931,7 +932,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       final branchName = _branchModeLabel();
       final uomAbbr = p['uoms']?['abbreviation'] as String? ?? '';
       final currentStock = _movements.isNotEmpty ? (_movements.last['running_qty'] as double) : 0.0;
-      final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+      final genTime = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
       final genBy = user?.name ?? user?.email ?? 'Unknown';
       final periodStr = (_dateFrom != null || _dateTo != null)
           ? ((_dateFrom != null ? DateFormat('d MMM yy').format(_dateFrom!) : 'Beginning') + ' to ' + (_dateTo != null ? DateFormat('d MMM yy').format(_dateTo!) : 'Today'))
@@ -943,7 +944,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
         if (qty > 0) totalIn += qty; else totalOut += -qty;
         final runQty = m['running_qty'] as double;
         final entryUom = m['uoms']?['abbreviation'] as String? ?? uomAbbr;
-        final date = m['moved_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
+        final date = m['moved_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
         final type = _displayType(m);
         final refId = m['reference_id'] as String?;
         final vno = refId != null ? (_voucherNumbers[refId] ?? _friendlyRefLabel(m['reference_type'] as String?)) : (m['notes'] as String? ?? '-');
@@ -1357,7 +1358,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                             final runQty = m['running_qty'] as double;
                             final entryUom = m['uoms']?['abbreviation'] as String? ?? '';
                             final date = m['moved_at'] != null
-                                ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
+                                ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
                             final type = _displayType(m);
                             final refId = m['reference_id'] as String?;
                             final refType = m['reference_type'] as String?;
@@ -1454,7 +1455,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
     final runQty = m['running_qty'] as double;
     final entryUom = m['uoms']?['abbreviation'] as String? ?? '';
     final date = m['moved_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
+        ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';
     final type = _displayType(m);
     final refId = m['reference_id'] as String?;
     final refType = m['reference_type'] as String?;

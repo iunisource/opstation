@@ -6,6 +6,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../widgets/survey_audit_status.dart';
+import '../../../core/format/time_format.dart';
 
 /// Date-range PDF reports for the survey team:
 ///  • Audit report — every audit (Matches / Issue / Feedback) in the range.
@@ -16,7 +17,7 @@ import '../widgets/survey_audit_status.dart';
 class SurveyReportsPdf {
   static final _c = Supabase.instance.client;
   static final _df = DateFormat('d MMM yyyy');
-  static final _tf = DateFormat('d MMM yyyy, h:mm a');
+  static DateFormat get _tf => DateFormat(orgTime('d MMM yyyy, h:mm a'));
 
   static Future<List<Map<String, dynamic>>> _paged(
       String table, String cols, String orgId,

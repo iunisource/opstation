@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 class CustomerHistoryScreen extends ConsumerStatefulWidget {
   final String customerId;
@@ -376,7 +377,7 @@ class _VisitCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   if (ts != null)
-                    Text(DateFormat('d MMM y · HH:mm').format(ts),
+                    Text(DateFormat(orgTime('d MMM y · HH:mm')).format(ts),
                         style: const TextStyle(
                             fontSize: 12,
                             color: AppTheme.textSecondary)),

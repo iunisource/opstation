@@ -26,6 +26,7 @@ import '../widgets/bom_specs_box.dart';
 import '../services/production_labels.dart';
 import '../services/batch_tracking.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
+import '../../../core/format/time_format.dart';
 
 class _JobMat {
   static int _seq = 0;
@@ -1435,7 +1436,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                 itemBuilder: (_, i) {
                   final r = rows[i];
                   final ts = DateTime.tryParse((r['inspected_at'] ?? '').toString())?.toLocal();
-                  final when = ts != null ? DateFormat('d MMM yyyy  HH:mm').format(ts) : '';
+                  final when = ts != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(ts) : '';
                   final who = ((r['inspector_name'] ?? r['inspector_id']) as String?) ?? '';
                   final seq = r['seq_no'];
                   final pass = (r['result'] ?? 'pass') == 'pass';
@@ -1519,7 +1520,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
                   final who = e['performed_by_name'] as String? ?? 'Unknown';
                   final notes = e['notes'] as String?;
                   DateTime? ts; try { ts = DateTime.parse(e['performed_at'] as String).toLocal(); } catch (_) {}
-                  final when = ts != null ? DateFormat('d MMM yyyy, h:mm a').format(ts) : '';
+                  final when = ts != null ? DateFormat(orgTime('d MMM yyyy, h:mm a')).format(ts) : '';
                   final changes = (notes != null && notes.isNotEmpty)
                       ? notes.split(' · ').where((s) => s.trim().isNotEmpty).toList()
                       : <String>[];
@@ -1705,7 +1706,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final comp = _componentsCost, oh = _laborOhCost, total = _totalCost, unit = _unitCost;
     final uid = ref.read(currentUserProvider)?.id;
     final by = uid != null ? ((_users.firstWhere((u) => u['id'] == uid, orElse: () => <String, dynamic>{})['name'] as String?) ?? '') : '';
-    final printedAt = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final printedAt = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
 
     // Floor QR: a worker scans this to Start / Finish the job (no login). Only
     // shown for a saved job that has a token.

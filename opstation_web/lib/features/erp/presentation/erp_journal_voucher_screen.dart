@@ -18,6 +18,7 @@ import '../widgets/voucher_docs_panel.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 class _JvLine {
   static int _seq = 0;
@@ -763,7 +764,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     String esc(String? v) => (v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     String when(dynamic iso) {
       final d = DateTime.tryParse('${iso ?? ''}');
-      return d == null ? '' : DateFormat('d MMM yyyy, HH:mm').format(d.toLocal());
+      return d == null ? '' : DateFormat(orgTime('d MMM yyyy, HH:mm')).format(d.toLocal());
     }
     // Footprints: whatever has happened by the time this is printed.
     String preparedBy = '';

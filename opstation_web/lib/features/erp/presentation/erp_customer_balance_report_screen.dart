@@ -11,6 +11,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Customer Balance Report — a route-wise collection sheet.
 /// Lists customers grouped by sales route with Credit Limit and net AR balance
@@ -494,7 +495,7 @@ class _ErpCustomerBalanceReportScreenState
       }
     }
 
-    final genTime = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final genTime = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final spanLabel = _span == '3W' ? '3 Weeks' : '3 Months';
     final doc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Customer Balance Report</title>'
         '<style>@page{margin:0}'

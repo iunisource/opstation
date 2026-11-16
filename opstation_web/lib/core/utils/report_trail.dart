@@ -1,5 +1,6 @@
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../format/time_format.dart';
 
 /// Records this generation of a reimbursement report (SQL 413) and returns
 /// who generated it and when, oldest first — printed in a DUPLICATE copy's
@@ -10,7 +11,7 @@ Future<List<String>> logReportIssue(String? orgId, String type, String key, {boo
     final r = await Supabase.instance.client.rpc('report_issue_log', params: {
       'p_org': orgId, 'p_type': type, 'p_key': key, 'p_counted': counted,
     });
-    final fmt = DateFormat('d MMM yyyy, h:mm a');
+    final fmt = DateFormat(orgTime('d MMM yyyy, h:mm a'));
     return [
       for (final e in (r as List? ?? const []))
         () {

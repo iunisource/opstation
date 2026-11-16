@@ -20,6 +20,7 @@ import 'customer_edit_review.dart';
 import 'customer_other_locations.dart';
 import '../../intelligence/services/autopilot.dart';
 import 'customer_shop_notes.dart';
+import '../../../core/format/time_format.dart';
 
 /// Customer 360 — a unified view of a single shop:
 ///  • Overview     : profile, location, credit vs current outstanding
@@ -520,7 +521,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       partyLabel: 'Customer',
       partyName: _shopName,
       priceLabel: 'Suggested Price',
-      genTime: DateFormat('d MMM y · h:mm a').format(now),
+      genTime: DateFormat(orgTime('d MMM y · h:mm a')).format(now),
       rows: [
         for (final r in _prices)
           PriceListRow(
@@ -597,7 +598,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                             style: TextStyle(fontWeight: FontWeight.w700,
                                 color: isLatest ? AppTheme.primary : null)),
                         subtitle: Text([
-                          if (at != null) DateFormat('d MMM y · h:mm a').format(at),
+                          if (at != null) DateFormat(orgTime('d MMM y · h:mm a')).format(at),
                           if (who.isNotEmpty) 'by $who',
                           if (note.isNotEmpty) note,
                         ].join('  ·  '), style: const TextStyle(fontSize: 12)),
@@ -872,7 +873,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                 Text(
                     created == null
                         ? ''
-                        : DateFormat('d MMM y, h:mm a').format(created.toLocal()),
+                        : DateFormat(orgTime('d MMM y, h:mm a')).format(created.toLocal()),
                     style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                 const Spacer(),
                 if (open)
@@ -2037,7 +2038,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   ),
                   const SizedBox(width: 8),
                   if (ts != null)
-                    Text(DateFormat('d MMM y · HH:mm').format(ts),
+                    Text(DateFormat(orgTime('d MMM y · HH:mm')).format(ts),
                         style: const TextStyle(
                             fontSize: 12, color: AppTheme.textSecondary)),
                 ]),
@@ -2926,7 +2927,7 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
                   _typeChip(a['type'] as String?),
                   const SizedBox(width: 8),
                   if (created != null)
-                    Text(DateFormat('d MMM y · HH:mm').format(created),
+                    Text(DateFormat(orgTime('d MMM y · HH:mm')).format(created),
                         style: const TextStyle(
                             fontSize: 11, color: AppTheme.textSecondary)),
                   if (isTask && done)

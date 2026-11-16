@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/format/time_format.dart';
 
 /// Correct the CR# on one collection, or release its slip for re-use
 /// (admins / master admins, SQL 479 / 482). Releasing does NOT change the
@@ -71,7 +72,7 @@ Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit, 
             Text(
               [
                 if ('${visit['user_name'] ?? ''}'.isNotEmpty) '${visit['user_name']}',
-                if (at != null) DateFormat('d MMM yyyy, h:mm a').format(at),
+                if (at != null) DateFormat(orgTime('d MMM yyyy, h:mm a')).format(at),
                 if (shop.isNotEmpty) shop,
                 if (visit['amount'] != null) 'Rs ${NumberFormat('#,##0').format(visit['amount'])}',
               ].join(' · '),
@@ -181,7 +182,7 @@ Future<bool> receiptFixForSerial(BuildContext context, String orgId, int serial)
               [
                 '${v['user_name'] ?? ''}',
                 if (DateTime.tryParse('${v['timestamp'] ?? ''}') != null)
-                  DateFormat('d MMM yyyy, h:mm a').format(DateTime.parse('${v['timestamp']}').toLocal()),
+                  DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.parse('${v['timestamp']}').toLocal()),
                 '${(v['customers'] as Map?)?['shop_name'] ?? ''}',
                 'Rs ${NumberFormat('#,##0').format(v['amount'] ?? 0)}',
               ].where((x) => x.isNotEmpty).join(' · '),

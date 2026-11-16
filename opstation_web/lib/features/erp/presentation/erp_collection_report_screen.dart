@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Collection Report — executive view of money collected from the market.
 ///
@@ -1064,7 +1065,7 @@ class _ErpCollectionReportScreenState extends ConsumerState<ErpCollectionReportS
     final modes = _modeTotals(rows);
     final modeTotal = modes.values.fold<double>(0, (a, b) => a + b);
     final user = ref.read(currentUserProvider);
-    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     String gapTxt(double v) => v.abs() < 0.5 ? '—' : (v > 0 ? '+${money(v)}' : '(${money(-v)})');
 
     final body = StringBuffer();

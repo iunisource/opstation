@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 /// Employee profile ▸ History (SQL 342).
 ///
@@ -222,7 +223,7 @@ class _EmployeeHistorySectionState extends State<EmployeeHistorySection> {
   }
 
   Widget _groupTile(_Group g) {
-    final when = DateFormat('d MMM yyyy, HH:mm').format(g.at);
+    final when = DateFormat(orgTime('d MMM yyyy, HH:mm')).format(g.at);
     final (IconData icon, Color color, String title) = switch (g.type) {
       'baseline' => (Icons.flag_outlined, AppTheme.textSecondary, 'Profile on record when history started'),
       'created' => (Icons.person_add_alt, AppTheme.success, 'Employee created'),

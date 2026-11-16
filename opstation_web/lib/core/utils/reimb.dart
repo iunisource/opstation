@@ -2,6 +2,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/reports/pdf/report_pdf_builder.dart' show ReimbInfo;
+import '../format/time_format.dart';
 
 /// Reimbursement Approvals (SQL 466). Called every time a Trip Summary /
 /// Combined Trip Summary is generated: records the claim the first time
@@ -179,7 +180,7 @@ String _excludedNote(List<Map<String, dynamic>> excl, List<Map<String, dynamic>>
 /// (trips already approved are left out — they are in the excluded note).
 (Set<String>, String?) _generated(Map<String, dynamic> r, [Set<String> skipTrips = const {}]) {
   final dFmt = DateFormat('d MMM');
-  final at = DateFormat('d MMM yyyy, h:mm a');
+  final at = DateFormat(orgTime('d MMM yyyy, h:mm a'));
   final days = <String>{};
   // one line per earlier sheet: "10 Nov — Trip Summary (pending)"
   final bySheet = <String, Map<String, dynamic>>{};

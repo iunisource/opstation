@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/format/time_format.dart';
 
 /// Shared "void instead of delete" pieces for the purchase chain
 /// (PO, GRN, Purchase Invoice, Purchase Return Note, Purchase Return Invoice).
@@ -82,7 +83,7 @@ class VoidedBanner extends StatelessWidget {
     final by = (detail['voided_by_name'] as String?)?.trim();
     final reason = (detail['void_reason'] as String?)?.trim();
     final parts = <String>[
-      if (at != null) 'on ${DateFormat('d MMM yyyy, HH:mm').format(at.toLocal())}',
+      if (at != null) 'on ${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(at.toLocal())}',
       if (by != null && by.isNotEmpty) 'by $by',
     ];
     return Container(

@@ -9,6 +9,7 @@ import 'package:excel/excel.dart' as xls;
 
 import '../../auth/auth_controller.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import '../../../core/format/time_format.dart';
 
 /// Compliance report — surfaces three classes of anomaly across the
 /// last 90 days, scoped to the current user's organization:
@@ -482,7 +483,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
     final rows = _matrixRows();
     if (rows.isEmpty) { _snack('Nothing to export for the current filters.'); return; }
     final org = ref.read(currentUserProvider)?.orgName ?? '';
-    final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
+    final stamp = DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.now());
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4.landscape,
@@ -521,7 +522,7 @@ class _ComplianceScreenState extends ConsumerState<ComplianceScreen> {
     final rows = _matrixRows();
     if (rows.isEmpty) { _snack('Nothing to export for the current filters.'); return; }
     final org = ref.read(currentUserProvider)?.orgName ?? '';
-    final stamp = DateFormat('d MMM y, h:mm a').format(DateTime.now());
+    final stamp = DateFormat(orgTime('d MMM y, h:mm a')).format(DateTime.now());
     final excel = xls.Excel.createExcel();
     const sheetName = 'Compliance';
     final sheet = excel[sheetName];

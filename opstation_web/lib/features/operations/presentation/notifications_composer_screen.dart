@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Admin "Notifications" composer (Operations menu). Sends a push + saves a
 /// drawer entry to any combination of user groups (roles) or a specific
@@ -35,7 +36,7 @@ class _NotificationsComposerScreenState
   bool _loading = true;
   List<Map<String, dynamic>> _recent = [];
   List<String> _roles = [];
-  final _df = DateFormat('d MMM y, h:mm a');
+  final _df = DateFormat(orgTime('d MMM y, h:mm a'));
   DateTime? _from;
   DateTime? _to;
   // 'all' | 'manual' (Push — sent by a person) | 'system' (auto-generated).

@@ -12,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/reports/branch_scope.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Cash Book Report (Financials).
 ///
@@ -195,7 +196,7 @@ class _ErpCashBookScreenState extends ConsumerState<ErpCashBookScreen> {
     final branch = ref.read(selectedBranchProvider);
     final branchName = _allBranches ? 'All Branches' : ((branch?['name'] as String?) ?? 'All Branches');
     final period = DateFormat('d MMM yy').format(_from) + ' to ' + DateFormat('d MMM yy').format(_to);
-    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     double td = 0, tc = 0;
     for (final e in display) { td += (e['debit'] as num?)?.toDouble() ?? 0; tc += (e['credit'] as num?)?.toDouble() ?? 0; }
     final closing = _opening + td - tc;

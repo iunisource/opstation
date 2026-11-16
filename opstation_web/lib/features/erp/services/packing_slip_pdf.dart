@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import '../../../core/format/time_format.dart';
 
 /// Packing slips for online-store orders (Sales → Fulfillment), A4 or A5, one
 /// page per order: store + order number (barcode + QR for scanning at
@@ -66,7 +67,7 @@ class PackingSlipPdf {
     final fmt = a5 ? PdfPageFormat.a5 : PdfPageFormat.a4;
     final s = a5 ? 0.82 : 1.0; // text scale for A5
     final money = NumberFormat('#,##0.##');
-    final now = DateFormat('d MMM yyyy, HH:mm').format(DateTime.now());
+    final now = DateFormat(orgTime('d MMM yyyy, HH:mm')).format(DateTime.now());
 
     for (final o in orders) {
       final cur = _t(o['currency'] ?? '');
@@ -189,7 +190,7 @@ class PackingSlipPdf {
               pw.Text('PACKING SLIP', style: st(10, bold: true, color: _grey)),
               pw.SizedBox(height: 6),
               pw.Text('Order $orderNo', style: st(18, bold: true)),
-              if (placed != null) pw.Text(_t('Placed ${DateFormat('d MMM yyyy, HH:mm').format(placed)}'), style: st(9, color: _grey)),
+              if (placed != null) pw.Text(_t('Placed ${DateFormat(orgTime('d MMM yyyy, HH:mm')).format(placed)}'), style: st(9, color: _grey)),
             ])),
             if (orderNo.isNotEmpty)
               pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
@@ -267,8 +268,8 @@ class PackingSlipPdf {
           ],
           pw.Divider(color: _line),
           pw.Text(_t([
-            if (o['picked_by_name'] != null) 'Picked by ${o['picked_by_name']}${pickedAt != null ? ' (${DateFormat('d MMM, HH:mm').format(pickedAt)})' : ''}',
-            if (o['packed_by_name'] != null) 'Packed by ${o['packed_by_name']}${packedAt != null ? ' (${DateFormat('d MMM, HH:mm').format(packedAt)})' : ''}',
+            if (o['picked_by_name'] != null) 'Picked by ${o['picked_by_name']}${pickedAt != null ? ' (${DateFormat(orgTime('d MMM, HH:mm')).format(pickedAt)})' : ''}',
+            if (o['packed_by_name'] != null) 'Packed by ${o['packed_by_name']}${packedAt != null ? ' (${DateFormat(orgTime('d MMM, HH:mm')).format(packedAt)})' : ''}',
             'Printed by $printedBy, $now',
           ].join('   |   ')), style: st(8, color: _grey)),
         ],

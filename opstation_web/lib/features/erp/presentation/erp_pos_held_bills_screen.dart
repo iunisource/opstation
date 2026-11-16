@@ -9,6 +9,7 @@ import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpPosHeldBillsScreen extends ConsumerStatefulWidget {
   const ErpPosHeldBillsScreen({super.key});
@@ -147,7 +148,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
                 final b = filtered[i];
-                final ts = b['held_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(b['held_at'] as String).toLocal()) : '-';
+                final ts = b['held_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(b['held_at'] as String).toLocal()) : '-';
                 final sess = b['pos_sessions']?['session_number'] as String? ?? '-';
                 final branch = b['pos_sessions']?['branches']?['name'] as String? ?? '-';
                 final cust = b['customer_name'] as String? ?? 'Walk-in';

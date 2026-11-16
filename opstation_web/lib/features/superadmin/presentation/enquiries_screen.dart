@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../../../core/format/time_format.dart';
 
 /// Super admin → Enquiries: "Talk to our team" requests from the website
 /// (SQL 437). Each one is also emailed when it arrives.
@@ -226,7 +227,7 @@ class _EnquiriesScreenState extends State<EnquiriesScreen> {
             icon: const Icon(Icons.chat_outlined, size: 16), label: const Text('WhatsApp'),
           ),
           if (when != null)
-            Text(DateFormat('d MMM yyyy, h:mm a').format(when), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            Text(DateFormat(orgTime('d MMM yyyy, h:mm a')).format(when), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         ]),
         if (notes != null && notes.isNotEmpty) ...[
           const SizedBox(height: 10),

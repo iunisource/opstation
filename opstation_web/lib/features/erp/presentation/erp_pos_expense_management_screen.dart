@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpPosExpenseManagementScreen extends ConsumerStatefulWidget {
   const ErpPosExpenseManagementScreen({super.key});
@@ -108,7 +109,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
       final branch = e['pos_sessions']?['branches']?['name'] as String? ?? '-';
       final sess = e['pos_sessions']?['session_number'] as String? ?? '-';
       final cashier = e['users']?['name'] as String? ?? '-';
-      final ts = e['created_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
+      final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
       return '<tr><td>$ts</td><td>$sess</td><td>$branch</td><td><span class="cat">$cat</span></td><td>$note</td><td>$cashier</td><td class="amt">Rs. ${money(amt)}</td></tr>';
     }).join();
 
@@ -129,7 +130,7 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
 </style></head><body>
 <h1>$orgName — Expense Report</h1>
 <h2>$branchName</h2>
-<p class="meta">Period: $dateRange &nbsp;|&nbsp; Generated: ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())} &nbsp;|&nbsp; ${data.length} entries</p>
+<p class="meta">Period: $dateRange &nbsp;|&nbsp; Generated: ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now())} &nbsp;|&nbsp; ${data.length} entries</p>
 </div>
 <h3 style="font-size:13px;margin-bottom:8px">Expense Details</h3>
 <table><thead><tr><th>Date & Time</th><th>Session</th><th>Branch</th><th>Category</th><th>Note</th><th>Cashier</th><th>Amount</th></tr></thead>
@@ -242,7 +243,7 @@ ${print ? '<script>window.print()</script>' : ''}
               final branch = e['pos_sessions']?['branches']?['name'] as String? ?? '-';
               final sess = e['pos_sessions']?['session_number'] as String? ?? '-';
               final cashier = e['users']?['name'] as String? ?? '-';
-              final ts = e['created_at'] != null ? DateFormat('d MMM yyyy  HH:mm').format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
+              final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
               return InkWell(onTap: () => setState(() { if (sel) _selected.remove(id); else _selected.add(id); }),
                 child: Container(color: sel ? AppTheme.primary.withOpacity(0.04) : Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),

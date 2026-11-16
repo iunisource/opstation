@@ -13,6 +13,7 @@ import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/attendance_deduction.dart';
+import '../../../core/format/time_format.dart';
 
 class HrAttendanceScreen extends ConsumerStatefulWidget {
   const HrAttendanceScreen({super.key});
@@ -574,7 +575,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
                 child: Text(_audit[i]['action'] as String? ?? '', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: _audit[i]['action'] == 'created' ? Colors.green.shade700 : Colors.orange.shade800))),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${_empName[_audit[i]['employee_id']] ?? _audit[i]['employee_id'] ?? ''} \u2014 ${_audit[i]['changes'] ?? ''}', style: const TextStyle(fontSize: 12)),
-                Text('${_audit[i]['changed_by_name'] ?? ''}  \u00b7  ${_audit[i]['changed_at'] != null ? DateFormat('d MMM HH:mm').format(DateTime.parse(_audit[i]['changed_at'] as String).toLocal()) : ''}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                Text('${_audit[i]['changed_by_name'] ?? ''}  \u00b7  ${_audit[i]['changed_at'] != null ? DateFormat(orgTime('d MMM HH:mm')).format(DateTime.parse(_audit[i]['changed_at'] as String).toLocal()) : ''}', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
               ])),
             ])),
         ])),
@@ -744,7 +745,7 @@ table.trail{font-size:10px;margin-top:6px}
 @media print{body{padding:6px}@page{size:landscape;margin:0}}
 </style></head><body>
 <h1>Attendance Register</h1>
-<div class="meta">$headerDate &nbsp;|&nbsp; $branchLabel &nbsp;|&nbsp; Generated ${DateFormat('d MMM yyyy HH:mm').format(DateTime.now())}</div>
+<div class="meta">$headerDate &nbsp;|&nbsp; $branchLabel &nbsp;|&nbsp; Generated ${DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.now())}</div>
 $body
 <script>window.onload=function(){window.print();}</script>
 </body></html>''';

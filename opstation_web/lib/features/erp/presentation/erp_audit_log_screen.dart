@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Birds-eye audit trail for the whole ERP. Reads `voucher_audit_log`
 /// (the shared audit store) joined to the acting user, scoped to the current
@@ -362,7 +363,7 @@ class _ErpAuditLogScreenState extends ConsumerState<ErpAuditLogScreen> {
         ? '—'
         : (_userNames[token] ?? token);
     final ts = e['performed_at'] != null
-        ? DateFormat('d MMM y · HH:mm')
+        ? DateFormat(orgTime('d MMM y · HH:mm'))
             .format(DateTime.parse(e['performed_at'] as String).toLocal())
         : '';
     final (icon, color) = _actionStyle(action);

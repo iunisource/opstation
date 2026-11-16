@@ -17,6 +17,7 @@ import '../widgets/void_flow.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 /// Purchase Invoice (PI) — Stage 3 of purchase flow.
 /// Created from a saved GRN. User enters unit cost + discount per line.
@@ -727,11 +728,11 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
       grandTotal: (_detail['grand_total'] as num?)?.toDouble() ?? 0,
       preparedBy: _meta.preparedBy,
       createdAt: _detail['created_at'] != null
-          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal())
+          ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal())
           : null,
       approvedBy: _detail['reviewed_by_name'] as String?,
       approvedAt: _detail['reviewed_at'] != null
-          ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['reviewed_at'] as String).toLocal())
+          ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['reviewed_at'] as String).toLocal())
           : null,
       approvedSignatureUrl: _detail['reviewer_signature_url'] as String?,
       stampUrl: _detail['review_stamp_url'] as String?,
@@ -1269,7 +1270,7 @@ class _PiAuditTrailState extends State<_PiAuditTrail> {
   Widget _row(Map<String, dynamic> e) {
     final action = e['action'] as String? ?? '-';
     final by = e['_by'] as String? ?? '—';
-    final ts = e['performed_at'] != null ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
+    final ts = e['performed_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
     final details = e['details'] as String? ?? '';
     Color color;
     switch (action) {

@@ -14,6 +14,7 @@ import '../widgets/void_flow.dart';
 import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
+import '../../../core/format/time_format.dart';
 
 /// Purchase Return Invoices (PRI) — stage 2 of the purchase return flow.
 ///
@@ -471,7 +472,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     final date = _detail['voucher_date'] != null
         ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final createdAt = _detail['created_at'] != null
-        ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
+        ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(_detail['created_at'] as String).toLocal()) : null;
     await VoucherPdf.printVoucher(
       watermark: VoucherPdf.voidMark(_detail),
       voucherNumber: _detail['voucher_number'] as String? ?? '-',
@@ -951,7 +952,7 @@ class _AuditTrailWidget extends StatelessWidget {
             ...entries.map((e) {
               final action = e['action'] as String? ?? '-';
               final ts = e['performed_at'] != null
-                  ? DateFormat('d MMM yyyy HH:mm').format(DateTime.parse(e['performed_at'] as String).toLocal())
+                  ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(e['performed_at'] as String).toLocal())
                   : '';
               final by = e['_by'] as String? ?? '—';
               final details = e['details'] as String? ?? '';

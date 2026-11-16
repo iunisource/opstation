@@ -11,6 +11,7 @@ import '../../erp/services/voucher_pdf.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import 'retailer_web_order_flow.dart';
+import '../../../core/format/time_format.dart';
 
 /// Badge counters shared between the tabs (which load the data) and the shell
 /// (which paints the badges). Set by the tabs on load / mutation.
@@ -382,7 +383,7 @@ class _TabButton extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════
 // Shared helpers
 // ════════════════════════════════════════════════════════════════════
-final _df = DateFormat('d MMM y, h:mm a');
+DateFormat get _df => DateFormat(orgTime('d MMM y, h:mm a'));
 
 void _snack(BuildContext c, String m) {
   ScaffoldMessenger.of(c).showSnackBar(
@@ -1602,7 +1603,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
 
   void _printLedger() {
     final name = ref.read(currentRetailerProvider)?.name ?? 'Customer';
-    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final rows = StringBuffer();
     for (final e in _entries) {
       final debit = e['debit'] as double;

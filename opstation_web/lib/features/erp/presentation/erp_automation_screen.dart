@@ -7,6 +7,7 @@ import '../../../core/permissions/access_control.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// ERP ▸ Automation (SQL 324).
 ///
@@ -268,7 +269,7 @@ class _ErpAutomationScreenState extends ConsumerState<ErpAutomationScreen> {
               const SizedBox(height: 2),
               Text(_how(r), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               if (fired != null) Padding(padding: const EdgeInsets.only(top: 4),
-                  child: Text('Last created a draft ${DateFormat('d MMM y, h:mm a').format(fired.toLocal())}',
+                  child: Text('Last created a draft ${DateFormat(orgTime('d MMM y, h:mm a')).format(fired.toLocal())}',
                       style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
             ])),
             const SizedBox(width: 8),
@@ -339,7 +340,7 @@ class _ErpAutomationScreenState extends ConsumerState<ErpAutomationScreen> {
                             onTap: () => context.go(a == 'job' ? '/manufacturing/job-card' : '/erp/purchase?focus=${r['doc_id']}'),
                             child: Text(doc, style: const TextStyle(fontSize: 12, color: AppTheme.primary, fontWeight: FontWeight.w700, decoration: TextDecoration.underline)),
                           ),
-                        if (t != null) Text(DateFormat('d MMM, h:mm a').format(t.toLocal()), style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
+                        if (t != null) Text(DateFormat(orgTime('d MMM, h:mm a')).format(t.toLocal()), style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary)),
                       ]),
                     ]),
                   );

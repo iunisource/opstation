@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../fleet/fleet_common.dart' show openPrint, esc;
+import '../../../core/format/time_format.dart';
 
 /// One person's app version (SQL 475 app_versions).
 class AppVersionRow {
@@ -207,10 +208,10 @@ class _AppVersionsScreenState extends ConsumerState<AppVersionsScreen> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final day = DateTime(d.year, d.month, d.day);
-    final t = DateFormat('h:mm a').format(d);
+    final t = DateFormat(orgTime('h:mm a')).format(d);
     if (day == today) return 'Today, $t';
     if (day == today.subtract(const Duration(days: 1))) return 'Yesterday, $t';
-    return DateFormat('d MMM, h:mm a').format(d);
+    return DateFormat(orgTime('d MMM, h:mm a')).format(d);
   }
 
   void _call(String phone) {

@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 class DeliveriesScreen extends ConsumerStatefulWidget {
   const DeliveriesScreen({super.key});
@@ -467,7 +468,7 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
                     final canComplete =
                         status == 'assigned' || status == 'in_progress';
                     final createdAt = d['created_at'] != null
-                        ? DateFormat('d MMM · HH:mm').format(
+                        ? DateFormat(orgTime('d MMM · HH:mm')).format(
                             DateTime.parse(d['created_at'] as String)
                                 .toLocal())
                         : '-';

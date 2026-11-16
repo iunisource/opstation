@@ -11,6 +11,7 @@ import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
 import 'running_dot.dart';
+import '../../../core/format/time_format.dart';
 
 class ErpProductionFloorScreen extends ConsumerStatefulWidget {
   const ErpProductionFloorScreen({super.key});
@@ -277,7 +278,7 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
     final c = finished ? const Color(0xFF16A34A) : AppTheme.primary;
     final planned = _planned(j); final produced = _produced(j);
     final since = j['on_floor_at'] != null ? DateTime.tryParse(j['on_floor_at'] as String)?.toLocal() : null;
-    final sinceLbl = since != null ? DateFormat('d MMM, HH:mm').format(since) : null;
+    final sinceLbl = since != null ? DateFormat(orgTime('d MMM, HH:mm')).format(since) : null;
     return InkWell(
       onTap: () => context.go('/manufacturing/job-card?id=${j['id']}'),
       borderRadius: BorderRadius.circular(10),
@@ -842,7 +843,7 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
   }
 
   Widget _event(IconData icon, Color color, String title, DateTime? ts, String? detail, {bool first = false, bool last = false}) {
-    final when = ts != null ? DateFormat('d MMM yyyy, h:mm a').format(ts) : '—';
+    final when = ts != null ? DateFormat(orgTime('d MMM yyyy, h:mm a')).format(ts) : '—';
     return IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Column(children: [
         Container(width: 2, height: 6, color: first ? Colors.transparent : AppTheme.border),

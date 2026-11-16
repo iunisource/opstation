@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart'; // orgModulesProvider
 import '../../auth/auth_controller.dart';
+import '../../../core/format/time_format.dart';
 
 /// Expand a receipt-number field into every slip number it represents.
 /// Ported verbatim from the Team 360 profile so the Super Summary's app-usage
@@ -872,7 +873,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
   // bulk logging. Rows <90s from the previous event are flagged.
   void _showBulkDetails(_Usage u) {
     final ev = u.events;
-    final tf = DateFormat('d MMM, h:mm:ss a');
+    final tf = DateFormat(orgTime('d MMM, h:mm:ss a'));
     DateTime? prevReal;
     final rows = <Widget>[];
     var bulkCount = 0; var skipCount = 0;
@@ -1079,7 +1080,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
           '<h3 class="sub">Jobs Running Behind (&gt;$_kDelayDays days)</h3>$delTbl</div>';
     }
 
-    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final kpi = '<div class="kpis">'
         '<div class="kpi kb"><div class="kl">Total Sale</div><div class="kv">${rs(totals['sales'] as num?)}</div></div>'
         '<div class="kpi ki"><div class="kl">Total Purchase</div><div class="kv">${rs(totals['purchase'] as num?)}</div></div>'

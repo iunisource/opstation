@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import 'receipt_fix.dart';
+import '../../../core/format/time_format.dart';
 
 /// Skipped Receipt Serials — salesperson-wise.
 ///
@@ -516,7 +517,7 @@ class _ErpSkippedReceiptsReportScreenState
       s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
   void _print() {
-    final gen = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+    final gen = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
     final b = StringBuffer();
     for (final r in _rows) {
       final clearedHere = r.skipped.where((n) => _isCleared(r.userId, n)).length;
@@ -673,7 +674,7 @@ class _ErpSkippedReceiptsReportScreenState
       err = 'Could not search: $e';
     }
     if (!mounted) return;
-    final df = DateFormat('d MMM yyyy, h:mm a');
+    final df = DateFormat(orgTime('d MMM yyyy, h:mm a'));
     final nf = NumberFormat('#,##0');
     final exact = int.tryParse(q);
     await showDialog<void>(
@@ -1000,7 +1001,7 @@ class _ErpSkippedReceiptsReportScreenState
           return Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
-                'Supervised${at != null ? ' ${DateFormat('d MMM, h:mm a').format(at)}' : ''}'
+                'Supervised${at != null ? ' ${DateFormat(orgTime('d MMM, h:mm a')).format(at)}' : ''}'
                 '${'${c?['comment'] ?? ''}'.trim().isNotEmpty ? ' — ${c!['comment']}' : ''}',
                 style: TextStyle(fontSize: 11.5, color: Colors.green.shade800)),
           );
@@ -1063,7 +1064,7 @@ class _ErpSkippedReceiptsReportScreenState
   Future<void> _showUses(int n) {
     final list = [...(_uses[n] ?? const <Map<String, dynamic>>[])]
       ..sort((a, b) => '${a['at']}'.compareTo('${b['at']}'));
-    final df = DateFormat('d MMM yyyy, h:mm a');
+    final df = DateFormat(orgTime('d MMM yyyy, h:mm a'));
     final nf = NumberFormat('#,##0');
 
     // ── Pattern: nearby slips of the same book, and the order they were used.
@@ -1097,7 +1098,7 @@ class _ErpSkippedReceiptsReportScreenState
       if (d.inDays >= 1) return '${d.inDays} day${d.inDays == 1 ? '' : 's'}';
       return h > 0 ? '${h}h ${mi}m' : '${d.inMinutes}m';
     }
-    final sm = DateFormat('d MMM, h:mm a');
+    final sm = DateFormat(orgTime('d MMM, h:mm a'));
     String? summary;
     if (earlierHigher.isNotEmpty && myAt != null) {
       final m = earlierHigher.first;

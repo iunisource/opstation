@@ -10,6 +10,7 @@ import '../../../core/format/money.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../../../core/utils/place_name.dart';
 import 'time_in_market.dart';
+import '../../../core/format/time_format.dart';
 
 /// Time in Market print — laid out like the screen (one card per day), not a
 /// grid. [detail] adds "The day, in order" and the summary (single-day print).
@@ -47,7 +48,7 @@ Future<void> printTimDays(
   final kmDays = days.where((d) => d.km != null).toList();
   final totalKm = kmDays.fold<double>(0, (a, d) => a + (d.km ?? 0));
   const pageW = 595.28 - 56; // A4 portrait minus margins
-  final now = DateFormat('d MMM yyyy, h:mm a').format(DateTime.now());
+  final now = DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now());
 
   // Overview figures (several days only).
   final withStops = days.where((d) => d.visits > 0).toList();
@@ -82,8 +83,8 @@ Future<void> printTimDays(
       ]),
       pw.SizedBox(height: 3),
       pw.Text(
-          'Working day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)}  ·  late if first stop after ${TimSettings.hm(s.lateAfter)}  ·  '
-          'early if finished before ${TimSettings.hm(s.earlyBefore)}  ·  gaps over ${s.gapMin} min flagged',
+          'Working day ${TimSettings.clock(s.dayStart)}–${TimSettings.clock(s.dayEnd)}  ·  late if first stop after ${TimSettings.clock(s.lateAfter)}  ·  '
+          'early if finished before ${TimSettings.clock(s.earlyBefore)}  ·  gaps over ${s.gapMin} min flagged',
           style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
       pw.SizedBox(height: 10),
       if (days.length > 1) ...[
@@ -155,7 +156,7 @@ pw.Widget _legend(TimSettings s, bool drivers, bool sales) {
     for (final k in kinds) item(_dot(_pc(timKindColor(k))), timKindLabel(k)),
     item(pw.Container(width: 12, height: 7, color: const PdfColor.fromInt(0xFFF1D2D2)), 'Gap over ${s.gapMin} min'),
     item(pw.Container(width: 12, height: 7, color: const PdfColor.fromInt(0xFFE1E5EF)),
-        'Working day ${TimSettings.hm(s.dayStart)}–${TimSettings.hm(s.dayEnd)}'),
+        'Working day ${TimSettings.clock(s.dayStart)}–${TimSettings.clock(s.dayEnd)}'),
   ]);
 }
 
@@ -283,7 +284,7 @@ pw.Widget _timeline(TimDay day, TimSettings s, double w) {
   for (var h = lo; h <= hi; h += step) {
     final px = x(h) - 10;
     kids.add(pw.Positioned(left: px < 0 ? 0 : (px > w - 22 ? w - 22 : px), top: 23,
-        child: pw.Text(TimSettings.hm(h), style: const pw.TextStyle(fontSize: 6.5, color: _muted))));
+        child: pw.Text(TimSettings.clock(h, short: true), style: const pw.TextStyle(fontSize: 6.5, color: _muted))));
   }
   return pw.SizedBox(width: w, height: 32, child: pw.Stack(children: kids));
 }
