@@ -3,6 +3,10 @@ import 'dart:async';
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../features/auth/auth_controller.dart';
 
 /// Tells web users when a new version of Opstation has been published, with a
 /// "Refresh now" button that loads it cleanly (drops the cached app first).
@@ -10,14 +14,32 @@ import 'package:flutter/material.dart';
 /// How it knows: the app's code file (main.dart.js) changes with every build,
 /// and the hosting stamps it with an ETag. It is checked when the app starts,
 /// every 3 minutes, and whenever the tab comes back into view.
-class UpdatePrompt extends StatefulWidget {
+///
+/// Admin Settings → "New version pop-up on the web" (org.web_update_prompt,
+/// per organization, ON by default): when OFF the pop-up never shows; users
+/// get the new version the next time they open or reload Opstation.
+class UpdatePrompt extends ConsumerStatefulWidget {
   final Widget child;
   const UpdatePrompt({super.key, required this.child});
   @override
-  State<UpdatePrompt> createState() => _UpdatePromptState();
+  ConsumerState<UpdatePrompt> createState() => _UpdatePromptState();
 }
 
-class _UpdatePromptState extends State<UpdatePrompt> {
+class _UpdatePromptState extends ConsumerState<UpdatePrompt> {
+  /// The org's setting (default ON). Read each check, so turning it off in
+  /// Admin Settings takes effect within a few minutes without a reload.
+  Future<bool> _enabled() async {
+    try {
+      final org = ref.read(currentUserProvider)?.orgId;
+      if (org == null) return true;
+      final r = await Supabase.instance.client.from('app_config').select('value')
+          .eq('org_id', org).eq('key', 'org.web_update_prompt').limit(1);
+      return !((r as List).isNotEmpty && '${r.first['value']}'.trim() == 'false');
+    } catch (_) {
+      return true;
+    }
+  }
+
   String? _loaded;
   bool _show = false;
   DateTime? _snoozeUntil;
@@ -81,6 +103,7 @@ class _UpdatePromptState extends State<UpdatePrompt> {
     }
     if (sig != _loaded) {
       if (_snoozeUntil != null && DateTime.now().isBefore(_snoozeUntil!)) return;
+      if (!await _enabled() || !mounted) return; // switched off for this organization
       setState(() => _show = true);
     }
   }

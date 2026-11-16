@@ -701,6 +701,15 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.web_update_prompt',
+    'New version pop-up on the web',
+    'When a new version of Opstation is published, web users see "A new version of Opstation is out" with a '
+        'Refresh button. Turn OFF if the pop-up disturbs routine work: nobody sees it, and everyone gets the new '
+        'version the next time they open or reload Opstation. For this organization only.',
+    defaultOn: true,
+  ),
+
+  _AdminToggle(
     'org.app_update_banner',
     'Ask old apps to update',
     'Phones on an app build older than the minimum below show a "Please update Opstation" banner with a Play Store '
@@ -1048,6 +1057,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.fleet_alerts',
   ]),
   _ToggleGroup('App Updates', Icons.system_update_outlined, [
+    'org.web_update_prompt',
     'org.app_update_banner',
   ]),
   _ToggleGroup('Reimbursements', Icons.receipt_long_outlined, [
