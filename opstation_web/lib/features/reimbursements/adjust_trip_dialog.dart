@@ -473,6 +473,7 @@ Future<void> printClaimTripSummary(
   double allowanceDefault = 0,
   required String orgName,
   String? approvedBy,
+  DateTime? approvedAt,
 }) async {
   final db = Supabase.instance.client;
   final messenger = ScaffoldMessenger.maybeOf(context);
@@ -524,6 +525,7 @@ Future<void> printClaimTripSummary(
         allowancePerDay: allow > 0 || (existing?['allowance'] != null) ? allow : null,
         unpaidDays: 1,
         approvedBy: approvedBy,
+        approvedAt: approvedAt,
       ),
       adjustNote: adjusted ? reimbAdjustNote(existing!, reasons: false, defaultAllowance: allowanceDefault) : null,
     );

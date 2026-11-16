@@ -203,6 +203,8 @@ class ReimbInfo {
   final String? stamp; // why days are excluded (already approved), one line per claim
   final bool fullyPaid; // every day already approved → nothing to claim
   final String? approvedBy;
+  /// When the claim was approved (for the APPROVED watermark).
+  final DateTime? approvedAt;
   final double paidKm; // km of trips already approved / paid (excluded)
   /// Dates (yyyy-MM-dd) with a trip already approved → marked † and excluded.
   final Set<String> excludedDays;
@@ -216,7 +218,7 @@ class ReimbInfo {
   final int? unpaidDays;
   /// Allowance total set by the approver (days can differ); overrides per-day × days.
   final double? allowanceTotal;
-  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.paidKm = 0,
+  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.approvedAt, this.paidKm = 0,
       this.excludedDays = const <String>{}, this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays,
       this.allowanceTotal});
 }
@@ -276,7 +278,7 @@ class ReportPdfBuilder {
     final trip = ctx.trip;
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
-      pageTheme: _pageTheme(duplicate),
+      pageTheme: _pageTheme(duplicate, reimb),
       header: (c) => _pageHeader(orgName, 'Trip Summary'),
       footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Trip Summary',
           distanceNote: ctx.usedGoogle
@@ -371,7 +373,7 @@ class ReportPdfBuilder {
     final distIdx = showSalesperson ? 4 : 3;
 
     doc.addPage(pw.MultiPage(
-      pageTheme: _pageTheme(duplicate),
+      pageTheme: _pageTheme(duplicate, reimb),
       header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
       footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Combined Trip Summary',
           distanceNote: 'Distances: road distance (Google Directions API); straight-line where unavailable')),
@@ -449,12 +451,53 @@ class ReportPdfBuilder {
 
   /// A4 page theme; when [duplicate] is true every page gets a faint diagonal
   /// "DUPLICATE" watermark behind the content (re-issued reimbursement docs).
-  static pw.PageTheme _pageTheme(bool duplicate) => pw.PageTheme(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
-        buildBackground: (ctx) =>
-            duplicate ? _duplicateWatermark() : pw.SizedBox(),
-      );
+  /// An approved claim (Reimbursement Approvals print) also gets a faint
+  /// repeated "APPROVED BY …" mark over every page, like an approved PA.
+  static pw.PageTheme _pageTheme(bool duplicate, [ReimbInfo? reimb]) {
+    final by = reimb?.approvedBy?.trim() ?? '';
+    return pw.PageTheme(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+      buildBackground: (ctx) =>
+          duplicate ? _duplicateWatermark() : pw.SizedBox(),
+      buildForeground: by.isEmpty ? null : (ctx) => _approvedMarks(by, reimb?.approvedAt),
+    );
+  }
+
+  static pw.Widget _approvedMarks(String by, DateTime? at) {
+    final line = 'APPROVED BY ${by.toUpperCase()}';
+    final when = at == null ? '' : DateFormat(orgTime('d MMM yyyy, h:mm a')).format(at.toLocal());
+    return pw.FullPage(
+      ignoreMargins: true,
+      child: pw.Opacity(
+        opacity: 0.09,
+        child: pw.Column(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+          children: [
+            for (var r = 0; r < 8; r++)
+              pw.Padding(
+                padding: pw.EdgeInsets.only(left: r.isOdd ? 60 : 0, right: r.isOdd ? 0 : 60),
+                child: pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                  children: [
+                    for (var c = 0; c < 3; c++)
+                      pw.Transform.rotate(
+                        angle: 0.35,
+                        child: pw.Column(mainAxisSize: pw.MainAxisSize.min, children: [
+                          pw.Text(line,
+                              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _brandBlue)),
+                          if (when.isNotEmpty)
+                            pw.Text(when, style: const pw.TextStyle(fontSize: 7, color: _brandBlue)),
+                        ]),
+                      ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   static pw.Widget _duplicateWatermark() => pw.FullPage(
         ignoreMargins: true,

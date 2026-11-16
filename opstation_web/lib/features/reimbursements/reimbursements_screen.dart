@@ -501,6 +501,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                             allowanceDefault: _allowDefault,
                             orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
                             approvedBy: c['status'] == 'approved' || c['status'] == 'paid' ? '${c['decided_by_name'] ?? ''}' : null,
+                            approvedAt: DateTime.tryParse('${c['decided_at'] ?? ''}'),
                           ),
                     icon: const Icon(Icons.print_outlined, size: 16),
                     label: Text((_adj[c['id']]?.isNotEmpty ?? false) ? 'Print / PDF (adjusted)' : 'Print / PDF')),
@@ -809,6 +810,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
             unpaidDays: atDefault,
             allowanceTotal: _allowance(c) > 0 || _allowDefault > 0 ? _allowance(c) : null,
             approvedBy: c['status'] == 'approved' || c['status'] == 'paid' ? '${c['decided_by_name'] ?? ''}' : null,
+            approvedAt: DateTime.tryParse('${c['decided_at'] ?? ''}'),
           );
         }(),
         adjustNote: notes.isEmpty ? null : notes.join('\n'),
