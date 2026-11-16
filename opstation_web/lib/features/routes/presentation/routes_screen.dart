@@ -634,7 +634,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
                               IconButton(
                                   icon: const Icon(Icons.history,
                                       size: 18, color: AppTheme.textSecondary),
-                                  tooltip: 'Assignment history',
+                                  tooltip: 'History',
                                   onPressed: () => _showAssignmentHistory(
                                       r['id'] as String, '${r['name'] ?? ''}')),
                               if (!_isUnassignedRoute(r))
@@ -822,13 +822,17 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     }
   }
 
-  /// Route lifecycle: every assignment, hand-over and un-assignment
-  /// (route_assignment_log, SQL 359), newest first.
+  /// Route history, two sections:
+  ///  * Customers — every customer added to / removed from the route, with who
+  ///    and how (route_stop_log, SQL 483), grouped per save.
+  ///  * Salesperson — every assignment, hand-over and un-assignment
+  ///    (route_assignment_log, SQL 359).
   Future<void> _showAssignmentHistory(String routeId, String routeName) async {
+    final client = Supabase.instance.client;
     List<Map<String, dynamic>> rows = [];
     String? err;
     try {
-      rows = List<Map<String, dynamic>>.from(await Supabase.instance.client
+      rows = List<Map<String, dynamic>>.from(await client
           .from('route_assignment_log')
           .select()
           .eq('route_id', routeId)
@@ -839,6 +843,20 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
           ? 'This feature isn\'t set up yet — please contact Opstation support.'
           : 'Could not load: ${e.toString().split('\n').first}';
     }
+    List<Map<String, dynamic>> stopLog = [];
+    String? stopErr;
+    try {
+      stopLog = List<Map<String, dynamic>>.from(await client
+          .from('route_stop_log')
+          .select('customer_id, op, via, by_name, at')
+          .eq('route_id', routeId)
+          .order('at', ascending: false)
+          .limit(1000));
+    } catch (e) {
+      stopErr = e.toString().contains('route_stop_log')
+          ? 'Customer changes are not being recorded yet.'
+          : 'Could not load: ${e.toString().split('\n').first}';
+    }
     if (!mounted) return;
     final names = <String, String>{
       for (final m in rows)
@@ -846,67 +864,140 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     };
     if (names.isNotEmpty) {
       try {
-        final u = await Supabase.instance.client
+        final u = await client
             .from('users').select('id, name').inFilter('id', names.keys.toList());
         for (final x in (u as List)) {
           names[x['id'] as String] = '${x['name'] ?? ''}';
         }
       } catch (_) {}
     }
+    // Shop names for the customer changes.
+    final shops = <String, String>{};
+    final custIds = {for (final m in stopLog) '${m['customer_id']}'}.toList();
+    for (var k = 0; k < custIds.length; k += 150) {
+      try {
+        final c = await client.from('customers').select('id, shop_name')
+            .inFilter('id', custIds.sublist(k, (k + 150).clamp(0, custIds.length)));
+        for (final x in (c as List)) {
+          shops['${x['id']}'] = '${x['shop_name'] ?? ''}';
+        }
+      } catch (_) {}
+    }
+    // One entry per save: same moment, same action, same person, same way.
+    final groups = <String, Map<String, dynamic>>{};
+    for (final m in stopLog) {
+      final key = '${m['at']}|${m['op']}|${m['via']}|${m['by_name']}';
+      final g = groups.putIfAbsent(key, () => {...m, 'shops': <String>[]});
+      (g['shops'] as List<String>).add(shops['${m['customer_id']}'] ?? '${m['customer_id']}');
+    }
+    final changes = groups.values.toList();
     if (!mounted) return;
     final df = DateFormat('d MMM y, h:mm a');
+
+    Widget header(String t) => Padding(
+          padding: const EdgeInsets.only(top: 14, bottom: 4),
+          child: Text(t.toUpperCase(),
+              style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, letterSpacing: .6, color: AppTheme.textSecondary)),
+        );
+    Widget empty(String t) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Text(t, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+        );
+
+    Widget customerTile(Map<String, dynamic> g) {
+      final list = (g['shops'] as List<String>)..sort();
+      final added = g['op'] == 'added';
+      final when = DateTime.tryParse('${g['at'] ?? ''}')?.toLocal();
+      final by = '${g['by_name'] ?? ''}';
+      final direct = g['via'] == 'direct';
+      return Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          dense: true,
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(left: 30, bottom: 8),
+          leading: Icon(added ? Icons.add_circle_outline : Icons.remove_circle_outline,
+              size: 18, color: added ? AppTheme.success : AppTheme.danger),
+          title: Text(
+              '${added ? 'Added' : 'Removed'} ${list.length} customer${list.length == 1 ? '' : 's'}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          subtitle: Text(
+            [
+              if (when != null) df.format(when),
+              if (by.isNotEmpty) 'by $by',
+              direct ? 'not through the route editor' : 'route editor',
+            ].join(' · '),
+            style: TextStyle(fontSize: 11.5, color: direct ? Colors.orange.shade800 : null),
+          ),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final n in list)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1.5),
+                child: Text(n, style: const TextStyle(fontSize: 12.5)),
+              ),
+          ],
+        ),
+      );
+    }
+
+    Widget assignTile(Map<String, dynamic> m) {
+      final note = '${m['note'] ?? ''}';
+      final from = m['from_name'] as String?;
+      final to = m['to_name'] as String?;
+      final when = DateTime.tryParse('${m['changed_at'] ?? ''}')?.toLocal();
+      final by = names[m['changed_by']] ?? '';
+      final (IconData icon, Color color, String what) = note.startsWith('Handed')
+          ? (Icons.swap_horiz, Colors.orange.shade800, '${from ?? '—'} → ${to ?? '—'}')
+          : note == 'Unassigned'
+              ? (Icons.person_remove_outlined, AppTheme.danger, 'Removed from ${from ?? '—'}')
+              : note.startsWith('Clean-up')
+                  ? (Icons.cleaning_services_outlined, AppTheme.textSecondary,
+                      'Kept with ${to ?? '—'}, removed from ${from ?? '—'}')
+                  : (Icons.person_add_alt_1_outlined, AppTheme.success, 'Assigned to ${to ?? '—'}');
+      return ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(icon, size: 18, color: color),
+        title: Text(what, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        subtitle: Text(
+          [
+            if (when != null) df.format(when),
+            if (by.isNotEmpty) 'by $by',
+            if (note.startsWith('Clean-up')) 'one-time clean-up of a double assignment',
+          ].join(' · '),
+          style: const TextStyle(fontSize: 11.5),
+        ),
+      );
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Assignment history', style: const TextStyle(fontSize: 18)),
+        title: const Text('History', style: TextStyle(fontSize: 18)),
         content: SizedBox(
           width: 520,
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(routeName, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
-            const SizedBox(height: 10),
-            if (err != null)
-              Text(err, style: const TextStyle(color: AppTheme.danger))
-            else if (rows.isEmpty)
-              const Text('No changes recorded yet.',
-                  style: TextStyle(color: AppTheme.textSecondary))
-            else
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: rows.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final m = rows[i];
-                    final note = '${m['note'] ?? ''}';
-                    final from = m['from_name'] as String?;
-                    final to = m['to_name'] as String?;
-                    final when = DateTime.tryParse('${m['changed_at'] ?? ''}')?.toLocal();
-                    final by = names[m['changed_by']] ?? '';
-                    final (IconData icon, Color color, String what) = note.startsWith('Handed')
-                        ? (Icons.swap_horiz, Colors.orange.shade800, '${from ?? '—'} → ${to ?? '—'}')
-                        : note == 'Unassigned'
-                            ? (Icons.person_remove_outlined, AppTheme.danger, 'Removed from ${from ?? '—'}')
-                            : note.startsWith('Clean-up')
-                                ? (Icons.cleaning_services_outlined, AppTheme.textSecondary,
-                                    'Kept with ${to ?? '—'}, removed from ${from ?? '—'}')
-                                : (Icons.person_add_alt_1_outlined, AppTheme.success, 'Assigned to ${to ?? '—'}');
-                    return ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(icon, size: 18, color: color),
-                      title: Text(what, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                      subtitle: Text(
-                        [
-                          if (when != null) df.format(when),
-                          if (by.isNotEmpty) 'by $by',
-                          if (note.startsWith('Clean-up')) 'one-time clean-up of a double assignment',
-                        ].join(' · '),
-                        style: const TextStyle(fontSize: 11.5),
-                      ),
-                    );
-                  },
-                ),
-              ),
+            Flexible(
+              child: ListView(shrinkWrap: true, children: [
+                header('Customers'),
+                if (stopErr != null)
+                  empty(stopErr)
+                else if (changes.isEmpty)
+                  empty('No customer changes recorded yet.')
+                else
+                  for (final g in changes) customerTile(g),
+                const Divider(height: 18),
+                header('Salesperson'),
+                if (err != null)
+                  Text(err, style: const TextStyle(color: AppTheme.danger))
+                else if (rows.isEmpty)
+                  empty('No changes recorded yet.')
+                else
+                  for (final m in rows) assignTile(m),
+              ]),
+            ),
           ]),
         ),
         actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
