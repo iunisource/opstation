@@ -184,6 +184,19 @@ class SupabaseSyncService {
     });
   }
 
+  /// A trip's whole shop list in one request (all or nothing), in chunks of
+  /// 500. One-by-one pushes used to stop at the first network blip and the
+  /// rest of the list never reached the server.
+  Future<void> pushTripStops(List<TripStopsData> stops) async {
+    for (var i = 0; i < stops.length; i += 500) {
+      final part = stops.sublist(i, i + 500 > stops.length ? stops.length : i + 500);
+      await _client.from('trip_stops').upsert([
+        for (final s in part)
+          {'trip_id': s.tripId, 'customer_id': s.customerId, 'position': s.position},
+      ]);
+    }
+  }
+
   Future<void> pushTripStop(TripStopsData s) async {
     await _client.from('trip_stops').upsert({
       'trip_id': s.tripId,

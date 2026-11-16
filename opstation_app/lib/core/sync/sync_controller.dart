@@ -14,6 +14,7 @@ import '../database/app_database_provider.dart';
 import '../supabase/supabase_pull_service.dart';
 import '../supabase/supabase_sync_service.dart';
 import 'connectivity_service.dart';
+import 'trip_stops_synced.dart';
 import '../../features/surveyor/services/survey_audit_service.dart';
 import '../../features/surveyor/services/survey_location_service.dart';
 
@@ -393,12 +394,21 @@ class SyncController extends Notifier<SyncStatus> {
           : await (_db.select(_db.trips)..where((t) => t.orgId.equals(orgId))).get();
       await _pushTripsRespectingServerClose(trips, tag: 'pushAll');
 
+      // Shop lists in bulk, per trip (was one request per row: slow, and the
+      // rows after a failure were simply lost until the next login).
       final tripStops = await _db.select(_db.tripStops).get();
+      final byTrip = <String, List<TripStopsData>>{};
       for (final s in tripStops) {
+        (byTrip[s.tripId] ??= []).add(s);
+      }
+      final tripIdsHere = {for (final t in trips) t.id};
+      for (final e in byTrip.entries) {
+        if (!tripIdsHere.contains(e.key)) continue; // other orgs' trips
         try {
-          await _supabase.pushTripStop(s);
-        } catch (e) {
-          print('pushTripStop FAILED: $e');
+          await _supabase.pushTripStops(e.value);
+          await TripStopsSynced.mark(e.key);
+        } catch (err) {
+          print('pushTripStops FAILED (${e.key}): $err');
         }
       }
 
@@ -592,6 +602,20 @@ class SyncController extends Notifier<SyncStatus> {
         final recentTrips =
             localTrips.where((t) => t.startedAt.isAfter(cutoff)).toList();
         await _pushTripsRespectingServerClose(recentTrips, tag: 'flushPending');
+        // A trip's shop list that never fully reached the server (signal
+        // dropped at route start): re-send it whole until confirmed.
+        for (final t in recentTrips) {
+          if (await TripStopsSynced.isSynced(t.id)) continue;
+          try {
+            final stops = await (_db.select(_db.tripStops)
+                  ..where((s) => s.tripId.equals(t.id)))
+                .get();
+            if (stops.isNotEmpty) await _supabase.pushTripStops(stops);
+            await TripStopsSynced.mark(t.id);
+          } catch (e) {
+            SmsService.note('sync: trip ${t.id} shop list not sent yet — $e');
+          }
+        }
       } catch (e) {
         SmsService.note('sync: recent-trip re-push block threw — $e');
       }
@@ -620,12 +644,10 @@ class SyncController extends Notifier<SyncStatus> {
         final tripStops = await (_db.select(_db.tripStops)
               ..where((s) => s.tripId.isIn(tripIds.toList())))
             .get();
-        for (final s in tripStops) {
-          try {
-            await _supabase.pushTripStop(s);
-          } catch (e) {
-            print('flushPending pushTripStop FAILED: $e');
-          }
+        try {
+          await _supabase.pushTripStops(tripStops);
+        } catch (e) {
+          print('flushPending pushTripStops FAILED: $e');
         }
       }
 

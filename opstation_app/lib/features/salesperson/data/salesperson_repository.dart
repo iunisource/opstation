@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/supabase/supabase_sync_service.dart';
+import '../../../core/sync/trip_stops_synced.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../models/customer.dart';
@@ -467,10 +468,14 @@ class SalespersonRepository {
       final stopRows = await (_db.select(_db.tripStops)
             ..where((s) => s.tripId.equals(trip.id)))
           .get();
-      for (final s in stopRows) {
-        await _sync?.pushTripStop(s);
+      final sync = _sync;
+      if (sync != null) {
+        await sync.pushTripStops(stopRows); // whole list in one go
+        await TripStopsSynced.mark(trip.id);
       }
-    } catch (_) {}
+    } catch (_) {
+      // Not confirmed: the sync loop re-sends the shop list until it lands.
+    }
     return trip;
   }
 
@@ -502,6 +507,7 @@ class SalespersonRepository {
           ),
         );
     try {
+      await TripStopsSynced.unmark(tripId); // re-confirm on the next sync
       final rows = await (_db.select(_db.tripStops)
             ..where((s) => s.tripId.equals(tripId) & s.customerId.equals(customerId)))
           .get();
