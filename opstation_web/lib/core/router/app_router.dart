@@ -182,6 +182,7 @@ import '../../features/fleet/fleet_screen.dart' deferred as _s169;
 import '../../features/licences/licences_screen.dart' deferred as _s170;
 import '../../features/reimbursements/reimbursements_screen.dart' deferred as _s171;
 import '../../features/operations/presentation/app_versions_screen.dart' deferred as _s172;
+import '../../features/reimbursements/reimb_claim_public_screen.dart' deferred as _s173;
 
 class AuthNotifier extends ChangeNotifier {
   AuthNotifier(this._ref) {
@@ -233,6 +234,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       if (loc.startsWith('/f/')) return null;
       // Public Payment Advice copy (QR on the printed slip) — no login.
       if (loc.startsWith('/pa/')) return null;
+      // Public check of a reimbursement claim (QR on its print) — no login.
+      if (loc.startsWith('/rc/')) return null;
       // Approve / Reject link from a PO or PA notification email — no login.
       if (loc.startsWith('/act/')) return null;
 
@@ -396,6 +399,10 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/subscription-expired',
         builder: (_, __) => _deferred('_s068', _s068.loadLibrary, () => _s068.SubscriptionExpiredScreen()),
+      ),
+      GoRoute(
+        path: '/rc/:token',
+        builder: (_, state) => _deferred('_s173', _s173.loadLibrary, () => _s173.ReimbClaimPublicScreen(token: state.pathParameters['token'] ?? '')),
       ),
       GoRoute(
         path: '/pa/:token',
@@ -995,6 +1002,7 @@ final Map<String, Future<void> Function()> _allScreens = {
   '_s170': _s170.loadLibrary,
   '_s171': _s171.loadLibrary,
   '_s172': _s172.loadLibrary,
+  '_s173': _s173.loadLibrary,
 };
 
 /// Once the first screen is up, download the other screens' code one by one

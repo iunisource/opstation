@@ -205,6 +205,9 @@ class ReimbInfo {
   final String? approvedBy;
   /// When the claim was approved (for the APPROVED watermark).
   final DateTime? approvedAt;
+  /// Public check link of the claim (SQL 485) → trust badge + QR under the
+  /// signature line.
+  final String? verifyUrl;
   final double paidKm; // km of trips already approved / paid (excluded)
   /// Dates (yyyy-MM-dd) with a trip already approved → marked † and excluded.
   final Set<String> excludedDays;
@@ -218,7 +221,7 @@ class ReimbInfo {
   final int? unpaidDays;
   /// Allowance total set by the approver (days can differ); overrides per-day × days.
   final double? allowanceTotal;
-  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.approvedAt, this.paidKm = 0,
+  const ReimbInfo({this.rate, this.stamp, this.fullyPaid = false, this.approvedBy, this.approvedAt, this.verifyUrl, this.paidKm = 0,
       this.excludedDays = const <String>{}, this.generatedDays = const <String>{}, this.generatedNote, this.allowancePerDay, this.unpaidDays,
       this.allowanceTotal});
 }
@@ -298,7 +301,7 @@ class ReportPdfBuilder {
         if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
         _reimbursementBlock(ctx, reimb),
         pw.SizedBox(height: 36),
-        _signatureLine(),
+        _signatureLine(reimb),
       ],
     ));
     return doc.save();
@@ -418,7 +421,7 @@ class ReportPdfBuilder {
         if (reimb?.stamp != null) ...[_paidStamp(reimb!), pw.SizedBox(height: 10)],
         _reimbursementClaimBlock(grandTotalKm, reimb, rows.length),
         pw.SizedBox(height: 36),
-        _signatureLine(),
+        _signatureLine(reimb),
       ],
     ));
     return doc.save();
@@ -1180,7 +1183,8 @@ class ReportPdfBuilder {
     );
   }
 
-  static pw.Widget _signatureLine() {
+  static pw.Widget _signatureLine([ReimbInfo? reimb]) {
+    final url = reimb?.verifyUrl;
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -1196,7 +1200,63 @@ class ReportPdfBuilder {
                   letterSpacing: 0.8,
                   color: _muted)),
         ),
+        if (url != null && url.isNotEmpty) ...[
+          pw.SizedBox(height: 10),
+          _trustBadge(url),
+        ],
       ],
+    );
+  }
+
+  /// "Verified document" badge with a QR that opens the claim's public check
+  /// page (/#/rc/<token>) — scanning shows whether the print is genuine.
+  static pw.Widget _trustBadge(String url) {
+    const green = PdfColor.fromInt(0xFF059669);
+    const greenBg = PdfColor.fromInt(0xFFECFDF5);
+    const greenLine = PdfColor.fromInt(0xFFA7F3D0);
+    return pw.Container(
+      padding: const pw.EdgeInsets.fromLTRB(8, 6, 6, 6),
+      decoration: pw.BoxDecoration(
+        color: greenBg,
+        border: pw.Border.all(color: greenLine, width: 0.6),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
+      ),
+      child: pw.Row(mainAxisSize: pw.MainAxisSize.min, children: [
+        // shield-like round seal with a tick (drawn: the PDF font has no ✓)
+        pw.Container(
+          width: 20,
+          height: 20,
+          decoration: const pw.BoxDecoration(color: green, shape: pw.BoxShape.circle),
+          child: pw.CustomPaint(
+            size: const PdfPoint(20, 20),
+            painter: (canvas, size) {
+              canvas
+                ..setStrokeColor(PdfColors.white)
+                ..setLineWidth(1.8)
+                ..setLineCap(PdfLineCap.round)
+                ..setLineJoin(PdfLineJoin.round)
+                ..moveTo(5.5, 10.5)
+                ..lineTo(8.8, 7.2)
+                ..lineTo(14.8, 13.5)
+                ..strokePath();
+            },
+          ),
+        ),
+        pw.SizedBox(width: 7),
+        pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, mainAxisSize: pw.MainAxisSize.min, children: [
+          pw.Text('VERIFIED DOCUMENT',
+              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: green, letterSpacing: 0.6)),
+          pw.SizedBox(height: 1.5),
+          pw.Text('Issued by Opstation. Scan the QR to check it is genuine.',
+              style: const pw.TextStyle(fontSize: 6.5, color: _muted)),
+        ]),
+        pw.SizedBox(width: 8),
+        pw.Container(
+          color: PdfColors.white,
+          padding: const pw.EdgeInsets.all(2),
+          child: pw.BarcodeWidget(barcode: pw.Barcode.qrCode(), data: url, width: 44, height: 44, drawText: false),
+        ),
+      ]),
     );
   }
 

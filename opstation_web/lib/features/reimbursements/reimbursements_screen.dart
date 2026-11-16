@@ -502,6 +502,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                             orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
                             approvedBy: c['status'] == 'approved' || c['status'] == 'paid' ? '${c['decided_by_name'] ?? ''}' : null,
                             approvedAt: DateTime.tryParse('${c['decided_at'] ?? ''}'),
+                            verifyUrl: _verifyUrl(c),
                           ),
                     icon: const Icon(Icons.print_outlined, size: 16),
                     label: Text((_adj[c['id']]?.isNotEmpty ?? false) ? 'Print / PDF (adjusted)' : 'Print / PDF')),
@@ -811,6 +812,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
             allowanceTotal: _allowance(c) > 0 || _allowDefault > 0 ? _allowance(c) : null,
             approvedBy: c['status'] == 'approved' || c['status'] == 'paid' ? '${c['decided_by_name'] ?? ''}' : null,
             approvedAt: DateTime.tryParse('${c['decided_at'] ?? ''}'),
+            verifyUrl: _verifyUrl(c),
           );
         }(),
         adjustNote: notes.isEmpty ? null : notes.join('\n'),
@@ -819,6 +821,12 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     } catch (e) {
       _snack(friendlyError('Could not print', e));
     }
+  }
+
+  /// Public check link printed as a QR under the signature (SQL 485).
+  String? _verifyUrl(Map c) {
+    final t = '${c['public_token'] ?? ''}';
+    return t.length < 32 ? null : '${Uri.base.origin}/#/rc/$t';
   }
 
   /// "Combined Trip Summary 2–13 Nov, approved by Mian Hamza on 14 Nov, paid 15 Nov"
