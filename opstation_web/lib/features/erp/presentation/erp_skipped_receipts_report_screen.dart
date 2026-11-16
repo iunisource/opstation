@@ -587,6 +587,109 @@ class _ErpSkippedReceiptsReportScreenState
     }
   }
 
+  final _searchCtrl = TextEditingController();
+
+  /// Every collection with this receipt number (or containing it), any date,
+  /// any salesperson — to verify a slip. Tap a result for its nearby slips.
+  Future<void> _searchReceipt(String raw) async {
+    final q = raw.trim();
+    final orgId = _orgId;
+    if (q.isEmpty || orgId == null) return;
+    List<Map<String, dynamic>> rows = [];
+    String? err;
+    try {
+      rows = List<Map<String, dynamic>>.from(await Supabase.instance.client
+          .from('visits')
+          .select('user_id, user_name, receipt_number, amount, timestamp, status, trip_id, customers(shop_name, code)')
+          .eq('org_id', orgId)
+          .ilike('receipt_number', '%$q%')
+          .order('timestamp', ascending: false)
+          .limit(100));
+    } catch (e) {
+      err = 'Could not search: $e';
+    }
+    if (!mounted) return;
+    final df = DateFormat('d MMM yyyy, h:mm a');
+    final nf = NumberFormat('#,##0');
+    final exact = int.tryParse(q);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Receipt # "$q"'),
+          Text(
+            [
+              '${rows.length}${rows.length == 100 ? '+' : ''} collection${rows.length == 1 ? '' : 's'} found (all dates)',
+              if (exact != null) _bookLabel(exact),
+            ].join(' · '),
+            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
+        ]),
+        content: SizedBox(
+          width: 600,
+          child: err != null
+              ? Text(err, style: const TextStyle(color: AppTheme.danger))
+              : rows.isEmpty
+                  ? const Text('No collection has this receipt number.')
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: rows.length,
+                      separatorBuilder: (_, __) => const Divider(height: 14),
+                      itemBuilder: (_, i) {
+                        final v = rows[i];
+                        final at = DateTime.tryParse('${v['timestamp'] ?? ''}')?.toLocal();
+                        final cust = v['customers'] as Map?;
+                        final who = '${v['user_name'] ?? ''}'.trim().isNotEmpty
+                            ? '${v['user_name']}'
+                            : (_names['${v['user_id']}'] ?? 'Unknown');
+                        final slips = _receiptSlipNumbers('${v['receipt_number'] ?? ''}');
+                        return InkWell(
+                          onTap: slips.isEmpty
+                              ? null
+                              : () {
+                                  if (_uses.containsKey(slips.first)) {
+                                    _showUses(slips.first);
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                                        content: Text('Generate the report for that period to see this slip\'s nearby slips.')));
+                                  }
+                                },
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            SizedBox(
+                              width: 90,
+                              child: Text('${v['receipt_number'] ?? ''}',
+                                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                            ),
+                            Expanded(
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(who, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                                Text(
+                                  [
+                                    if (at != null) df.format(at),
+                                    if (cust != null && '${cust['shop_name'] ?? ''}'.isNotEmpty) '${cust['shop_name']}',
+                                  ].join(' · '),
+                                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                ),
+                              ]),
+                            ),
+                            Text('Rs ${nf.format((v['amount'] as num?) ?? 0)}',
+                                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                          ]),
+                        );
+                      },
+                    ),
+        ),
+        actions: [
+          if (rows.isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Text('Tap a row for its nearby slips', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -641,6 +744,23 @@ class _ErpSkippedReceiptsReportScreenState
             _quickChip('Yesterday', 'yesterday'),
             _quickChip('This week', 'week'),
             _quickChip('This month', 'month'),
+            SizedBox(
+              width: 280,
+              child: TextField(
+                controller: _searchCtrl,
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'Search receipt # (all dates)…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.arrow_forward, size: 18),
+                    onPressed: () => _searchReceipt(_searchCtrl.text),
+                  ),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onSubmitted: _searchReceipt,
+              ),
+            ),
           ]),
         ),
         Expanded(child: _body()),
