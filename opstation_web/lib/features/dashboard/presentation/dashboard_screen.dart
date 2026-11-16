@@ -54,6 +54,10 @@ class _DashboardStats extends StatefulWidget {
 
 class _DashboardStatsState extends State<_DashboardStats> {
   Map<String, dynamic> _stats = {};
+  // Collection on the same weekday one week earlier — up to the same time of
+  // day when viewing today, the whole day otherwise. null = not loaded.
+  int? _lastWeekCollection;
+  String? _lastWeekFor; // which day _lastWeekCollection belongs to
   bool _loading = true;
   bool _partial = false; // some rollups failed to load
 
@@ -232,7 +236,60 @@ class _DashboardStatsState extends State<_DashboardStats> {
     super.dispose();
   }
 
+  /// Same weekday last week, for the "vs last week" line on the Collection tile.
+  Future<void> _loadLastWeek() async {
+    final client = Supabase.instance.client;
+    final d = _selectedDate;
+    final key = '${d.year}-${d.month}-${d.day}';
+    if (_lastWeekFor != key && _lastWeekCollection != null) {
+      setState(() => _lastWeekCollection = null); // another day picked
+    }
+    final start = DateTime(d.year, d.month, d.day).subtract(const Duration(days: 7));
+    final end = _isToday
+        ? DateTime.now().subtract(const Duration(days: 7)) // same time of day
+        : start.add(const Duration(days: 1));
+    int? total;
+    // Sum of collections in that window (paged, so a busy day is never cut
+    // off at the server's row limit).
+    try {
+      var sum = 0;
+      for (var from = 0; ; from += 1000) {
+        final rows = await client.from('visits').select('amount')
+            .eq('org_id', widget.orgId)
+            .gte('timestamp', start.toUtc().toIso8601String())
+            .lt('timestamp', end.toUtc().toIso8601String())
+            .gt('amount', 0)
+            .order('id')
+            .range(from, from + 999) as List;
+        for (final r in rows) {
+          sum += ((r['amount'] as num?) ?? 0).round();
+        }
+        if (rows.length < 1000) break;
+      }
+      total = sum;
+    } catch (_) {}
+    if (mounted && '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}' == key) {
+      setState(() { _lastWeekCollection = total; _lastWeekFor = key; });
+    }
+  }
+
+  /// e.g. "▲ 12% vs Rs 84,500 same time last Mon"
+  String? _vsLastWeek() {
+    final now = _stats['collection'];
+    final prev = _lastWeekCollection;
+    if (prev == null || now is! num || _locked) return null;
+    final d = _selectedDate.subtract(const Duration(days: 7));
+    final day = DateFormat('EEE').format(d);
+    final amt = 'Rs ${NumberFormat('#,##0').format(prev)}';
+    final when = _isToday ? 'same time last $day' : 'last $day';
+    if (prev == 0) return now > 0 ? 'vs Rs 0 $when' : null;
+    final pct = ((now - prev) / prev * 100).round();
+    final arrow = pct > 0 ? '▲' : (pct < 0 ? '▼' : '=');
+    return '$arrow ${pct.abs()}% vs $amt $when';
+  }
+
   Future<void> _load() async {
+    _loadLastWeek(); // runs alongside; fills in the small comparison line
     final client = Supabase.instance.client;
     final d = _selectedDate;
     // Local midnight of the selected day + next day, converted to UTC for the
@@ -503,6 +560,7 @@ class _DashboardStatsState extends State<_DashboardStats> {
         value: _mask(_stats['collection'] == null ? 'Rs —' : 'Rs ${_stats['collection']}'),
         color: AppTheme.primary,
         featured: true,
+        sub: _vsLastWeek(),
         onTap: _locked ? null : _showCollectionBreakdown,
       ),
       if (_isToday)
@@ -680,6 +738,7 @@ class _StatCard extends StatelessWidget {
   final Color color;
   final VoidCallback? onTap;
   final bool featured;
+  final String? sub; // small line under the label (e.g. vs last week)
 
   const _StatCard({
     required this.icon,
@@ -688,6 +747,7 @@ class _StatCard extends StatelessWidget {
     required this.color,
     this.onTap,
     this.featured = false,
+    this.sub,
   });
 
   @override
@@ -736,6 +796,15 @@ class _StatCard extends StatelessWidget {
               style: TextStyle(
                   color: featured ? Colors.white.withOpacity(0.75) : AppTheme.textSecondary,
                   fontSize: 12.5, fontWeight: FontWeight.w500)),
+          if (sub != null) ...[
+            const SizedBox(height: 3),
+            Text(sub!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    color: featured ? Colors.white.withOpacity(0.6) : AppTheme.textSecondary,
+                    fontSize: 11)),
+          ],
         ],
       ),
     );
