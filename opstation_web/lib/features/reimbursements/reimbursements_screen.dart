@@ -438,7 +438,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 760, maxHeight: MediaQuery.of(ctx).size.height * 0.9),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(18),
+            padding: EdgeInsets.all(MediaQuery.of(ctx).size.width < 600 ? 12 : 18),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
               Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
                 Text('${c['claimant_name'] ?? ''} · ${_dates(c)}', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
@@ -577,110 +577,24 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                 ],
               ])),
               _box(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
+                Wrap(spacing: 10, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [
                   Text('Days (${_dayCount(lines)})', style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const Spacer(),
                   const Text('Check any day: Visit report · Time in Market', style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
                 ]),
                 const SizedBox(height: 6),
-                for (final l in lines)
-                  () {
-                    final other = _coveredBy(c, l['trip_id'] as String?);
-                    final p = _paidTrips[l['trip_id']];
-                    final own = p != null && p['claim_id'] == c['id'];
-                    final excluded = other != null;
-                    final day = DateTime.tryParse('${l['day']}');
-                    final km = (l['km'] as num?)?.toDouble() ?? 0;
-                    final String note;
-                    final Color noteColor;
-                    if (excluded) {
-                      note = 'Already approved · ${_claimLabel(other!)}';
-                      noteColor = const Color(0xFF64748B);
-                    } else if (own) {
-                      note = 'Paid ${_fd(p!['paid_on'], 'd MMM')}';
-                      noteColor = const Color(0xFF047857);
-                    } else {
-                      note = c['status'] == 'rejected' ? '' : (c['status'] == 'pending' ? 'To approve' : 'Approved on this claim');
-                      noteColor = c['status'] == 'pending' ? const Color(0xFFB45309) : const Color(0xFF1D4ED8);
-                    }
-                    final dim = excluded ? const Color(0xFF94A3B8) : null;
-                    final adj = _adj[c['id']]?['${l['trip_id']}'];
-                    final canAdj = _canApprove && (c['status'] == 'pending' || c['status'] == 'rejected') && !excluded;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 6),
-                      decoration: BoxDecoration(
-                        color: excluded ? const Color(0xFFF8FAFC) : null,
-                        border: const Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
-                      ),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                        SizedBox(width: 110, child: Text(_fd(l['day'], 'EEE, d MMM'), style: TextStyle(fontSize: 12.5, color: dim))),
-                        SizedBox(
-                          width: adj != null ? 150 : 80,
-                          child: Text.rich(
-                            TextSpan(children: [
-                              if (adj != null)
-                                TextSpan(text: '${_km(adj['original_km'] as num?)} ',
-                                    style: const TextStyle(decoration: TextDecoration.lineThrough, color: AppTheme.textSecondary)),
-                              TextSpan(text: _km(km)),
-                            ]),
-                            textAlign: TextAlign.right,
-                            style: TextStyle(fontSize: 12.5, color: dim, decoration: excluded ? TextDecoration.lineThrough : null)),
-                        ),
-                        SizedBox(
-                          width: 80,
-                          child: Text(excluded || rate == null ? '—' : _rs((km * rate).round()), textAlign: TextAlign.right,
-                              style: TextStyle(fontSize: 12.5, color: dim)),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Text.rich(TextSpan(children: [
-                            TextSpan(text: note, style: TextStyle(fontSize: 11.5, color: noteColor, fontWeight: FontWeight.w600)),
-                            if (!excluded && (_dayAllowance(c, '${l['day']}'.substring(0, 10)) ?? 0) + _allowDefault > 0)
-                              TextSpan(
-                                text: '${note.isEmpty ? '' : '  ·  '}allowance ${_rs((_dayAllowance(c, '${l['day']}'.substring(0, 10)) ?? 0).round())}',
-                                style: TextStyle(
-                                    fontSize: 11.5,
-                                    color: adj?['allowance'] != null ? const Color(0xFFB91C1C) : AppTheme.textSecondary)),
-                            if (adj != null && _adjSummary(adj).isNotEmpty)
-                              TextSpan(
-                                text: '${note.isEmpty ? '' : '  ·  '}Adjusted: ${_adjSummary(adj)}',
-                                style: const TextStyle(fontSize: 11.5, color: Color(0xFFB91C1C), fontWeight: FontWeight.w600)),
-                          ])),
-                        ),
-                        if (lines.length > 1 && (l['trip_id'] ?? '') != '' && (canAdj || adj != null))
-                          TextButton.icon(
-                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
-                            onPressed: () => _adjustTrip(ctx, c, l),
-                            icon: const Icon(Icons.edit_road_outlined, size: 15),
-                            label: Text(canAdj ? 'Adjust' : 'Adjustment', style: const TextStyle(fontSize: 12)),
-                          ),
-                        if ((l['trip_id'] ?? '') != '')
-                          TextButton.icon(
-                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
-                            onPressed: () => openVisitReportForTrip(context, '${l['trip_id']}',
-                                orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation'),
-                            icon: const Icon(Icons.description_outlined, size: 15),
-                            label: const Text('Visit report', style: TextStyle(fontSize: 12)),
-                          ),
-                        if (day != null)
-                          TextButton.icon(
-                            style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
-                            onPressed: () => tim(day, day),
-                            icon: const Icon(Icons.schedule, size: 15),
-                            label: const Text('Time in Market', style: TextStyle(fontSize: 12)),
-                          ),
-                      ]),
-                    );
-                  }(),
+                for (final day in {for (final l in lines) '${l['day']}'.substring(0, 10)})
+                  _dayCard(ctx, c, day, [for (final l in lines) if ('${l['day']}'.startsWith(day)) l], rate, tim),
                 if (pe.isNotEmpty || rate != null) ...[
                   const SizedBox(height: 8),
-                  Row(children: [
+                  Wrap(alignment: WrapAlignment.spaceBetween, spacing: 12, runSpacing: 4, children: [
                     if (pe.isNotEmpty)
                       Text('Excluded ${_dayCount(pe)} day${_dayCount(pe) == 1 ? '' : 's'} · ${_km(pe.fold<double>(0, (s, l) => s + ((l['km'] as num?) ?? 0).toDouble()))}',
                           style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                    const Spacer(),
-                    Text('To pay  ${_km(_unpaidKm(c))}${amt == null ? '' : '  ·  ${_rs(amt)}'}',
-                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800)),
+                    Text(
+                      'To pay  ${_km(_unpaidKm(c))}'
+                      '${_allowance(c) > 0 && (c['status'] == 'pending' || c['status'] == 'rejected') ? '  + allowance ${_rs(_allowance(c).round())}' : ''}'
+                      '${amt == null ? '' : '  =  ${_rs(amt)}'}',
+                      style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800)),
                   ]),
                 ],
               ])),
@@ -688,6 +602,104 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  /// One day of a claim: date, km (adjusted shown against the original),
+  /// distance amount, allowance, status, what the approver changed, and the
+  /// actions. Wraps on a phone.
+  Widget _dayCard(BuildContext ctx, Map<String, dynamic> c, String day, List<Map<String, dynamic>> ls, double? rate,
+      void Function(DateTime, DateTime) tim) {
+    final excluded = ls.every((l) => _coveredBy(c, l['trip_id'] as String?) != null);
+    final other = excluded ? _coveredBy(c, ls.first['trip_id'] as String?) : null;
+    final p = _paidTrips[ls.first['trip_id']];
+    final own = p != null && p['claim_id'] == c['id'];
+    final km = ls.fold<double>(0, (s, l) => s + ((l['km'] as num?) ?? 0).toDouble());
+    final adjs = [for (final l in ls) if (_adj[c['id']]?['${l['trip_id']}'] != null) _adj[c['id']]!['${l['trip_id']}']!];
+    final origKm = ls.fold<double>(0, (s, l) {
+      final a = _adj[c['id']]?['${l['trip_id']}'];
+      return s + ((a?['original_km'] as num?) ?? (l['km'] as num?) ?? 0).toDouble();
+    });
+    final kmChanged = (origKm - km).abs() > 0.05;
+    final allow = _dayAllowance(c, day);
+    final allowChanged = adjs.any((a) => a['allowance'] != null);
+    final canAdj = _canApprove && (c['status'] == 'pending' || c['status'] == 'rejected') && !excluded;
+    final date = DateTime.tryParse(day);
+    final (String st, Color stc) = excluded
+        ? ('Already approved', const Color(0xFF64748B))
+        : own
+            ? ('Paid ${_fd(p!['paid_on'], 'd MMM')}', const Color(0xFF047857))
+            : c['status'] == 'pending'
+                ? ('To approve', const Color(0xFFB45309))
+                : c['status'] == 'rejected' ? ('', AppTheme.textSecondary) : ('Approved', const Color(0xFF1D4ED8));
+    final changes = [
+      for (final a in adjs) if (_adjSummary(a).isNotEmpty) _adjSummary(a),
+      if (allowChanged) 'allowance changed',
+    ];
+    final dim = excluded ? const Color(0xFF94A3B8) : AppTheme.textPrimary;
+    Widget action(IconData i, String t, VoidCallback f) => TextButton.icon(
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+          onPressed: f,
+          icon: Icon(i, size: 15),
+          label: Text(t, style: const TextStyle(fontSize: 12)),
+        );
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 4),
+      decoration: BoxDecoration(
+        color: excluded ? const Color(0xFFF8FAFC) : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: changes.isNotEmpty ? const Color(0xFFFCA5A5) : AppTheme.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 14, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          SizedBox(
+            width: 96,
+            child: Text(_fd(day, 'EEE, d MMM'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: dim)),
+          ),
+          Text.rich(TextSpan(children: [
+            if (kmChanged)
+              TextSpan(text: '${_km(origKm)}  ',
+                  style: const TextStyle(decoration: TextDecoration.lineThrough, color: AppTheme.textSecondary)),
+            TextSpan(text: _km(km), style: const TextStyle(fontWeight: FontWeight.w700)),
+          ]), style: TextStyle(fontSize: 12.5, color: dim, decoration: excluded ? TextDecoration.lineThrough : null)),
+          if (!excluded && rate != null)
+            Text(_rs((km * rate).round()), style: TextStyle(fontSize: 12.5, color: dim)),
+          if (!excluded && (allow ?? 0) + _allowDefault > 0)
+            Text('+ allowance ${_rs((allow ?? 0).round())}',
+                style: TextStyle(fontSize: 12, color: allowChanged ? const Color(0xFFB91C1C) : AppTheme.textSecondary,
+                    fontWeight: allowChanged ? FontWeight.w700 : FontWeight.w400)),
+          if (st.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(color: stc.withOpacity(0.1), borderRadius: BorderRadius.circular(999)),
+              child: Text(st, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: stc)),
+            ),
+        ]),
+        if (excluded && other != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Text(_claimLabel(other), style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          ),
+        if (changes.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Text('Adjusted: ${changes.join(' · ')}',
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFFB91C1C), fontWeight: FontWeight.w600)),
+          ),
+        Wrap(spacing: 0, children: [
+          for (var i = 0; i < ls.length; i++)
+            if ((ls[i]['trip_id'] ?? '') != '') ...[
+              if (canAdj || _adj[c['id']]?['${ls[i]['trip_id']}'] != null)
+                action(Icons.edit_road_outlined, '${canAdj ? 'Adjust' : 'Adjustment'}${ls.length > 1 ? ' ${i + 1}' : ''}',
+                    () => _adjustTrip(ctx, c, ls[i])),
+              action(Icons.description_outlined, 'Visit report${ls.length > 1 ? ' ${i + 1}' : ''}',
+                  () => openVisitReportForTrip(context, '${ls[i]['trip_id']}',
+                      orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation')),
+            ],
+          if (date != null) action(Icons.schedule, 'Time in Market', () => tim(date, date)),
+        ]),
+      ]),
     );
   }
 
@@ -770,13 +782,23 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
       ];
       final bytes = await ReportPdfBuilder.buildCombinedTripSummary(
         orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
-        periodLabel: _dates(c),
+        periodLabel: _dates(c).replaceAll('–', '-'), // PDF font has no en dash
         salespersonLabel: '${c['claimant_name'] ?? ''}',
         showSalesperson: false,
         rows: rows,
         grandTotalKm: total,
-        reimb: ReimbInfo(rate: (c['rate'] as num?)?.toDouble() ?? _rate,
-            allowanceTotal: _allowance(c) > 0 || _allowDefault > 0 ? _allowance(c) : null),
+        reimb: () {
+          // "6 days × Rs 150" when every day has the default or none; else the total.
+          final days = {for (final l in lines) '${l['day']}'.substring(0, 10)};
+          final vals = [for (final d in days) _dayAllowance(c, d)].whereType<double>().toList();
+          final atDefault = vals.where((v) => (v - _allowDefault).abs() < 0.005).length;
+          return ReimbInfo(
+            rate: (c['rate'] as num?)?.toDouble() ?? _rate,
+            allowancePerDay: _allowDefault > 0 ? _allowDefault : null,
+            unpaidDays: atDefault,
+            allowanceTotal: _allowance(c) > 0 || _allowDefault > 0 ? _allowance(c) : null,
+          );
+        }(),
         adjustNote: notes.join('\n'),
       );
       await outputPdf(bytes, 'Combined Trip Summary (adjusted)');

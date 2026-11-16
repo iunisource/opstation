@@ -1025,7 +1025,7 @@ class ReportPdfBuilder {
           ? 'Nothing to claim'
           : allow == null
               ? ''
-              : r?.allowanceTotal != null || perDay == null
+              : allow == 0 || perDay == null || (allowDays * perDay).round() != allow
                   ? 'Rs ${f.format(allow)}'
                   : 'Rs ${f.format(allow)}  ($allowDays day${allowDays == 1 ? '' : 's'} × Rs ${f2.format(perDay)})'),
       _reimbRow('Total Amount', nothing ? 'Nothing to claim' : total == null ? '' : 'Rs ${f.format(total)}'),

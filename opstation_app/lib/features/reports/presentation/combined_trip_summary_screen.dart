@@ -87,8 +87,10 @@ class _CombinedTripSummaryScreenState
     for (final uid in targetIds) {
       trips.addAll(await salesRepo.tripsInRangeForUser(start, end, uid));
     }
-    final filtered =
-        _routeId == null ? trips : trips.where((t) => t.routeId == _routeId).toList();
+    // Abandoned trips (ended with no visits) are left out of the summary.
+    final filtered = (_routeId == null ? trips : trips.where((t) => t.routeId == _routeId))
+        .where((t) => !(t.endedAt != null && t.visits.isEmpty))
+        .toList();
     return _LoadResult(trips: filtered, userNames: userNames);
   }
 
@@ -138,7 +140,7 @@ class _CombinedTripSummaryScreenState
         periodLabel: _periodLabel(range),
         salespersonLabel: salespersonLabel,
         actor: actor,
-        duplicate: duplicate,
+        duplicate: false, // replaced by the "already generated" note (SQL 470)
         reimbKey: key,
         claimantId: effectiveUserId,
         reimbRecord: action == _Action.share,

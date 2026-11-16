@@ -56,6 +56,10 @@ class _CombinedTripSummaryScreenState
   double _grandKm = 0;
   double _grandLastWeekKm = 0;
   double _grandAbandonedKm = 0;
+  // Abandoned trips (ended with no visits) are left out unless switched on.
+  bool _includeAbandoned = false;
+  int _abandonedCount = 0;
+  double _abandonedLeftKm = 0;
 
   @override
   void initState() {
@@ -173,9 +177,19 @@ class _CombinedTripSummaryScreenState
           ctxs[k] = part[k - i];
         }
       }
+      var abCount = 0;
+      var abKm = 0.0;
       for (var si = 0; si < sessions.length; si++) {
         final t = sessions[si];
         final abandoned = t['_abandoned'] == true;
+        if (abandoned && !_includeAbandoned) {
+          final sa = DateTime.tryParse('${t['started_at'] ?? ''}')?.toLocal();
+          if (sa != null && !DateTime(sa.year, sa.month, sa.day).isBefore(rangeStart)) {
+            abCount++;
+            abKm += ctxs[si]?.totalDistanceKm ?? 0;
+          }
+          continue;
+        }
         final startedAt = t['started_at'] as String?;
         if (startedAt == null) continue;
         final dt = DateTime.parse(startedAt).toLocal();
@@ -222,6 +236,8 @@ class _CombinedTripSummaryScreenState
         _grandKm = grand;
         _grandLastWeekKm = grandLw;
         _grandAbandonedKm = grandAb;
+        _abandonedCount = abCount;
+        _abandonedLeftKm = abKm;
         _loading = false;
       });
     } catch (e) {
@@ -332,17 +348,17 @@ class _CombinedTripSummaryScreenState
     final showSalesperson = _selectedUserId == null;
     return Container(
       color: AppTheme.background,
-      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 16 : 32),
+      padding: EdgeInsets.all(MediaQuery.of(context).size.width < 700 ? 12 : 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Combined Trip Summary',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+        Text('Combined Trip Summary',
+            style: TextStyle(fontSize: MediaQuery.of(context).size.width < 700 ? 20 : 28, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
         const Text(
           'Multi-date distance sheet for expense reimbursement. Rate per km and total amount are left blank for finance.',
           style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
         ),
         const SizedBox(height: 20),
-        Row(children: [
+        Wrap(spacing: 12, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
@@ -363,7 +379,6 @@ class _CombinedTripSummaryScreenState
               }
             },
           ),
-          const SizedBox(width: 12),
           DropdownButton<String>(
             hint: const Text('All salespersons'),
             value: _selectedUserId,
@@ -378,7 +393,6 @@ class _CombinedTripSummaryScreenState
               _load();
             },
           ),
-          const Spacer(),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
@@ -398,7 +412,23 @@ class _CombinedTripSummaryScreenState
             onPressed: (_loading || _rows.isEmpty) ? null : _generatePdf,
           ),
         ]),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
+        Row(children: [
+          Switch(
+            value: _includeAbandoned,
+            onChanged: _loading ? null : (v) { setState(() => _includeAbandoned = v); _load(); },
+          ),
+          Expanded(child: Text(
+            _includeAbandoned
+                ? 'Abandoned trips (no visits) included — marked for review'
+                : _abandonedCount == 0
+                    ? 'Abandoned trips (no visits) are left out'
+                    : '$_abandonedCount abandoned trip${_abandonedCount == 1 ? '' : 's'} (no visits, '
+                        '${_abandonedLeftKm.toStringAsFixed(1)} km) left out — switch on to include',
+            style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
+          )),
+        ]),
+        const SizedBox(height: 8),
         if (_loading)
           const Expanded(child: Center(child: CircularProgressIndicator()))
         else if (_error != null)

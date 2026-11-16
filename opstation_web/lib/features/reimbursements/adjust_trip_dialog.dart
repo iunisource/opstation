@@ -24,8 +24,8 @@ String reimbAdjustNote(Map a, {String? dayLabel, bool reasons = true, double? de
   final nf = NumberFormat('#,##0');
   return '${dayLabel == null ? '' : '$dayLabel: '}${a['by_name'] ?? 'Approver'}'
       '${at == null ? '' : ', ${DateFormat('d MMM yyyy').format(at)}'}: '
-      '${parts.isEmpty ? '' : 'left out ${parts.join('; ')}. ${o.toStringAsFixed(2)} km → ${n.toStringAsFixed(2)} km. '}'
-      '${allow == null ? '' : 'Allowance ${defaultAllowance == null ? '' : 'Rs ${nf.format(defaultAllowance)} → '}Rs ${nf.format(allow)}.'}'
+      '${parts.isEmpty ? '' : 'left out ${parts.join('; ')}. ${o.toStringAsFixed(2)} km to ${n.toStringAsFixed(2)} km. '}'
+      '${allow == null ? '' : 'Allowance ${defaultAllowance == null ? '' : 'Rs ${nf.format(defaultAllowance)} to '}Rs ${nf.format(allow)}.'}'
       .trim();
 }
 
@@ -259,7 +259,7 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: 900, maxHeight: MediaQuery.of(context).size.height * 0.92),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 10, 14),
+          padding: EdgeInsets.fromLTRB(MediaQuery.of(context).size.width < 600 ? 12 : 18, 14, 10, 14),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Expanded(
@@ -387,7 +387,8 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
         color: off ? const Color(0xFFFEF2F2) : null,
         border: const Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
       ),
-      child: Row(children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
         Checkbox(
           value: !off,
           onChanged: !widget.canEdit
@@ -404,7 +405,7 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
                   _recalc();
                 },
         ),
-        SizedBox(width: 46, child: Text(time, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+        SizedBox(width: 40, child: Text(time, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
         Expanded(
           child: Text(title,
               style: TextStyle(fontSize: 13, decoration: off ? TextDecoration.lineThrough : null,
@@ -412,28 +413,30 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
         ),
         SizedBox(width: 70, child: Text('${km.toStringAsFixed(1)} km', textAlign: TextAlign.right,
             style: TextStyle(fontSize: 12.5, decoration: off ? TextDecoration.lineThrough : null))),
-        if (off) ...[
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 240,
-            child: TextField(
-              controller: _out[id],
-              enabled: widget.canEdit,
-              decoration: const InputDecoration(isDense: true, hintText: 'Reason *', border: OutlineInputBorder()),
-              style: const TextStyle(fontSize: 12.5),
-            ),
-          ),
-        ],
+        ]),
+        if (off) _reasonField(_out[id]!),
       ]),
     );
   }
+
+  /// Reason box under an unticked row (full width, so it fits a phone).
+  Widget _reasonField(TextEditingController c) => Padding(
+        padding: const EdgeInsets.fromLTRB(48, 0, 8, 6),
+        child: TextField(
+          controller: c,
+          enabled: widget.canEdit,
+          decoration: const InputDecoration(isDense: true, hintText: 'Reason *', border: OutlineInputBorder()),
+          style: const TextStyle(fontSize: 12.5),
+        ),
+      );
 
   Widget _returnRow(double km) {
     final off = _noReturn;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       color: off ? const Color(0xFFFEF2F2) : null,
-      child: Row(children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
         Checkbox(
           value: !off,
           onChanged: !widget.canEdit
@@ -451,18 +454,8 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
         ),
         SizedBox(width: 70, child: Text('${km.toStringAsFixed(1)} km', textAlign: TextAlign.right,
             style: TextStyle(fontSize: 12.5, decoration: off ? TextDecoration.lineThrough : null))),
-        if (off) ...[
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 240,
-            child: TextField(
-              controller: _returnReason,
-              enabled: widget.canEdit,
-              decoration: const InputDecoration(isDense: true, hintText: 'Reason *', border: OutlineInputBorder()),
-              style: const TextStyle(fontSize: 12.5),
-            ),
-          ),
-        ],
+        ]),
+        if (off) _reasonField(_returnReason),
       ]),
     );
   }
