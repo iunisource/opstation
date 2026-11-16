@@ -535,16 +535,51 @@ class TimTimeline extends StatelessWidget {
 }
 
 /// Expanded view of one day: timeline, the day in order, and a summary.
-class TimDayDetail extends StatelessWidget {
+class TimDayDetail extends StatefulWidget {
   final TimDay day;
   final TimSettings s;
   const TimDayDetail({super.key, required this.day, required this.s});
+  @override
+  State<TimDayDetail> createState() => _TimDayDetailState();
+}
+
+class _TimDayDetailState extends State<TimDayDetail> {
+  // Where the route started / ended — GPS at once, the area name when found.
+  late (String?, String?) _at = (timGps(widget.day.startAt), timGps(widget.day.endAt));
+
+  @override
+  void initState() {
+    super.initState();
+    _lookUp();
+  }
+
+  @override
+  void didUpdateWidget(TimDayDetail old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.day, widget.day)) {
+      _at = (timGps(widget.day.startAt), timGps(widget.day.endAt));
+      _lookUp();
+    }
+  }
+
+  void _lookUp() {
+    final d = widget.day;
+    if (d.startAt == null && d.endAt == null) return;
+    timPlaces(d).then((p) {
+      if (mounted && identical(widget.day, d)) setState(() => _at = p);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final day = widget.day;
+    final s = widget.s;
+    String withPlace(String t, String? p) => p == null ? t : '$t · $p';
     final gaps = day.gaps(s);
     final lines = <Widget>[];
-    if (day.start != null) lines.add(_line(timClock(day.start), day.role == 'driver' ? 'Delivery started' : 'Route started'));
+    if (day.start != null) {
+      lines.add(_line(timClock(day.start), withPlace(day.role == 'driver' ? 'Delivery started' : 'Route started', _at.$1)));
+    }
     var gi = 0;
     for (final ev in day.sorted) {
       while (gi < gaps.length && !gaps[gi].to.isAfter(ev.at)) {
@@ -558,7 +593,7 @@ class TimDayDetail extends StatelessWidget {
           dot: timKindColor(ev.kind)));
     }
     if (day.end != null && !day.open) {
-      lines.add(_line(timClock(day.end), day.role == 'driver' ? 'Delivery completed' : 'Route ended'));
+      lines.add(_line(timClock(day.end), withPlace(day.role == 'driver' ? 'Delivery completed' : 'Route ended', _at.$2)));
     } else if (day.open) {
       lines.add(_line('', 'Still out', color: AppTheme.primary));
     }
