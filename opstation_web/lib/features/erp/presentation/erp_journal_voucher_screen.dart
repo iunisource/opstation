@@ -141,6 +141,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       for (final v in _vouchers) {
         if (v['id'] == id) { v['supervised_at'] = now; v['supervised_by'] = userId; v['supervised_by_name'] = userName; }
       }
+      ref.invalidate(jvPendingCountProvider); // nav badge drops at once
       _snack('Marked as supervised');
     } catch (e) { _snack(friendlyError('That did not save', e)); }
     finally { if (mounted) setState(() => _superviseBusy = false); }
@@ -167,6 +168,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       for (final v in _vouchers) {
         if (v['id'] == id) { v['supervised_at'] = null; v['supervised_by'] = null; v['supervised_by_name'] = null; }
       }
+      ref.invalidate(jvPendingCountProvider); // nav badge drops at once
       _snack('Supervision cleared');
     } catch (e) { _snack(friendlyError('That did not save', e)); }
   }
@@ -623,6 +625,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       }
       if (ok.isNotEmpty) await _auditMany(ok, 'posted', 'Bulk approved & posted by ${userName ?? 'admin'}');
       final numbers = {for (final v in _vouchers) v['id']: v['entry_number']};
+      ref.invalidate(jvPendingCountProvider);
       _snack('Approved & posted ${ok.length}'
           '${skipped.isEmpty ? '' : ' · skipped ${skipped.length} unbalanced: ${skipped.map((i) => numbers[i] ?? i).join(', ')}'}');
     } catch (e) { _snack(friendlyError('Bulk approve failed', e)); }
@@ -673,6 +676,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         }
         _sel.removeAll(ids);
       });
+      ref.invalidate(jvPendingCountProvider);
       _snack('Supervised ${ids.length} JV(s)');
     } catch (e) { _snack(friendlyError('Bulk supervise failed', e)); }
     if (mounted) setState(() => _bulkBusy = false);
