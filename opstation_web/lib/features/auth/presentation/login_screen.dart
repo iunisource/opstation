@@ -778,6 +778,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ]),
               ),
+              const SizedBox(height: 4),
+              Center(
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
+                  onPressed: () => html.window.open('https://opstationerp.com/privacy', '_blank'),
+                  child: Text('Privacy policy',
+                      style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary.withOpacity(0.9),
+                          decoration: TextDecoration.underline)),
+                ),
+              ),
             ],
           )),
         ),
