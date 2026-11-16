@@ -143,6 +143,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   // Collections whose CR# is from no book (holders of books, since their first book).
   List<Map<String, dynamic>> _outside = [];
   bool _isAdmin = false; // admins / master admins can correct or release a CR# (SQL 479)
+  Map<String, Map<String, dynamic>> _released = {}; // "visitId|serial" → release (SQL 482)
   String _status = 'open'; // open | closed | all
   String _query = '';
   bool _busy = false;
@@ -231,8 +232,10 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           b.checks = [for (final r in rows) if (r['book_id'] == b.id) r];
         }
       } catch (_) {}
+      final released = await loadSlipReleases(orgId);
       if (!mounted) return;
       setState(() {
+        _released = released;
         _flowOn = on;
         _canIssue = isAdmin || (me != null && issuers.contains(me.id));
         _isAdmin = isAdmin;
@@ -560,7 +563,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                       : 'Reviewed by ${c['reviewed_by'] ?? '—'} · ${_fmt(c['reviewed_at'])}'
                           '${'${c['review_note'] ?? ''}'.isEmpty ? '' : ' — ${c['review_note']}'}',
                   style: TextStyle(fontSize: 12, color: c['reviewed_at'] == null ? Colors.orange.shade800 : AppTheme.success)),
-            ] else if (uses.isEmpty)
+            ] else if (uses.isEmpty && !_released.values.any((r) => '${r['serial']}' == '$n'))
               const Text('Not used yet.')
             else
               for (final u in uses)
@@ -572,6 +575,30 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                         style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
                   ]),
                 ),
+            for (final r in _released.values.where((r) => '${r['serial']}' == '$n'))
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.lock_open, size: 16, color: Color(0xFF047857)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                        'An earlier use was released for re-use by ${r['by_name'] ?? 'admin'} · ${_fmt(r['at'])} — ${r['reason'] ?? ''}. '
+                        'That entry keeps its CR# (search the number to see it).',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF047857))),
+                  ),
+                  if (_isAdmin)
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _run('Release undone', () async {
+                          await _db.rpc('receipt_slip_unrelease', params: {'p_id': r['id']});
+                        });
+                      },
+                      child: const Text('Undo'),
+                    ),
+                ]),
+              ),
           ]),
         ),
         actions: [

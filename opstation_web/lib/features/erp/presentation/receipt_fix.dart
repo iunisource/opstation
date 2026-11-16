@@ -5,13 +5,18 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 
-/// Correct or release the CR# on one collection (admins / master admins,
-/// SQL 479). [visit] needs id, receipt_number; shows user_name, timestamp,
-/// amount and shop when present. Returns true when it was changed.
-Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit) async {
+/// Correct the CR# on one collection, or release its slip for re-use
+/// (admins / master admins, SQL 479 / 482). Releasing does NOT change the
+/// old entry: it keeps its CR# and stays searchable; the slip is only freed
+/// for its book holder. [serial] = the slip to release (default: the first
+/// number on the entry). Returns true when something changed.
+Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit, {int? serial}) async {
   final newCtl = TextEditingController();
   final reasonCtl = TextEditingController();
   var release = false;
+  var checked = false;
+  final slip = serial ??
+      int.tryParse(RegExp(r'\d+').firstMatch('${visit['receipt_number'] ?? ''}')?.group(0) ?? '');
   String? err;
   var busy = false;
   final at = DateTime.tryParse('${visit['timestamp'] ?? visit['at'] ?? ''}')?.toLocal();
@@ -28,13 +33,30 @@ Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit) 
           setD(() => err = 'Enter the correct slip number, or choose Release.');
           return;
         }
+        if (release && !checked) {
+          setD(() => err = 'Check the physical slip book first, then tick the box.');
+          return;
+        }
+        if (release && slip == null) {
+          setD(() => err = 'This entry has no slip number to release.');
+          return;
+        }
         setD(() { busy = true; err = null; });
         try {
-          await Supabase.instance.client.rpc('receipt_fix', params: {
-            'p_visit': '${visit['id']}',
-            'p_new': release ? null : newCtl.text.trim(),
-            'p_reason': reasonCtl.text.trim(),
-          });
+          if (release) {
+            await Supabase.instance.client.rpc('receipt_slip_release', params: {
+              'p_visit': '${visit['id']}',
+              'p_serial': slip,
+              'p_reason': reasonCtl.text.trim(),
+              'p_verified': checked,
+            });
+          } else {
+            await Supabase.instance.client.rpc('receipt_fix', params: {
+              'p_visit': '${visit['id']}',
+              'p_new': newCtl.text.trim(),
+              'p_reason': reasonCtl.text.trim(),
+            });
+          }
           if (ctx.mounted) Navigator.pop(ctx, true);
         } catch (e) {
           setD(() { busy = false; err = friendlyError('Could not save', e); });
@@ -79,10 +101,21 @@ Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit) 
               dense: true,
               contentPadding: EdgeInsets.zero,
               onChanged: (v) => setD(() => release = true),
-              title: const Text('Release: the real slip is not known'),
-              subtitle: const Text('The collection keeps its amount; CR# becomes RELEASED and the slip is free again.',
+              title: Text('Release slip ${slip ?? ''} for re-use'),
+              subtitle: const Text(
+                  'This entry is NOT changed — it keeps its CR# and stays searchable. The slip only becomes '
+                  'free again for the holder of its book.',
                   style: TextStyle(fontSize: 11.5)),
             ),
+            if (release)
+              CheckboxListTile(
+                value: checked,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                onChanged: (v) => setD(() => checked = v == true),
+                title: const Text('I have checked the physical slip book', style: TextStyle(fontSize: 13)),
+              ),
             const SizedBox(height: 6),
             TextField(
               controller: reasonCtl,
@@ -105,7 +138,7 @@ Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit) 
   );
   if (done == true && context.mounted) {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
-        content: Text(release ? 'CR# released — the slip is free again' : 'CR# corrected')));
+        content: Text(release ? 'Slip $slip released for re-use — the old entry is unchanged' : 'CR# corrected')));
   }
   return done == true;
 }
@@ -135,7 +168,7 @@ Future<bool> receiptFixForSerial(BuildContext context, String orgId, int serial)
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text('No collection carries slip $serial.')));
     return false;
   }
-  if (rows.length == 1) return receiptFixDialog(context, rows.first);
+  if (rows.length == 1) return receiptFixDialog(context, rows.first, serial: serial);
   final pick = await showDialog<Map<String, dynamic>>(
     context: context,
     builder: (ctx) => SimpleDialog(
@@ -158,5 +191,16 @@ Future<bool> receiptFixForSerial(BuildContext context, String orgId, int serial)
     ),
   );
   if (pick == null || !context.mounted) return false;
-  return receiptFixDialog(context, pick);
+  return receiptFixDialog(context, pick, serial: serial);
+}
+
+/// Releases (SQL 482) for an org: "visitId|serial" → {id, reason, by_name, at}.
+Future<Map<String, Map<String, dynamic>>> loadSlipReleases(String orgId) async {
+  try {
+    final rows = await Supabase.instance.client.from('receipt_slip_releases')
+        .select('id, visit_id, serial, reason, by_name, at').eq('org_id', orgId).limit(5000);
+    return {for (final r in rows as List) '${r['visit_id']}|${r['serial']}': Map<String, dynamic>.from(r as Map)};
+  } catch (_) {
+    return {}; // SQL 482 not run yet
+  }
 }

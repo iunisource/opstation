@@ -248,7 +248,7 @@ class _ErpSkippedReceiptsReportScreenState
       for (var f = 0;; f += 1000) {
         final page = List<Map<String, dynamic>>.from(await client
             .from('visits')
-            .select('user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
+            .select('id, user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
             .eq('org_id', orgId)
             .gt('amount', 0)
             .gte('timestamp', DateFormat('yyyy-MM-dd').format(wideFrom))
@@ -260,6 +260,7 @@ class _ErpSkippedReceiptsReportScreenState
           final cust = v['customers'];
           for (final n in slips) {
             (uses[n] ??= []).add({
+              'visit_id': v['id'],
               'user_id': v['user_id'],
               'user_name': '${v['user_name'] ?? ''}'.trim().isEmpty ? (names['${v['user_id']}'] ?? '') : v['user_name'],
               'at': v['timestamp'],
@@ -589,6 +590,15 @@ class _ErpSkippedReceiptsReportScreenState
   }
 
   final _searchCtrl = TextEditingController();
+  Map<String, Map<String, dynamic>> _released = {}; // "visitId|serial" → release (SQL 482)
+
+  String? _releaseText(Object? visitId, int serial) {
+    final r = _released['$visitId|$serial'];
+    if (r == null) return null;
+    final at = DateTime.tryParse('${r['at'] ?? ''}')?.toLocal();
+    return 'Slip released for re-use by ${r['by_name'] ?? 'admin'}'
+        '${at == null ? '' : ' on ${DateFormat('d MMM').format(at)}'} — ${r['reason'] ?? ''}';
+  }
 
   bool get _isAdmin {
     final r = ref.read(currentUserProvider)?.role;
@@ -602,6 +612,7 @@ class _ErpSkippedReceiptsReportScreenState
     final orgId = _orgId;
     if (orgId == null) return;
     final client = Supabase.instance.client;
+    _released = await loadSlipReleases(orgId);
     try {
       if (_books.isEmpty) {
         final books = <Map<String, dynamic>>[];
@@ -618,7 +629,7 @@ class _ErpSkippedReceiptsReportScreenState
       if (need.isNotEmpty) {
         final rows = await client
             .from('visits')
-            .select('user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
+            .select('id, user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
             .eq('org_id', orgId)
             .gt('amount', 0)
             .inFilter('receipt_number', [for (final m in need) '$m'])
@@ -627,6 +638,7 @@ class _ErpSkippedReceiptsReportScreenState
           final cust = v['customers'];
           for (final m in _receiptSlipNumbers('${v['receipt_number'] ?? ''}')) {
             (_uses[m] ??= []).add({
+              'visit_id': v['id'],
               'user_id': v['user_id'],
               'user_name': '${v['user_name'] ?? ''}'.trim().isEmpty ? (_names['${v['user_id']}'] ?? '') : v['user_name'],
               'at': v['timestamp'],
@@ -646,6 +658,7 @@ class _ErpSkippedReceiptsReportScreenState
     final q = raw.trim();
     final orgId = _orgId;
     if (q.isEmpty || orgId == null) return;
+    _released = await loadSlipReleases(orgId);
     List<Map<String, dynamic>> rows = [];
     String? err;
     try {
@@ -706,6 +719,10 @@ class _ErpSkippedReceiptsReportScreenState
                             Expanded(
                               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                 Text(who, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                                for (final sl in slips)
+                                  if (_releaseText(v['id'], sl) != null)
+                                    Text(_releaseText(v['id'], sl)!,
+                                        style: const TextStyle(fontSize: 11.5, color: Color(0xFF047857), fontWeight: FontWeight.w600)),
                                 Text(
                                   [
                                     if (at != null) df.format(at),
@@ -1197,6 +1214,9 @@ class _ErpSkippedReceiptsReportScreenState
                         : (_names['${u['user_id']}'] ?? 'Unknown');
                     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(who, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      if (_releaseText(u['visit_id'], n) != null)
+                        Text(_releaseText(u['visit_id'], n)!,
+                            style: const TextStyle(fontSize: 11.5, color: Color(0xFF047857), fontWeight: FontWeight.w600)),
                       Text(
                         [
                           if (at != null) df.format(at),
@@ -1212,7 +1232,21 @@ class _ErpSkippedReceiptsReportScreenState
            ]),
           ),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+        actions: [
+          if (_isAdmin && list.isNotEmpty)
+            TextButton(
+              onPressed: () async {
+                final org = _orgId;
+                if (org == null) return;
+                if (await receiptFixForSerial(context, org, n)) {
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _openSlip(n);
+                }
+              },
+              child: const Text('Correct / release…'),
+            ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
       ),
     );
   }
