@@ -2369,7 +2369,8 @@ class _ErpAdminSettingsScreenState
                   ]),
                   const SizedBox(height: 18),
                   _GoLivePanel(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
-                  if (ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin ||
+                  if (ref.read(currentUserProvider)?.role == WebUserRole.admin ||
+                      ref.read(currentUserProvider)?.role == WebUserRole.masterAdmin ||
                       ref.read(currentUserProvider)?.role == WebUserRole.superAdmin)
                     _NotificationsEntry(orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   // Search
@@ -4318,7 +4319,7 @@ class _GoLivePanelState extends ConsumerState<_GoLivePanel> {
 }
 
 
-/// Entry card: opens Admin Settings → Notifications (master admin only).
+/// Entry card: opens Admin Settings → Notifications (admins and master admins).
 class _NotificationsEntry extends StatelessWidget {
   final String orgId;
   const _NotificationsEntry({required this.orgId});

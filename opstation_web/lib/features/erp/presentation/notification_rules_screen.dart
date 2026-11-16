@@ -5,9 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
 
-/// Admin Settings → Notifications (master admin only).
+/// Admin Settings → Notifications (admins and master admins).
 ///
-/// For every event that can notify, the master admin picks the recipients and,
+/// For every event that can notify, an admin picks the recipients and,
 /// per recipient, the channel (Push = browser push + bell, Email) and the
 /// branches. Nobody is included by default. Stored in notification_rules and
 /// dispatched server-side by notify_event() (SQL 296).
