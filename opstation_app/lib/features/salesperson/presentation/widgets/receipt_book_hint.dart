@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/database/app_database_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/receipt_books.dart';
+import '../../../../core/utils/receipt_slip_key.dart';
 import '../../../auth/providers/auth_controller.dart';
 import '../../providers/trip_controller.dart';
 
@@ -48,9 +48,9 @@ class _ReceiptBookHintState extends ConsumerState<ReceiptBookHint> {
       final n = ReceiptBooks.next(_localUsed);
       // Replace only an empty field or our own earlier suggestion.
       final cur = widget.crCtrl.text.trim();
-      final curN = int.tryParse(cur);
-      final mine = cur.isEmpty || (curN != null && ReceiptBooks.problem(cur, _localUsed) != null);
-      if (n != null && mine) widget.crCtrl.text = '$n';
+      final single = receiptSlipKeys(cur).length == 1 && RegExp(r'^[A-Za-z]{0,3}[ \-]?\d+$').hasMatch(cur);
+      final mine = cur.isEmpty || (single && ReceiptBooks.problem(cur, _localUsed) != null);
+      if (n != null && mine) widget.crCtrl.text = n;
     }
     setState(() {});
   }
@@ -69,8 +69,7 @@ class _ReceiptBookHintState extends ConsumerState<ReceiptBookHint> {
           const SizedBox(height: 12),
           TextField(
             controller: serialCtrl,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            textCapitalization: TextCapitalization.characters,
             decoration: const InputDecoration(labelText: 'Slip number (CR#)'),
           ),
           const SizedBox(height: 8),
@@ -88,9 +87,11 @@ class _ReceiptBookHintState extends ConsumerState<ReceiptBookHint> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Back')),
           FilledButton(
             onPressed: () {
-              final n = int.tryParse(serialCtrl.text.trim());
-              if (n == null) return setLocal(() => err = 'Enter the slip number.');
-              if (ReceiptBooks.bookOf(n) == null) return setLocal(() => err = 'CR# $n is not from your receipt book.');
+              final ks = receiptSlipKeys(serialCtrl.text.trim());
+              if (ks.length != 1) return setLocal(() => err = 'Enter one slip number.');
+              if (ReceiptBooks.bookOf(ks.first) == null) {
+                return setLocal(() => err = 'CR# ${serialCtrl.text.trim()} is not from your receipt book.');
+              }
               if (reasonCtrl.text.trim().isEmpty) return setLocal(() => err = 'Give a reason.');
               Navigator.pop(ctx, true);
             },
@@ -105,11 +106,12 @@ class _ReceiptBookHintState extends ConsumerState<ReceiptBookHint> {
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final n = int.parse(serialCtrl.text.trim());
-      await ReceiptBooks.cancelSlip(ref.read(appDatabaseProvider), orgId, n, reasonCtrl.text.trim());
-      if (widget.crCtrl.text.trim() == '$n') widget.crCtrl.clear();
+      final k = receiptSlipKeys(serialCtrl.text.trim()).first;
+      await ReceiptBooks.cancelSlip(ref.read(appDatabaseProvider), orgId, k, reasonCtrl.text.trim());
+      final cur = receiptSlipKeys(widget.crCtrl.text.trim());
+      if (cur.length == 1 && cur.first == k) widget.crCtrl.clear();
       _prefill();
-      messenger.showSnackBar(SnackBar(content: Text('Slip $n cancelled')));
+      messenger.showSnackBar(SnackBar(content: Text('Slip ${slipLabel(k)} cancelled')));
     } catch (e) {
       final s = '$e';
       messenger.showSnackBar(SnackBar(

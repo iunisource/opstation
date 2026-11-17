@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../database/app_database.dart';
+import 'receipt_slip_key.dart';
 
 /// One physical CR book issued to this salesperson (SQL 411).
 class ReceiptBook {
@@ -10,15 +11,20 @@ class ReceiptBook {
   final int start;
   final int end;
   final String? label;
-  final Set<int> used;      // already on synced collections
+  final Set<int> used;      // already on synced collections (plain numbers of this book)
   final Set<int> cancelled; // torn / spoiled
-  const ReceiptBook(this.id, this.start, this.end, this.label, this.used, this.cancelled);
+  final String? prefix;     // the book's letter, e.g. "B" (SQL 487); null = plain numbers
+  const ReceiptBook(this.id, this.start, this.end, this.label, this.used, this.cancelled, [this.prefix]);
 
   bool contains(int n) => n >= start && n <= end;
-  String get range => '$start–$end';
+  /// A slip key (see receipt_slip_key.dart) of this book?
+  bool holds(int key) => slipPrefixOf(key) == (prefix ?? '') && contains(slipNumber(key));
+  int keyOf(int n) => slipKey(prefix, n);
+  String fmt(int n) => '${prefix ?? ''}$n';
+  String get range => '${fmt(start)}–${fmt(end)}';
 
   Map<String, dynamic> toJson() => {
-        'id': id, 'start': start, 'end': end, 'label': label,
+        'id': id, 'start': start, 'end': end, 'label': label, 'prefix': prefix,
         'used': used.toList(), 'cancelled': cancelled.toList(),
       };
 
@@ -28,9 +34,14 @@ class ReceiptBook {
     Set<int> ints(Object? l) => {
           for (final x in (l as List? ?? const [])) if (x is num) x.toInt(),
         };
-    return ReceiptBook('${m['id']}', s, e, m['label'] as String?, ints(m['used']), ints(m['cancelled']));
+    final pre = '${m['prefix'] ?? ''}'.trim().toUpperCase();
+    return ReceiptBook('${m['id']}', s, e, m['label'] as String?, ints(m['used']), ints(m['cancelled']),
+        pre.isEmpty ? null : pre);
   }
 }
+
+/// Slip keys of a CR#, reading the letters of this phone's books.
+List<int> receiptSlipKeys(String raw) => slipKeys(raw, ReceiptBooks.letters);
 
 /// Expand a CR# field into every slip it represents — "32282 83 84" →
 /// 32282, 32283, 32284; "31457 & 31458" → both. Same rules as the web.
@@ -97,44 +108,62 @@ class ReceiptBooks {
       final x = ReceiptBook.fromJson(Map<String, dynamic>.from(b as Map));
       if (x != null) list.add(x);
     }
-    list.sort((a, b) => a.start.compareTo(b.start));
+    list.sort((a, b) {
+      final p = (a.prefix ?? '').compareTo(b.prefix ?? '');
+      return p != 0 ? p : a.start.compareTo(b.start);
+    });
     books = list;
   }
 
-  static ReceiptBook? bookOf(int n) {
+  /// Letters of this phone's open books ("B", …).
+  static Set<String> get letters => {for (final b in books) if (b.prefix != null) b.prefix!};
+
+  /// The book holding a slip key (letter and number must both match).
+  static ReceiptBook? bookOf(int key) {
     for (final b in books) {
-      if (b.contains(n)) return b;
+      if (b.holds(key)) return b;
     }
     return null;
   }
 
-  /// Why this CR# can't be used, or null when it's fine. [localUsed] = slips
-  /// on this phone's collections not yet reflected by the server.
+  /// Why this CR# can't be used, or null when it's fine. [localUsed] = slip
+  /// keys on this phone's collections not yet reflected by the server.
   static String? problem(String receipt, Set<int> localUsed) {
     if (!on) return null;
-    final slips = receiptSlips(receipt);
+    final slips = receiptSlipKeys(receipt);
     if (slips.isEmpty) return 'Enter the receipt (CR#) number from your receipt book.';
     if (books.isEmpty) return 'No receipt book is issued to you. Ask your supervisor to issue one.';
     final seen = <int>{};
-    for (final n in slips) {
-      if (!seen.add(n)) return 'CR# $n is entered twice.';
-      final b = bookOf(n);
+    for (final k in slips) {
+      final label = slipLabel(k);
+      if (!seen.add(k)) return 'CR# $label is entered twice.';
+      final b = bookOf(k);
       if (b == null) {
-        return 'CR# $n is not from your receipt book (${books.map((b) => b.range).join(', ')}). '
+        // Number of a lettered book typed without its letter.
+        final n = slipNumber(k);
+        final lettered = slipPrefixOf(k).isEmpty
+            ? books.where((x) => x.prefix != null && x.contains(n)).toList()
+            : const <ReceiptBook>[];
+        if (lettered.isNotEmpty) {
+          return 'Write the book letter with the number: ${lettered.first.fmt(n)}.';
+        }
+        return 'CR# $label is not from your receipt book (${books.map((b) => b.range).join(', ')}). '
             'Check the slip number.';
       }
-      if (b.cancelled.contains(n)) return 'CR# $n was cancelled. Use the next slip.';
-      if (b.used.contains(n) || localUsed.contains(n)) return 'CR# $n is already used. Check the slip number.';
+      final n = slipNumber(k);
+      if (b.cancelled.contains(n)) return 'CR# $label was cancelled. Use the next slip.';
+      if (b.used.contains(n) || localUsed.contains(k)) return 'CR# $label is already used. Check the slip number.';
     }
     return null;
   }
 
-  /// The lowest slip not yet used or cancelled (oldest book first).
-  static int? next(Set<int> localUsed) {
+  /// The lowest slip not yet used or cancelled (oldest book first), written
+  /// as on the slip: "B1251" for a lettered book, "1251" otherwise.
+  static String? next(Set<int> localUsed) {
     if (!on) return null;
     for (final b in books) {
       for (var n = b.start; n <= b.end; n++) {
-        if (!b.used.contains(n) && !b.cancelled.contains(n) && !localUsed.contains(n)) return n;
+        if (!b.used.contains(n) && !b.cancelled.contains(n) && !localUsed.contains(b.keyOf(n))) return b.fmt(n);
       }
     }
     return null;
@@ -145,20 +174,67 @@ class ReceiptBooks {
     var n = 0;
     for (final b in books) {
       for (var s = b.start; s <= b.end; s++) {
-        if (!b.used.contains(s) && !b.cancelled.contains(s) && !localUsed.contains(s)) n++;
+        if (!b.used.contains(s) && !b.cancelled.contains(s) && !localUsed.contains(b.keyOf(s))) n++;
       }
     }
     return n;
   }
 
-  /// Mark a torn / spoiled slip as cancelled (needs internet).
-  static Future<void> cancelSlip(AppDatabase db, String orgId, int serial, String reason) async {
-    final b = bookOf(serial);
-    if (b == null) throw ArgumentError('CR# $serial is not from your receipt book.');
+  /// Mark a torn / spoiled slip as cancelled (needs internet). [key] = slip key.
+  static Future<void> cancelSlip(AppDatabase db, String orgId, int key, String reason) async {
+    final b = bookOf(key);
+    if (b == null) throw ArgumentError('CR# ${slipLabel(key)} is not from your receipt book.');
+    final serial = slipNumber(key);
     await Supabase.instance.client.rpc('receipt_slip_cancel', params: {
       'p_book': b.id, 'p_serial': serial, 'p_reason': reason,
     });
     b.cancelled.add(serial);
     await refresh(db, orgId);
   }
+}
+
+/// Next CR# when receipt books are OFF: continues the series of the latest
+/// receipt entered, keeping its letters and style — "B-1234" → "B-1235",
+/// "B1234" → "B1235", "1234" → "1235". [receipts] = (when, CR#) of today's
+/// collections. null when nothing has been entered yet.
+String? nextReceiptAfter(Iterable<(DateTime, String)> receipts) {
+  final list = [...receipts]..sort((a, b) => a.$1.compareTo(b.$1));
+  if (list.isEmpty) return null;
+  // Slips as (letters, separator, number), with "& 51" short endings expanded.
+  List<(String, String, int)> parse(String raw) {
+    final out = <(String, String, int)>[];
+    int? prev;
+    var prevL = '', prevSep = '';
+    for (final m in RegExp(r'(?:([A-Za-z]{1,3})([ \-]?))?(\d+)').allMatches(raw)) {
+      final t = m.group(3)!;
+      if (t.length > 15) continue;
+      var l = (m.group(1) ?? '').toUpperCase(), sep = m.group(2) ?? '';
+      if (m.group(1) == null) { l = prevL; sep = prevSep; }
+      final int n;
+      if (prev == null || t.length >= prev.toString().length) {
+        n = int.parse(t);
+      } else {
+        var p10 = 1;
+        for (var i = 0; i < t.length; i++) {
+          p10 *= 10;
+        }
+        n = (prev - (prev % p10)) + int.parse(t);
+      }
+      out.add((l, sep, n));
+      prev = n; prevL = l; prevSep = sep;
+    }
+    return out;
+  }
+  final last = parse(list.last.$2);
+  if (last.isEmpty) return null;
+  final series = last.last.$1; // letters of the latest slip
+  var sep = last.last.$2;
+  int? hi;
+  for (final r in list) {
+    for (final (l, s, n) in parse(r.$2)) {
+      if (l != series) continue;
+      if (hi == null || n > hi) { hi = n; sep = s; }
+    }
+  }
+  return hi == null ? null : '$series$sep${hi + 1}';
 }

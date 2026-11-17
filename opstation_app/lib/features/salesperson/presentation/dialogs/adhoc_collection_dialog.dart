@@ -73,16 +73,15 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
     if (ReceiptBooks.on) return;
     final s = ref.read(tripControllerProvider).valueOrNull;
     if (s == null) return;
-    int? maxNum;
+    // Letters kept: last "B-1234" → "B-1235" (SQL 487 lettered books).
+    final seen = <(DateTime, String)>[];
     void scan(Iterable<Visit> visits) {
       for (final v in visits) {
-        if (v.amount <= 0) continue; // nothing collected → no slip used
+        // Only visits where money was collected used up a slip.
+        if (v.amount <= 0) continue;
         final r = v.receiptNumber;
-        if (r == null) continue;
-        for (final m in RegExp(r'\d+').allMatches(r)) {
-          final n = int.tryParse(m.group(0)!);
-          if (n != null && (maxNum == null || n > maxNum!)) maxNum = n;
-        }
+        if (r == null || r.trim().isEmpty) continue;
+        seen.add((v.timestamp, r));
       }
     }
 
@@ -90,7 +89,8 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
     for (final t in s.completedToday) {
       scan(t.visits);
     }
-    if (maxNum != null) _crCtrl.text = '${maxNum! + 1}';
+    final next = nextReceiptAfter(seen);
+    if (next != null) _crCtrl.text = next;
   }
 
   @override

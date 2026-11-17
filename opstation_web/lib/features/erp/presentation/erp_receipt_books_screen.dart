@@ -1,5 +1,6 @@
 import 'receipt_fix.dart';
 import 'package:flutter/material.dart';
+import '../../../core/utils/receipt_slip_key.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -27,29 +28,6 @@ class ErpReceiptBooksScreen extends ConsumerStatefulWidget {
   ConsumerState<ErpReceiptBooksScreen> createState() => _State();
 }
 
-/// "32282 83 84" → 32282, 32283, 32284 (same rules as the app and SQL).
-List<int> _slips(String raw) {
-  final toks = RegExp(r'\d+').allMatches(raw).map((m) => m.group(0)!).toList();
-  final out = <int>[];
-  int? prev;
-  for (final t in toks) {
-    if (t.length > 15) continue;
-    final n = int.parse(t);
-    if (prev == null || t.length >= prev.toString().length) {
-      out.add(n);
-      prev = n;
-    } else {
-      var p10 = 1;
-      for (var i = 0; i < t.length; i++) {
-        p10 *= 10;
-      }
-      prev = (prev - (prev % p10)) + n;
-      out.add(prev);
-    }
-  }
-  return out;
-}
-
 class _Book {
   final Map<String, dynamic> row;
   final List<Map<String, dynamic>> used;      // {serial, user_id, user_name, at, amount, …}
@@ -68,6 +46,15 @@ class _Book {
   String get id => row['id'] as String;
   int get start => (row['start_no'] as num).toInt();
   int get end => (row['end_no'] as num).toInt();
+  /// The book's letter (SQL 487), e.g. "B" → slips B1201…; null = plain numbers.
+  String? get prefix {
+    final p = '${row['prefix'] ?? ''}'.trim().toUpperCase();
+    return p.isEmpty ? null : p;
+  }
+  String fmt(int n) => '${prefix ?? ''}$n';
+  String get range => '${fmt(start)}–${fmt(end)}';
+  /// A slip key (receipt_slip_key.dart) of this book?
+  bool holds(int key) => slipPrefixOf(key) == (prefix ?? '') && slipNumber(key) >= start && slipNumber(key) <= end;
   int get size => end - start + 1;
   bool get open => row['status'] == 'open';
   String get holderId => '${row['user_id'] ?? ''}';
@@ -204,6 +191,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
 
       // Collections not from any book, by people who hold (or held) a book.
       final outside = <Map<String, dynamic>>[];
+      final letters = {for (final b in books) if (b.prefix != null) b.prefix!};
       if (books.isNotEmpty) {
         final holders = {for (final b in books) b.holderId}.toList();
         DateTime first = DateTime.now();
@@ -218,8 +206,8 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               .gt('amount', 0).gte('timestamp', first.toUtc().toIso8601String())
               .order('timestamp').range(f, f + 999) as List);
           for (final v in page) {
-            final slips = _slips('${v['receipt_number'] ?? ''}');
-            final bad = slips.where((n) => !books.any((b) => n >= b.start && n <= b.end)).toList();
+            final slips = slipKeys('${v['receipt_number'] ?? ''}', letters);
+            final bad = [for (final k in slips) if (!books.any((b) => b.holds(k))) slipNumber(k)];
             if (slips.isEmpty || bad.isNotEmpty) outside.add({...v, 'bad': bad});
           }
           if (page.length < 1000 || f > 100000) break;
@@ -274,6 +262,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
     final fromCtrl = TextEditingController();
     final toCtrl = TextEditingController();
     final labelCtrl = TextEditingController();
+    final prefixCtrl = TextEditingController();
     String? err;
     // Suggest the next range after the highest book issued.
     final hi = _books.isEmpty ? null : _books.map((b) => b.end).reduce((a, b) => a > b ? a : b);
@@ -286,6 +275,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
       builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
         final a = int.tryParse(fromCtrl.text.trim()), b = int.tryParse(toCtrl.text.trim());
         final count = (a != null && b != null && b >= a) ? b - a + 1 : null;
+        final pre = prefixCtrl.text.trim().toUpperCase();
         return AlertDialog(
           title: const Text('Issue a receipt book'),
           content: SizedBox(
@@ -313,11 +303,22 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                      'Open now: ${_books.where((x) => x.open && x.holderId == userId).map((x) => '${x.start}–${x.end}').join(', ')}',
+                      'Open now: ${_books.where((x) => x.open && x.holderId == userId).map((x) => x.range).join(', ')}',
                       style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 ),
               const SizedBox(height: 10),
               Row(children: [
+                SizedBox(width: 90, child: TextField(
+                  controller: prefixCtrl,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z]')),
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  decoration: const InputDecoration(labelText: 'Letter', hintText: 'e.g. B'),
+                  onChanged: (_) => setLocal(() {}),
+                )),
+                const SizedBox(width: 12),
                 Expanded(child: TextField(
                   controller: fromCtrl,
                   keyboardType: TextInputType.number,
@@ -337,7 +338,10 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               if (count != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Text('$count slips', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  child: Text(
+                      '$count slips${pre.isEmpty ? '' : ' · $pre$a – $pre$b'}'
+                      '${pre.isEmpty ? ' · leave Letter empty when the slips have only numbers' : ''}',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 ),
               const SizedBox(height: 10),
               TextField(
@@ -360,9 +364,10 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                 if (b < a) return setLocal(() => err = 'The last slip must be after the first.');
                 if (b - a >= 1000) return setLocal(() => err = 'A book can have up to 1000 slips.');
                 // Same serials can never be issued twice (any book, open or closed).
+                // (Under another letter the same numbers are a different series.)
                 for (final x in _books) {
-                  if (x.start <= b && x.end >= a) {
-                    return setLocal(() => err = 'Serials ${x.start}–${x.end} are already issued to '
+                  if ((x.prefix ?? '') == pre && x.start <= b && x.end >= a) {
+                    return setLocal(() => err = 'Serials ${x.range} are already issued to '
                         '${x.holder}${x.open ? '' : ' (closed book)'}. Each serial can be issued only once.');
                   }
                 }
@@ -393,6 +398,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
       await _db.rpc('receipt_book_issue', params: {
         'p_org': _orgId, 'p_user': userId, 'p_start': int.parse(fromCtrl.text.trim()),
         'p_end': int.parse(toCtrl.text.trim()), 'p_label': labelCtrl.text.trim(),
+        if (prefixCtrl.text.trim().isNotEmpty) 'p_prefix': prefixCtrl.text.trim().toUpperCase(),
       });
     });
   }
@@ -441,7 +447,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                             title: Text('${u['name'] ?? ''}'),
                             subtitle: Text([
                               if ('${u['role'] ?? ''}'.isNotEmpty) '${u['role']}',
-                              if (open.isNotEmpty) 'Open: ${open.map((x) => '${x.start}–${x.end}').join(', ')}',
+                              if (open.isNotEmpty) 'Open: ${open.map((x) => x.range).join(', ')}',
                             ].join(' · '), style: const TextStyle(fontSize: 11.5)),
                             onTap: () => Navigator.pop(ctx, u['id'] as String),
                           );
@@ -488,16 +494,17 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   }
 
   Future<void> _cancelSlip(_Book b) async {
-    final serialTxt = await _askText('Cancel a slip — ${b.start}–${b.end}', 'Slip number', required: true);
+    final serialTxt = await _askText('Cancel a slip — ${b.range}', 'Slip number', required: true);
     if (serialTxt == null) return;
-    final n = int.tryParse(serialTxt);
+    // The book's letter may be typed or left out.
+    final n = int.tryParse(RegExp(r'\d+').firstMatch(serialTxt)?.group(0) ?? '');
     if (n == null || n < b.start || n > b.end) {
-      _snack('Slip $serialTxt is not in this book (${b.start}–${b.end}).');
+      _snack('Slip $serialTxt is not in this book (${b.range}).');
       return;
     }
-    final reason = await _askText('Cancel slip $n', 'Reason', hint: 'e.g. slip torn', required: true);
+    final reason = await _askText('Cancel slip ${b.fmt(n)}', 'Reason', hint: 'e.g. slip torn', required: true);
     if (reason == null) return;
-    await _run('Slip $n cancelled', () async {
+    await _run('Slip ${b.fmt(n)} cancelled', () async {
       await _db.rpc('receipt_slip_cancel', params: {'p_book': b.id, 'p_serial': n, 'p_reason': reason});
     });
   }
@@ -507,7 +514,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
       case 'cancel':
         return _cancelSlip(b);
       case 'close':
-        final note = await _askText('Close book ${b.start}–${b.end}?', 'Note (optional)',
+        final note = await _askText('Close book ${b.range}?', 'Note (optional)',
             body: b.unused > 0
                 ? '${b.unused} slip${b.unused == 1 ? ' is' : 's are'} not used yet — they will show as missing.\n'
                 : null);
@@ -523,7 +530,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: Text('Remove book ${b.start}–${b.end}?'),
+            title: Text('Remove book ${b.range}?'),
             content: const Text('Only for a book issued by mistake. None of its slips is used yet.'),
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -550,7 +557,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Slip $n'),
+        title: Text('Slip ${b.fmt(n)}'),
         content: SizedBox(
           width: 380,
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -608,7 +615,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               onPressed: () async {
                 Navigator.pop(ctx);
                 final org = ref.read(currentUserProvider)?.orgId;
-                if (org != null && await receiptFixForSerial(context, org, n)) _load();
+                if (org != null && await receiptFixForSerial(context, org, n, letters: b.prefix ?? '')) _load();
               },
               child: const Text('Correct / release CR#'),
             ),
@@ -616,7 +623,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
             TextButton(
               onPressed: () {
                 Navigator.pop(ctx);
-                _run('Slip $n is usable again', () async {
+                _run('Slip ${b.fmt(n)} is usable again', () async {
                   await _db.rpc('receipt_slip_uncancel', params: {'p_id': c['id']});
                 });
               },
@@ -641,7 +648,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
     final list = _books.where((b) {
       if (_status == 'open' && !b.open) return false;
       if (_status == 'closed' && b.open) return false;
-      if (q.isNotEmpty && !matchesQuery('${b.holder} ${b.start} ${b.end} ${b.row['label'] ?? ''}', q)) return false;
+      if (q.isNotEmpty && !matchesQuery('${b.holder} ${b.start} ${b.end} ${b.fmt(b.start)} ${b.row['label'] ?? ''}', q)) return false;
       return true;
     }).toList();
     final issuesTotal = _books.fold<int>(0, (s, b) => s + b.issues) + _outside.length;
@@ -774,7 +781,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
             child: Row(children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Slip ${e.$2['serial']} · ${e.$1.holder} · book ${e.$1.start}–${e.$1.end}',
+                  Text('Slip ${e.$1.fmt((e.$2['serial'] as num).toInt())} · ${e.$1.holder} · book ${e.$1.range}',
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                   Text('${e.$2['reason'] ?? ''} — by ${e.$2['by'] ?? '—'}, ${_fmt(e.$2['at'])}',
                       style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -851,7 +858,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           tilePadding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
           childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           title: Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text('${b.start}–${b.end}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+            Text(b.range, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
             if (label.isNotEmpty) Text(RegExp(r'^\d').hasMatch(label) ? 'Book $label' : label, style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
             _tag(b.open ? 'Open' : 'Closed', b.open ? AppTheme.success : AppTheme.textSecondary),
             if (b.issues > 0) _tag('${b.issues} to check', Colors.deepOrange),

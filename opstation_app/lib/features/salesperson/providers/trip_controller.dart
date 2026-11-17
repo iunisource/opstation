@@ -369,7 +369,7 @@ class TripController extends AsyncNotifier<TripState> {
     });
   }
 
-  /// Slips on today's collections on this phone (a phone's not-yet-synced
+  /// Slip keys on today's collections on this phone (a phone's not-yet-synced
   /// collections aren't in the server's count yet).
   Set<int> localReceiptSlips() {
     final s = state.valueOrNull;
@@ -380,7 +380,7 @@ class TripController extends AsyncNotifier<TripState> {
         if (v.amount <= 0) continue;
         final r = v.receiptNumber;
         if (r == null || r.trim().isEmpty) continue;
-        out.addAll(receiptSlips(r));
+        out.addAll(receiptSlipKeys(r)); // letter-aware (SQL 487)
       }
     }
     if (s.active != null) scan(s.active!.visits);

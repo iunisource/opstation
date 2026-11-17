@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import '../../../core/utils/receipt_slip_key.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -23,26 +24,10 @@ import '../../../core/format/time_format.dart';
 /// Expand a receipt-number field into every slip number it represents.
 /// Handles "31457 & 31458", "31451 to 31452", and the shorthand "32282 83 84"
 /// (= 32282, 32283, 32284). A plain "31457" returns [31457]; garbage returns [].
-List<int> _receiptSlipNumbers(String raw) {
-  final toks = RegExp(r'\d+').allMatches(raw).map((m) => m.group(0)!).toList();
-  final out = <int>[];
-  int? prevFull;
-  for (final t in toks) {
-    final n = int.parse(t);
-    final prevLen = prevFull?.toString().length ?? 0;
-    if (prevFull == null || t.length >= prevLen) {
-      out.add(n);
-      prevFull = n;
-    } else {
-      var p10 = 1;
-      for (var i = 0; i < t.length; i++) p10 *= 10;
-      final expanded = (prevFull - (prevFull % p10)) + n;
-      out.add(expanded);
-      prevFull = expanded;
-    }
-  }
-  return out;
-}
+/// Slips are keys (receipt_slip_key.dart): a lettered book's slip "B1250" and a
+/// plain "1250" are different slips; a plain slip's key is its number.
+Set<String> _letters = {};
+List<int> _receiptSlipNumbers(String raw) => slipKeys(raw, _letters);
 
 class _PersonGaps {
   final String userId;
@@ -91,7 +76,34 @@ class _ErpSkippedReceiptsReportScreenState
   }
   String _bookLabel(int n) {
     final b = _bookOf(n);
-    return b == null ? 'not from an issued book' : 'book ${b['start']}–${b['end']}';
+    return b == null ? 'not from an issued book' : 'book ${slipLabel(b['start'] as int)}–${slipLabel(b['end'] as int)}';
+  }
+
+  /// Receipt books as slip-key ranges + cancelled slips (keys); sets the
+  /// letters used to read CR#s.
+  Future<(List<Map<String, dynamic>>, Set<int>)> _loadBooks(SupabaseClient client, String orgId) async {
+    final cancelled = <int>{};
+    final books = <Map<String, dynamic>>[];
+    final letters = <String>{};
+    try {
+      final res = await client.rpc('receipt_books_status', params: {'p_org': orgId});
+      for (final b in res as List) {
+        final m = b as Map;
+        final pre = '${m['prefix'] ?? ''}'.trim().toUpperCase();
+        if (pre.isNotEmpty) letters.add(pre);
+        final st = (m['start_no'] as num?)?.toInt();
+        final en = (m['end_no'] as num?)?.toInt();
+        if (st != null && en != null) {
+          books.add({'id': '${m['id']}', 'start': slipKey(pre, st), 'end': slipKey(pre, en), 'holder': '${m['user_name'] ?? ''}'});
+        }
+        for (final c in (m['cancelled'] as List?) ?? const []) {
+          final n = ((c as Map)['serial'] as num?)?.toInt();
+          if (n != null) cancelled.add(slipKey(pre, n));
+        }
+      }
+    } catch (_) {}
+    _letters = letters;
+    return (books, cancelled);
   }
   /// Two slips from different issued books (e.g. the old book ran out and a
   /// new one was started) — a jump between them is not a gap / out of order.
@@ -188,6 +200,9 @@ class _ErpSkippedReceiptsReportScreenState
           u['id'] as String: (u['name'] as String? ?? 'Unknown')
       };
 
+      // Receipt books first: their letters decide how CR#s are read.
+      final bookInfo = await _loadBooks(client, orgId);
+
       // Trips in the window → who owns which trip.
       final tripsRaw = await client
           .from('trips')
@@ -272,24 +287,8 @@ class _ErpSkippedReceiptsReportScreenState
         }
         if (page.length < 1000 || f > 300000) break;
       }
-      // Slips cancelled in Receipt Books (spoiled / torn) are accounted for.
-      final cancelled = <int>{};
-      final books = <Map<String, dynamic>>[];
-      try {
-        final res = await client.rpc('receipt_books_status', params: {'p_org': orgId});
-        for (final b in res as List) {
-          final st = ((b as Map)['start_no'] as num?)?.toInt();
-          final en = (b['end_no'] as num?)?.toInt();
-          if (st != null && en != null) {
-            books.add({'id': '${b['id']}', 'start': st, 'end': en, 'holder': '${b['user_name'] ?? ''}'});
-          }
-          for (final c in ((b as Map)['cancelled'] as List?) ?? const []) {
-            final n = ((c as Map)['serial'] as num?)?.toInt();
-            if (n != null) cancelled.add(n);
-          }
-        }
-      } catch (_) {}
-      _books = books;
+      _books = bookInfo.$1;
+      final cancelled = bookInfo.$2;
       var droppedUsed = 0, droppedCancelled = 0, switches = 0;
 
       // Gap detection per user.
@@ -389,7 +388,7 @@ class _ErpSkippedReceiptsReportScreenState
     final action = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Serial $n — ${r.name}'),
+        title: Text('Serial ${slipLabel(n)} — ${r.name}'),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(wasCleared ? 'This serial is marked cleared. Update the note, or re-open it.' : 'Mark this skipped serial as cleared (reviewed) and add a note.',
               style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
@@ -457,10 +456,10 @@ class _ErpSkippedReceiptsReportScreenState
           width: 440,
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Marks ${open.length} flagged slip${open.length == 1 ? '' : 's'} as checked: '
-                '${open.take(12).join(', ')}${open.length > 12 ? ' …' : ''}',
+                '${open.take(12).map(slipLabel).join(', ')}${open.length > 12 ? ' …' : ''}',
                 style: const TextStyle(fontSize: 12.5, color: AppTheme.textSecondary)),
             const SizedBox(height: 4),
-            Text([for (final n in open.take(6)) '$n: ${_bookLabel(n)}'].join(' · '),
+            Text([for (final n in open.take(6)) '${slipLabel(n)}: ${_bookLabel(n)}'].join(' · '),
                 style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
             const SizedBox(height: 12),
             TextField(controller: ctrl, autofocus: true, maxLines: 2,
@@ -528,10 +527,10 @@ class _ErpSkippedReceiptsReportScreenState
       for (final n in r.skipped) {
         if (_isCleared(r.userId, n)) {
           final cm = (_clearanceOf(r.userId, n)?['comment'] as String? ?? '').trim();
-          b.write('<span class="s cleared">&#10003; $n'
+          b.write('<span class="s cleared">&#10003; ${slipLabel(n)}'
               '${cm.isEmpty ? '' : ' <span class="note">— ${_esc(cm)}</span>'}</span>');
         } else {
-          b.write('<span class="s">$n</span>');
+          b.write('<span class="s">${slipLabel(n)}</span>');
         }
       }
       b.write('</div>');
@@ -594,7 +593,7 @@ class _ErpSkippedReceiptsReportScreenState
   Map<String, Map<String, dynamic>> _released = {}; // "visitId|serial" → release (SQL 482)
 
   String? _releaseText(Object? visitId, int serial) {
-    final r = _released['$visitId|$serial'];
+    final r = _released['$visitId|${slipNumber(serial)}'];
     if (r == null) return null;
     final at = DateTime.tryParse('${r['at'] ?? ''}')?.toLocal();
     return 'Slip released for re-use by ${r['by_name'] ?? 'admin'}'
@@ -616,15 +615,7 @@ class _ErpSkippedReceiptsReportScreenState
     _released = await loadSlipReleases(orgId);
     try {
       if (_books.isEmpty) {
-        final books = <Map<String, dynamic>>[];
-        for (final b in await client.rpc('receipt_books_status', params: {'p_org': orgId}) as List) {
-          final st = ((b as Map)['start_no'] as num?)?.toInt();
-          final en = (b['end_no'] as num?)?.toInt();
-          if (st != null && en != null) {
-            books.add({'id': '${b['id']}', 'start': st, 'end': en, 'holder': '${b['user_name'] ?? ''}'});
-          }
-        }
-        _books = books;
+        _books = (await _loadBooks(client, orgId)).$1;
       }
       final need = [for (var m = n - 3; m <= n + 50; m++) if (m > 0 && !_uses.containsKey(m)) m];
       if (need.isNotEmpty) {
@@ -633,7 +624,12 @@ class _ErpSkippedReceiptsReportScreenState
             .select('id, user_id, user_name, receipt_number, amount, timestamp, customers(shop_name)')
             .eq('org_id', orgId)
             .gt('amount', 0)
-            .inFilter('receipt_number', [for (final m in need) '$m'])
+            .inFilter('receipt_number', [
+              for (final m in need) ...{
+                slipLabel(m),
+                if (slipPrefixOf(m).isNotEmpty) ...['${slipPrefixOf(m)}-${slipNumber(m)}', '${slipPrefixOf(m)} ${slipNumber(m)}'],
+              },
+            ])
             .limit(2000);
         for (final v in rows as List) {
           final cust = v['customers'];
@@ -676,7 +672,8 @@ class _ErpSkippedReceiptsReportScreenState
     if (!mounted) return;
     final df = DateFormat(orgTime('d MMM yyyy, h:mm a'));
     final nf = NumberFormat('#,##0');
-    final exact = int.tryParse(q);
+    final qk = _receiptSlipNumbers(q);
+    final exact = qk.length == 1 ? qk.first : null;
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1050,7 +1047,7 @@ class _ErpSkippedReceiptsReportScreenState
                     borderRadius: BorderRadius.circular(5),
                     border: Border.all(color: _isCleared(r.userId, n) ? const Color(0xFF9AE6B4) : color.withOpacity(0.35)),
                   ),
-                  child: Text('$n', style: TextStyle(
+                  child: Text(slipLabel(n), style: TextStyle(
                       fontSize: 12,
                       decoration: _isCleared(r.userId, n) ? TextDecoration.lineThrough : null,
                       color: _isCleared(r.userId, n) ? Colors.green.shade800 : AppTheme.textPrimary)),
@@ -1104,8 +1101,8 @@ class _ErpSkippedReceiptsReportScreenState
       final m = earlierHigher.first;
       final t = atOf(firstUse(m))!;
       final more = earlierHigher.length > 1 ? ' (and ${earlierHigher.length - 1} more higher slip${earlierHigher.length == 2 ? '' : 's'})' : '';
-      summary = '$m was used on ${sm.format(t)} — ${gapText(myAt.difference(t))} before this slip$more, '
-          'though $n comes first in the book. Usually the slip was entered late, or a page was skipped and used later.';
+      summary = '${slipLabel(m)} was used on ${sm.format(t)} — ${gapText(myAt.difference(t))} before this slip$more, '
+          'though ${slipLabel(n)} comes first in the book. Usually the slip was entered late, or a page was skipped and used later.';
     }
     final hasPattern = usedNear.length >= 2 || summary != null;
 
@@ -1151,7 +1148,7 @@ class _ErpSkippedReceiptsReportScreenState
                 final tag = m == n
                     ? 'this slip'
                     : earlierHigher.contains(m)
-                        ? 'used before $n'
+                        ? 'used before ${slipLabel(n)}'
                         : (u == null ? 'not used' : (count > 1 ? 'used $count times' : ''));
                 final tagColor = m == n
                     ? AppTheme.primary
@@ -1163,7 +1160,7 @@ class _ErpSkippedReceiptsReportScreenState
                   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     SizedBox(
                       width: 56,
-                      child: Text('$m', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800,
+                      child: Text(slipLabel(m), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800,
                           color: m == n ? AppTheme.primary : AppTheme.textPrimary)),
                     ),
                     Expanded(
@@ -1192,7 +1189,7 @@ class _ErpSkippedReceiptsReportScreenState
       context: context,
       builder: (ctx) => AlertDialog(
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Slip $n — used ${list.length} time${list.length == 1 ? '' : 's'}'),
+          Text('Slip ${slipLabel(n)} — used ${list.length} time${list.length == 1 ? '' : 's'}'),
           Text(_bookLabel(n)[0].toUpperCase() + _bookLabel(n).substring(1),
               style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
         ]),
@@ -1239,7 +1236,7 @@ class _ErpSkippedReceiptsReportScreenState
               onPressed: () async {
                 final org = _orgId;
                 if (org == null) return;
-                if (await receiptFixForSerial(context, org, n)) {
+                if (await receiptFixForSerial(context, org, slipNumber(n), letters: slipPrefixOf(n))) {
                   if (ctx.mounted) Navigator.pop(ctx);
                   _openSlip(n);
                 }
@@ -1267,7 +1264,7 @@ class _ErpSkippedReceiptsReportScreenState
           Icon(Icons.check_circle, size: 12, color: Colors.green.shade600),
           const SizedBox(width: 4),
         ],
-        Text('$n', style: TextStyle(
+        Text(slipLabel(n), style: TextStyle(
           fontSize: 12,
           decoration: cleared ? TextDecoration.lineThrough : null,
           color: cleared ? Colors.green.shade800 : AppTheme.textPrimary,

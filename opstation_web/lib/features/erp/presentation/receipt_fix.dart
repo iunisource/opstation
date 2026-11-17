@@ -146,7 +146,7 @@ Future<bool> receiptFixDialog(BuildContext context, Map<String, dynamic> visit, 
 
 /// All collections carrying slip [serial] (exact, or within a multi-slip
 /// entry); pick one, then correct / release it.
-Future<bool> receiptFixForSerial(BuildContext context, String orgId, int serial) async {
+Future<bool> receiptFixForSerial(BuildContext context, String orgId, int serial, {String letters = ''}) async {
   List<Map<String, dynamic>> rows;
   try {
     rows = List<Map<String, dynamic>>.from(await Supabase.instance.client
@@ -163,17 +163,22 @@ Future<bool> receiptFixForSerial(BuildContext context, String orgId, int serial)
     }
     return false;
   }
-  rows = rows.where((v) => RegExp(r'\d+').allMatches('${v['receipt_number'] ?? ''}').any((m) => m.group(0) == '$serial')).toList();
+  rows = rows.where((v) {
+    final cr = '${v['receipt_number'] ?? ''}';
+    if (!RegExp(r'\d+').allMatches(cr).any((m) => m.group(0) == '$serial')) return false;
+    // A lettered book's slip (SQL 487): the CR# must carry the letter too.
+    return letters.isEmpty || cr.toUpperCase().contains(letters.toUpperCase());
+  }).toList();
   if (!context.mounted) return false;
   if (rows.isEmpty) {
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text('No collection carries slip $serial.')));
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(content: Text('No collection carries slip $letters$serial.')));
     return false;
   }
   if (rows.length == 1) return receiptFixDialog(context, rows.first, serial: serial);
   final pick = await showDialog<Map<String, dynamic>>(
     context: context,
     builder: (ctx) => SimpleDialog(
-      title: Text('Slip $serial is on ${rows.length} collections — which one?'),
+      title: Text('Slip $letters$serial is on ${rows.length} collections — which one?'),
       children: [
         for (final v in rows)
           SimpleDialogOption(
