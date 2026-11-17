@@ -34,15 +34,22 @@ Future<void> printTimDays(
   // list (or a failed lookup) shows the GPS only.
   final lookup = detail || days.length <= 15;
   final places = <TimDay, (String?, String?)>{};
+  // Names not found within ~12 s print as GPS (the lookups carry on and are
+  // saved, so the next print has them).
+  final nameBudget = DateTime.now().add(const Duration(seconds: 12));
   Future<String?> where((double, double)? p) async {
     if (p == null) return null;
     final gps = '${p.$1.toStringAsFixed(5)}, ${p.$2.toStringAsFixed(5)}';
-    final n = lookup ? await placeName(p.$1, p.$2) : null;
+    final n = lookup ? await placeName(p.$1, p.$2, until: nameBudget) : null;
     return n == null ? gps : '$n ($gps)';
   }
-  for (final d in days) {
-    places[d] = (await where(d.startAt), await where(d.endAt));
-  }
+  await Future.wait([
+    for (final d in days)
+      () async {
+        final r = await Future.wait([where(d.startAt), where(d.endAt)]);
+        places[d] = (r[0], r[1]);
+      }(),
+  ]);
   // Road distance per day (same figure as the Trip Summary).
   await timLoadDistances(days);
   final kmDays = days.where((d) => d.km != null).toList();
