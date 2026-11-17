@@ -282,7 +282,7 @@ class ReportPdfBuilder {
     final doc = pw.Document();
     doc.addPage(pw.MultiPage(
       pageTheme: _pageTheme(duplicate, reimb),
-      header: (c) => _pageHeader(orgName, 'Trip Summary'),
+      header: (c) => _pageHeader(orgName, 'Trip Summary', verifyUrl: reimb?.verifyUrl),
       footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Trip Summary',
           distanceNote: ctx.usedGoogle
               ? 'Distances: Google Directions API (road distance)'
@@ -380,7 +380,7 @@ class ReportPdfBuilder {
 
     doc.addPage(pw.MultiPage(
       pageTheme: _pageTheme(duplicate, reimb),
-      header: (c) => _pageHeader(orgName, 'Combined Trip Summary'),
+      header: (c) => _pageHeader(orgName, 'Combined Trip Summary', verifyUrl: reimb?.verifyUrl),
       footer: (c) => _withTrail(duplicate ? trail : const [], _pageFooter(c, orgName, 'Combined Trip Summary',
           distanceNote: 'Distances: road distance (Google Directions API); straight-line where unavailable')),
       build: (c) => [
@@ -525,7 +525,7 @@ class ReportPdfBuilder {
         ),
       );
 
-  static pw.Widget _pageHeader(String orgName, String title) {
+  static pw.Widget _pageHeader(String orgName, String title, {String? verifyUrl}) {
     return pw.Container(
       padding: const pw.EdgeInsets.only(bottom: 6),
       decoration: const pw.BoxDecoration(
@@ -540,12 +540,47 @@ class ReportPdfBuilder {
                   fontWeight: pw.FontWeight.bold,
                   letterSpacing: 2,
                   color: _brandBlue)),
-          pw.Text(title,
-              style: pw.TextStyle(
-                  fontSize: 18, fontWeight: pw.FontWeight.bold, color: _ink)),
+          pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
+            pw.Text(title,
+                style: pw.TextStyle(
+                    fontSize: 18, fontWeight: pw.FontWeight.bold, color: _ink)),
+            if (verifyUrl != null && verifyUrl.isNotEmpty) ...[
+              pw.SizedBox(width: 8),
+              _trustMark(verifyUrl),
+            ],
+          ]),
         ],
       ),
     );
+  }
+
+  /// Small green tick + QR (no text) in the header of a claim print; the QR
+  /// opens the claim's public check page (/#/rc/<token>).
+  static pw.Widget _trustMark(String url) {
+    const green = PdfColor.fromInt(0xFF059669);
+    return pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+      pw.Container(
+        width: 12,
+        height: 12,
+        decoration: const pw.BoxDecoration(color: green, shape: pw.BoxShape.circle),
+        child: pw.CustomPaint(
+          size: const PdfPoint(12, 12),
+          painter: (canvas, size) {
+            canvas
+              ..setStrokeColor(PdfColors.white)
+              ..setLineWidth(1.3)
+              ..setLineCap(PdfLineCap.round)
+              ..setLineJoin(PdfLineJoin.round)
+              ..moveTo(3.3, 6.3)
+              ..lineTo(5.3, 4.3)
+              ..lineTo(8.9, 8.1)
+              ..strokePath();
+          },
+        ),
+      ),
+      pw.SizedBox(width: 4),
+      pw.BarcodeWidget(barcode: pw.Barcode.qrCode(), data: url, width: 26, height: 26, drawText: false),
+    ]);
   }
 
   /// On a DUPLICATE copy: who generated this report and when, above the footer.
@@ -1184,7 +1219,6 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _signatureLine([ReimbInfo? reimb]) {
-    final url = reimb?.verifyUrl;
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -1200,65 +1234,10 @@ class ReportPdfBuilder {
                   letterSpacing: 0.8,
                   color: _muted)),
         ),
-        if (url != null && url.isNotEmpty) ...[
-          pw.SizedBox(height: 10),
-          _trustBadge(url),
-        ],
       ],
     );
   }
 
-  /// "Verified document" badge with a QR that opens the claim's public check
-  /// page (/#/rc/<token>) — scanning shows whether the print is genuine.
-  static pw.Widget _trustBadge(String url) {
-    const green = PdfColor.fromInt(0xFF059669);
-    const greenBg = PdfColor.fromInt(0xFFECFDF5);
-    const greenLine = PdfColor.fromInt(0xFFA7F3D0);
-    return pw.Container(
-      padding: const pw.EdgeInsets.fromLTRB(8, 6, 6, 6),
-      decoration: pw.BoxDecoration(
-        color: greenBg,
-        border: pw.Border.all(color: greenLine, width: 0.6),
-        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(5)),
-      ),
-      child: pw.Row(mainAxisSize: pw.MainAxisSize.min, children: [
-        // shield-like round seal with a tick (drawn: the PDF font has no ✓)
-        pw.Container(
-          width: 20,
-          height: 20,
-          decoration: const pw.BoxDecoration(color: green, shape: pw.BoxShape.circle),
-          child: pw.CustomPaint(
-            size: const PdfPoint(20, 20),
-            painter: (canvas, size) {
-              canvas
-                ..setStrokeColor(PdfColors.white)
-                ..setLineWidth(1.8)
-                ..setLineCap(PdfLineCap.round)
-                ..setLineJoin(PdfLineJoin.round)
-                ..moveTo(5.5, 10.5)
-                ..lineTo(8.8, 7.2)
-                ..lineTo(14.8, 13.5)
-                ..strokePath();
-            },
-          ),
-        ),
-        pw.SizedBox(width: 7),
-        pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, mainAxisSize: pw.MainAxisSize.min, children: [
-          pw.Text('VERIFIED DOCUMENT',
-              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: green, letterSpacing: 0.6)),
-          pw.SizedBox(height: 1.5),
-          pw.Text('Issued by Opstation. Scan the QR to check it is genuine.',
-              style: const pw.TextStyle(fontSize: 6.5, color: _muted)),
-        ]),
-        pw.SizedBox(width: 8),
-        pw.Container(
-          color: PdfColors.white,
-          padding: const pw.EdgeInsets.all(2),
-          child: pw.BarcodeWidget(barcode: pw.Barcode.qrCode(), data: url, width: 44, height: 44, drawText: false),
-        ),
-      ]),
-    );
-  }
 
   // ---- Helpers ---------------------------------------------------------
 
