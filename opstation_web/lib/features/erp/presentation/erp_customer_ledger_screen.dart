@@ -236,6 +236,14 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
     } catch (_) {}
   }
 
+  /// Re-reads the open ledger from the server (new entries, balance).
+  Future<void> _refresh() async {
+    final id = _selectedCustomer?['id'] as String?;
+    if (id == null) return;
+    await _loadLedger(id);
+    _loadPendingCheques(id);
+  }
+
   Future<void> _loadLedger(String customerId) async {
     final orgId = _orgId;
     if (orgId == null) return;
@@ -909,6 +917,14 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
+                    icon: _loading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh, size: 16),
+                    label: const Text('Refresh', style: TextStyle(fontSize: 12)),
+                    onPressed: _loading ? null : _refresh,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
                     icon: const Icon(Icons.calendar_today_outlined, size: 15),
                     label: Text(
                       _dateFrom == null && _dateTo == null ? 'Date Range'
@@ -957,6 +973,14 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               ]);
               final actions = (_selectedCustomer != null && _entries.isNotEmpty)
                 ? Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: _loading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh, size: 16),
+                    label: const Text('Refresh', style: TextStyle(fontSize: 12)),
+                    onPressed: _loading ? null : _refresh,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.calendar_today_outlined, size: 15),
                     label: Text(

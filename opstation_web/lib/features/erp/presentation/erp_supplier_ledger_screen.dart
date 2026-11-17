@@ -222,6 +222,13 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
     } catch (_) {}
   }
 
+  /// Re-reads the open ledger from the server (new entries, balance).
+  Future<void> _refresh() async {
+    final id = _selectedSupplier?['id'] as String?;
+    if (id == null) return;
+    await _loadLedger(id);
+  }
+
   Future<void> _loadLedger(String supplierId) async {
     // Supplier ledgers are intentionally CROSS-BRANCH: a supplier account is
     // common to the whole org, so no voucher is ever filtered out by the
@@ -607,6 +614,14 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
                   OutlinedButton.icon(
+                    icon: _loading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh, size: 16),
+                    label: const Text('Refresh', style: TextStyle(fontSize: 12)),
+                    onPressed: _loading ? null : _refresh,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
+                  OutlinedButton.icon(
                     icon: const Icon(Icons.print_outlined, size: 16),
                     label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),
                     onPressed: _printLedger,
@@ -637,6 +652,14 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               ]);
               final actions = (_selectedSupplier != null && _entries.isNotEmpty)
                 ? Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    icon: _loading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh, size: 16),
+                    label: const Text('Refresh', style: TextStyle(fontSize: 12)),
+                    onPressed: _loading ? null : _refresh,
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+                  ),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.print_outlined, size: 16),
                     label: const Text('Print / PDF', style: TextStyle(fontSize: 12)),

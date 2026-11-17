@@ -56,16 +56,50 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
         'p_branch_id': _branchId,
         'p_as_of': _fmtDate(_asOf),
       });
+      final rows = [for (final r in res as List) Map<String, dynamic>.from(r as Map)];
+      await _fillTaxonomy(client, orgId, rows);
       setState(() {
         _branches = List<Map<String, dynamic>>.from(branches as List);
         _taxonomies = grouped;
-        _rows = List<Map<String, dynamic>>.from(res as List);
+        _rows = rows;
         _loading = false;
       });
     } catch (e) {
       setState(() => _loading = false);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load: $e')));
     }
+  }
+
+  /// The stock balance rows don't always carry every product group (Sub Group
+  /// was missing, so filtering by it showed nothing). Take the groups from the
+  /// product itself — matched by id, else SKU, else name.
+  Future<void> _fillTaxonomy(SupabaseClient client, String orgId, List<Map<String, dynamic>> rows) async {
+    const keys = ['product_main_group', 'product_group', 'product_sub_group', 'product_class', 'product_movement_category'];
+    try {
+      final byId = <String, Map>{}, bySku = <String, Map>{}, byName = <String, Map>{};
+      for (var from = 0; ; from += 1000) {
+        final page = await client.from('products')
+            .select('id, sku, name, ${keys.join(', ')}')
+            .eq('org_id', orgId).order('id').range(from, from + 999) as List;
+        for (final p in page) {
+          final m = p as Map;
+          byId['${m['id']}'] = m;
+          final sku = '${m['sku'] ?? ''}'.trim().toLowerCase();
+          if (sku.isNotEmpty) bySku[sku] = m;
+          byName['${m['name'] ?? ''}'.trim().toLowerCase()] = m;
+        }
+        if (page.length < 1000) break;
+      }
+      for (final r in rows) {
+        final p = byId['${r['product_id'] ?? r['id'] ?? ''}'] ??
+            bySku['${r['sku'] ?? ''}'.trim().toLowerCase()] ??
+            byName['${r['product_name'] ?? ''}'.trim().toLowerCase()];
+        if (p == null) continue;
+        for (final k in keys) {
+          r[k] = p[k] ?? r[k]; // the product's own groups (same names as the filters)
+        }
+      }
+    } catch (_) {/* filters just use what the report sent */}
   }
 
   double _qty(Map<String, dynamic> r) => ((r['on_hand']) as num?)?.toDouble() ?? 0;
