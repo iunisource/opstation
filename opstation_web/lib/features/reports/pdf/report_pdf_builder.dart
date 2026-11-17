@@ -1143,7 +1143,7 @@ class ReportPdfBuilder {
         pw.Text('* ALREADY GENERATED FOR REIMBURSEMENT',
             style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
         pw.SizedBox(height: 4),
-        pw.Text(note, style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF78350F))),
+        pw.Text(_pdfSafe(note), style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF78350F))),
       ]),
     );
   }
@@ -1167,7 +1167,7 @@ class ReportPdfBuilder {
                 : 'EXCLUDED - ALREADY APPROVED FOR REIMBURSEMENT',
             style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
         pw.SizedBox(height: 4),
-        pw.Text(r.stamp ?? '', style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF334155))),
+        pw.Text(_pdfSafe(r.stamp ?? ''), style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF334155))),
       ]),
     );
   }
@@ -1187,7 +1187,7 @@ class ReportPdfBuilder {
         pw.Text('ADJUSTED BY APPROVER',
             style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, letterSpacing: 0.6, color: c)),
         pw.SizedBox(height: 4),
-        pw.Text(note, style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF7F1D1D))),
+        pw.Text(_pdfSafe(note), style: const pw.TextStyle(fontSize: 9, color: PdfColor.fromInt(0xFF7F1D1D))),
       ]),
     );
   }
@@ -1217,6 +1217,17 @@ class ReportPdfBuilder {
       ],
     );
   }
+
+  /// The PDF font has no long dashes or arrows (they print as boxes).
+  static String _pdfSafe(String t) => t
+      .replaceAll('–', '-')
+      .replaceAll('—', '-')
+      .replaceAll('→', 'to')
+      .replaceAll('…', '...')
+      .replaceAll('‘', "'")
+      .replaceAll('’', "'")
+      .replaceAll('“', '"')
+      .replaceAll('”', '"');
 
   static pw.Widget _signatureLine([ReimbInfo? reimb]) {
     return pw.Column(
