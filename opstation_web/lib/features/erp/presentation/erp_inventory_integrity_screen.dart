@@ -97,11 +97,39 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
   };
 
   bool _canOpen(String voucherNo) =>
-      _openTargets.keys.any((p) => voucherNo.startsWith(p));
+      voucherNo.startsWith('JOB-') || _openTargets.keys.any((p) => voucherNo.startsWith(p));
+
+  /// A job run is numbered "<job number>-R<run>" (e.g. JOB-2026-0123-R1). It
+  /// opens the Job Card it belongs to.
+  Future<void> _openJobRun(String voucherNo, String orgId) async {
+    final jobNo = voucherNo.replaceFirst(RegExp(r'-R\d+$'), '');
+    try {
+      final r = await Supabase.instance.client
+          .from('job_cards')
+          .select('id')
+          .eq('org_id', orgId)
+          .eq('job_number', jobNo)
+          .limit(1);
+      final rows = r as List;
+      if (!mounted) return;
+      if (rows.isEmpty) {
+        _snack('Could not find job $jobNo.');
+        return;
+      }
+      context.push('/manufacturing/job-card?id=${rows.first['id']}');
+    } catch (_) {
+      if (!mounted) return;
+      _snack('Could not open $voucherNo.');
+    }
+  }
 
   Future<void> _openVoucher(String voucherNo) async {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
+    if (voucherNo.startsWith('JOB-')) {
+      await _openJobRun(voucherNo, orgId);
+      return;
+    }
     final key = _openTargets.keys.firstWhere((p) => voucherNo.startsWith(p), orElse: () => '');
     final target = _openTargets[key];
     if (target == null) {
