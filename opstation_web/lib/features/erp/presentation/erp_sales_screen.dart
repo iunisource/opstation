@@ -66,6 +66,18 @@ Future<List<String>> matchSalesOrderIds(String orgId, String q) async {
   } catch (_) { return const []; }
 }
 
+/// Ids of vouchers (of [voucherType]) whose Internal Remarks thread contains [q].
+Future<List<String>> matchVoucherIdsByRemark(String orgId, String voucherType, String q) async {
+  final s = sanitizeSearch(q);
+  if (s.isEmpty) return const [];
+  try {
+    final rows = await Supabase.instance.client
+        .from('voucher_remarks').select('voucher_id').eq('org_id', orgId)
+        .eq('voucher_type', voucherType).ilike('remark', '%$s%').limit(100);
+    return {for (final r in rows as List) r['voucher_id'] as String}.toList();
+  } catch (_) { return const []; }
+}
+
 /// Merge several result lists into one, de-duplicated by id, newest first,
 /// capped. created_at is ISO-8601 so string compare orders correctly.
 List<Map<String, dynamic>> mergeVouchersById(List<List> parts, {int cap = kSalesRecentCap}) {
@@ -3420,6 +3432,10 @@ class ErpSalesInvoicesScreen extends ConsumerStatefulWidget {
 
 class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen> {
   List<Map<String, dynamic>> _invoices = [];
+  // Invoices the last search found through their remarks (own Remarks field or
+  // the Internal Remarks thread). They stay in the list even though their
+  // number/customer don't contain the search text.
+  Set<String> _remarkHitIds = {};
   String? _selectedId;
   Map<String, dynamic> _detail = {};
   List<Map<String, dynamic>> _items = [];
@@ -3478,15 +3494,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       final cfgFuture = client.from('app_config').select('key,value').eq('org_id', orgId)
           .inFilter('key', ['org.doc_review_flow_si', 'org.si_supervise_flow', 'org.si_supervisor_users']);
       List<Map<String, dynamic>> out;
+      final remarkHits = <String>{};
       if (s.isEmpty) {
         var q = client.from('sales_invoices').select(cols).eq('org_id', orgId);
         if (branchId != null) q = q.eq('branch_id', branchId);
         final res = await q.order('created_at', ascending: false).limit(kSalesRecentCap);
         out = List<Map<String, dynamic>>.from(res);
       } else {
-        // Search by SI number, parent SO number, or customer — across the table.
+        // Search by SI number, parent SO number, customer or remarks — across the table.
         final custIds = await matchCustomerIds(orgId, s);
         final soIds = await matchSalesOrderIds(orgId, s);
+        final rmkIds = await matchVoucherIdsByRemark(orgId, 'SI', s);
         final futures = <Future<dynamic>>[];
         var byNum = client.from('sales_invoices').select(cols).eq('org_id', orgId);
         if (branchId != null) byNum = byNum.eq('branch_id', branchId);
@@ -3501,7 +3519,20 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           if (branchId != null) b = b.eq('branch_id', branchId);
           futures.add(b.inFilter('so_id', soIds).order('created_at', ascending: false).limit(kSalesRecentCap));
         }
+        // Remarks: the invoice's own Remarks field and the Internal Remarks thread.
+        final remarkFrom = futures.length;
+        var byRmk = client.from('sales_invoices').select(cols).eq('org_id', orgId);
+        if (branchId != null) byRmk = byRmk.eq('branch_id', branchId);
+        futures.add(byRmk.ilike('remarks', '%$s%').order('created_at', ascending: false).limit(kSalesRecentCap));
+        if (rmkIds.isNotEmpty) {
+          var b = client.from('sales_invoices').select(cols).eq('org_id', orgId);
+          if (branchId != null) b = b.eq('branch_id', branchId);
+          futures.add(b.inFilter('id', rmkIds).order('created_at', ascending: false).limit(kSalesRecentCap));
+        }
         final results = await Future.wait(futures);
+        for (var i = remarkFrom; i < results.length; i++) {
+          for (final r in results[i] as List) { remarkHits.add(r['id'] as String); }
+        }
         out = mergeVouchersById([for (final r in results) r as List]);
       }
       bool reviewFlow = _reviewFlow; bool superviseFlow = _superviseFlow; bool canSup = _canSupervise;
@@ -3516,7 +3547,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         canSup = _isAdmin || (uid != null && extraIds.contains(uid));
       } catch (_) {}
       if (!mounted) return;
-      setState(() { _invoices = out; _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _canSupervise = canSup; _listLoading = false; });
+      setState(() { _invoices = out; _remarkHitIds = remarkHits; _reviewFlow = reviewFlow; _superviseFlow = superviseFlow; _canSupervise = canSup; _listLoading = false; });
     } catch (_) { if (mounted) setState(() => _listLoading = false); }
   }
 
@@ -4343,7 +4374,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       if (_siSupFilter == 'yes' && !sup) return false;
       if (_siSupFilter == 'no' && (sup || i['is_voided'] == true)) return false;
     }
-    return matchesQuery('${i['voucher_number'] ?? ''} ${i['sales_orders']?['voucher_number'] ?? ''} ${i['customers']?['shop_name'] ?? ''}', _search);
+    // Found through its remarks on the server: keep it.
+    if (_remarkHitIds.contains(i['id'])) return true;
+    return matchesQuery('${i['voucher_number'] ?? ''} ${i['sales_orders']?['voucher_number'] ?? ''} ${i['customers']?['shop_name'] ?? ''} ${i['remarks'] ?? ''}', _search);
   }).toList();
 
   int get _siSupPendingCount => _invoices.where((i) => i['supervised_at'] == null && i['is_voided'] != true).length;
@@ -4386,7 +4419,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 const Align(alignment: Alignment.centerLeft, child: Text('Sales Invoices', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800))),
                 const SizedBox(height: 8),
                 TextField(
-                  decoration: const InputDecoration(hintText: 'Search SI/SO/customer...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
+                  decoration: const InputDecoration(hintText: 'Search SI/SO/customer/remarks...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
                   onChanged: (v) {
                     setState(() => _search = v);
                     _searchDebounce?.cancel();
