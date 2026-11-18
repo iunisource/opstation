@@ -770,12 +770,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final sid = _session['id'];
       final priceFuture = (() async {
         try {
-          return await _fetchAllPaged((from, to) => client
+          return await _retryNetwork(() => _fetchAllPaged((from, to) => client
               .from('products')
               .select('id, selling_price, cost_price, is_consignment')
               .eq('org_id', orgId)
               .order('id')
-              .range(from, to));
+              .range(from, to)));
         } catch (_) { return <Map<String, dynamic>>[]; }
       })();
       final expFuture = (() async {
@@ -847,10 +847,14 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         final isConsign = r['is_consignment'] == true;
         costOk[id] = isConsign || ((r['cost_price'] as num?)?.toDouble() ?? 0) > 0;
       }
+      // If the whole products lookup failed (empty list), we know nothing about
+      // anyone's cost — don't block every product on that: fail open. A product
+      // is blocked only when we positively know it has no cost.
+      final costLookupFailed = priceRows.isEmpty;
       for (final p in prods) {
         final pid = p['product_id'] as String?;
         if (pid != null && priceMap.containsKey(pid)) p['price'] = priceMap[pid];
-        p['cost_ok'] = pid != null ? (costOk[pid] ?? false) : false;
+        p['cost_ok'] = pid != null ? (costOk[pid] ?? costLookupFailed) : false;
       }
 
       final allowNoStock = s != null && s['allow_sell_without_stock'] == true;
