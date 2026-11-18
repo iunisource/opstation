@@ -7,6 +7,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/widgets/responsive.dart';
+import '../../../core/layout/main_layout.dart' show inventoryIntegrityCountProvider;
+import '../services/inventory_integrity_data.dart';
 
 /// Inventory Integrity Check — two different questions, deliberately separate.
 ///
@@ -86,90 +88,18 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     if (orgId == null) return;
     setState(() => _docLoading = true);
     try {
-      final res = await Supabase.instance.client.rpc(
-        'rpc_inventory_gl_reconciliation_active',
-        params: {
-          'p_org_id': orgId,
-          'p_from': _d(_from),
-          'p_to': _d(_to),
-          'p_branch_id': null,
-        },
-      );
-      var rows = List<Map<String, dynamic>>.from(res as List);
-      rows = await _dropExplainedByPpv(orgId, rows);
+      final rows = await InventoryIntegrityData.documents(Supabase.instance.client, orgId, _from, _to);
       if (!mounted) return;
       setState(() {
         _docRows = rows;
         _docLoading = false;
       });
+      ref.invalidate(inventoryIntegrityCountProvider); // keep the menu badge in step
     } catch (e) {
       if (!mounted) return;
       setState(() => _docLoading = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Reconciliation error: $e')));
-    }
-  }
-
-  /// A Purchase Invoice whose price differs from the received cost posts the
-  /// difference on units ALREADY SOLD/USED to Purchase Price Variance (an
-  /// expense), not to inventory. That is correct — but the reconciliation
-  /// compares the invoice's whole GL value with the cost ledger, so the PPV
-  /// shows up as a "difference" (e.g. PI-2026-0117, Rs 99.75). Drop rows whose
-  /// gap is exactly the PPV the invoice booked.
-  Future<List<Map<String, dynamic>>> _dropExplainedByPpv(
-      String orgId, List<Map<String, dynamic>> rows) async {
-    final piNos = rows
-        .map((r) => '${r['voucher_no'] ?? ''}')
-        .where((v) => v.startsWith('PI-') || v.startsWith('PRI-'))
-        .toSet()
-        .toList();
-    if (piNos.isEmpty) return rows;
-    try {
-      final client = Supabase.instance.client;
-      // Match the invoice's journal by reference number, or by its entry
-      // number ("PINV-PI-2026-0117").
-      final byRef = await client
-          .from('journal_entries')
-          .select('id, reference_number, entry_number')
-          .eq('org_id', orgId)
-          .eq('status', 'posted')
-          .inFilter('reference_number', piNos);
-      final byNo = await client
-          .from('journal_entries')
-          .select('id, reference_number, entry_number')
-          .eq('org_id', orgId)
-          .eq('status', 'posted')
-          .inFilter('entry_number', [for (final v in piNos) 'PINV-$v']);
-      final entryToVoucher = <String, String>{};
-      for (final e in [...(byRef as List), ...(byNo as List)]) {
-        final ref = '${e['reference_number'] ?? ''}';
-        final no = '${e['entry_number'] ?? ''}';
-        final v = piNos.contains(ref) ? ref : (no.startsWith('PINV-') ? no.substring(5) : ref);
-        if (piNos.contains(v)) entryToVoucher[e['id'] as String] = v;
-      }
-      if (entryToVoucher.isEmpty) return rows;
-      final lines = await client
-          .from('journal_lines')
-          .select('entry_id, debit, credit, account_name, description')
-          .inFilter('entry_id', entryToVoucher.keys.toList());
-      final ppv = <String, double>{};
-      for (final l in (lines as List)) {
-        final name = '${l['account_name'] ?? ''} ${l['description'] ?? ''}'.toLowerCase();
-        if (!name.contains('price variance')) continue;
-        final v = entryToVoucher[l['entry_id']];
-        if (v == null) continue;
-        final amt = ((l['debit'] as num?)?.toDouble() ?? 0) - ((l['credit'] as num?)?.toDouble() ?? 0);
-        ppv[v] = (ppv[v] ?? 0) + amt;
-      }
-      return rows.where((r) {
-        final v = '${r['voucher_no'] ?? ''}';
-        final p = ppv[v];
-        if (p == null || p == 0) return true;
-        final diff = ((r['difference'] as num?)?.toDouble() ?? 0).abs();
-        return (diff - p.abs()).abs() > 0.05; // keep only if PPV doesn't explain it
-      }).toList();
-    } catch (_) {
-      return rows; // if the lookup fails, show everything
     }
   }
 
@@ -283,92 +213,13 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
     if (orgId == null) return;
     setState(() => _loading = true);
     try {
-      final client = Supabase.instance.client;
-      final res = await client
-          .rpc('rpc_inventory_integrity', params: {'p_org': orgId});
-      var rows = List<Map<String, dynamic>>.from(res as List);
-
-      // In-transit + pending purchase-return awareness. Both lower physical
-      // stock while the cost layer stays put: an in-transit transfer keeps its
-      // layer until the goods are received, and a saved-but-not-invoiced
-      // purchase return keeps its layer until the return invoice (PRI) is
-      // posted. In both cases the STOCK <> LAYERS gap is a normal timing window,
-      // not corruption. Build the expected gap per product and drop any product
-      // whose ONLY gap is fully explained by it.
-      try {
-        final expected = <String, double>{};
-        // (a) in-transit stock transfers (dispatched, not yet received)
-        final trs = await client
-            .from('stock_transfers')
-            .select('id')
-            .eq('org_id', orgId)
-            .eq('status', 'in_transit');
-        final ids = (trs as List).map((e) => e['id'] as String).toList();
-        if (ids.isNotEmpty) {
-          final items = await client
-              .from('stock_transfer_items')
-              .select('product_id, quantity')
-              .inFilter('transfer_id', ids);
-          for (final r in (items as List)) {
-            final pid = r['product_id'] as String?;
-            if (pid == null) continue;
-            expected[pid] = (expected[pid] ?? 0) + ((r['quantity'] as num?)?.toDouble() ?? 0);
-          }
-        }
-        // (b) purchase returns saved but not yet invoiced (layer consumed at PRI)
-        try {
-          final pr = await client
-              .rpc('rpc_pending_purchase_return_qty', params: {'p_org': orgId});
-          for (final r in (pr as List)) {
-            final pid = r['product_id'] as String?;
-            if (pid == null) continue;
-            expected[pid] = (expected[pid] ?? 0) + ((r['qty'] as num?)?.toDouble() ?? 0);
-          }
-        } catch (_) {/* ignore if the helper RPC is unavailable */}
-        // (c) sales returns confirmed (SRN) but whose Return Invoice (SRI) is not
-        //     issued yet: stock came back IN at the SRN, the cost layer is only
-        //     created when the SRI is issued. Stock runs AHEAD of layers.
-        try {
-          final srns = await client
-              .from('sales_returns')
-              .select('id')
-              .eq('org_id', orgId)
-              .eq('status', 'saved')
-              .or('is_voided.is.null,is_voided.eq.false');
-          final srnIds = (srns as List).map((e) => e['id'] as String).toList();
-          for (var i = 0; i < srnIds.length; i += 200) {
-            final items = await client
-                .from('sales_return_items')
-                .select('product_id, quantity')
-                .inFilter('return_id', srnIds.sublist(i, (i + 200).clamp(0, srnIds.length)));
-            for (final r in (items as List)) {
-              final pid = r['product_id'] as String?;
-              if (pid == null) continue;
-              expected[pid] = (expected[pid] ?? 0) - ((r['quantity'] as num?)?.toDouble() ?? 0);
-            }
-          }
-        } catch (_) {/* ignore */}
-
-        if (expected.isNotEmpty) {
-          rows = rows.where((r) {
-            if (r['issue'] != 'STOCK <> LAYERS') return true;      // other issues stay
-            if (((r['neg_layers'] as num?)?.toInt() ?? 0) != 0) return true; // real neg-layer issue
-            final pid = r['product_id'] as String?;
-            final it = pid != null ? (expected[pid] ?? 0) : 0;
-            if (it == 0) return true;
-            final stock = (r['stock_qty'] as num?)?.toDouble() ?? 0;
-            final layer = (r['layer_qty'] as num?)?.toDouble() ?? 0;
-            // keep only if the gap is NOT fully explained by in-transit + pending returns
-            return (stock + it - layer).abs() > 0.001;
-          }).toList();
-        }
-      } catch (_) {/* if the lookup fails, show the raw list */}
-
+      final rows = await InventoryIntegrityData.products(Supabase.instance.client, orgId);
       if (!mounted) return;
       setState(() {
         _rows = rows;
         _loading = false;
       });
+      ref.invalidate(inventoryIntegrityCountProvider); // keep the menu badge in step
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
