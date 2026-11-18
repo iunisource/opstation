@@ -1140,13 +1140,17 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
 
   Future<String?> _promptNewValue(BuildContext ctx, String title) async {
     final ctrl = TextEditingController();
-    return showDialog<String>(context: ctx, builder: (_) => AlertDialog(
+    // Close THIS dialog with its own context (dctx). Using the page's context
+    // (ctx) here closed the Customers page behind the dialog instead — the page
+    // lives in a nested navigator, the dialog on the root one — which left a
+    // blank white screen.
+    return showDialog<String>(context: ctx, builder: (dctx) => AlertDialog(
       title: Text(title),
       content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(hintText: 'Name'),
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim().isEmpty ? null : v.trim())),
+          onSubmitted: (v) => Navigator.of(dctx).pop(v.trim().isEmpty ? null : v.trim())),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim().isEmpty ? null : ctrl.text.trim()), child: const Text('Add')),
+        TextButton(onPressed: () => Navigator.of(dctx).pop(), child: const Text('Cancel')),
+        ElevatedButton(onPressed: () => Navigator.of(dctx).pop(ctrl.text.trim().isEmpty ? null : ctrl.text.trim()), child: const Text('Add')),
       ],
     ));
   }
