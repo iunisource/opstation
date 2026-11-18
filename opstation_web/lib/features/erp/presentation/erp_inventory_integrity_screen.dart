@@ -2,6 +2,7 @@
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
@@ -78,6 +79,59 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
   void dispose() {
     _tabs.dispose();
     super.dispose();
+  }
+
+  // Voucher number prefix -> (table, screen) so a row on the Documents tab can
+  // open the voucher it is about. Only used on this tab.
+  static const _openTargets = <String, (String, String)>{
+    'PI-': ('purchase_invoices', '/erp/purchase-invoices'),
+    'PRI-': ('purchase_return_invoices', '/erp/purchase-return-vouchers'),
+    'GRN-': ('purchase_grns', '/erp/grn'),
+    'PO-': ('purchase_orders', '/erp/purchase'),
+    'SI-': ('sales_invoices', '/erp/sales-invoices'),
+    'SRI-': ('sales_return_invoices', '/erp/sales-return-invoices'),
+    'DO-': ('delivery_orders', '/erp/delivery-orders'),
+    'SO-': ('sales_orders', '/erp/sales'),
+    'ST-': ('stock_transfers', '/erp/stock-transfers'),
+    'PRD-': ('production_vouchers', '/manufacturing/production-voucher'),
+  };
+
+  bool _canOpen(String voucherNo) =>
+      _openTargets.keys.any((p) => voucherNo.startsWith(p));
+
+  Future<void> _openVoucher(String voucherNo) async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    final key = _openTargets.keys.firstWhere((p) => voucherNo.startsWith(p), orElse: () => '');
+    final target = _openTargets[key];
+    if (target == null) {
+      _snack('This kind of document cannot be opened from here.');
+      return;
+    }
+    try {
+      final r = await Supabase.instance.client
+          .from(target.$1)
+          .select('id')
+          .eq('org_id', orgId)
+          .eq('voucher_number', voucherNo)
+          .limit(1);
+      final rows = r as List;
+      if (!mounted) return;
+      if (rows.isEmpty) {
+        _snack('Could not find $voucherNo.');
+        return;
+      }
+      // Pushed on top, so Back returns to this list.
+      context.push('${target.$2}?focus=${rows.first['id']}');
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Could not open $voucherNo.');
+    }
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
   String _d(DateTime d) =>
@@ -1034,8 +1088,28 @@ class _State extends ConsumerState<ErpInventoryIntegrityScreen>
                   child: Row(children: [
                     Expanded(flex: 2, child: Text('${r['doc_type'] ?? '-'}',
                         style: const TextStyle(fontSize: 12))),
-                    Expanded(flex: 2, child: Text('${r['voucher_no'] ?? '-'}',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+                    Expanded(flex: 2, child: _canOpen('${r['voucher_no'] ?? ''}')
+                        ? Align(
+                            alignment: Alignment.centerLeft,
+                            child: Tooltip(
+                              message: 'Open this voucher',
+                              child: InkWell(
+                                onTap: () => _openVoucher('${r['voucher_no']}'),
+                                borderRadius: BorderRadius.circular(4),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+                                  child: Text('${r['voucher_no']}',
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppTheme.primary,
+                                          decoration: TextDecoration.underline)),
+                                ),
+                              ),
+                            ),
+                          )
+                        : Text('${r['voucher_no'] ?? '-'}',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
                     Expanded(flex: 2, child: Text('${r['voucher_date'] ?? '-'}',
                         style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text(_fmt(r['gl_value'] as num?),
