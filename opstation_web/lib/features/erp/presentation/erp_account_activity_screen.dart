@@ -49,8 +49,10 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   Map<String, dynamic>? get _sidebarBranch => ref.read(selectedBranchProvider);
-  bool get _isAdminTier { final r = ref.read(currentUserProvider)?.role; return r == WebUserRole.superAdmin || r == WebUserRole.masterAdmin || r == WebUserRole.admin; }
-  String? get _effectiveBranchId => _isAdminTier ? (_accumulated ? null : _sidebarBranch?['id'] as String?) : (_sidebarBranch?['id'] as String?);
+  // Account ledgers are company-wide. Branch-level access only decides who can
+  // open this screen; it does not narrow the entries. Everyone starts on all
+  // branches and may switch to their current branch.
+  String? get _effectiveBranchId => _accumulated ? null : _sidebarBranch?['id'] as String?;
 
   @override
   void initState() {
@@ -497,9 +499,9 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
                   child: Row(children: [const Icon(Icons.date_range, size: 14, color: AppTheme.textSecondary), const SizedBox(width: 8),
                     Text(DateFormat('dd/MM/yyyy').format(_dateFrom) + ' - ' + DateFormat('dd/MM/yyyy').format(_dateTo), style: const TextStyle(fontSize: 12))]))),
               ])),
-              if (_isAdminTier) const SizedBox(width: 16, height: 12),
+              const SizedBox(width: 16, height: 12),
               // Branch
-              if (_isAdminTier) SizedBox(width: phone ? double.infinity : 190, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: phone ? double.infinity : 190, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Branch', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
