@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/audit_label.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -699,6 +700,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'product_id': _addProductId, 'uom_id': _addUomId,
         'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
       });
+      await _logAudit(_detail['id'] as String, 'SO', 'line_added',
+          'Added ${prod['name'] ?? 'item'} × ${_plain4(qty)} ${uom['abbreviation'] ?? ''}'.trim());
       _qtyControllers[itemId] = TextEditingController(text: _plain4(qty));
       setState(() {
         _items.add({
@@ -844,6 +847,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                         onSubmitted: (v) async {
                           final newQty = double.tryParse(v) ?? qty;
                           await Supabase.instance.client.from('sales_order_items').update({'quantity': newQty}).eq('id', item['id']);
+                          if (newQty != qty) {
+                            await _logAudit(_detail['id'] as String, 'SO', 'line_edited',
+                                '${item['products']?['name'] ?? 'Line'}: qty ${_n4(qty)} → ${_n4(newQty)}');
+                          }
                           _loadDetail(_detail['id'] as String);
                         },
                       ))
@@ -929,6 +936,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         'quantity': qty, 'unit_price': 0, 'discount': 0, 'qty_delivered': 0,
         'is_foc': true,
       });
+      await _logAudit(_detail['id'] as String, 'SO', 'line_added',
+          'Added FOC ${prod['name'] ?? 'item'} × ${_plain4(qty)} ${uom['abbreviation'] ?? ''}'.trim());
       _qtyControllers[itemId] = TextEditingController(text: _plain4(qty));
       setState(() {
         _items.add({
@@ -1068,11 +1077,14 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   Future<void> _deleteItem(String itemId) async {
     if (!_canEditLines) { _showSnack('Cannot remove: $_doMsg'); return; }
     try {
+      final gone = _items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{});
       await Supabase.instance.client.from('sales_order_items').delete().eq('id', itemId);
       setState(() {
         _items.removeWhere((i) => i['id'] == itemId);
         _qtyControllers.remove(itemId)?.dispose();
       });
+      await _logAudit(_detail['id'] as String, 'SO', 'line_removed',
+          'Removed ${gone['products']?['name'] ?? 'item'}${gone['quantity'] == null ? '' : ' (qty ${_n4(gone['quantity'] as num)})'}');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
@@ -1436,6 +1448,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                 onSubmitted: (v) async {
                                   final newQty = double.tryParse(v) ?? qty;
                                   await Supabase.instance.client.from('sales_order_items').update({'quantity': newQty}).eq('id', item['id']);
+                                  if (newQty != qty) {
+                                    await _logAudit(_detail['id'] as String, 'SO', 'line_edited',
+                                        '${item['products']?['name'] ?? 'Line'}: qty ${_n4(qty)} → ${_n4(newQty)}');
+                                  }
                                   _loadDetail(_detail['id'] as String);
                                 },
                               ))
@@ -2502,7 +2518,18 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         }).eq('id', _detail['id']);
       } catch (_) {}
       await _saveDelivery(); // posts lines + locks atomically via the DB function
-      try { await _logAudit(_detail['id'] as String, 'DO', 'saved', 'Delivery Order saved'); } catch (_) {}
+      try {
+        final parts = <String>[];
+        for (final e in _deliverQtyCtrl.entries) {
+          final q = double.tryParse(e.value.text.trim()) ?? 0;
+          if (q <= 0) continue;
+          final so = _soItems.firstWhere((i) => i['id'] == e.key, orElse: () => {});
+          final ordered = (so['quantity'] as num?)?.toDouble();
+          parts.add('${so['products']?['name'] ?? 'Item'}: ${_n4(q)}${ordered == null ? '' : ' of ${_n4(ordered)}'}');
+        }
+        await _logAudit(_detail['id'] as String, 'DO', 'saved',
+            parts.isEmpty ? 'Delivery Order saved' : 'Delivered — ${parts.join(', ')}');
+      } catch (_) {}
       // Reload so the collect-amount chip and lock state reflect what was saved.
       // (Invoice is NOT auto-created — use the explicit "Create Invoice" button.)
       await _loadDetail(_detail['id'] as String);
@@ -4149,6 +4176,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   Future<void> _saveDiscounts() async {
     if (!await _preOpeningOk()) return;
     try {
+      final oldDisc = (_detail['discount_total'] as num?)?.toDouble() ?? 0;
+      final oldTotal = (_detail['grand_total'] as num?)?.toDouble() ?? 0;
       final (subtotal, discountTotal) = await _writeItemDiscounts();
       await Supabase.instance.client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
@@ -4157,7 +4186,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'locked_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'saved',
-          'Discount: ${money(discountTotal)} · Total: ${money(subtotal - discountTotal)}');
+          'Discount: ${money(oldDisc)} → ${money(discountTotal)} · Total: ${money(oldTotal)} → ${money(subtotal - discountTotal)}');
       _showSnack('Saved & locked');
       await _loadList();
       _loadDetail(_detail['id'] as String);
@@ -5308,7 +5337,7 @@ class _AuditTrailList extends StatelessWidget {
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
-                        Text(action[0].toUpperCase() + action.substring(1),
+                        Text(auditActionLabel(action),
                             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
                         const SizedBox(width: 6),
                         Flexible(child: Text('by $user',

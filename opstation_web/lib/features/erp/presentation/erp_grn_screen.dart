@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/audit_label.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -130,7 +131,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
+      await _logAudit(_detail['id'] as String, 'date_changed',
+          'Date: ${cur == null ? '—' : DateFormat('d MMM yyyy').format(cur)} → ${DateFormat('d MMM yyyy').format(picked)}');
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -823,11 +825,11 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         onChanged: (v) => setState(() => _search = v))),
       const SizedBox(height: 8),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Wrap(spacing: 6, runSpacing: 6, children: [
-        _GrnFilterTab(label: 'All', value: 'all', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
-        _GrnFilterTab(label: 'Draft', value: 'draft', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
-        _GrnFilterTab(label: 'Received', value: 'received', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
-        _GrnFilterTab(label: 'Partial', value: 'partially_received', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
-        _GrnFilterTab(label: 'Invoiced', value: 'invoiced', current: _statusFilter, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'All', value: 'all', current: _statusFilter, count: _grns.length, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Draft', value: 'draft', current: _statusFilter, count: _grns.where((r) { final s0 = r['status'] as String? ?? 'draft'; return (s0 == 'saved' ? 'received' : s0) == 'draft'; }).length, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Received', value: 'received', current: _statusFilter, count: _grns.where((r) { final s0 = r['status'] as String? ?? 'draft'; return (s0 == 'saved' ? 'received' : s0) == 'received'; }).length, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Partial', value: 'partially_received', current: _statusFilter, count: _grns.where((r) { final s0 = r['status'] as String? ?? 'draft'; return (s0 == 'saved' ? 'received' : s0) == 'partially_received'; }).length, onTap: (v) => setState(() => _statusFilter = v)),
+        _GrnFilterTab(label: 'Invoiced', value: 'invoiced', current: _statusFilter, count: _grns.where((r) { final s0 = r['status'] as String? ?? 'draft'; return (s0 == 'saved' ? 'received' : s0) == 'invoiced'; }).length, onTap: (v) => setState(() => _statusFilter = v)),
       ])),
       if (_superviseEnabled && _isAdmin) ...[
         const SizedBox(height: 8),
@@ -1116,7 +1118,7 @@ class _GrnAuditTrail extends StatelessWidget {
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary, letterSpacing: 0.6)), const SizedBox(height: 8),
-            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; case 'supervised': color = AppTheme.success; break; case 'unsupervised': color = AppTheme.textSecondary; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
+            ...entries.map((e) { final action = e['action'] as String? ?? '-'; final who = (e['users']?['name'] as String?) ?? ''; final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : ''; final details = e['details'] as String? ?? ''; Color color; switch (action) { case 'created': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; case 'unlocked': color = Colors.orange; break; case 'edited': color = AppTheme.warning; break; case 'supervised': color = AppTheme.success; break; case 'unsupervised': color = AppTheme.textSecondary; break; default: color = AppTheme.textSecondary; } return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Text(auditActionLabel(action), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: color)), if (who.isNotEmpty) Text('  by $who', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]), if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]))])); }),
           ]));
       });
   }

@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/audit_label.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../../core/widgets/responsive.dart';
@@ -114,7 +115,8 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
+      await _logAudit(_detail['id'] as String, 'date_changed',
+          'Date: ${cur == null ? '—' : DateFormat('d MMM yyyy').format(cur)} → ${DateFormat('d MMM yyyy').format(picked)}');
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -796,19 +798,19 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         onChanged: (v) => setState(() => _search = v))),
       const SizedBox(height: 8),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Wrap(runSpacing: 6, children: [
-        _PiFilterTab(label: 'All',   value: 'all',   current: _filter, onTap: (v) => setState(() => _filter = v)),
+        _PiFilterTab(label: 'All', value: 'all', current: _filter, count: _invoices.length, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
         _PiFilterTab(label: 'Draft', value: 'draft', current: _filter, count: _invoices.where((r) => r['is_voided'] != true && !(r['is_locked'] as bool? ?? false) && r['review_status'] == null).length, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
         if (_reviewFlow) ...[
-          _PiFilterTab(label: 'Review', value: 'review', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          _PiFilterTab(label: 'Review', value: 'review', current: _filter, count: _invoices.where((r) => r['is_voided'] != true && r['review_status'] == 'pending').length, onTap: (v) => setState(() => _filter = v)),
           const SizedBox(width: 6),
-          _PiFilterTab(label: 'Rejected', value: 'rejected', current: _filter, onTap: (v) => setState(() => _filter = v)),
+          _PiFilterTab(label: 'Rejected', value: 'rejected', current: _filter, count: _invoices.where((r) => r['is_voided'] != true && r['review_status'] == 'rejected').length, onTap: (v) => setState(() => _filter = v)),
           const SizedBox(width: 6),
         ],
-        _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+        _PiFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, count: _invoices.where((r) => r['is_voided'] != true && (r['is_locked'] as bool? ?? false)).length, onTap: (v) => setState(() => _filter = v)),
         const SizedBox(width: 6),
-        _PiFilterTab(label: 'Voided', value: 'voided', current: _filter, onTap: (v) => setState(() => _filter = v)),
+        _PiFilterTab(label: 'Voided', value: 'voided', current: _filter, count: _invoices.where((r) => r['is_voided'] == true).length, onTap: (v) => setState(() => _filter = v)),
       ])),
       if (_superviseFlow && _isAdmin) ...[
         const SizedBox(height: 8),
@@ -1290,7 +1292,7 @@ class _PiAuditTrailState extends State<_PiAuditTrail> {
       Icon(Icons.circle, size: 8, color: color), const SizedBox(width: 8),
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(action.replaceAll('_', ' '), style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)),
+          Text(auditActionLabel(action), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: color)),
           const SizedBox(width: 8),
           Text('by $by', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           const Spacer(),

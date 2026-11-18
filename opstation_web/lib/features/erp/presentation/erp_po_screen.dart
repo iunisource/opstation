@@ -8,6 +8,7 @@ import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/audit_label.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
 import '../../auth/auth_controller.dart';
@@ -233,7 +234,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', _detail['id']);
       if (mounted) setState(() => _detail['voucher_date'] = iso);
-      await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
+      await _logAudit(_detail['id'] as String, 'date_changed',
+          'Date: ${cur == null ? '—' : DateFormat('d MMM yyyy').format(cur)} → ${DateFormat('d MMM yyyy').format(picked)}');
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -556,7 +558,10 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           .update({'description': txt.isEmpty ? null : txt}).eq('id', itemId);
       final idx = _items.indexWhere((i) => i['id'] == itemId);
       if (idx >= 0) _items[idx]['description'] = txt.isEmpty ? null : txt;
-      await _resetApprovalIfNeeded();
+      final dName = (idx >= 0 ? (_items[idx]['products']?['name'] as String?) : null) ?? 'Line';
+      await _logAudit(_detail['id'] as String, 'line_edited',
+          '$dName description: "${cur.isEmpty ? '—' : cur}" → "${txt.isEmpty ? '—' : txt}"');
+      await _resetApprovalIfNeeded(why: 'the description of $dName changed');
     } catch (e) { _showSnack(friendlyError('Failed to save description', e)); }
   }
 
@@ -601,6 +606,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       return;
     }
     if (cur != null && cur == qty) return; // unchanged — no write, no approval reset
+    final lineName = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['products']?['name'] as String?) ?? 'Line';
+    String q0(double? v) => v == null ? '—' : v.toStringAsFixed(v % 1 == 0 ? 0 : 2);
     try {
       await Supabase.instance.client.from('purchase_order_items')
           .update({'quantity_ordered': qty}).eq('id', itemId);
@@ -608,8 +615,8 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['quantity_ordered'] = qty;
       });
-      await _logAudit(_detail['id'] as String, 'line_edited', 'Qty changed to ${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)}');
-      await _resetApprovalIfNeeded();
+      await _logAudit(_detail['id'] as String, 'line_edited', '$lineName: qty ${q0(cur)} → ${q0(qty)}');
+      await _resetApprovalIfNeeded(why: 'qty of $lineName changed ${q0(cur)} → ${q0(qty)}');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
@@ -687,7 +694,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         _addProductId = null; _addUomId = null; _addQtyCtrl.text = '1';
         _syncLineCtrls();
       });
-      await _resetApprovalIfNeeded();
+      await _logAudit(_detail['id'] as String, 'line_added',
+          'Added ${prod['name'] ?? 'item'} × ${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)} ${uom['abbreviation'] ?? ''}'.trim());
+      await _resetApprovalIfNeeded(why: 'a line was added (${prod['name'] ?? 'item'})');
       return true;
     } catch (e) { _showSnack(friendlyError('That did not save', e)); return false; }
   }
@@ -722,10 +731,15 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   Future<void> _deleteItem(String itemId) async {
     if (!_canEditLines) { _showSnack('Cannot remove: an active GRN exists against this PO. Void the GRN first.'); return; }
     try {
+      final gone = _items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{});
       await Supabase.instance.client.from('purchase_order_items').delete().eq('id', itemId);
       setState(() => _items.removeWhere((i) => i['id'] == itemId));
       _syncLineCtrls();
-      await _resetApprovalIfNeeded();
+      final gName = (gone['products']?['name'] as String?) ?? 'item';
+      final gQty = (gone['quantity_ordered'] as num?)?.toDouble();
+      await _logAudit(_detail['id'] as String, 'line_removed',
+          'Removed $gName${gQty == null ? '' : ' (qty ${gQty.toStringAsFixed(gQty % 1 == 0 ? 0 : 2)})'}');
+      await _resetApprovalIfNeeded(why: 'a line was removed ($gName)');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
@@ -918,15 +932,17 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
 
   // Clears approval after any line-item change, forcing re-approval.
-  Future<void> _resetApprovalIfNeeded() async {
+  Future<void> _resetApprovalIfNeeded({String? why}) async {
     if (_detail['approved_at'] == null) return;
     final id = _detail['id'] as String;
+    final prevBy = _detail['approved_by_name'] as String?;
     try {
       await Supabase.instance.client.from('purchase_orders').update({
         'approved_by': null, 'approved_by_name': null, 'approved_at': null,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', id);
-      await _logAudit(id, 'approval_reset', 'Line items changed — approval cleared, re-approval required');
+      await _logAudit(id, 'approval_reset',
+          '${why == null ? 'PO changed' : why[0].toUpperCase() + why.substring(1)} — approval by ${prevBy ?? 'approver'} cleared, re-approval required');
       setState(() { _detail['approved_by'] = null; _detail['approved_by_name'] = null; _detail['approved_at'] = null; });
       _showSnack('Line changed — approval reset, this PO must be approved again');
       ref.invalidate(poPendingApprovalCountProvider);
@@ -973,15 +989,16 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     final picked = await showDialog<Map<String, dynamic>?>(
         context: context, builder: (_) => _SupplierPickDialog(suppliers: _suppliers));
     if (picked == null) return;
+    final oldSup = ((_detail['suppliers'] as Map?)?['name'] as String?) ?? '—';
     try {
       await Supabase.instance.client.from('purchase_orders').update({
         'supplier_id': picked['id'],
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'supplier_changed',
-          'Supplier changed to ${picked['name']}');
+          'Supplier: $oldSup → ${picked['name']}');
       _showSnack('Supplier updated to ${picked['name']}');
-      await _resetApprovalIfNeeded();
+      await _resetApprovalIfNeeded(why: 'the supplier changed ($oldSup → ${picked['name']})');
       _loadDetail(_detail['id'] as String);
       _loadList();
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -1253,6 +1270,25 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           || (_filter == 'closereq' && _closeReqIds.contains(r['id']));
       return matchSearch && matchFilter;
     }).toList();
+    // Same rules as the list filter above, so a pill's number is exactly what
+    // you get when you tap it (search text ignored).
+    bool inFilter(Map<String, dynamic> r, String f) {
+      final disp = poDisplayStatus(r);
+      switch (f) {
+        case 'all': return true;
+        case 'pending': return _poIsPending(r, _orgApprovalRequired);
+        case 'approved': return disp == 'Approved';
+        case 'open': return disp == 'Ordered' || disp == 'Approved';
+        case 'partial': return disp == 'Partially Received';
+        case 'received': return disp == 'Received';
+        case 'invoiced': return disp == 'Invoiced';
+        case 'voided': return disp == 'Voided';
+        case 'rejected': return disp == 'Rejected';
+        case 'closereq': return _closeReqIds.contains(r['id']);
+      }
+      return false;
+    }
+    int cnt(String f) => _pos.where((r) => inFilter(r, f)).length;
     return Container(
       decoration: const BoxDecoration(border: Border(right: BorderSide(color: AppTheme.border))),
       child: Column(children: [
@@ -1267,25 +1303,25 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         const SizedBox(height: 8),
         // Wrap (not Row) so all pills stay visible in the narrow list pane.
         Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Wrap(runSpacing: 6, children: [
-            _PoFilterTab(label: 'All',      value: 'all',      current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'All', value: 'all', current: _filter, count: cnt('all'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
             if (_orgApprovalRequired) ...[
-              _PoFilterTab(label: 'Pending',  value: 'pending',  current: _filter, onTap: (v) => setState(() => _filter = v)),
+              _PoFilterTab(label: 'Pending', value: 'pending', current: _filter, count: cnt('pending'), urgent: true, onTap: (v) => setState(() => _filter = v)),
               const SizedBox(width: 5),
             ],
-            _PoFilterTab(label: 'Open',     value: 'open',     current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Open', value: 'open', current: _filter, count: cnt('open'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
-            _PoFilterTab(label: 'Approved', value: 'approved', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Approved', value: 'approved', current: _filter, count: cnt('approved'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
-            _PoFilterTab(label: 'Partially received', value: 'partial', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Partially received', value: 'partial', current: _filter, count: cnt('partial'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
-            _PoFilterTab(label: 'Received', value: 'received', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Received', value: 'received', current: _filter, count: cnt('received'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
-            _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Invoiced', value: 'invoiced', current: _filter, count: cnt('invoiced'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
-            _PoFilterTab(label: 'Rejected', value: 'rejected', current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Rejected', value: 'rejected', current: _filter, count: cnt('rejected'), onTap: (v) => setState(() => _filter = v)),
             const SizedBox(width: 5),
-            _PoFilterTab(label: 'Voided',   value: 'voided',   current: _filter, onTap: (v) => setState(() => _filter = v)),
+            _PoFilterTab(label: 'Voided', value: 'voided', current: _filter, count: cnt('voided'), onTap: (v) => setState(() => _filter = v)),
             if (_closeReqIds.isNotEmpty) ...[
               const SizedBox(width: 5),
               _PoFilterTab(label: 'Close requested (${_closeReqIds.length})', value: 'closereq', current: _filter,
@@ -1791,19 +1827,45 @@ class _PoStatusBadge extends StatelessWidget {
 class _PoAuditTrail extends StatelessWidget {
   final String voucherId;
   const _PoAuditTrail({super.key, required this.voucherId});
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final sb = Supabase.instance.client;
+    final rows = List<Map<String, dynamic>>.from(await sb.from('voucher_audit_log')
+        .select().eq('voucher_id', voucherId).eq('voucher_type', 'PO')
+        .order('performed_at', ascending: false).limit(60));
+    final ids = rows.map((e) => e['performed_by'] as String?).whereType<String>().toSet().toList();
+    final names = <String, String>{};
+    if (ids.isNotEmpty) {
+      try {
+        final us = await sb.from('users').select('id, name').inFilter('id', ids);
+        for (final u in us as List) { names[u['id'] as String] = (u['name'] as String?) ?? ''; }
+      } catch (_) {}
+    }
+    for (final e in rows) { e['_by'] = names[e['performed_by'] as String?] ?? ''; }
+    return rows;
+  }
+
+  Color _color(String action) {
+    switch (action) {
+      case 'created': case 'saved': return AppTheme.primary;
+      case 'confirmed': case 'approved': return AppTheme.success;
+      case 'deleted': case 'cancelled': case 'rejected': case 'voided': case 'line_removed': return AppTheme.danger;
+      case 'approval_reset': case 'locked': case 'unlocked': return Colors.orange;
+      default: return AppTheme.textSecondary;
+    }
+  }
+
   @override Widget build(BuildContext context) {
     if (voucherId.isEmpty) return const SizedBox.shrink();
-    return FutureBuilder<List<dynamic>>(
-      future: Supabase.instance.client.from('voucher_audit_log')
-          .select().eq('voucher_id', voucherId).eq('voucher_type', 'PO')
-          .order('performed_at', ascending: false).limit(30),
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _load(),
       builder: (ctx, snap) {
-        if (!snap.hasData || (snap.data as List).isEmpty) return Container(
+        if (!snap.hasData || snap.data!.isEmpty) return Container(
           margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: const Row(children: [Icon(Icons.history, size: 14, color: AppTheme.textSecondary), SizedBox(width: 8),
             Text('No activity logged yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))]));
-        final entries = List<Map<String, dynamic>>.from(snap.data!);
+        final entries = snap.data!;
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1811,16 +1873,25 @@ class _PoAuditTrail extends StatelessWidget {
             const SizedBox(height: 8),
             ...entries.map((e) {
               final action = e['action'] as String? ?? '-';
-              final ts = e['performed_at'] != null ? DateFormat(orgTime('d MMM HH:mm')).format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
+              final by = e['_by'] as String? ?? '';
+              final ts = e['performed_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(e['performed_at'] as String).toLocal()) : '';
               final details = e['details'] as String? ?? '';
-              Color color;
-              switch (action) { case 'created': case 'saved': color = AppTheme.primary; break; case 'confirmed': color = AppTheme.success; break; case 'deleted': case 'cancelled': color = AppTheme.danger; break; case 'locked': color = Colors.orange; break; default: color = AppTheme.textSecondary; }
-              return Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              final color = _color(action);
+              return Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Icon(Icons.history, size: 13, color: color), const SizedBox(width: 8),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [Text(action, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: color)), const Spacer(), Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))]),
-                  if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  Row(children: [
+                    Text(auditActionLabel(action), style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: color)),
+                    if (by.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Flexible(child: Text('by $by', overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
+                    ],
+                  ]),
+                  if (details.isNotEmpty) Text(details, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
                 ])),
+                const SizedBox(width: 12),
+                Text(ts, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
               ]));
             }),
           ]));
@@ -1830,15 +1901,30 @@ class _PoAuditTrail extends StatelessWidget {
 
 class _PoFilterTab extends StatelessWidget {
   final String label, value, current;
+  final int? count;
+  final bool urgent; // draws the count in red while something is waiting
   final ValueChanged<String> onTap;
-  const _PoFilterTab({required this.label, required this.value, required this.current, required this.onTap});
+  const _PoFilterTab({required this.label, required this.value, required this.current, required this.onTap, this.count, this.urgent = false});
   @override Widget build(BuildContext context) {
     final active = value == current;
+    final hot = urgent && (count ?? 0) > 0;
     return GestureDetector(onTap: () => onTap(value), child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background,
-        borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)),
-      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-          color: active ? Colors.white : AppTheme.textSecondary))));
+        borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : (hot ? const Color(0xFFDC2626) : AppTheme.border))),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+            color: active ? Colors.white : AppTheme.textSecondary)),
+        if (count != null) ...[
+          const SizedBox(width: 5),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: active ? Colors.white.withOpacity(0.25) : (hot ? const Color(0xFFDC2626) : AppTheme.border.withOpacity(0.7)),
+              borderRadius: BorderRadius.circular(8)),
+            child: Text('$count', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800,
+                color: active || hot ? Colors.white : AppTheme.textSecondary))),
+        ],
+      ])));
   }
 }
