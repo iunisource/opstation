@@ -826,7 +826,10 @@ class _State extends ConsumerState<ErpAccountActivityScreen> {
               const SizedBox(height: 2),
               Text(sub, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ])),
-            IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => Navigator.pop(context)),
+            // Close with the DIALOG's own context. The screen's context (this State's
+            // `context`) belongs to the page's inner navigator, so popping with it
+            // closed the whole page and left a white screen.
+            Builder(builder: (dctx) => IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => Navigator.of(dctx).pop())),
           ])),
         if (((h['description'] as String?) ?? '').isNotEmpty)
           Padding(padding: const EdgeInsets.fromLTRB(16, 10, 16, 0), child: Text(h['description'] as String, style: const TextStyle(fontSize: 12))),
