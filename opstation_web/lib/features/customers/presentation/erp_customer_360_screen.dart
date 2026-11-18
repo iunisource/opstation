@@ -20,6 +20,7 @@ import 'customer_edit_review.dart';
 import 'customer_other_locations.dart';
 import '../../intelligence/services/autopilot.dart';
 import 'customer_shop_notes.dart';
+import '../../erp/widgets/customer_receipt_dialog.dart';
 import '../../../core/format/time_format.dart';
 
 /// Customer 360 — a unified view of a single shop:
@@ -1025,6 +1026,16 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     );
   }
 
+  // Quick receipt for this customer: opens the Receipt Voucher form in a dialog
+  // (customer already chosen) and posts it. Refreshes the balances afterwards.
+  Future<void> _recordPayment() async {
+    final vNo = await showCustomerReceiptDialog(context, ref,
+        customer: widget.customer, outstanding: _arTotal > 0 ? _arTotal.toDouble() : 0);
+    if (vNo == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Receipt $vNo posted ✓')));
+    _refresh();
+  }
+
   Future<void> _loadAr() async {
     setState(() {
       _loadingAr = true;
@@ -1783,6 +1794,15 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
     return ListView(
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
       children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.payments_outlined, size: 18),
+            label: const Text('Record payment'),
+            onPressed: _recordPayment,
+          ),
+        ),
+        const SizedBox(height: 12),
         Row(
           children: [
             _bucketCard('Current (0-30)', _current, AppTheme.success),
