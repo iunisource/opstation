@@ -72,17 +72,137 @@ class ScanBarState extends State<ScanBar> {
   ScanOutcome? _last;
   int _count = 0;
 
+  // ── Scanner stations (autofocus bars) ────────────────────────────────────
+  // A hardware scanner just types. If the cursor has wandered off the scan box
+  // (a button was clicked, a warning flashed…), its keystrokes are caught here
+  // and fed into the box anyway, so nobody has to click the field first.
+  static final List<ScanBarState> _stations = [];
+  bool _station = false;
+  bool _capturing = false;
+  Timer? _captureIdle;
+  final List<Timer> _refocusTimers = [];
+  // Keys pressed while the box looks focused. If the box never receives them,
+  // the browser's typing link to it has dropped — they are put in by hand.
+  final List<String> _pending = [];
+  String? _pendingBase;
+  Timer? _pendingTimer;
+
   @override
   void initState() {
     super.initState();
     if (widget.strongFeedback) ScanFeedback.install();
     if (widget.autofocus) {
       WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _focus.requestFocus(); });
+      _station = true;
+      _stations.add(this);
+      HardwareKeyboard.instance.addHandler(_onHardwareKey);
     }
+  }
+
+  void _clearPending() {
+    _pendingTimer?.cancel();
+    _pendingTimer = null;
+    _pending.clear();
+    _pendingBase = null;
+  }
+
+  /// The box shows as focused but typing isn't reaching it: drop the cursor
+  /// and take it again so the browser links up afresh.
+  void _reconnect() {
+    _focus.unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (_mayTakeFocus()) _focus.requestFocus(); });
+  }
+
+  /// True when the scan box may take the cursor: this screen is on top and the
+  /// user isn't typing in some other text field.
+  bool _mayTakeFocus() {
+    if (!mounted) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (_focus.hasFocus) return true;
+    final other = FocusManager.instance.primaryFocus?.context;
+    if (other != null && other.findAncestorWidgetOfExactType<EditableText>() != null) return false;
+    return true;
+  }
+
+  bool _onHardwareKey(KeyEvent e) {
+    if (!mounted || e is! KeyDownEvent) return false;
+    if (_stations.isEmpty || _stations.last != this) return false;
+    final kb = HardwareKeyboard.instance;
+    final key = e.logicalKey;
+    final isEnter = key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter;
+    final chr = e.character;
+    final printable = chr != null && chr.isNotEmpty && chr.codeUnitAt(0) >= 32 &&
+        !(kb.isControlPressed || kb.isMetaPressed || kb.isAltPressed);
+    // The box has the cursor: the browser types into it by itself. Only watch
+    // that the keys really arrive, and step in if they don't.
+    if (_focus.hasFocus && !_capturing) {
+      if (isEnter) {
+        if (_pending.isNotEmpty && _ctrl.text == _pendingBase) {
+          final code = '${_pendingBase ?? ''}${_pending.join()}';
+          _clearPending();
+          _submit(code);
+          _reconnect();
+          return true;
+        }
+        _clearPending();
+        return false;
+      }
+      if (!printable) { _clearPending(); return false; }
+      _pendingBase ??= _ctrl.text;
+      _pending.add(chr!);
+      _pendingTimer?.cancel();
+      _pendingTimer = Timer(const Duration(milliseconds: 300), () {
+        if (mounted && _pending.isNotEmpty && _ctrl.text == _pendingBase) {
+          _ctrl.text = '${_pendingBase ?? ''}${_pending.join()}';
+          _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+          _clearPending();
+          _reconnect();
+        } else {
+          _clearPending();
+        }
+      });
+      return false;
+    }
+    if (!_capturing && !_mayTakeFocus()) return false;
+    if (kb.isControlPressed || kb.isMetaPressed || kb.isAltPressed) return false;
+    if (isEnter) {
+      if (!_capturing) return false;
+      _endCapture();
+      _submit(_ctrl.text);
+      return true;
+    }
+    final ch = e.character;
+    if (ch == null || ch.isEmpty || ch.codeUnitAt(0) < 32) return false;
+    if (!_capturing && ch == ' ') return false; // Space on a focused button stays a click
+    if (!_capturing) { _capturing = true; _ctrl.clear(); }
+    _ctrl.text = _ctrl.text + ch;
+    _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    // No Enter shortly after the last key: someone is typing by hand — hand
+    // the cursor to the box and let them carry on.
+    _captureIdle?.cancel();
+    _captureIdle = Timer(const Duration(milliseconds: 500), () {
+      _endCapture();
+      if (mounted && _mayTakeFocus()) _focus.requestFocus();
+    });
+    return true;
+  }
+
+  void _endCapture() {
+    _captureIdle?.cancel();
+    _captureIdle = null;
+    _capturing = false;
   }
 
   @override
   void dispose() {
+    if (_station) {
+      HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+      _stations.remove(this);
+    }
+    _captureIdle?.cancel();
+    _pendingTimer?.cancel();
+    for (final t in _refocusTimers) { t.cancel(); }
     _ctrl.dispose();
     _focus.dispose();
     _qty.dispose();
@@ -90,6 +210,7 @@ class ScanBarState extends State<ScanBar> {
   }
 
   void _submit(String v) {
+    _clearPending();
     final code = v.trim();
     _ctrl.clear();
     _focus.requestFocus();
@@ -127,15 +248,23 @@ class ScanBarState extends State<ScanBar> {
     } else if (!r.ok) {
       SystemSound.play(SystemSoundType.alert);
     }
-    // A wrong scan must leave the cursor back in the scan box, ready for the
-    // next one (hardware scanner stations only — on phones this would pop the
-    // keyboard up).
-    if (!r.ok && widget.autofocus) _refocus();
+    // After every scan — right or wrong — the cursor goes back to the scan
+    // box, ready for the next one (hardware scanner stations only; on phones
+    // this would pop the keyboard up).
+    if (_station) _refocus();
     return r;
   }
 
+  /// Put the cursor back now, on the next frame, and again once any warning
+  /// flash has finished — whatever took it away, it comes back.
   void _refocus() {
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _focus.requestFocus(); });
+    void go() { if (_mayTakeFocus() && !_focus.hasFocus) _focus.requestFocus(); }
+    for (final t in _refocusTimers) { t.cancel(); }
+    _refocusTimers.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) => go());
+    for (final ms in const [150, 500, 1100]) {
+      _refocusTimers.add(Timer(Duration(milliseconds: ms), go));
+    }
   }
 
   /// Put the cursor in the scan box (for a hardware scanner).

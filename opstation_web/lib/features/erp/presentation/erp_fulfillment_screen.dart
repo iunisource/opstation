@@ -2772,8 +2772,13 @@ class _CheckScanDialogState extends State<_CheckScanDialog> {
   }
 
   void _refocus() {
-    _focus.requestFocus();
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _focus.requestFocus(); });
+    void go() { if (mounted && !_focus.hasFocus) _focus.requestFocus(); }
+    go();
+    WidgetsBinding.instance.addPostFrameCallback((_) => go());
+    // ...and again after the red warning flash has finished.
+    for (final ms in const [150, 500, 1100]) {
+      Future.delayed(Duration(milliseconds: ms), go);
+    }
   }
 
   @override
