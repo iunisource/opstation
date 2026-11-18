@@ -1680,7 +1680,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/products', '/erp/stock', '/erp/low-stock-report', '/erp/stock-value-report',
            '/erp/stock-balance-report', '/erp/stock-aging-report', '/erp/inventory-integrity', '/erp/batch-tracking', '/erp/purchase-variance',
            '/erp/product-classifications', '/erp/opening-stock', '/erp/stock-transfers', '/erp/stock-adjustment', '/erp/inventory-ledger', '/erp/demand-plan', '/erp/price-list', '/erp/discounts'],
-          _trimDividers(inventoryItems), badge: transferPending + integrityCount + productSupervisePending + discountPending),
+          _trimDividers(inventoryItems), badge: transferPending + integrityCount + productSupervisePending + discountPending + processorOverduePending),
       if (_hasItems(purchaseItems))
         _navMenu(context, 'Purchase', Icons.shopping_cart_outlined, location,
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
