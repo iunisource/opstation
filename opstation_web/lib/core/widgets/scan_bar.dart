@@ -150,7 +150,7 @@ class ScanBarState extends State<ScanBar> {
       }
       if (!printable) { _clearPending(); return false; }
       _pendingBase ??= _ctrl.text;
-      _pending.add(chr!);
+      _pending.add(chr);
       _pendingTimer?.cancel();
       _pendingTimer = Timer(const Duration(milliseconds: 300), () {
         if (mounted && _pending.isNotEmpty && _ctrl.text == _pendingBase) {
