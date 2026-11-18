@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
@@ -306,7 +307,18 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       );
 
   // Logo tap target: return to the sign-in screen (same as "Back to sign in").
-  void _goHome() => Navigator.of(context).maybePop();
+  // The wizard is reached two ways: pushed on top of the sign-in screen (then we
+  // just pop back to it) or opened directly at /signup, e.g. from the website's
+  // "Start free trial" link, where it is the ONLY page and there is nothing to
+  // pop. In that case go to the sign-in route instead of silently doing nothing.
+  void _goHome() {
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    } else {
+      context.go('/login');
+    }
+  }
 
   Widget _compactTopBar() {
     return Container(
@@ -329,7 +341,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
           ),
         ),
         const Spacer(),
-        TextButton(onPressed: () => Navigator.of(context).maybePop(), child: const Text('Back to sign in')),
+        TextButton(onPressed: _goHome, child: const Text('Back to sign in')),
       ]),
     );
   }
@@ -341,7 +353,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
-          onPressed: () => Navigator.of(context).maybePop(),
+          onPressed: _goHome,
           icon: const Icon(Icons.arrow_back, size: 16),
           label: const Text('Back to sign in'),
           style: TextButton.styleFrom(padding: EdgeInsets.zero, foregroundColor: AppTheme.textSecondary),
@@ -582,7 +594,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
       SizedBox(
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: () => Navigator.of(context).maybePop(),
+          onPressed: _goHome,
           style: ElevatedButton.styleFrom(
             backgroundColor: AppTheme.primary, foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(vertical: 16), elevation: 0,
