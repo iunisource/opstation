@@ -1869,6 +1869,24 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     }
   }
 
+  /// Runs [op], retrying a couple of times when the browser itself could not
+  /// reach the server ("Failed to fetch", e.g. a connection that went stale while
+  /// the POS sat open). Real server answers (PostgrestException) are never retried.
+  /// Only used for writes that are safe to repeat.
+  Future<T> _retryNetwork<T>(Future<T> Function() op) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await op();
+      } catch (e) {
+        final m = e.toString();
+        final network = e is! PostgrestException &&
+            (m.contains('Failed to fetch') || m.contains('ClientException') || m.contains('SocketException'));
+        if (!network || attempt >= 2) rethrow;
+        await Future.delayed(Duration(milliseconds: 800 * (attempt + 1)));
+      }
+    }
+  }
+
   Future<void> _closeSession() async {
     final opening = (_session['opening_cash'] as num?)?.toDouble() ?? 0;
     double cashSales = 0, cashExpenses = 0;
@@ -1947,17 +1965,27 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     ));
     if (ok != true) return;
     try {
-      await Supabase.instance.client.from('pos_sessions').update({
-        'status': 'closed', 'closed_at': DateTime.now().toUtc().toIso8601String(),
-        'closing_cash': double.tryParse(cashCtrl.text.trim()) ?? 0,
-        'closed_by': ref.read(currentUserProvider)?.id,
-        'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
-      }).eq('id', _session['id']);
+      final closedAt = DateTime.now().toUtc().toIso8601String();
+      await _retryNetwork(() async {
+        await Supabase.instance.client.from('pos_sessions').update({
+          'status': 'closed', 'closed_at': closedAt,
+          'closing_cash': double.tryParse(cashCtrl.text.trim()) ?? 0,
+          'closed_by': ref.read(currentUserProvider)?.id,
+          'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+        }).eq('id', _session['id']);
+      });
       await _loadData();
       await _exportSummary(); // ask bill-wise vs combined on close (restored)
       widget.onUpdated();
       if (mounted) Navigator.of(context).pop();
-    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    } catch (e) {
+      final m = e.toString();
+      if (e is! PostgrestException && (m.contains('Failed to fetch') || m.contains('ClientException'))) {
+        _showSnack('Connection to the server was lost, so the session was NOT closed. Check the internet and press Close Session again.');
+      } else {
+        _showSnack(friendlyError('That did not save', e));
+      }
+    }
   }
 
   /// Asks whether the product breakdown should be per-transaction (bill-wise,
