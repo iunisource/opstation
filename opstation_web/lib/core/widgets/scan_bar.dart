@@ -127,7 +127,15 @@ class ScanBarState extends State<ScanBar> {
     } else if (!r.ok) {
       SystemSound.play(SystemSoundType.alert);
     }
+    // A wrong scan must leave the cursor back in the scan box, ready for the
+    // next one (hardware scanner stations only — on phones this would pop the
+    // keyboard up).
+    if (!r.ok && widget.autofocus) _refocus();
     return r;
+  }
+
+  void _refocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _focus.requestFocus(); });
   }
 
   /// Put the cursor in the scan box (for a hardware scanner).
@@ -171,6 +179,8 @@ class ScanBarState extends State<ScanBar> {
             focusNode: _focus,
             autofocus: widget.autofocus,
             textInputAction: TextInputAction.done,
+            // Enter (the scanner's own) must not drop the cursor out of the box.
+            onEditingComplete: () {},
             decoration: InputDecoration(
               hintText: widget.hint, isDense: true, border: const OutlineInputBorder(),
               prefixIcon: const Icon(Icons.qr_code_scanner, size: 20),

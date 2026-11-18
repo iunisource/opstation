@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import '../attendance/web_attendance_button.dart';
 import '../../features/fleet/fleet_common.dart' show fleetDueCountProvider;
+import '../../features/erp/widgets/voucher_remarks_panel.dart' show kRemarkPendencyStart;
 import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
@@ -1093,6 +1094,37 @@ final grnRemarkPendingProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// Remark pendency for any other voucher type with an Internal Remarks panel:
+/// vouchers that have an unread remark written by SOMEONE ELSE. Same rule as
+/// the DO / GRN counters above — it stays until someone opens the voucher and
+/// clicks "Read"; your own remarks never count against you.
+FutureProvider<int> _remarkPendingProvider(String voucherType) => FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = ref.watch(currentUserProvider);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('voucher_remarks')
+        .select('voucher_id, user_id')
+        .eq('org_id', user.orgId!)
+        .eq('voucher_type', voucherType)
+        .eq('is_read', false)
+        // From now on only: older remarks are history and never count.
+        .gte('created_at', kRemarkPendencyStart.toIso8601String());
+    final ids = <String>{};
+    for (final r in res as List) {
+      if (r['user_id'] == user.id) continue;
+      final v = r['voucher_id'];
+      if (v != null) ids.add('$v');
+    }
+    return ids.length;
+  } catch (_) {
+    return 0;
+  }
+});
+final piRemarkPendingProvider = _remarkPendingProvider('PI');
+final siRemarkPendingProvider = _remarkPendingProvider('SI');
+
 /// Count of retailer orders awaiting review. A retailer order is a REQUEST in
 /// its own table — nothing exists in sales_orders until staff approve it, which
 /// is what stops a pending request being confirmed by accident from the Sales
@@ -1414,6 +1446,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final retailerOrdersPending = gate('/erp/retailer-orders', ref.watch(retailerOrderPendingCountProvider).valueOrNull ?? 0);
   final shopNewOrders = gate('/erp/fulfillment', ref.watch(shopNewOrdersCountProvider).valueOrNull ?? 0);
   final doRemarkPending = gate('/erp/delivery-orders', ref.watch(doRemarkPendingProvider).valueOrNull ?? 0);
+  final piRemarkPending = gate('/erp/purchase-invoices', ref.watch(piRemarkPendingProvider).valueOrNull ?? 0);
+  final siRemarkPending = gate('/erp/sales-invoices', ref.watch(siRemarkPendingProvider).valueOrNull ?? 0);
   final doSupervisePending = gate('/erp/delivery-orders', ref.watch(doSupervisePendingProvider).valueOrNull ?? 0);
   final grnSupervisePending = gate('/erp/grn', (ref.watch(grnSupervisePendingProvider).valueOrNull ?? 0) +
       (ref.watch(grnRemarkPendingProvider).valueOrNull ?? 0));
@@ -1479,7 +1513,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/suppliers')) _menuItem(context, 'Suppliers',               Icons.people_outline,            '/erp/suppliers',                location),
       if (show('/erp/purchase')) _menuItem(context, 'Purchase Orders',          Icons.shopping_cart_outlined,     '/erp/purchase',                 location, badge: poPending),
       if (show('/erp/grn')) _menuItem(context, 'Goods Receipt Note (GRN)', Icons.move_to_inbox_outlined,     '/erp/grn',                      location, badge: grnSupervisePending),
-      if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice + piSupervisePending),
+      if (show('/erp/purchase-invoices')) _menuItem(context, 'Purchase Invoices',        Icons.receipt_outlined,           '/erp/purchase-invoices',        location, badge: piReviewPending + grnPendingInvoice + piSupervisePending + piRemarkPending),
     ];
     final purReturns = <Widget>[
       if (show('/erp/purchase-returns')) _menuItem(context, 'Purchase Return Notes',    Icons.assignment_return_outlined, '/erp/purchase-returns',         location),
@@ -1511,7 +1545,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/retailer-orders')) _menuItem(context, 'Retailer Orders',      Icons.storefront_outlined,        '/erp/retailer-orders',       location, badge: retailerOrdersPending),
       if (show('/erp/fulfillment')) _menuItem(context, 'Fulfillment',          Icons.local_shipping_outlined,    '/erp/fulfillment',           location, badge: shopNewOrders),
       if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location, badge: doRemarkPending + doSupervisePending),
-      if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending + siSupervisePending),
+      if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending + siSupervisePending + siRemarkPending),
       if (show('/erp/schemes')) _menuItem(context, 'Schemes & Offers',      Icons.local_offer_outlined,       '/erp/schemes',               location),
     ];
     final salesReturns = <Widget>[
@@ -1698,13 +1732,13 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ['/erp/suppliers', '/erp/purchase', '/erp/grn', '/erp/purchase-invoices',
            '/erp/purchase-returns', '/erp/purchase-return-vouchers', '/erp/payment-vouchers', '/erp/purchase-report', '/erp/pending-po-items',
            '/erp/supplier-ledger', '/erp/supplier-aging', '/erp/supplier-balance-report'],
-          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice + piSupervisePending),
+          _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice + piSupervisePending + piRemarkPending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
           ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/fulfillment', '/erp/delivery-orders', '/erp/sales-invoices', '/erp/schemes',
            '/erp/field-returns', '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/dispatch-summary', '/erp/schemes-report',
            '/erp/customer-ledger', '/erp/customer-aging', '/erp/customer-balance-report', '/erp/sale-vs-recovery'],
-          _trimDividers(salesItems), badge: fieldOrdersPending + fieldReturnsPending + retailerOrdersPending + shopNewOrders + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending),
+          _trimDividers(salesItems), badge: fieldOrdersPending + fieldReturnsPending + retailerOrdersPending + shopNewOrders + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending + siRemarkPending),
       if (_hasItems(posItems))
         _navMenu(context, 'POS', Icons.storefront_outlined, location,
           ['/erp/pos', '/erp/pos-catalog', '/erp/pos-config', '/erp/pos-customer-history', '/erp/pos-held-bills', '/erp/pos-expense-management', '/erp/promoters', '/erp/promoter-ledger'], _trimDividers(posItems)),

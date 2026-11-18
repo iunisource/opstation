@@ -59,7 +59,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'discount_policies', // discountPendingCountProvider
     'retailer_orders', // retailerOrderPendingCountProvider
     'products', // productSupervisePendingProvider
-    'voucher_remarks', // doRemarkPendingProvider (DO remark pendency)
+    'voucher_remarks', // DO / GRN / PI / SI remark pendency
     'hr_leave_requests', // leavePendingCountProvider
     'payment_advices', // paPendingApprovalCountProvider
     'journal_entries', // jvPendingCountProvider (JV approval / supervision)
@@ -264,6 +264,9 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(retailerOrderPendingCountProvider);
     ref.invalidate(productSupervisePendingProvider);
     ref.invalidate(doRemarkPendingProvider);
+    ref.invalidate(grnRemarkPendingProvider);
+    ref.invalidate(piRemarkPendingProvider);
+    ref.invalidate(siRemarkPendingProvider);
     ref.invalidate(leavePendingCountProvider);
     ref.invalidate(paPendingApprovalCountProvider);
     ref.invalidate(jvPendingCountProvider);

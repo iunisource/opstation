@@ -5,6 +5,18 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
 import '../../../core/format/time_format.dart';
 
+/// Read-tracking for Purchase Invoices, Sales Invoices and Purchase Order
+/// comments starts here. Remarks written before this moment are history: they
+/// stay in the trail but never show as unread and never raise a counter.
+final DateTime kRemarkPendencyStart = DateTime.utc(2026, 11, 18, 10);
+
+/// True when [r] was written at or after [since] (or [since] is null).
+bool remarkIsSince(Map r, DateTime? since) {
+  if (since == null) return true;
+  final t = DateTime.tryParse('${r['created_at'] ?? ''}');
+  return t != null && !t.toUtc().isBefore(since);
+}
+
 /// Internal remarks trail for a voucher (screen-only — never printed).
 /// Any user can add a remark; the full trail is kept and shown here. Rows are
 /// stored in `voucher_remarks`. Collapsible.
@@ -20,6 +32,8 @@ class VoucherRemarksPanel extends StatefulWidget {
   // are cleared (so a parent can refresh a pendency badge). Off elsewhere.
   final bool trackReads;
   final VoidCallback? onRead;
+  // Only remarks written at or after this moment can be unread (null = all).
+  final DateTime? unreadSince;
 
   const VoucherRemarksPanel({
     super.key,
@@ -31,6 +45,7 @@ class VoucherRemarksPanel extends StatefulWidget {
     this.canWrite = true,
     this.trackReads = false,
     this.onRead,
+    this.unreadSince,
   });
 
   @override
@@ -78,9 +93,10 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
 
   // Unread remarks written by SOMEONE ELSE — what the pendency badge counts and
   // what "Mark as read" clears. A user's own remark never nags them.
-  int get _unreadFromOthers => _rows
-      .where((r) => r['is_read'] != true && r['user_id'] != widget.userId)
-      .length;
+  bool _isUnread(Map<String, dynamic> r) =>
+      r['is_read'] != true && r['user_id'] != widget.userId && remarkIsSince(r, widget.unreadSince);
+
+  int get _unreadFromOthers => _rows.where(_isUnread).length;
 
   Future<void> _add() async {
     final text = _ctrl.text.trim();
@@ -207,13 +223,13 @@ class _VoucherRemarksPanelState extends State<VoucherRemarksPanel> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
-                    color: (widget.trackReads && r['is_read'] != true && r['user_id'] != widget.userId)
+                    color: (widget.trackReads && _isUnread(r))
                         ? const Color(0xFFFEF2F2)
                         : null,
                     border: Border(top: BorderSide(color: AppTheme.border.withOpacity(0.5)))),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
-                      if (widget.trackReads && r['is_read'] != true && r['user_id'] != widget.userId) ...[
+                      if (widget.trackReads && _isUnread(r)) ...[
                         Container(width: 7, height: 7, margin: const EdgeInsets.only(right: 6),
                           decoration: const BoxDecoration(color: Color(0xFFDC2626), shape: BoxShape.circle)),
                       ],

@@ -470,6 +470,8 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     final r = await _onScan(code.trim(), 1);
     if (r.ok) { ScanFeedback.ok(); } else { ScanFeedback.wrong(context); }
     _snack(r.message);
+    // Back to the scan box (desktop scanner stations).
+    if (mounted && MediaQuery.of(context).size.width >= 700) _scanKey.currentState?.focusInput();
   }
 
   /// A scan that is a packing slip (order number) or a courier label
@@ -2748,7 +2750,7 @@ class _CheckScanDialogState extends State<_CheckScanDialog> {
     final code = v.trim();
     _ctrl.clear();
     if (code.isEmpty || _busy) {
-      _focus.requestFocus();
+      _refocus();
       return;
     }
     setState(() => _busy = true);
@@ -2764,7 +2766,14 @@ class _CheckScanDialogState extends State<_CheckScanDialog> {
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
       return;
     }
+    // Wrong slip / label: put the cursor straight back so the next scan lands
+    // in the box without anyone clicking.
+    _refocus();
+  }
+
+  void _refocus() {
     _focus.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _focus.requestFocus(); });
   }
 
   @override
@@ -2788,8 +2797,10 @@ class _CheckScanDialogState extends State<_CheckScanDialog> {
             controller: _ctrl,
             focusNode: _focus,
             autofocus: true,
-            enabled: !_busy,
+            // Stays enabled while a scan is being checked: a disabled box loses
+            // the cursor and a hardware scanner then types into nothing.
             textInputAction: TextInputAction.done,
+            onEditingComplete: () {},
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.qr_code_scanner),
               hintText: label ? 'Scan or type the tracking number' : 'Scan or type the order number on the slip',

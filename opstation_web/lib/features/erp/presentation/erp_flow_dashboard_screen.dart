@@ -71,6 +71,8 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
   // Purchase dashboard extras for pending POs: comment-thread counts
   // (voucher_remarks, voucher_type 'PO') keyed by PO id.
   final Map<String, int> _poCommentCounts = {};
+  // ...and how many of those are unread remarks written by someone else.
+  final Map<String, int> _poUnreadCounts = {};
 
   final _money = NumberFormat('#,##0');
 
@@ -235,6 +237,8 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
 
       // Comment counts for pending POs (threads live in voucher_remarks).
       _poCommentCounts.clear();
+      _poUnreadCounts.clear();
+      final myId = ref.read(currentUserProvider)?.id;
       if (widget.purchase) {
         final poIds = [
           for (final d in _stageDocs['po'] ?? const <Map<String, dynamic>>[])
@@ -246,13 +250,16 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
           try {
             final rem = await c
                 .from('voucher_remarks')
-                .select('voucher_id')
+                .select('voucher_id, is_read, user_id, created_at')
                 .eq('org_id', orgId)
                 .eq('voucher_type', 'PO')
                 .inFilter('voucher_id', chunk);
             for (final r in rem) {
               final v = '${r['voucher_id']}';
               _poCommentCounts[v] = (_poCommentCounts[v] ?? 0) + 1;
+              if (r['is_read'] != true && r['user_id'] != myId && remarkIsSince(r, kRemarkPendencyStart)) {
+                _poUnreadCounts[v] = (_poUnreadCounts[v] ?? 0) + 1;
+              }
             }
           } catch (_) {/* remarks table absent — counts stay 0 */}
         }
@@ -685,6 +692,7 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
   /// Comment count chip; tap opens the PO's remark thread in a modal.
   Widget _commentsCell(Map<String, dynamic> d) {
     final n = _poCommentCounts['${d['id']}'] ?? 0;
+    final unread = _poUnreadCounts['${d['id']}'] ?? 0;
     return Center(
       child: InkWell(
         onTap: () => _openComments(d),
@@ -692,15 +700,18 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(n > 0 ? Icons.forum : Icons.add_comment_outlined,
-                size: 15, color: n > 0 ? AppTheme.primary : AppTheme.textSecondary),
+            Icon(unread > 0 ? Icons.mark_chat_unread : (n > 0 ? Icons.forum : Icons.add_comment_outlined),
+                size: 15,
+                color: unread > 0
+                    ? const Color(0xFFDC2626)
+                    : (n > 0 ? AppTheme.primary : AppTheme.textSecondary)),
             if (n > 0) ...[
               const SizedBox(width: 4),
-              Text('$n',
-                  style: const TextStyle(
+              Text(unread > 0 ? '$n · $unread new' : '$n',
+                  style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
-                      color: AppTheme.primary)),
+                      color: unread > 0 ? const Color(0xFFDC2626) : AppTheme.primary)),
             ],
           ]),
         ),
@@ -743,6 +754,10 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
                     userId: user?.id,
                     userName: user?.name,
                     canWrite: true,
+                    // Unread remarks from others are highlighted with a "Read"
+                    // button; the chip on the dashboard stays red until then.
+                    trackReads: true,
+                    unreadSince: kRemarkPendencyStart,
                   ),
                 ),
               ),
@@ -755,12 +770,17 @@ class _FlowDashboardState extends ConsumerState<_FlowDashboard> {
     try {
       final rem = await Supabase.instance.client
           .from('voucher_remarks')
-          .select('id')
+          .select('id, is_read, user_id, created_at')
           .eq('org_id', orgId)
           .eq('voucher_type', 'PO')
           .eq('voucher_id', '${d['id']}');
       if (mounted) {
-        setState(() => _poCommentCounts['${d['id']}'] = (rem as List).length);
+        setState(() {
+          _poCommentCounts['${d['id']}'] = (rem as List).length;
+          _poUnreadCounts['${d['id']}'] = rem
+              .where((r) => r['is_read'] != true && r['user_id'] != user?.id && remarkIsSince(r, kRemarkPendencyStart))
+              .length;
+        });
       }
     } catch (_) {}
   }

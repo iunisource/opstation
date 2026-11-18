@@ -1122,6 +1122,11 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
             orgId: _orgId ?? '',
             userId: ref.read(currentUserProvider)?.id,
             userName: ref.read(currentUserProvider)?.name,
+            // New remarks by someone else show as unread with a "Read" button
+            // and drive the Purchase Invoices badge until acknowledged here.
+            trackReads: true,
+            unreadSince: kRemarkPendencyStart,
+            onRead: () => ref.invalidate(piRemarkPendingProvider),
           ),
           const SizedBox(height: 16),
         ],

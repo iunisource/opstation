@@ -5008,6 +5008,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 orgId: _orgId ?? '',
                 userId: ref.read(currentUserProvider)?.id,
                 userName: ref.read(currentUserProvider)?.name,
+                // New remarks by someone else show as unread with a "Read" button
+                // and drive the Sales Invoices badge until acknowledged here.
+                trackReads: true,
+                unreadSince: kRemarkPendencyStart,
+                onRead: () => ref.invalidate(siRemarkPendingProvider),
               ),
               const SizedBox(height: 16),
             ],
