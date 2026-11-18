@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
+import '../../../core/widgets/account_picker.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -747,7 +748,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         client.from('pos_held_bills').select('*').eq('session_id', _session['id']).eq('status', 'held').order('held_at', ascending: false),
         client.from('sales_promoters').select('id, name, phone').eq('org_id', orgId).eq('is_active', true).order('name'),
         client.from('suppliers').select('id, name').eq('org_id', orgId).order('name'),
-        client.from('chart_of_accounts').select('id, code, name').eq('org_id', orgId).eq('account_type', 'expense').order('code'),
+        client.from('chart_of_accounts').select('id, code, name, parent_id, level, is_active').eq('org_id', orgId).eq('account_type', 'expense').order('code'),
       ]);
       final prods = List<Map<String, dynamic>>.from(results[1] as List);
       final stockRows = List<Map<String, dynamic>>.from(results[4] as List);
@@ -902,7 +903,8 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
         _heldBills = List<Map<String, dynamic>>.from(results[6] as List);
         _promoters = List<Map<String, dynamic>>.from(results[7] as List);
         _suppliers = List<Map<String, dynamic>>.from(results[8] as List);
-        _expenseAccounts = List<Map<String, dynamic>>.from(results[9] as List);
+        // Postable expense accounts only — parents can't take postings.
+        _expenseAccounts = postableAccounts(List<Map<String, dynamic>>.from(results[9] as List));
         _posConfig = posCfg;
         _loading = false;
       });
@@ -1338,12 +1340,13 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     return null;
   }
 
-  Widget _bankDropdown() => DropdownButtonFormField<String>(
-    value: _selectedBankId,
-    isExpanded: true,
-    decoration: const InputDecoration(isDense: true, labelText: 'Bank account', contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
-    items: _bankAccounts.map((b) => DropdownMenuItem(value: b['id'] as String, child: Text(b['name'] as String, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)))).toList(),
-    onChanged: _isOpen ? (v) => setState(() => _selectedBankId = v) : null,
+  Widget _bankDropdown() => AccountPickerField(
+    accounts: _bankAccounts,
+    selectedId: _selectedBankId,
+    label: 'Bank account',
+    title: 'Select bank account',
+    enabled: _isOpen,
+    onPicked: (b) => setState(() => _selectedBankId = b['id'] as String?),
   );
 
   // Tenders for the current sale. Single mode: full total on selected method.
@@ -2958,10 +2961,9 @@ ${retRows.isNotEmpty ? section('Returns & refunds', '${returns.length}', '<table
               }, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.border)),
                 child: Row(children: [Expanded(child: Text(l['name'] as String? ?? 'Tap to pick supplier', style: TextStyle(fontSize: 12, color: l['name']==null ? AppTheme.textSecondary : null), overflow: TextOverflow.ellipsis)), const Icon(Icons.arrow_drop_down, size: 18)])))
             else
-              DropdownButtonFormField<String>(value: l['id'] as String?, isExpanded: true, isDense: true,
-                decoration: const InputDecoration(hintText: 'Expense account', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8), border: OutlineInputBorder()),
-                items: _expenseAccounts.map((a) => DropdownMenuItem(value: a['id'] as String, child: Text('${a['code']} — ${a['name']}', style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis))).toList(),
-                onChanged: (v) => setS(() { l['id'] = v; l['name'] = _expenseAccounts.firstWhere((a) => a['id']==v, orElse: () => {})['name']; })),
+              AccountPickerField(accounts: _expenseAccounts, selectedId: l['id'] as String?,
+                hint: 'Tap to pick expense account', title: 'Select expense account',
+                onPicked: (a) => setS(() { l['id'] = a['id']; l['name'] = a['name']; })),
             const SizedBox(height: 6),
             Row(children: [
               Expanded(flex: 2, child: TextField(controller: l['amtCtrl'] as TextEditingController, decoration: const InputDecoration(labelText: 'Amount', prefixText: 'Rs. ', isDense: true, border: OutlineInputBorder()),

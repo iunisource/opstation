@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/account_picker.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
 
@@ -23,6 +24,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
   // Payment methods manager
   List<Map<String, dynamic>> _methods = [];
   List<Map<String, dynamic>> _coa = [];
+  List<Map<String, dynamic>> _postableCoa = [];
   bool _methodsLoading = true;
   bool _loading = true, _saving = false;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -98,11 +100,13 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
       final m = await Supabase.instance.client.from('pos_payment_methods')
           .select('id, code, label, gl_account_id, is_credit, is_active, sort_order')
           .eq('org_id', orgId).order('sort_order');
+      // All rows so parents are detected; the picker shows postable ones only.
       final coa = await Supabase.instance.client.from('chart_of_accounts')
-          .select('id, code, name').eq('org_id', orgId).eq('is_active', true).order('code');
+          .select('id, code, name, parent_id, level, is_active').eq('org_id', orgId).order('code');
       setState(() {
         _methods = List<Map<String, dynamic>>.from(m);
         _coa = List<Map<String, dynamic>>.from(coa);
+        _postableCoa = postableAccounts(_coa);
         _methodsLoading = false;
       });
     } catch (e) { _snack(friendlyError('Methods load error', e)); setState(() => _methodsLoading = false); }
@@ -142,9 +146,14 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
       content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, children: [
         TextField(controller: labelCtrl, decoration: const InputDecoration(labelText: 'Name (e.g. Easypaisa)')),
         const SizedBox(height: 14),
-        DropdownButtonFormField<String>(value: acct, isExpanded: true, decoration: const InputDecoration(labelText: 'Posts to GL account'),
-          items: _coa.map((a) => DropdownMenuItem(value: a['id'] as String, child: Text('${a['code']} — ${a['name']}', overflow: TextOverflow.ellipsis))).toList(),
-          onChanged: (v) => setLocal(() => acct = v)),
+        AccountPickerField(
+          // Keep an older mapping visible even if it's no longer postable, so it can be changed.
+          accounts: [
+            ..._postableCoa,
+            if (acct != null && !_postableCoa.any((a) => a['id'] == acct)) ..._coa.where((a) => a['id'] == acct),
+          ],
+          selectedId: acct, label: 'Posts to GL account', title: 'Select GL account', fontSize: 14,
+          onPicked: (a) => setLocal(() => acct = a['id'] as String?)),
         const SizedBox(height: 6),
         CheckboxListTile(contentPadding: EdgeInsets.zero, dense: true, controlAffinity: ListTileControlAffinity.leading,
           title: const Text('On credit (customer account)', style: TextStyle(fontSize: 13)),
@@ -156,6 +165,7 @@ class _ErpPosConfigScreenState extends ConsumerState<ErpPosConfigScreen> {
         ElevatedButton(onPressed: () async {
           final label = labelCtrl.text.trim();
           if (label.isEmpty || acct == null) { _snack('Enter a name and pick an account'); return; }
+          if (!_postableCoa.any((x) => x['id'] == acct)) { _snack('Please choose a specific account, not a group heading'); return; }
           final orgId = _orgId!;
           final code = isNew ? label.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_') : existing['code'] as String;
           final id = isNew ? 'ppm_${orgId}_$code' : existing['id'] as String;

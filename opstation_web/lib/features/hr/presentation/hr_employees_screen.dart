@@ -11,6 +11,7 @@ import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/account_picker.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
@@ -201,8 +202,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final orgId = _orgId; if (orgId == null) return;
     try {
       final rows = await Supabase.instance.client.from('chart_of_accounts')
-          .select('id, code, name').eq('org_id', orgId).eq('account_type', 'asset').order('code');
-      final list = List<Map<String, dynamic>>.from(rows);
+          .select('id, code, name, parent_id, level, is_active').eq('org_id', orgId).eq('account_type', 'asset').order('code');
+      // Postable accounts only — an advance can't sit on a group heading.
+      final list = postableAccounts(List<Map<String, dynamic>>.from(rows));
       // Advance accounts first, then everything else.
       bool adv(Map a) => '${a['name']}'.toLowerCase().contains('advance');
       list.sort((a, b) {
