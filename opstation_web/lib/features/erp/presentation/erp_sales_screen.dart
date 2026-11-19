@@ -9,6 +9,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/audit_label.dart';
 import '../widgets/schemes_banner.dart';
+import '../../../core/widgets/pulse_attention.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -344,6 +345,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool _focEnabled = false;
   bool _schemesEnabled = false; // org.schemes_enabled — FOC schemes on the SO
   bool _schemeBusy = false;
+  Timer? _schemeHintTimer;
+  int _schemeAvail = 0;        // schemes that apply now and are not on the order yet
+  String _schemeAvailSig = ''; // which ones (so the button only pulses for NEW ones)
+  String _schemeSeenSig = '';  // what the user has already opened the dialog for
   List<Map<String, dynamic>> _appliedSchemes = []; // scheme_redemptions on this SO
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
@@ -356,6 +361,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   @override
   void dispose() {
+    _schemeHintTimer?.cancel();
     _searchDebounce?.cancel();
     _addQtyCtrl.dispose();
     _addQtyFocus.dispose();
@@ -508,6 +514,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         _appliedSchemes = appliedSchemes;
         _detailLoading = false;
       });
+      _scheduleSchemeHint();
     } catch (_) { setState(() => _detailLoading = false); }
   }
 
@@ -946,6 +953,58 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
+  // ── "Schemes available" hint ─────────────────────────────────────────────
+  // After every change to the order, quietly ask the scheme engine whether a
+  // scheme now applies that is not on the order yet. If so, the Schemes button
+  // shows a count and pulses (once per new set of schemes, until it is opened).
+  void _scheduleSchemeHint() {
+    _schemeHintTimer?.cancel();
+    _schemeHintTimer = Timer(const Duration(milliseconds: 700), _refreshSchemeHint);
+  }
+
+  void _setSchemeHint(int n, String sig) {
+    if (!mounted) return;
+    if (_schemeAvail == n && _schemeAvailSig == sig) return;
+    setState(() { _schemeAvail = n; _schemeAvailSig = sig; });
+  }
+
+  Future<void> _refreshSchemeHint() async {
+    final orgId = _orgId;
+    final orderId = _detail['id'];
+    if (!mounted || orgId == null || orderId == null || !_schemesEnabled || !_canEditLines) { _setSchemeHint(0, ''); return; }
+    final custId = _detail['customer_id'] as String?;
+    final branchId = _detail['branch_id'] as String? ?? _branchId;
+    final lines = _items.where((it) => it['is_foc'] != true).map((it) => {
+          'product_id': it['product_id'],
+          'qty': (it['quantity'] as num?)?.toDouble() ?? 0,
+          'unit_price': 0,
+        }).toList();
+    if (lines.isEmpty) { _setSchemeHint(0, ''); return; }
+    try {
+      final client = Supabase.instance.client;
+      final res = await client.rpc('scheme_suggest', params: {
+        'p_org': orgId, 'p_branch': branchId, 'p_customer': custId, 'p_lines': lines,
+      });
+      final applied = {for (final r in _appliedSchemes) '${r['scheme_id']}'};
+      final foc = List<Map<String, dynamic>>.from((res as List?) ?? const [])
+          .where((s) => (s['type'] == 'foc' || s['type'] == 'combo') && !applied.contains('${s['scheme_id']}'))
+          .toList();
+      Map<String, dynamic>? elig;
+      if (custId != null && foc.any((s) => (s['block_aging_days'] != null) || s['block_over_limit'] == true)) {
+        try {
+          final e = await client.rpc('scheme_customer_eligibility', params: {'p_org': orgId, 'p_customer': custId});
+          elig = e is Map ? Map<String, dynamic>.from(e) : null;
+        } catch (_) {}
+      }
+      final user = ref.read(currentUserProvider);
+      // Count only schemes this user could actually apply (not hard-blocked).
+      final usable = foc.where((s) => schemeBlockReasons(s, elig).isEmpty || canOverrideScheme(s, user)).toList();
+      if (!mounted || _detail['id'] != orderId) return; // moved to another order meanwhile
+      final ids = [for (final s in usable) '${s['scheme_id']}']..sort();
+      _setSchemeHint(usable.length, ids.join(','));
+    } catch (_) {/* only a hint: never disturb the order */}
+  }
+
   // ── Schemes: detect eligible FOC schemes for the current lines and, on
   // confirm, add the free goods as FOC lines. Slab-discount schemes execute on
   // the Sales Invoice (where prices are set), not here.
@@ -977,6 +1036,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       if (!mounted) return;
       setState(() => _schemeBusy = false);
       if (foc.isEmpty) { _showSnack('No schemes currently apply to this order'); return; }
+      setState(() => _schemeSeenSig = _schemeAvailSig); // they have looked: stop pulsing
       final chosen = await showSchemeSelectionDialog(
         context: context,
         schemes: foc,
@@ -1325,13 +1385,28 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           if (isLocked) ...[const SizedBox(width: 8), const _LockedBadge()],
           const Spacer(),
           if (_schemesEnabled && _canEditLines) ...[
-            OutlinedButton.icon(
-              onPressed: _schemeBusy ? null : _checkSchemes,
-              icon: _schemeBusy
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.local_offer_outlined, size: 16, color: AppTheme.primary),
-              label: const Text('Schemes'),
-              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+            Tooltip(
+              message: _schemeAvail > 0 ? '$_schemeAvail scheme(s) now apply to this order — tap to review' : 'Check for applicable schemes',
+              child: PulseAttention(
+                active: _schemeAvail > 0 && _schemeAvailSig != _schemeSeenSig && !_schemeBusy,
+                radius: 22,
+                child: Badge(
+                  isLabelVisible: _schemeAvail > 0,
+                  label: Text('$_schemeAvail'),
+                  backgroundColor: const Color(0xFFF59E0B),
+                  child: OutlinedButton.icon(
+                    onPressed: _schemeBusy ? null : _checkSchemes,
+                    icon: _schemeBusy
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Icon(Icons.local_offer_outlined, size: 16, color: _schemeAvail > 0 ? const Color(0xFFB45309) : AppTheme.primary),
+                    label: Text(_schemeAvail > 0 ? 'Schemes available' : 'Schemes'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _schemeAvail > 0 ? const Color(0xFFB45309) : AppTheme.primary,
+                      side: BorderSide(color: _schemeAvail > 0 ? const Color(0xFFF59E0B) : AppTheme.primary, width: _schemeAvail > 0 ? 1.6 : 1),
+                    ),
+                  ),
+                ),
+              ),
             ),
             const SizedBox(width: 8),
           ],
@@ -4115,7 +4190,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     final client = Supabase.instance.client;
     final user = ref.read(currentUserProvider);
     final redemptions = <Map<String, dynamic>>[];
-    int idx = 0;
     try {
       for (final s in schemes) {
         final type = s['type'] as String?;
@@ -4157,7 +4231,6 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             _priceCtrl[id] ??= TextEditingController(); _priceCtrl[id]!.text = _plain4(promo);
           }
         }
-        idx++;
         redemptions.add({
           // One log row per scheme per invoice (applying again updates it).
           'id': 'rdm_${_detail['id']}_${s['scheme_id']}',
