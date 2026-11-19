@@ -39,13 +39,18 @@ class _ErpSchemesReportScreenState extends ConsumerState<ErpSchemesReportScreen>
     try {
       final from = DateFormat('yyyy-MM-dd').format(_range.start);
       final to = DateFormat('yyyy-MM-dd').format(_range.end.add(const Duration(days: 1)));
-      final res = await Supabase.instance.client
-          .from('scheme_redemptions')
+      // Read the "live" view (only redemptions whose order / invoice still
+      // counts: not deleted, cancelled or voided); fall back to the raw log if
+      // the view has not been created yet.
+      Future<dynamic> q(String table) => Supabase.instance.client
+          .from(table)
           .select('scheme_id, scheme_name, scheme_type, benefit_type, free_qty, discount_amount, voucher_number, applied_at')
           .eq('org_id', orgId)
           .gte('applied_at', from)
           .lt('applied_at', to)
           .order('applied_at', ascending: false);
+      dynamic res;
+      try { res = await q('scheme_redemptions_live'); } catch (_) { res = await q('scheme_redemptions'); }
       if (!mounted) return;
       setState(() {
         _rows = List<Map<String, dynamic>>.from(res as List);

@@ -105,6 +105,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('dispatch_summary', 'Dispatch Summary', PermKind.report, '/erp/dispatch-summary'),
     PermItem('schemes', 'Schemes & Offers', PermKind.doc, '/erp/schemes'),
     PermItem('schemes_report', 'Scheme Performance', PermKind.report, '/erp/schemes-report'),
+    PermItem('scheme_vouchers_report', 'Scheme Vouchers', PermKind.report, '/erp/scheme-vouchers-report'),
   ]),
   PermModule('pos', 'POS', Icons.storefront_outlined, [
     PermItem('pos_config', 'Configuration', PermKind.doc, '/erp/pos-config'),

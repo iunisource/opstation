@@ -139,6 +139,7 @@ import '../../features/erp/presentation/erp_quotation_screen.dart' deferred as _
 import '../../features/erp/presentation/erp_schemes_screen.dart' deferred as _s124;
 import '../../features/erp/presentation/erp_dispatch_summary_screen.dart' deferred as _s125;
 import '../../features/erp/presentation/erp_schemes_report_screen.dart' deferred as _s126;
+import '../../features/erp/presentation/erp_scheme_vouchers_report_screen.dart' deferred as _s990;
 import '../../features/erp/presentation/erp_demand_plan_screen.dart' deferred as _s127;
 import '../../features/erp/presentation/erp_pos_catalog_screen.dart' deferred as _s128;
 import '../../features/erp/presentation/erp_pos_config_screen.dart' deferred as _s129;
@@ -609,6 +610,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/dispatch-summary', builder: (_, __) => _deferred('_s125', _s125.loadLibrary, () => _s125.ErpDispatchSummaryScreen())),
           GoRoute(path: '/erp/schemes',   builder: (_, __) => _deferred('_s124', _s124.loadLibrary, () => _s124.ErpSchemesScreen())),
           GoRoute(path: '/erp/schemes-report', builder: (_, __) => _deferred('_s126', _s126.loadLibrary, () => _s126.ErpSchemesReportScreen())),
+          GoRoute(path: '/erp/scheme-vouchers-report', builder: (_, __) => _deferred('_s990', _s990.loadLibrary, () => _s990.ErpSchemeVouchersReportScreen())),
           GoRoute(path: '/erp/field-orders', builder: (_, state) => _deferred('_s094', _s094.loadLibrary, () => _s094.ErpFieldOrdersScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/discounts', builder: (_, __) => _deferred('_s164', _s164.loadLibrary, () => _s164.ErpDiscountPoliciesScreen())),
           GoRoute(path: '/erp/field-returns', builder: (_, state) => _deferred('_s163', _s163.loadLibrary, () => _s163.ErpFieldReturnsScreen(focusId: state.uri.queryParameters['focus']))),

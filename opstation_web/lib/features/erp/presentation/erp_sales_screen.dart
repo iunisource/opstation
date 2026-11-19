@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/audit_label.dart';
+import '../widgets/schemes_banner.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
@@ -475,7 +476,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final itemsF = client.from('sales_order_items').select('*, products(name, sku), uoms(name, abbreviation)').eq('sales_order_id', id);
       final Future<dynamic> cfgF = client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.voucher_dates_editable').maybeSingle().then<dynamic>((v) => v).catchError((_) => null);
       final Future<dynamic> doF = client.from('delivery_orders').select('id, voucher_number, is_voided, created_at').eq('so_id', id).order('created_at', ascending: false).then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
-      final Future<dynamic> schF = client.from('scheme_redemptions').select('scheme_name, benefit_type, meta').eq('voucher_id', id).eq('voucher_type', 'SO').order('applied_at', ascending: true).then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
+      final Future<dynamic> schF = client.from('scheme_redemptions').select('id, scheme_id, scheme_name, benefit_type, meta').eq('voucher_id', id).eq('voucher_type', 'SO').order('applied_at', ascending: true).then<dynamic>((v) => v).catchError((_) => const <dynamic>[]);
 
       final core = await Future.wait<dynamic>([orderF, itemsF]);
       final order = core[0] as Map<String, dynamic>;
@@ -585,6 +586,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       );
       if (bankErr != null) _showSnack('Bank # failed: $bankErr');
       await _logAudit(_detail['id'] as String, 'SO', 'deleted', 'Voucher $vNum deleted by admin');
+      try { await Supabase.instance.client.from('scheme_redemptions').delete().eq('voucher_type', 'SO').eq('voucher_id', _detail['id']); } catch (_) {}
       // Any DO still on this SO is voided (active ones were blocked above). A voided
       // DO is a dead delivery but its row still holds the so_id FK, so remove it (and
       // its items / any Sales Invoice raised from it) to free the SO for deletion.
@@ -763,33 +765,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   }
 
   // Shows which schemes have been applied to this order (name + description).
-  Widget _appliedSchemesBanner() {
-    return Container(
-      decoration: BoxDecoration(color: Colors.teal.withOpacity(0.05), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.teal.withOpacity(0.3))),
-      padding: const EdgeInsets.all(12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [Icon(Icons.local_offer_outlined, size: 16, color: Colors.teal), SizedBox(width: 6), Text('Schemes applied', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.teal))]),
-        const SizedBox(height: 6),
-        ..._appliedSchemes.map((r) {
-          final name = r['scheme_name'] as String? ?? 'Scheme';
-          final desc = ((r['meta'] as Map?)?['description'] as String?)?.trim() ?? '';
-          final ft = ((r['meta'] as Map?)?['free_text'] as String?)?.trim() ?? '';
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.check_circle, size: 14, color: Colors.teal),
-              const SizedBox(width: 6),
-              Expanded(child: RichText(text: TextSpan(style: const TextStyle(fontSize: 12.5, color: AppTheme.textPrimary), children: [
-                TextSpan(text: name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                if (desc.isNotEmpty) TextSpan(text: '  —  $desc', style: const TextStyle(color: AppTheme.textSecondary)),
-                if (ft.isNotEmpty) TextSpan(text: '   ·   Free: $ft', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.w600)),
-              ]))),
-            ]),
-          );
-        }),
-      ]),
-    );
-  }
+  Widget _appliedSchemesBanner() => SchemesBanner(
+      title: 'Schemes applied',
+      rows: _appliedSchemes,
+      onRemove: _canEditLines ? _removeScheme : null);
 
   // Free-of-Cost items section: same shape as the paid items table, but lines
   // carry no price (zero invoice value) and are consumed at cost downstream.
@@ -1058,8 +1037,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           totalFree += freeQty;
         }
         // Log the redemption.
-        await client.from('scheme_redemptions').insert({
-          'id': 'rdm_${DateTime.now().microsecondsSinceEpoch}_$applied',
+        // One log row per scheme per order: applying again updates it instead of
+        // adding a second one (which used to be counted twice in the report).
+        await client.from('scheme_redemptions').upsert({
+          'id': 'rdm_${_detail['id']}_${s['scheme_id']}',
           'org_id': orgId,
           'scheme_id': s['scheme_id'],
           'scheme_name': s['name'],
@@ -1074,7 +1055,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
           'applied_by': user?.id,
           'applied_by_name': user?.name,
           'meta': {'free_items': items, 'description': s['description'], 'free_text': s['free_text']},
-        });
+        }, onConflict: 'org_id,voucher_type,voucher_id,scheme_id');
+        try {
+          await _logAudit(_detail['id'] as String, 'SO', 'scheme_applied',
+              'Applied "${s['name']}"${totalFree > 0 ? ' — free goods ${_plain4(totalFree)}' : ''}');
+        } catch (_) {}
         applied++;
       }
       await _loadDetail(_detail['id'] as String);
@@ -1084,6 +1069,39 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     } finally {
       if (mounted) setState(() => _schemeBusy = false);
     }
+  }
+
+  /// Take an applied scheme off this order: removes its free-goods lines and its
+  /// log row. Only while the order's lines can still be edited (no DO yet).
+  Future<void> _removeScheme(Map<String, dynamic> r) async {
+    if (!_canEditLines) { _showSnack('Cannot remove: $_doMsg'); return; }
+    final name = r['scheme_name'] as String? ?? 'this scheme';
+    Set<String> freeIdsOf(Map<String, dynamic> x) => {
+          for (final fi in (((x['meta'] as Map?)?['free_items']) as List? ?? const []))
+            if (fi is Map && fi['free_product_id'] is String) fi['free_product_id'] as String
+        };
+    final keep = <String>{for (final o in _appliedSchemes) if (o['id'] != r['id']) ...freeIdsOf(o)};
+    final freeIds = freeIdsOf(r).difference(keep); // a free product another scheme still gives stays
+    final ok = await showDialog<bool>(context: context, builder: (dctx) => AlertDialog(
+      title: const Text('Remove scheme?'),
+      content: Text('Remove "$name" from ${_detail['voucher_number']}? Its free goods will be taken off the order.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(dctx).pop(false), child: const Text('Cancel')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(dctx).pop(true), child: const Text('Remove')),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      final client = Supabase.instance.client;
+      if (freeIds.isNotEmpty) {
+        await client.from('sales_order_items').delete()
+            .eq('sales_order_id', _detail['id']).eq('is_foc', true).inFilter('product_id', freeIds.toList());
+      }
+      await client.from('scheme_redemptions').delete().eq('id', r['id']);
+      try { await _logAudit(_detail['id'] as String, 'SO', 'scheme_removed', 'Removed "$name"${freeIds.isEmpty ? '' : ' and its free goods'}'); } catch (_) {}
+      await _loadDetail(_detail['id'] as String);
+    } catch (e) { _showSnack(friendlyError('Could not remove the scheme', e)); }
   }
 
   Future<void> _deleteItem(String itemId) async {
@@ -1588,6 +1606,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   Map<String, double> _stockByProduct = {};
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _soItems = [];
+  List<Map<String, dynamic>> _soSchemes = []; // schemes applied on the linked Sales Order
   VoucherMeta _meta = VoucherMeta();
   bool _listLoading = true;
   bool _detailLoading = false;
@@ -1753,6 +1772,13 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         createdById: do_['created_by'] as String?,
       );
 
+      List<Map<String, dynamic>> soSchemes = [];
+      try {
+        soSchemes = List<Map<String, dynamic>>.from(await client.from('scheme_redemptions')
+            .select('id, scheme_id, scheme_name, benefit_type, meta')
+            .eq('voucher_type', 'SO').eq('voucher_id', soId).order('applied_at', ascending: true));
+      } catch (_) {}
+
       String? linkedSiId;
       final live = ((await sisF) as List).where((s) => s['is_voided'] != true).toList();
       if (live.isNotEmpty) linkedSiId = live.first['id'] as String?;
@@ -1762,6 +1788,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         _items = List<Map<String,dynamic>>.from(items);
         _soItems = List<Map<String,dynamic>>.from(soItems);
         _linkedSo = Map<String,dynamic>.from(so);
+        _soSchemes = soSchemes;
         _stockByProduct = stockMap;
         _meta = meta;
         _collectAmount = (do_['collect_amount'] as num?);
@@ -3161,6 +3188,10 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 ),
               ]),
             ),
+            if (_soSchemes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              SchemesBanner(title: 'Schemes on the Sales Order', rows: _soSchemes),
+            ],
 
             const SizedBox(height: 12),
 
@@ -3463,6 +3494,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   bool _schemesEnabled = false; // org.schemes_enabled — slab-discount schemes on the SI
   bool _schemeBusy = false;
   List<Map<String, dynamic>> _appliedSchemes = []; // scheme_redemptions on this SI
+  List<Map<String, dynamic>> _soSchemes = []; // schemes applied on the Sales Order this invoice came from
   final TextEditingController _remarksCtrl = TextEditingController();
 
   @override
@@ -3639,7 +3671,17 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         canSup = _isAdmin || (uid2 != null && extraIds2.contains(uid2));
       } catch (_) {}
       final appliedSchemes = List<Map<String, dynamic>>.from((await schF) as List);
+      List<Map<String, dynamic>> soSchemes = [];
+      final soIdForSchemes = inv['so_id'] as String?;
+      if (soIdForSchemes != null) {
+        try {
+          soSchemes = List<Map<String, dynamic>>.from(await client.from('scheme_redemptions')
+              .select('id, scheme_id, scheme_name, benefit_type, meta')
+              .eq('voucher_type', 'SO').eq('voucher_id', soIdForSchemes).order('applied_at', ascending: true));
+        } catch (_) {}
+      }
       setState(() {
+        _soSchemes = soSchemes;
         _reviewFlow = reviewFlow;
         _superviseFlow = superviseFlow;
         _canSupervise = canSup;
@@ -4115,8 +4157,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             _priceCtrl[id] ??= TextEditingController(); _priceCtrl[id]!.text = _plain4(promo);
           }
         }
+        idx++;
         redemptions.add({
-          'id': 'rdm_${DateTime.now().microsecondsSinceEpoch}_${idx++}',
+          // One log row per scheme per invoice (applying again updates it).
+          'id': 'rdm_${_detail['id']}_${s['scheme_id']}',
           'org_id': orgId,
           'scheme_id': s['scheme_id'],
           'scheme_name': s['name'],
@@ -4141,7 +4185,13 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       await client.from('sales_invoices').update({
         'subtotal': subtotal, 'discount_total': discountTotal, 'grand_total': subtotal - discountTotal,
       }).eq('id', _detail['id']);
-      for (final r in redemptions) { await client.from('scheme_redemptions').insert(r); }
+      for (final r in redemptions) {
+        await client.from('scheme_redemptions').upsert(r, onConflict: 'org_id,voucher_type,voucher_id,scheme_id');
+      }
+      try {
+        await _logAudit(_detail['id'] as String, 'scheme_applied',
+            'Applied ${redemptions.map((r) => '"${r['scheme_name']}"').join(', ')}');
+      } catch (_) {}
       await _loadDetail(_detail['id'] as String);
       if (mounted) showSchemeSuccess(context, redemptions.length == 1 ? 'Scheme applied — review and Save' : '${redemptions.length} schemes applied — review and Save');
     } catch (e) {
@@ -4152,33 +4202,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   }
 
   // Shows which schemes have been applied to this invoice (name + description).
-  Widget _appliedSchemesBanner() {
-    return Container(
-      decoration: BoxDecoration(color: Colors.teal.withOpacity(0.05), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.teal.withOpacity(0.3))),
-      padding: const EdgeInsets.all(12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [Icon(Icons.local_offer_outlined, size: 16, color: Colors.teal), SizedBox(width: 6), Text('Schemes applied', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.teal))]),
-        const SizedBox(height: 6),
-        ..._appliedSchemes.map((r) {
-          final name = r['scheme_name'] as String? ?? 'Scheme';
-          final desc = ((r['meta'] as Map?)?['description'] as String?)?.trim() ?? '';
-          final ft = ((r['meta'] as Map?)?['free_text'] as String?)?.trim() ?? '';
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.check_circle, size: 14, color: Colors.teal),
-              const SizedBox(width: 6),
-              Expanded(child: RichText(text: TextSpan(style: const TextStyle(fontSize: 12.5, color: AppTheme.textPrimary), children: [
-                TextSpan(text: name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                if (desc.isNotEmpty) TextSpan(text: '  —  $desc', style: const TextStyle(color: AppTheme.textSecondary)),
-                if (ft.isNotEmpty) TextSpan(text: '   ·   Free: $ft', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.w600)),
-              ]))),
-            ]),
-          );
-        }),
-      ]),
-    );
-  }
+  Widget _appliedSchemesBanner() => SchemesBanner(title: 'Schemes applied', rows: _appliedSchemes);
 
   Future<(double, double)> _writeItemDiscounts() async {
     double subtotal = 0, discountTotal = 0;
@@ -4987,6 +5011,10 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               ]),
             ),
 
+            if (_soSchemes.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              SchemesBanner(title: 'Schemes on the Sales Order', rows: _soSchemes),
+            ],
             if (_appliedSchemes.isNotEmpty) ...[
               const SizedBox(height: 16),
               _appliedSchemesBanner(),

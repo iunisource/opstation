@@ -26,6 +26,10 @@ String auditActionLabel(String action) {
     'customer_changed': 'Customer changed',
     'approval_reset': 'Approval cleared',
     'short_closed': 'Short-closed',
+    'scheme_applied': 'Scheme applied',
+    'scheme_removed': 'Scheme removed',
+    'scheme_applied': 'Scheme applied',
+    'scheme_removed': 'Scheme removed',
   };
   final n = names[action];
   if (n != null) return n;
