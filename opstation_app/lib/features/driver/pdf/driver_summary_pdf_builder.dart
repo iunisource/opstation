@@ -217,8 +217,8 @@ class DriverSummaryPdfBuilder {
       String timeStr = '-';
 
       if (s.status == DeliveryStopStatus.delivered && s.capturedLat != null) {
-        if (gpsIdx > 0 && gpsIdx < ctx.distanceKm.length) {
-          distStr = ctx.distanceKm[gpsIdx].toStringAsFixed(2);
+        if (gpsIdx < ctx.distanceKm.length && (gpsIdx > 0 || ctx.distanceKm[gpsIdx] > 0)) {
+          distStr = ctx.distanceKm[gpsIdx].toStringAsFixed(2); // the first stop: from the start, when recorded
         }
         if (s.deliveredAt != null) timeStr = _timeFmt.format(s.deliveredAt!);
         gpsIdx++;

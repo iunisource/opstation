@@ -25,6 +25,8 @@ import '../../reports/presentation/export_pdf_sheet.dart';
 import 'dialogs/mark_visit_dialog.dart';
 import 'dialogs/skip_visit_dialog.dart';
 import 'widgets/status_count_cell.dart';
+import 'widgets/free_visit_buttons.dart';
+import '../services/free_visit_photo_service.dart';
 import 'widgets/route_guide_widgets.dart';
 import '../services/route_guide.dart';
 
@@ -129,7 +131,7 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
 
   /// Free route: mark a visit right here, without choosing a customer. The
   /// phone's GPS point is the visit; the place name follows a moment later.
-  Future<void> _markFreeVisit() async {
+  Future<void> _markFreeVisit({bool photo = false}) async {
     if (_freeBusy) return;
     setState(() => _freeBusy = true);
     final messenger = ScaffoldMessenger.of(context);
@@ -154,13 +156,22 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
         say('GPS is not responding, so the visit was not saved. Step outside or near a window for a few seconds, then try again.');
         return;
       }
+      // "Photo": the camera opens first; the picture is stamped with this visit's own
+      // GPS point. If the camera is closed without a picture nothing is marked.
+      String? photoPath;
+      if (photo) {
+        photoPath = await ref.read(freeVisitPhotoServiceProvider).capture(lat: fix.lat, lng: fix.lng);
+        if (photoPath == null) return;
+        if (!mounted) return;
+      }
       final n = await ref.read(tripControllerProvider.notifier).markFreeVisit(
             lat: fix.lat,
             lng: fix.lng,
             accuracyMeters: fix.accuracy,
+            photoPath: photoPath,
           );
       ref.read(soundControllerProvider.notifier).play(AppSound.visitMarked);
-      say('Visit $n marked ✓');
+      say(photoPath == null ? 'Visit $n marked ✓' : 'Visit $n marked with a photo ✓');
       if (mounted) setState(() => _freeTick++);
     } catch (e) {
       final m = '$e'.replaceFirst('Bad state: ', '').replaceFirst('Invalid argument(s): ', '');
@@ -404,15 +415,10 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _freeBusy ? null : _markFreeVisit,
-                    icon: _freeBusy
-                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.place_outlined, size: 18),
-                    label: const Text('Mark visit here'),
-                  ),
+                FreeVisitButtons(
+                  busy: _freeBusy,
+                  onMark: _markFreeVisit,
+                  onPhoto: () => _markFreeVisit(photo: true),
                 ),
                 FutureBuilder<int>(
                   key: ValueKey('free_${trip.id}_$_freeTick'),

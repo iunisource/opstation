@@ -1,7 +1,9 @@
 import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/maps_config.dart';
+import '../../../core/database/app_database_provider.dart';
 import '../../../core/services/google_directions_service.dart';
+import '../../../core/utils/delivery_locations.dart';
 import '../../dispatch/models/delivery.dart';
 import '../../reports/services/nominatim_client.dart';
 
@@ -40,6 +42,35 @@ class DriverReportContext {
   });
 }
 
+/// Splits the consecutive leg distances of a job's route into the per-stop distances
+/// and the way back. The points are [start?], stop 1 ... stop n, [return?]; [legs] are
+/// the distances between neighbours (so one fewer than the points).
+class DriverLegs {
+  const DriverLegs(this.distances, this.returnKm);
+
+  /// One per stop: the distance from the previous point (the start for the first stop).
+  final List<double> distances;
+
+  /// Last stop to the return location; 0 when the job has no return location.
+  final double returnKm;
+
+  static DriverLegs split({
+    required int stopCount,
+    required bool hasStart,
+    required bool hasEnd,
+    required List<double> legs,
+  }) {
+    final off = hasStart ? 1 : 0;
+    double leg(int k) => (k >= 0 && k < legs.length) ? legs[k] : 0.0;
+    return DriverLegs(
+      [
+        for (var i = 0; i < stopCount; i++) i == 0 ? (hasStart ? leg(0) : 0.0) : leg(off + i - 1),
+      ],
+      (hasEnd && stopCount > 0) ? leg(off + stopCount - 1) : 0.0,
+    );
+  }
+}
+
 class DriverReportContextBuilder {
   final Ref _ref;
   DriverReportContextBuilder(this._ref);
@@ -59,6 +90,10 @@ class DriverReportContextBuilder {
             s.capturedLng != null)
         .toList();
 
+    // Where the job started and where it ended (the return location), when the driver's
+    // phone recorded them; the first / last stop stand in for them otherwise.
+    final locs = await DeliveryLocations.read(_ref.read(appDatabaseProvider), delivery.id);
+
     // Reverse geocode start + end addresses in parallel.
     String? startAddress;
     String? endAddress;
@@ -66,8 +101,10 @@ class DriverReportContextBuilder {
     await Future.wait([
       if (delivery_.startedAt != null)
         () async {
-          // We don't have start GPS on delivery — use first stop GPS as proxy
-          if (gpsStops.isNotEmpty) {
+          final p = locs.start;
+          if (p != null) {
+            startAddress = await nomi.reverseGeocode(p.lat, p.lng);
+          } else if (gpsStops.isNotEmpty) {
             startAddress = await nomi.reverseGeocode(
               gpsStops.first.capturedLat!,
               gpsStops.first.capturedLng!,
@@ -76,7 +113,10 @@ class DriverReportContextBuilder {
         }(),
       if (delivery_.completedAt != null)
         () async {
-          if (gpsStops.isNotEmpty) {
+          final p = locs.end;
+          if (p != null) {
+            endAddress = await nomi.reverseGeocode(p.lat, p.lng);
+          } else if (gpsStops.isNotEmpty) {
             endAddress = await nomi.reverseGeocode(
               gpsStops.last.capturedLat!,
               gpsStops.last.capturedLng!,
@@ -98,42 +138,34 @@ class DriverReportContextBuilder {
       );
     }
 
-    // Build point sequence for Google Directions.
-    final allPoints = [
-      for (final s in gpsStops)
-        DirectionsPoint(s.capturedLat!, s.capturedLng!),
+    // The route: [start] -> stops -> [return location].
+    final points = [
+      if (locs.start != null) DirectionsPoint(locs.start!.lat, locs.start!.lng),
+      for (final s in gpsStops) DirectionsPoint(s.capturedLat!, s.capturedLng!),
+      if (locs.end != null) DirectionsPoint(locs.end!.lat, locs.end!.lng),
     ];
 
     bool usedGoogle = false;
     List<double>? googleLegs;
-    if (MapsConfig.hasKey && allPoints.length >= 2) {
-      googleLegs = await GoogleDirectionsService.getLegsKm(allPoints);
+    if (MapsConfig.hasKey && points.length >= 2) {
+      googleLegs = await GoogleDirectionsService.getLegsKm(points);
       if (googleLegs != null) usedGoogle = true;
     }
 
-    // Leg distances: index 0 = first stop (no previous = 0),
-    // index i = distance from gpsStop[i-1] to gpsStop[i].
-    final distances = <double>[];
-    for (int i = 0; i < gpsStops.length; i++) {
-      if (i == 0) {
-        distances.add(0);
-        continue;
-      }
-      if (googleLegs != null && (i - 1) < googleLegs.length) {
-        distances.add(googleLegs[i - 1]);
-      } else {
-        final prev = allPoints[i - 1];
-        final cur = allPoints[i];
-        distances.add(_haversineKm(prev.lat, prev.lng, cur.lat, cur.lng));
-      }
-    }
-
-    // Return leg — last stop back to end (use same last leg if available).
-    double returnKm = 0;
-    if (gpsStops.length >= 2 && googleLegs != null &&
-        googleLegs.length >= gpsStops.length - 1) {
-      returnKm = googleLegs[gpsStops.length - 2];
-    }
+    final legs = <double>[
+      for (var k = 0; k + 1 < points.length; k++)
+        (googleLegs != null && k < googleLegs.length)
+            ? googleLegs[k]
+            : _haversineKm(points[k].lat, points[k].lng, points[k + 1].lat, points[k + 1].lng),
+    ];
+    final split = DriverLegs.split(
+      stopCount: gpsStops.length,
+      hasStart: locs.start != null,
+      hasEnd: locs.end != null,
+      legs: legs,
+    );
+    final distances = split.distances;
+    final returnKm = split.returnKm;
 
     final total = distances.fold<double>(0, (s, d) => s + d) + returnKm;
 

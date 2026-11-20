@@ -402,6 +402,7 @@ class TripController extends AsyncNotifier<TripState> {
     required double lat,
     required double lng,
     double? accuracyMeters,
+    String? photoPath, // a picture taken with the visit (already stamped with the coordinates)
   }) async {
     if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
@@ -409,8 +410,26 @@ class TripController extends AsyncNotifier<TripState> {
     if (s == null || active == null) throw StateError('No active trip.');
     final db = ref.read(appDatabaseProvider);
     final org = ref.read(orgIdProvider);
+    final visitId = _newId('visit');
+    // The picture goes to the upload queue first; the visit only points at it once it is
+    // queued, so the server never has a visit whose picture was lost.
+    String? remotePhoto;
+    if (photoPath != null && photoPath.isNotEmpty) {
+      final remote = FreeVisits.photoRemotePath(
+          userId: active.userId, userName: active.userName, visitId: visitId, at: DateTime.now());
+      try {
+        await ref.read(uploadQueueRepositoryProvider).enqueue(
+              localPath: photoPath,
+              remotePath: remote,
+              bucket: 'opstation-photos',
+              entityType: 'visit',
+              entityId: visitId,
+            );
+        remotePhoto = remote;
+      } catch (_) {}
+    }
     await FreeVisits.add(db, {
-      'id': _newId('visit'),
+      'id': visitId,
       'trip_id': active.id,
       'org_id': org,
       'ts': DateTime.now().millisecondsSinceEpoch,
@@ -420,6 +439,7 @@ class TripController extends AsyncNotifier<TripState> {
       'user_id': active.userId,
       'user_name': active.userName,
       'user_role': active.userRole,
+      if (remotePhoto != null) 'photo': remotePhoto,
     });
 
     // Send it now; offline or trip not on the server yet → the periodic sync

@@ -13,6 +13,7 @@ import '../../../core/services/sound_controller.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/storage/photo_url.dart';
 import '../../../shared/widgets/slide_to_confirm.dart';
+import 'delivery_bottom_action.dart';
 import '../../audit/data/audit_repository.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../customers/data/customer_repository.dart';
@@ -50,6 +51,7 @@ class _DeliveryExecutionScreenState
   Delivery? _delivery;
   bool _loading = true;
   bool _starting = false;
+  bool _ending = false;
   String? _startError;
 
   /// Pre-loaded snapshot of all customers, keyed by id. Used synchronously
@@ -92,7 +94,10 @@ class _DeliveryExecutionScreenState
       return;
     }
     try {
-      await repo.startDelivery(id: d.id, driverId: user.id);
+      // Where the job starts (the report counts the way to the first stop); a slow or
+      // missing GPS fix never stops the driver from starting.
+      final fix = await _tryGps();
+      await repo.startDelivery(id: d.id, driverId: user.id, lat: fix?.lat, lng: fix?.lng, accuracy: fix?.accuracy);
       await ref.read(auditLoggerProvider).deliveryStarted(deliveryId: d.id);
       ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
       await _reload();
@@ -335,9 +340,10 @@ class _DeliveryExecutionScreenState
     // replaces the older tap-then-dialog flow. Slide commits
     // immediately on release at the right edge.
     try {
+      final fix = await _tryGps(); // the return location
       await ref
           .read(deliveryRepositoryProvider)
-          .completeEarly(deliveryId: d.id);
+          .completeEarly(deliveryId: d.id, lat: fix?.lat, lng: fix?.lng, accuracy: fix?.accuracy);
       await ref
           .read(auditLoggerProvider)
           .deliveryCompleted(deliveryId: d.id, early: true);
@@ -348,6 +354,35 @@ class _DeliveryExecutionScreenState
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('$e')));
       }
+    }
+  }
+
+  /// Slide to end job: every stop is settled. The point the driver is at is the return
+  /// location (like a salesperson's route end), so the report can count the way back.
+  Future<void> _handleEnd() async {
+    if (_ending) return;
+    final d = _delivery;
+    if (d == null) return;
+    setState(() => _ending = true);
+    try {
+      final fix = await _tryGps();
+      await ref
+          .read(deliveryRepositoryProvider)
+          .endDelivery(deliveryId: d.id, lat: fix?.lat, lng: fix?.lng, accuracy: fix?.accuracy);
+      await ref.read(auditLoggerProvider).deliveryCompleted(deliveryId: d.id, early: false);
+      ref.read(soundControllerProvider.notifier).play(AppSound.routeEnd);
+      if (fix == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Job ended. The return location was not recorded (GPS not available).')));
+      }
+      await _reload();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$e'.replaceFirst('Bad state: ', ''))));
+      }
+    } finally {
+      if (mounted) setState(() => _ending = false);
     }
   }
 
@@ -473,55 +508,70 @@ class _DeliveryExecutionScreenState
     );
   }
 
-  /// Bottom action area. Three states, mutually exclusive:
+  /// Bottom action area (see [deliveryBottomAction]), one of:
   ///
-  /// - ASSIGNED -> slide-to-start (blue). Fires [_handleStart] on
-  ///   release at the right edge; no separate confirm tap needed.
+  /// - every stop settled, job still open -> slide to END the job (green): takes the
+  ///   return location. Also shown when the job still says "assigned" although all its
+  ///   stops are done, so a job whose start was lost can still be ended.
+  /// - ASSIGNED -> slide-to-start (blue). Fires [_handleStart] on release at the right
+  ///   edge; no separate confirm tap needed.
   /// - IN_PROGRESS with pending stops -> slide-to-complete (red).
   ///   Closes remaining pending stops as failed + stamps completedAt.
-  /// - Otherwise (completed / cancelled / in_progress with zero
-  ///   pending) -> no bottom bar; the repo auto-completes or the
-  ///   delivery is already closed.
+  /// - Otherwise (completed / cancelled) -> no bottom bar.
   Widget? _buildBottomBar(Delivery d) {
     final user = ref.read(authControllerProvider).valueOrNull;
     final isThisDriver = user != null && user.id == d.driverId;
 
-    if (d.status == DeliveryStatus.assigned && isThisDriver) {
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: SlideToConfirm(
-            // Distinct key: otherwise the "complete" slider that replaces
-            // this one inherits its already-fired state and ignores drags.
-            key: const ValueKey('slide-start'),
-            label: _starting
-                ? 'Starting...'
-                : 'Slide to start ${d.jobNounLower}',
-            icon: Icons.local_shipping_outlined,
-            color: AppColors.primary,
-            onConfirmed: _handleStart,
-            disabled: _starting,
+    switch (deliveryBottomAction(d, isThisDriver: isThisDriver)) {
+      case DeliveryBottomAction.end:
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SlideToConfirm(
+              key: const ValueKey('slide-end'),
+              label: _ending ? 'Ending...' : 'Slide to end ${d.jobNounLower}',
+              icon: Icons.flag_outlined,
+              color: AppColors.success,
+              onConfirmed: _handleEnd,
+              disabled: _ending,
+            ),
           ),
-        ),
-      );
-    }
-    if (d.status == DeliveryStatus.inProgress && d.pendingCount > 0) {
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: SlideToConfirm(
-            key: const ValueKey('slide-complete'),
-            label: 'Slide to complete (${d.pendingCount} remaining)',
-            icon: Icons.flag_outlined,
-            color: AppColors.danger,
-            onConfirmed: _handleCompleteEarly,
+        );
+      case DeliveryBottomAction.start:
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SlideToConfirm(
+              // Distinct key: otherwise the "complete" slider that replaces
+              // this one inherits its already-fired state and ignores drags.
+              key: const ValueKey('slide-start'),
+              label: _starting ? 'Starting...' : 'Slide to start ${d.jobNounLower}',
+              icon: Icons.local_shipping_outlined,
+              color: AppColors.primary,
+              onConfirmed: _handleStart,
+              disabled: _starting,
+            ),
           ),
-        ),
-      );
+        );
+      case DeliveryBottomAction.complete:
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SlideToConfirm(
+              key: const ValueKey('slide-complete'),
+              label: 'Slide to complete (${d.pendingCount} remaining)',
+              icon: Icons.flag_outlined,
+              color: AppColors.danger,
+              onConfirmed: _handleCompleteEarly,
+            ),
+          ),
+        );
+      case DeliveryBottomAction.none:
+        return null;
     }
-    return null;
   }
 }
 

@@ -8,6 +8,10 @@ import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
+import '../../../shared/widgets/quick_actions_menu.dart';
+import '../../../core/services/sound_controller.dart';
+import '../../salesperson/models/trip.dart';
+import '../../salesperson/providers/trip_controller.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
 import '../../../shared/widgets/update_app_banner.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
@@ -205,14 +209,52 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
     );
   }
 
+  /// Quick Actions: Free route. A driver can run a free route like a salesperson: mark
+  /// visits as they go (with or without a picture), and the trip report lists them.
+  Future<void> _showQuickActions() async {
+    final picked = await showQuickActionsMenu(context, const [
+      QuickActionItem(
+        id: 'free',
+        label: 'Free route',
+        hint: 'Mark visits as you go',
+        icon: Icons.add_road,
+        bg: AppColors.warningLight,
+        fg: AppColors.warningDark,
+      ),
+    ]);
+    if (!mounted || picked != 'free') return;
+    await _openFreeRoute();
+  }
+
+  /// Starts a free route, or opens the one already running.
+  Future<void> _openFreeRoute() async {
+    final messenger = ScaffoldMessenger.of(context);
+    void say(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
+    try {
+      final state = await ref.read(tripControllerProvider.future);
+      if (state.active == null) {
+        await ref.read(tripControllerProvider.notifier).startFreeTrip();
+        ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
+      }
+      if (!mounted) return;
+      context.push('/salesperson/route');
+    } on StateError catch (e) {
+      say(e.message);
+    } catch (_) {
+      say('Could not start a free route. Please try again.');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).valueOrNull;
     final firstName = user?.name.split(' ').first ?? 'Driver';
+    final activeTrip = ref.watch(tripControllerProvider).valueOrNull?.active;
     final dateStr = DateFormat('EEEE, d MMMM y').format(DateTime.now());
 
     return RoleHomeScaffold(
       appBarTitle: 'Home',
+      floatingActionButton: QuickActionsButton(onPressed: _showQuickActions),
       body: StreamBuilder<_DriverHomeData>(
         stream: ref.watch(driverHomeStreamProvider.stream),
         builder: (context, snap) {
@@ -268,6 +310,12 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
                 const SizedBox(height: 24),
                 const TempPasswordBanner(),
                 const UpdateAppBanner(padding: EdgeInsets.only(top: 8)),
+                if (activeTrip != null) ...[
+                  const _SectionTitle('FREE ROUTE IN PROGRESS', AppColors.warningDark),
+                  const SizedBox(height: 8),
+                  _FreeRouteCard(trip: activeTrip, onTap: () => context.push('/salesperson/route')),
+                  const SizedBox(height: 20),
+                ],
                 if (data.inProgress != null) ...[
                   const _SectionTitle(
                       'IN PROGRESS', AppColors.warningDark),
@@ -390,6 +438,46 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
     final changed =
         await context.push<bool>('/driver/delivery/${d.id}');
     if (changed == true && mounted) setState(() {});
+  }
+}
+
+/// The free route the driver is on: tap to go back to it.
+class _FreeRouteCard extends StatelessWidget {
+  const _FreeRouteCard({required this.trip, required this.onTap});
+
+  final Trip trip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(color: AppColors.warningLight, borderRadius: BorderRadius.circular(10)),
+              alignment: Alignment.center,
+              child: const Icon(Icons.add_road, color: AppColors.warningDark, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Free route', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text('Started ${DateFormat('hh:mm a').format(trip.startedAt)} - tap to continue',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ]),
+            ),
+            const Icon(Icons.chevron_right, size: 20, color: AppColors.textTertiaryLight),
+          ]),
+        ),
+      ),
+    );
   }
 }
 

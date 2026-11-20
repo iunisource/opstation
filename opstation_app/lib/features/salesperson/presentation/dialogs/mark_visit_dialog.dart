@@ -11,6 +11,7 @@ import '../../../../core/utils/receipt_books.dart';
 import '../widgets/receipt_book_hint.dart';
 import '../../../../core/services/device_gps_service.dart';
 import '../../../../core/services/sound_controller.dart';
+import '../../../../core/photo/photo_stamp.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/customer_locations.dart';
 import '../../../../core/database/app_database_provider.dart';
@@ -199,11 +200,31 @@ class _MarkVisitDialogState extends ConsumerState<MarkVisitDialog> {
         maxWidth: 1920,
       );
       if (picked != null && mounted) {
-        setState(() => _photos.add(picked.path));
+        await _stampPhoto(picked.path);
+        if (mounted) setState(() => _photos.add(picked.path));
       }
     } catch (e) {
       if (mounted) setState(() => _errorText = 'Could not open camera. Check permissions.');
     }
+  }
+
+  /// Burns the coordinates and time into the picture: the GPS point this visit is
+  /// being marked at (the one on screen), else a quick fresh reading. A picture taken
+  /// with no GPS at all is kept as it is.
+  Future<void> _stampPhoto(String path) async {
+    double? lat, lng;
+    final f = _currentFix;
+    if (f.available && f.lat != null && f.lng != null) {
+      lat = f.lat;
+      lng = f.lng;
+    } else {
+      try {
+        final r = await ref.read(deviceGpsServiceProvider).getFixResult(timeout: const Duration(seconds: 6));
+        lat = r.fix?.lat;
+        lng = r.fix?.lng;
+      } catch (_) {}
+    }
+    if (lat != null && lng != null) await PhotoStamp.stampFile(path, lat: lat, lng: lng);
   }
 
   Future<void> _submit() async {

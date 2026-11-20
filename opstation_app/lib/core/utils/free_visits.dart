@@ -19,6 +19,21 @@ class FreeVisits {
   /// skip_reason on the server row — what the reports look for.
   static const marker = 'free';
 
+  /// Where the picture of a free visit is stored (bucket opstation-photos), the same
+  /// folder scheme as a customer visit's pictures: unique per visit.
+  static String photoRemotePath({required String userId, required String userName, required String visitId, required DateTime at}) {
+    final safeName = userName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+    final date = at.toIso8601String().split('T').first;
+    return 'visits/$userId/${safeName}_${date}_free_$visitId.jpg';
+  }
+
+  /// The value of the server row's photo_paths_json for a free visit [row]: its
+  /// picture, or an empty list for a visit without one.
+  static String photoPathsJson(Map<String, dynamic> row) {
+    final photo = row['photo'];
+    return jsonEncode(photo is String && photo.isNotEmpty ? [photo] : const <String>[]);
+  }
+
   // One reader/writer at a time: a visit saved while a sync is running must not
   // be overwritten by the sync's write.
   static Future<void> _chain = Future.value();

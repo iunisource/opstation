@@ -1,4 +1,4 @@
-import 'dart:convert';
+import '../utils/free_visits.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/device_guard.dart';
@@ -257,7 +257,7 @@ class SupabaseSyncService {
       'receipt_number': null,
       'notes': null,
       'skip_reason': 'free',
-      'photo_paths_json': jsonEncode(const <String>[]),
+      'photo_paths_json': FreeVisits.photoPathsJson(r), // its picture, when it has one
       'sync_status': 'synced',
       'user_id': r['user_id'],
       'user_name': r['user_name'],
@@ -287,6 +287,14 @@ class SupabaseSyncService {
       'notes': d.notes,
       'org_id': d.orgId,
     });
+  }
+
+  /// The start / end points of a job (deliveries.start_lat, start_lng, end_lat, end_lng).
+  /// Sent as their own update so a server without these columns only fails here, never
+  /// the delivery push; the caller ignores that failure.
+  Future<void> pushDeliveryLocations(String id, Map<String, dynamic> columns) async {
+    if (columns.isEmpty) return;
+    await _client.from('deliveries').update(columns).eq('id', id);
   }
 
   Future<void> pushDeliveryStop(DeliveryStopsData s) async {

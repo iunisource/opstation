@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../../core/utils/delivery_locations.dart';
 import '../../../core/supabase/supabase_sync_service.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
@@ -348,6 +349,9 @@ class DeliveryRepository {
   Future<void> startDelivery({
     required String id,
     required String driverId,
+    double? lat, // where the driver is when he starts
+    double? lng,
+    double? accuracy,
   }) async {
     final d = await byId(id);
     if (d == null) throw StateError('Delivery not found');
@@ -374,6 +378,59 @@ class DeliveryRepository {
       ),
     );
     await _pushDeliveryById(id);
+    await _recordLocation(id, isStart: true, lat: lat, lng: lng, accuracy: accuracy);
+  }
+
+  /// Keeps the start (or return) point of a job, here and on the server. Best effort: a
+  /// missing GPS fix or a server without the columns never stops the job.
+  Future<void> _recordLocation(String id, {required bool isStart, double? lat, double? lng, double? accuracy}) async {
+    if (lat == null || lng == null) return;
+    try {
+      await DeliveryLocations.save(_db, id, isStart: isStart, lat: lat, lng: lng, accuracy: accuracy);
+      final sync = _sync;
+      if (sync != null) {
+        final cur = await DeliveryLocations.read(_db, id);
+        await sync.pushDeliveryLocations(id, DeliveryLocations.serverColumns(cur.start, cur.end));
+      }
+    } catch (_) {}
+  }
+
+  /// The driver ends the job once every stop is settled (slide to end). The point he is
+  /// at is the return location, so the report can count the way back. Also repairs a job
+  /// whose stops were all done but which still shows as assigned (its start was lost):
+  /// it is taken to have started with its first stop.
+  Future<void> endDelivery({
+    required String deliveryId,
+    double? lat,
+    double? lng,
+    double? accuracy,
+  }) async {
+    final d = await byId(deliveryId);
+    if (d == null) throw StateError('Delivery not found');
+    if (d.status != DeliveryStatus.assigned && d.status != DeliveryStatus.inProgress) {
+      throw StateError('Cannot end: delivery is ${d.status.label}');
+    }
+    if (d.pendingCount > 0) {
+      throw StateError('${d.pendingCount} stop${d.pendingCount == 1 ? ' is' : 's are'} still pending');
+    }
+    final now = DateTime.now();
+    DateTime? started = d.startedAt;
+    if (started == null) {
+      for (final s in d.stops) {
+        final t = s.deliveredAt;
+        if (t != null && (started == null || t.isBefore(started))) started = t;
+      }
+      started ??= now;
+    }
+    await (_db.update(_db.deliveries)..where((t) => t.id.equals(deliveryId))).write(
+      DeliveriesCompanion(
+        status: const Value('completed'),
+        startedAt: Value(started),
+        completedAt: Value(now),
+      ),
+    );
+    await _pushDeliveryById(deliveryId);
+    await _recordLocation(deliveryId, isStart: false, lat: lat, lng: lng, accuracy: accuracy);
   }
 
   /// Marks a single stop as delivered. Auto-completes the parent
@@ -498,24 +555,9 @@ class DeliveryRepository {
   /// and the delivery is currently in_progress, auto-flip it to
   /// completed. Called inside the stop-update transactions.
   Future<void> _maybeAutoComplete(String deliveryId) async {
-    final allStops = await (_db.select(_db.deliveryStops)
-          ..where((t) => t.deliveryId.equals(deliveryId)))
-        .get();
-    final anyPending = allStops.any((s) => s.status == 'pending');
-    if (anyPending) return;
-    final deliv = await (_db.select(_db.deliveries)
-          ..where((t) => t.id.equals(deliveryId)))
-        .getSingleOrNull();
-    if (deliv == null) return;
-    if (deliv.status != 'in_progress') return;
-    await (_db.update(_db.deliveries)
-          ..where((t) => t.id.equals(deliveryId)))
-        .write(
-      DeliveriesCompanion(
-        status: const Value('completed'),
-        completedAt: Value(DateTime.now()),
-      ),
-    );
+    // A job is no longer closed silently when its last stop is settled: the driver
+    // ends it with "Slide to end job", which is where the return location is taken
+    // (see [endDelivery]). Kept so the stop updates above stay as they were.
   }
 
   /// Driver manually closes a delivery before every stop is settled.
@@ -524,6 +566,9 @@ class DeliveryRepository {
   /// completed with `completedAt` stamped.
   Future<void> completeEarly({
     required String deliveryId,
+    double? lat, // the return location
+    double? lng,
+    double? accuracy,
   }) async {
     final d = await byId(deliveryId);
     if (d == null) throw StateError('Delivery not found');
@@ -559,6 +604,7 @@ class DeliveryRepository {
     // completed) and each stop (some flipped to failed).
     await _pushDeliveryById(deliveryId);
     await _pushDeliveryStopsForDelivery(deliveryId);
+    await _recordLocation(deliveryId, isStart: false, lat: lat, lng: lng, accuracy: accuracy);
   }
 
   /// Returns the one delivery currently in progress for [driverId], or

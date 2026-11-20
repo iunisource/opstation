@@ -426,3 +426,21 @@ class Delivery {
           s.verification == DeliveryStopVerification.noLocation)
       .length;
 }
+
+/// How far a delivery has got: draft < assigned < in progress < completed / cancelled.
+/// A refresh from the server must never move a job the driver has already started
+/// (or finished) back to an earlier step.
+int deliveryStatusRank(String wire) {
+  switch (wire) {
+    case 'draft':
+      return 0;
+    case 'assigned':
+      return 1;
+    case 'in_progress':
+      return 2;
+    case 'completed':
+    case 'cancelled':
+      return 3;
+  }
+  return 0;
+}

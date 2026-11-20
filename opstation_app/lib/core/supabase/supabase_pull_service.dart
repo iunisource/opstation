@@ -5,6 +5,8 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/app_database.dart';
+import '../../features/dispatch/models/delivery.dart';
+import '../utils/delivery_locations.dart';
 import '../database/app_database_provider.dart';
 import 'supabase_sync_service.dart';
 import '../utils/customer_locations.dart';
@@ -629,8 +631,28 @@ class SupabasePullService {
     }
   }
 
+  @visibleForTesting
+  Future<void> pullDeliveriesForTest(List<Map<String, dynamic>> rows) => _pullDeliveries(rows);
+
   Future<void> _pullDeliveries(List<Map<String, dynamic>> rows) async {
+    final local = {for (final d in await _db.select(_db.deliveries).get()) d.id: d};
+    final ahead = <DeliveriesData>[];
     for (final r in rows) {
+      // The driver has started (or finished) this job on this phone and the server copy is
+      // older (his update had not reached it yet): keep the phone's and send it again.
+      // Without this a refresh turned a finished job back into "assigned".
+      final mine = local['${r['id']}'];
+      final mineRank = mine == null ? 0 : deliveryStatusRank(mine.status);
+      if (mine != null && mineRank >= 2 && mineRank > deliveryStatusRank(r['status'] as String? ?? 'draft')) {
+        ahead.add(mine);
+        try {
+          await DeliveryLocations.mergePulled(_db, r);
+        } catch (_) {}
+        continue;
+      }
+      try {
+        await DeliveryLocations.mergePulled(_db, r); // start / return points kept on the server
+      } catch (_) {}
       try {
         await _db.into(_db.deliveries).insertOnConflictUpdate(
             DeliveriesCompanion(
@@ -650,6 +672,15 @@ class SupabasePullService {
           jobType: Value(r['job_type'] as String? ?? 'delivery'),
         ));
       } catch (_) {}
+    }
+    if (ahead.isNotEmpty) {
+      Future.microtask(() async {
+        for (final m in ahead) {
+          try {
+            await _sync.pushDelivery(m);
+          } catch (_) {}
+        }
+      });
     }
   }
 

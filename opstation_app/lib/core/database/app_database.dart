@@ -457,6 +457,9 @@ class DeliveryStops extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_open());
 
+  /// For tests: a database on the given executor (e.g. in memory).
+  AppDatabase.forTesting(QueryExecutor executor) : super(executor);
+
   @override
   int get schemaVersion => 23;
 
