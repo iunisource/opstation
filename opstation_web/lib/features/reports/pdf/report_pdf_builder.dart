@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -17,6 +18,18 @@ import '../../../core/format/time_format.dart';
 /// start-up (main.dart: the shared place-name lookup). Null = no names, the GPS
 /// point is shown instead.
 Future<String?> Function(double lat, double lng, DateTime until)? tripReportPlaceName;
+
+/// The picture taken with a visit marked on a free route: a small thumbnail to show in
+/// the report and a link that opens the full-size picture ("click to enlarge").
+class FreeVisitPhoto {
+  const FreeVisitPhoto({this.thumb, this.url});
+
+  /// A small image (JPEG/PNG bytes), or null when it could not be read.
+  final Uint8List? thumb;
+
+  /// A link to the full-size picture, or null when it could not be made.
+  final String? url;
+}
 
 /// Web port of mobile's TripReportContext.
 /// Pre-computed data for a trip report. [build] uses straight lines;
@@ -45,6 +58,9 @@ class TripReportContext {
   /// customers that were actually marked.
   final List<String> plannedStops;
 
+  /// Pictures of the free visits (visit id -> picture). Empty unless [withFreePhotos] was called.
+  final Map<String, FreeVisitPhoto> freePhotos;
+
   const TripReportContext({
     required this.trip,
     required this.visits,
@@ -59,6 +75,7 @@ class TripReportContext {
     this.freePlaceNames = const {},
     this.receiptCheck,
     this.plannedStops = const [],
+    this.freePhotos = const {},
   });
 
   TripReportContext _withExtras({
@@ -66,6 +83,7 @@ class TripReportContext {
     ReceiptCheckData? check,
     List<String>? planned,
     Map<String, Map<String, dynamic>>? customers,
+    Map<String, FreeVisitPhoto>? photos,
   }) =>
       TripReportContext(
         trip: trip,
@@ -81,6 +99,7 @@ class TripReportContext {
         freePlaceNames: names ?? freePlaceNames,
         receiptCheck: check ?? receiptCheck,
         plannedStops: planned ?? plannedStops,
+        freePhotos: photos ?? freePhotos,
       );
 
   factory TripReportContext.build({
@@ -184,6 +203,71 @@ class TripReportContext {
       planned: stops?.$1,
       customers: stops?.$2,
     );
+  }
+
+  /// The first picture stored with a visit (its photo_paths_json is a JSON list of storage paths).
+  static String? firstPhotoPath(Map<String, dynamic> v) {
+    final raw = v['photo_paths_json'];
+    try {
+      final list = raw is String ? jsonDecode(raw) : raw;
+      if (list is List) {
+        for (final p in list) {
+          if (p is String && p.trim().isNotEmpty) return p.trim();
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// True for the bytes of a JPEG or a PNG: what the PDF can place as a picture.
+  static bool isJpegOrPng(Uint8List b) =>
+      (b.length > 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) ||
+      (b.length > 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47);
+
+  /// (visit id, picture path) of every free visit on this trip that has a picture.
+  List<(String, String)> freePhotoJobs() => [
+        for (final v in orderedVerifiedVisits)
+          if (visitIsFree(v) && firstPhotoPath(v) != null) ('${v['id']}', firstPhotoPath(v)!),
+      ];
+
+  /// The same context with the pictures of its free visits added, for a report that shows
+  /// them: a small thumbnail (made by the server when it can, else the picture itself) and a
+  /// 30-day link to the full-size one. Needs the network; a picture that cannot be read is
+  /// left out and the report is made without it. Gives up after about 25 seconds.
+  Future<TripReportContext> withFreePhotos() async {
+    final jobs = freePhotoJobs();
+    if (jobs.isEmpty) return this;
+    final out = <String, FreeVisitPhoto>{};
+    final until = DateTime.now().add(const Duration(seconds: 25));
+    final store = Supabase.instance.client.storage.from('opstation-photos');
+    var next = 0;
+    Future<void> worker() async {
+      while (DateTime.now().isBefore(until)) {
+        final i = next++;
+        if (i >= jobs.length) return;
+        final (id, path) = jobs[i];
+        String? url;
+        Uint8List? thumb;
+        try {
+          url = await store.createSignedUrl(path, 60 * 60 * 24 * 30);
+        } catch (_) {}
+        try {
+          // A small copy made by the storage server ...
+          thumb = await store.download(path,
+              transform: const TransformOptions(width: 220, height: 165, resize: ResizeMode.cover, quality: 70, format: RequestImageFormat.origin));
+        } catch (_) {
+          // ... or, where the server cannot resize, the picture itself.
+          try {
+            thumb = await store.download(path);
+          } catch (_) {}
+        }
+        if (thumb != null && !isJpegOrPng(thumb)) thumb = null;
+        if (url != null || thumb != null) out[id] = FreeVisitPhoto(thumb: thumb, url: url);
+      }
+    }
+
+    await Future.wait([for (var k = 0; k < 4; k++) worker()]);
+    return out.isEmpty ? this : _withExtras(photos: out);
   }
 
   /// The trip's planned stops (trip_stops, in route order) and the customers among them that
@@ -452,6 +536,7 @@ class ReportPdfBuilder {
             totalVisitsOverride: ctx.orderedVerifiedVisits.length),
         pw.SizedBox(height: 14),
         _sequencedTable(ctx),
+        _photoNote(ctx),
         pw.SizedBox(height: 18),
         if (adjustNote != null) ...[_adjustBox(adjustNote), pw.SizedBox(height: 10)],
         if (reimb?.generatedNote != null) ...[_generatedBox(reimb!.generatedNote!), pw.SizedBox(height: 10)],
@@ -1180,13 +1265,21 @@ class ReportPdfBuilder {
         final lng = (v['captured_lng'] as num).toDouble();
         final name = ctx.freePlaceNames['${v['id']}'];
         final pt = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
-        custCell = cell(pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+        final place = pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
           if (name != null && name.isNotEmpty) pw.Text(_pdfSafe(name), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: _ink)),
           pw.UrlLink(
             destination: mapsLink(lat, lng),
             child: pw.Text(pt, style: pw.TextStyle(fontSize: name != null && name.isNotEmpty ? 7 : 8.5, color: PdfColors.blue, decoration: pw.TextDecoration.underline)),
           ),
-        ]));
+        ]);
+        final photo = ctx.freePhotos['${v['id']}'];
+        custCell = cell(photo == null
+            ? place
+            : pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+                pw.Expanded(child: place),
+                pw.SizedBox(width: 6),
+                _photoThumb(photo),
+              ]));
       } else {
         custCell = txt((c?['shop_name'] as String?) ?? '-');
       }
@@ -1224,6 +1317,33 @@ class ReportPdfBuilder {
       },
       border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
       children: rows,
+    );
+  }
+
+  /// A small picture; a click opens the full-size one. Without a usable thumbnail the link
+  /// is a word instead, so the picture stays reachable.
+  static pw.Widget _photoThumb(FreeVisitPhoto p) {
+    pw.Widget? image;
+    final bytes = p.thumb;
+    if (bytes != null) {
+      try {
+        image = pw.Container(
+          width: 52,
+          height: 39,
+          decoration: pw.BoxDecoration(border: pw.Border.all(color: _rule, width: 0.4)),
+          child: pw.Image(pw.MemoryImage(bytes), fit: pw.BoxFit.cover),
+        );
+      } catch (_) {}
+    }
+    image ??= pw.Text('Photo', style: pw.TextStyle(fontSize: 8, color: PdfColors.blue, decoration: pw.TextDecoration.underline));
+    return p.url == null ? image : pw.UrlLink(destination: p.url!, child: image);
+  }
+
+  static pw.Widget _photoNote(TripReportContext ctx) {
+    if (!ctx.freePhotos.values.any((p) => p.thumb != null)) return pw.SizedBox();
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 6),
+      child: pw.Text('Pictures: click a thumbnail to open it full size.', style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
     );
   }
 

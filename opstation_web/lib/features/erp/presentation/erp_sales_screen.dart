@@ -29,6 +29,8 @@ import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../../../core/format/time_format.dart';
 import '../../../core/widgets/adaptive_header_row.dart';
+import '../../../core/widgets/voucher_filter_pill.dart';
+import '../../../core/utils/do_list_filter.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -2961,41 +2963,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
-  List<Map<String, dynamic>> get _filteredOrders => _orders.where((o) {
-    final matchStatus = _statusFilter == 'all' || o['status'] == _statusFilter;
-    final matchSearch = matchesQuery('${o['voucher_number'] ?? ''} ${o['sales_orders']?['voucher_number'] ?? ''} ${o['customers']?['shop_name'] ?? ''}', _search);
-    // Supervision filter (only when the supervise flow is on).
-    if (_doSuperviseFlow && _doSupFilter != 'all') {
-      final sup = o['supervised_at'] != null;
-      if (_doSupFilter == 'yes' && !sup) return false;
-      if (_doSupFilter == 'no' && (sup || o['is_voided'] == true)) return false;
-    }
-    return matchStatus && matchSearch;
-  }).toList();
+  DoListFilter get _doFilter => DoListFilter(status: _statusFilter, search: _search, supFlow: _doSuperviseFlow, sup: _doSupFilter);
+
+  List<Map<String, dynamic>> get _filteredOrders => _doFilter.apply(_orders);
 
   int get _doSupPendingCount => _orders.where((o) => o['supervised_at'] == null && o['is_voided'] != true).length;
-
-  Widget _doSupChip(String value, String label, {int? count}) {
-    final active = _doSupFilter == value;
-    return GestureDetector(
-      onTap: () => setState(() => _doSupFilter = value),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-        decoration: BoxDecoration(
-          color: active ? AppTheme.primary : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
-          if (count != null && count > 0) ...[
-            const SizedBox(width: 5),
-            Text('$count', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: active ? Colors.white70 : Colors.orange)),
-          ],
-        ]),
-      ),
-    );
-  }
 
   Color _statusColor(String s) {
     if (s == 'invoiced') return AppTheme.success;
@@ -3033,26 +3005,37 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   },
                 ),
                 const SizedBox(height: 8),
-                SizedBox(width: double.infinity, child: DropdownButtonFormField<String>(
-                  value: _statusFilter,
-                  decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
-                  items: const [
-                    DropdownMenuItem(value: 'all', child: Text('All', style: TextStyle(fontSize: 12))),
-                    DropdownMenuItem(value: 'saved', child: Text('Saved', style: TextStyle(fontSize: 12))),
-                    DropdownMenuItem(value: 'partially_delivered', child: Text('Partial', style: TextStyle(fontSize: 12))),
-                    DropdownMenuItem(value: 'invoiced', child: Text('Invoiced', style: TextStyle(fontSize: 12))),
-                    DropdownMenuItem(value: 'cancelled', child: Text('Cancelled', style: TextStyle(fontSize: 12))),
-                  ],
-                  onChanged: (v) => setState(() => _statusFilter = v ?? 'all'),
-                )),
+                // Status pills with their numbers, as on the PO / GRN / PI lists. The number is
+                // exactly what the list shows when the pill is tapped. Saved and Partial are
+                // the DOs still waiting for their invoice.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(spacing: 5, runSpacing: 6, children: [
+                    for (final p in const [
+                      ('all', 'All', false),
+                      ('saved', 'Saved', true),
+                      ('partially_delivered', 'Partial', true),
+                      ('invoiced', 'Invoiced', false),
+                      ('cancelled', 'Cancelled', false),
+                    ])
+                      VoucherFilterPill(
+                        label: p.$2,
+                        value: p.$1,
+                        current: _statusFilter,
+                        count: _doFilter.countFor(_orders, p.$1),
+                        urgent: p.$3,
+                        onTap: (v) => setState(() => _statusFilter = v),
+                      ),
+                  ]),
+                ),
                 if (_doSuperviseFlow && _canSupervise) ...[
                   const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Wrap(spacing: 6, runSpacing: 6, children: [
-                      _doSupChip('all', 'All'),
-                      _doSupChip('yes', 'Supervised'),
-                      _doSupChip('no', 'Pending', count: _doSupPendingCount),
+                    child: Wrap(spacing: 5, runSpacing: 6, children: [
+                      VoucherFilterPill(label: 'All', value: 'all', current: _doSupFilter, onTap: (v) => setState(() => _doSupFilter = v)),
+                      VoucherFilterPill(label: 'Supervised', value: 'yes', current: _doSupFilter, onTap: (v) => setState(() => _doSupFilter = v)),
+                      VoucherFilterPill(label: 'Supervision pending', value: 'no', current: _doSupFilter, count: _doSupPendingCount, urgent: true, onTap: (v) => setState(() => _doSupFilter = v)),
                     ]),
                   ),
                   if (_doSupPendingCount > 0) ...[
@@ -3193,7 +3176,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   onPressed: _clearDoSupervision),
             ],
             if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
-              _collectToggle(),
+              if (_deliveryFlow) _collectToggle(),
               ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
             ],
             if (!isVoided && !isInvoiced && _items.isNotEmpty)

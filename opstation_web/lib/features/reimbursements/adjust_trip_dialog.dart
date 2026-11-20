@@ -159,7 +159,7 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
           startAddress: a.startAddress, endAddress: a.endAddress,
           orderedVerifiedVisits: a.orderedVerifiedVisits, distanceKm: a.distanceKm,
           returnDistanceKm: 0, totalDistanceKm: a.totalDistanceKm - a.returnDistanceKm,
-          usedGoogle: a.usedGoogle,
+          usedGoogle: a.usedGoogle, freePlaceNames: a.freePlaceNames,
         );
       }
       if (mounted) setState(() { _adj = a; _calc = false; });
@@ -230,13 +230,13 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
         : null;
     // The adjusted distance on the print matches the claim.
     final adjKm = _adjustedKm ?? a.totalDistanceKm;
-    final ctx = TripReportContext(
+    final ctx = await TripReportContext(
       trip: a.trip, visits: a.visits, customersById: a.customersById,
       startAddress: a.startAddress, endAddress: a.endAddress,
       orderedVerifiedVisits: a.orderedVerifiedVisits, distanceKm: a.distanceKm,
       returnDistanceKm: a.returnDistanceKm, totalDistanceKm: _changed ? adjKm : a.totalDistanceKm,
-      usedGoogle: a.usedGoogle,
-    );
+      usedGoogle: a.usedGoogle, freePlaceNames: a.freePlaceNames,
+    ).withFreePhotos(); // thumbnails of free-visit pictures, click to enlarge
     final bytes = await ReportPdfBuilder.buildTripSummary(
       ctx: ctx,
       orgName: widget.orgName,
@@ -508,7 +508,7 @@ Future<void> printClaimTripSummary(
       endAddress: places.$2,
     );
     final adjusted = existing != null;
-    ctx = TripReportContext(
+    ctx = await TripReportContext(
       trip: ctx.trip, visits: ctx.visits, customersById: ctx.customersById,
       startAddress: ctx.startAddress, endAddress: ctx.endAddress,
       orderedVerifiedVisits: ctx.orderedVerifiedVisits, distanceKm: ctx.distanceKm,
@@ -516,7 +516,8 @@ Future<void> printClaimTripSummary(
       // The claim's figure, so the print matches what is approved.
       totalDistanceKm: lineKm,
       usedGoogle: ctx.usedGoogle,
-    );
+      freePlaceNames: ctx.freePlaceNames,
+    ).withFreePhotos(); // thumbnails of free-visit pictures, click to enlarge
     final allow = (existing?['allowance'] as num?)?.toDouble() ?? allowanceDefault;
     final bytes = await ReportPdfBuilder.buildTripSummary(
       ctx: ctx,

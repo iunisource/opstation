@@ -188,13 +188,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
       final places = await tripPlaceNames(trip); // start / end area names
-      final ctx = await TripReportContext.buildRoad(
+      final ctx = await (await TripReportContext.buildRoad(
         trip: trip,
         visits: visits,
         customersById: _customersById,
         startAddress: places.$1,
         endAddress: places.$2,
-      );
+      )).withFreePhotos(); // thumbnails of free-visit pictures, click to enlarge
       final user = ref.read(currentUserProvider);
       final orgName = user?.orgName ?? 'Opstation';
       // Reimbursement doc: flag re-issues with a DUPLICATE watermark.
