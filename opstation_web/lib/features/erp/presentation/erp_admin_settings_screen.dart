@@ -9,6 +9,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/notifications/alert_chime.dart';
+import '../../../core/notifications/floating_alert_preview.dart';
+import '../../../core/notifications/floating_alerts_model.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
@@ -1984,6 +1987,40 @@ class _ErpAdminSettingsScreenState
   // A single toggle rendered as a self-contained card (for the grid layout).
   // Header: title + description on the left, switch on the right. When ON, any
   // companion field (number / text / branch / users) drops in below a divider.
+  /// "Show a sample": a sample alert with the options as they are on the card now (even
+  /// if not saved yet): position, time, sound, how many at once. Each press shows the next type.
+  void _showFloatingAlertSample() {
+    String c(String k, String d) => _choiceValues[k] ?? d;
+    FloatingAlertPreview.show(FloatingAlertSettings.fromConfig({
+      'org.float_alerts': 'true',
+      'org.float_alerts_seconds': _numCtrls['org.float_alerts_seconds']?.text ?? '',
+      'org.float_alerts_position': c('org.float_alerts_position', 'top_right'),
+      'org.float_alerts_sound': c('org.float_alerts_sound', 'chime'),
+      'org.float_alerts_max': c('org.float_alerts_max', '3'),
+      'org.float_alerts_hover': c('org.float_alerts_hover', 'pause'),
+    }));
+  }
+
+  Widget _floatingAlertSampleRow() {
+    final chime = (_choiceValues['org.float_alerts_sound'] ?? 'chime') != 'off';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+      child: Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        OutlinedButton.icon(
+          onPressed: _showFloatingAlertSample,
+          icon: const Icon(Icons.notifications_active_outlined, size: 16),
+          label: const Text('Show a sample', style: TextStyle(fontSize: 12.5)),
+        ),
+        Text(
+          chime && AlertChime.muted
+              ? 'Sound is off on this device (speaker button in the bell).'
+              : 'Uses the options above, even before they are saved. Press again for the next type.',
+          style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+        ),
+      ]),
+    );
+  }
+
   Widget _toggleCard(_AdminToggle t) {
     final on = _values[t.key] ?? false;
     final hasCompanion =
@@ -2050,6 +2087,8 @@ class _ErpAdminSettingsScreenState
             if (t.choice != null) _choiceRow(t.choice!),
             for (final ch in t.moreChoices) _choiceRow(ch),
           ],
+          // Floating alerts: see what the options above give, without waiting for a real one.
+          if (on && t.key == 'org.float_alerts') _floatingAlertSampleRow(),
           // Daily backup: where to send it, Google Drive and "Back up now",
           // right here under the toggle.
           if (on && t.key == 'org.backup_enabled') ...[

@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/auth_controller.dart';
 import 'alert_chime.dart';
 import 'floating_alert_card.dart';
+import 'floating_alert_preview.dart';
 import 'floating_alerts_model.dart';
 
 /// Floating alerts, shown in a corner of the screen in addition to the bell: a new
@@ -31,6 +32,7 @@ class FloatingAlertsHost extends ConsumerStatefulWidget {
 
 class _FloatingAlertsHostState extends ConsumerState<FloatingAlertsHost> {
   FloatingAlertSettings _s = const FloatingAlertSettings();
+  FloatingAlertSettings? _preview; // the options of a sample on screen (maybe not saved yet)
   final FloatingAlertQueue _q = FloatingAlertQueue();
   final Set<String> _seen = {};
   RealtimeChannel? _ch;
@@ -51,11 +53,13 @@ class _FloatingAlertsHostState extends ConsumerState<FloatingAlertsHost> {
     _g1 = html.document.onMouseDown.listen((_) => AlertChime.unlock());
     _g2 = html.document.onKeyDown.listen((_) => AlertChime.unlock());
     _g3 = html.document.onTouchStart.listen((_) => AlertChime.unlock());
+    FloatingAlertPreview.requests.addListener(_onPreview);
     WidgetsBinding.instance.addPostFrameCallback((_) => _boot());
   }
 
   @override
   void dispose() {
+    FloatingAlertPreview.requests.removeListener(_onPreview);
     _teardown();
     _g1?.cancel();
     _g2?.cancel();
@@ -230,13 +234,36 @@ class _FloatingAlertsHostState extends ConsumerState<FloatingAlertsHost> {
     } catch (_) {}
   }
 
+  /// A sample from Admin Settings: shown with the options picked on the card, which
+  /// may not be saved yet, and with the chime if that is chosen.
+  void _onPreview() {
+    final r = FloatingAlertPreview.requests.value;
+    if (r == null || !mounted) return;
+    final s = r.settings;
+    setState(() {
+      _preview = s;
+      _q.maxVisible = s.maxVisible;
+      final res = _q.add(sampleAlert(r.n));
+      if (res == AddResult.shown && s.chime) AlertChime.play();
+    });
+  }
+
+  bool get _hasSample => _q.visible.any(isSampleAlert) || _q.waiting.any(isSampleAlert);
+
   void _dismiss(String id) {
     if (!mounted) return;
-    setState(() => _q.dismiss(id));
+    setState(() {
+      _q.dismiss(id);
+      if (_preview != null && !_hasSample) {
+        _preview = null; // back to the saved options
+        _q.maxVisible = _s.maxVisible;
+      }
+    });
   }
 
   Future<void> _open(FloatingAlert a) async {
     _dismiss(a.id);
+    if (isSampleAlert(a)) return; // nothing behind a sample
     final uid = _uid;
     if (uid != null) {
       try {
@@ -260,11 +287,12 @@ class _FloatingAlertsHostState extends ConsumerState<FloatingAlertsHost> {
     ref.listen(currentUserProvider, (prev, next) {
       if (prev?.id != next?.id || prev?.orgId != next?.orgId) _restart();
     });
-    if (!_s.enabled || _q.visible.isEmpty) return const SizedBox.shrink();
+    final s = _preview ?? _s;
+    if (_q.visible.isEmpty || (!s.enabled && _preview == null)) return const SizedBox.shrink();
     final narrow = MediaQuery.of(context).size.width < 600;
     return Positioned(
-      top: _s.bottom ? null : 64,
-      bottom: _s.bottom ? 20 : null,
+      top: s.bottom ? null : 64,
+      bottom: s.bottom ? 20 : null,
       right: narrow ? 8 : 20,
       left: narrow ? 8 : null,
       width: narrow ? null : 360,
@@ -278,8 +306,8 @@ class _FloatingAlertsHostState extends ConsumerState<FloatingAlertsHost> {
               child: FloatingAlertCard(
                 key: ValueKey(a.id),
                 alert: a,
-                seconds: _s.seconds,
-                pauseOnHover: _s.pauseOnHover,
+                seconds: s.seconds,
+                pauseOnHover: s.pauseOnHover,
                 onClose: () => _dismiss(a.id),
                 onOpen: () => _open(a),
                 onExpired: () => _dismiss(a.id),

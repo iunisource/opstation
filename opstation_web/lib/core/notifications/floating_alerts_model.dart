@@ -86,6 +86,21 @@ class FloatingAlert {
   AlertKind get kind => alertKindOf(title, body);
 }
 
+/// Sample alerts for the "Show a sample" button in Admin Settings: one of each type,
+/// in turn, so pressing it again shows the next colour.
+bool isSampleAlert(FloatingAlert a) => a.id.startsWith('sample-');
+
+FloatingAlert sampleAlert(int n) {
+  const samples = <(String, String)>[
+    ('Sample: PO submitted for approval', 'PO-2026-0214 from Al-Noor Traders, Rs 1,250,000, is waiting for you.'),
+    ('Sample: Reimbursement approved', 'Trip summary of Bilal Ahmed, Rs 4,820, is ready to pay.'),
+    ('Sample: PO rejected', 'PO-2026-0209 was rejected: price differs from the quotation.'),
+    ('Sample: Field order submitted', 'Imran submitted an order for Karim Electric: 18 lines.'),
+  ];
+  final s = samples[n % samples.length];
+  return FloatingAlert(id: 'sample-$n', title: s.$1, body: s.$2, link: '/sample', createdAt: DateTime.now());
+}
+
 enum AddResult { shown, queued, duplicate }
 
 /// Which alerts are on screen (newest on top, at most [maxVisible]) and which wait.
