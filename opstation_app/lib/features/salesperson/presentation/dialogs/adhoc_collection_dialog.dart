@@ -93,6 +93,29 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
     if (next != null) _crCtrl.text = next;
   }
 
+  /// A subtle "+" in the CR# box: adds the next slip in sequence (101 → 101, 102).
+  /// Slips that are not in sequence are typed by hand.
+  void _addNextSlip() {
+    final typed = _crCtrl.text.trim();
+    final next = receiptWithNextSlip(typed, localUsed: ref.read(tripControllerProvider.notifier).localReceiptSlips());
+    if (next == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(typed.isEmpty
+              ? 'Type the first receipt number, then tap + to add the next one.'
+              : 'No more slips left after this one in your book.')));
+      return;
+    }
+    _crCtrl.value = TextEditingValue(text: next, selection: TextSelection.collapsed(offset: next.length));
+  }
+
+  Widget _addSlipButton() => IconButton(
+        icon: const Icon(Icons.add_circle_outline, size: 20),
+        color: Theme.of(context).hintColor,
+        tooltip: 'Add the next slip',
+        visualDensity: VisualDensity.compact,
+        onPressed: _addNextSlip,
+      );
+
   @override
   void dispose() {
     _debounce?.cancel();
@@ -391,9 +414,10 @@ class _AdHocCollectionDialogState extends ConsumerState<AdHocCollectionDialog> {
                         const SizedBox(height: 10),
                         TextField(
                           controller: _crCtrl,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             hintText: 'CR# (receipt number)',
-                            prefixIcon: Icon(Icons.receipt_long_outlined),
+                            prefixIcon: const Icon(Icons.receipt_long_outlined),
+                            suffixIcon: _addSlipButton(),
                           ),
                         ),
                       ReceiptBookHint(crCtrl: _crCtrl),

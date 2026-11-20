@@ -43,6 +43,30 @@ class ReceiptBook {
 /// Slip keys of a CR#, reading the letters of this phone's books.
 List<int> receiptSlipKeys(String raw) => slipKeys(raw, ReceiptBooks.letters);
 
+/// The CR# text with the NEXT slip added — the "+" beside the CR# box:
+/// "B1250" → "B1250, B1251", "101, 102" → "101, 102, 103". With receipt books on
+/// it skips slips already used or cancelled and stays inside the book (null at
+/// the book's end). Without books it is simply the number after the last one.
+/// Null when no slip is typed yet. Slips that are not in sequence are typed by
+/// hand as before ("101, 105").
+String? receiptWithNextSlip(String raw, {Set<int> localUsed = const {}}) {
+  final keys = receiptSlipKeys(raw);
+  if (keys.isEmpty) return null;
+  final last = keys.last;
+  var n = slipNumber(last) + 1;
+  final b = ReceiptBooks.on ? ReceiptBooks.bookOf(last) : null;
+  if (b != null) {
+    bool taken(int x) =>
+        b.used.contains(x) || b.cancelled.contains(x) || localUsed.contains(b.keyOf(x)) || keys.contains(b.keyOf(x));
+    while (n <= b.end && taken(n)) {
+      n++;
+    }
+    if (n > b.end) return null;
+  }
+  final base = raw.trim().replaceAll(RegExp(r'[\s,&+]+$'), '');
+  return '$base, ${slipPrefixOf(last)}$n';
+}
+
 /// Expand a CR# field into every slip it represents — "32282 83 84" →
 /// 32282, 32283, 32284; "31457 & 31458" → both. Same rules as the web.
 List<int> receiptSlips(String raw) {
