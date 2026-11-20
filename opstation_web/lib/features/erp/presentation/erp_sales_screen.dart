@@ -28,6 +28,7 @@ import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/widgets/adaptive_header_row.dart';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -1274,6 +1275,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       }
     });
     return CollapsibleListPane(
+        detailActive: _selectedId != null,
+        onBack: () => setState(() { _selectedId = null; }),
         listChild: Column(children: [
             Padding(
               padding: const EdgeInsets.all(16),
@@ -1375,7 +1378,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
         decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+        child: AdaptiveHeaderRow(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(voucherNum, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
             Text('Sales Order', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
@@ -1456,7 +1459,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
       Expanded(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(context.isMobile ? 12 : 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // ── Header Fields ───────────────────────────────────
             Container(
@@ -3009,6 +3012,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       }
     });
     return CollapsibleListPane(
+        detailActive: _selectedId != null,
+        onBack: () => setState(() { _selectedId = null; }),
         listChild: Column(children: [
             Padding(
               padding: const EdgeInsets.all(16),
@@ -3236,7 +3241,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
       Expanded(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(context.isMobile ? 12 : 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // Linked SO info
             Container(

@@ -15,6 +15,7 @@ import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/widgets/adaptive_header_row.dart';
 
 /// Purchase Return Invoices (PRI) — stage 2 of the purchase return flow.
 ///
@@ -504,6 +505,8 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       color: AppTheme.background,
       child: CollapsibleListPane(
         paneWidth: 360,
+        detailActive: _selectedId != null,
+        onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
         listChild: _buildList(),
         detailChild: _selectedId == null
             ? const Center(child: Text('Select or create a Purchase Return Invoice',
@@ -592,9 +595,9 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header
       Container(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+        padding: EdgeInsets.fromLTRB(context.isMobile ? 14 : 24, 16, context.isMobile ? 12 : 24, 16),
         decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+        child: AdaptiveHeaderRow(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(_detail['voucher_number'] as String? ?? '-',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
@@ -626,7 +629,7 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
       ),
       Expanded(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(context.isMobile ? 12 : 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // Info chips
             if (_isVoided) VoidedBanner(_detail),

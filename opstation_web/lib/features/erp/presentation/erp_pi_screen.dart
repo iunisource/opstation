@@ -759,7 +759,9 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
     ref.listen(selectedBranchProvider, (_, __) { _selectedId = null; _detail = {}; _items = []; _loadList(); });
     return Container(color: AppTheme.background, child: CollapsibleListPane(
       paneWidth: 360,
-      listChild: _buildList(),
+      detailActive: _selectedId != null,
+        onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
+        listChild: _buildList(),
       detailChild: _selectedId == null
           ? const Center(child: Text('Select or create a Purchase Invoice', style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
           : _buildDetail(),
@@ -917,7 +919,7 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
               ]),
         );
       }),
-      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(context.isMobile ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (_isVoided) VoidedBanner(_detail),
         Wrap(spacing: 12, runSpacing: 8, children: [
           _PiChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),

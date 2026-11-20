@@ -15,6 +15,7 @@ import '../../../core/utils/friendly_error.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/widgets/adaptive_header_row.dart';
 
 /// Purchase Return Notes (SRN) — open-ended return documents.
 ///
@@ -57,6 +58,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   @override
   void dispose() {
     _addQtyCtrl.dispose();
+    _remarksCtrl.dispose();
     super.dispose();
   }
 
@@ -151,6 +153,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       );
       setState(() {
         _detail = Map<String, dynamic>.from(ret);
+        _remarksCtrl.text = (ret['remarks'] as String?) ?? '';
         _items = List<Map<String, dynamic>>.from(items);
         _meta = meta;
         _detailLoading = false;
@@ -178,6 +181,67 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
   bool get _isDraft  => (_detail['status'] as String? ?? 'draft') == 'draft';
   bool get _canEdit  => !_isLocked;
   bool get _isVoided => isVoidedRow(_detail);
+
+  // ── Remarks ────────────────────────────────────────────────────────────────
+  // Free text about this Purchase Return Note; printed on the note. Editable on a draft; admins can
+  // still correct it after it is saved (not on a voided note).
+  final _remarksCtrl = TextEditingController();
+  bool _remarksSaving = false;
+  bool get _canEditRemarks => !_isVoided && ((_isDraft && !_isLocked) || _canDelete);
+
+  Future<void> _saveRemarks({bool quiet = false}) async {
+    final id = _detail['id'] as String?;
+    if (id == null) return;
+    final v = _remarksCtrl.text.trim();
+    if (v == ((_detail['remarks'] as String?) ?? '').trim()) return;
+    setState(() => _remarksSaving = true);
+    try {
+      await Supabase.instance.client.from('purchase_returns').update({'remarks': v.isEmpty ? null : v}).eq('id', id);
+      _detail['remarks'] = v.isEmpty ? null : v;
+      await _logAudit(id, 'edited', v.isEmpty ? 'Remarks cleared' : 'Remarks: $v');
+      if (!quiet) _showSnack('Remarks saved');
+    } catch (e) {
+      _showSnack(friendlyError('Remarks did not save', e));
+    }
+    if (mounted) setState(() => _remarksSaving = false);
+  }
+
+  /// The remarks to print: what is typed, else what is saved.
+  String? get _remarksForPrint {
+    final r = _remarksCtrl.text.trim().isNotEmpty ? _remarksCtrl.text.trim() : ((_detail['remarks'] as String?) ?? '').trim();
+    return r.isEmpty ? null : r;
+  }
+
+  Widget _remarksCard() {
+    final shown = ((_detail['remarks'] as String?) ?? '').trim();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Expanded(child: Text('Remarks', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+          if (_canEditRemarks)
+            TextButton.icon(
+              onPressed: _remarksSaving ? null : () => _saveRemarks(),
+              icon: _remarksSaving
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.save_outlined, size: 15),
+              label: const Text('Save'),
+            ),
+        ]),
+        const SizedBox(height: 6),
+        if (_canEditRemarks)
+          TextField(
+            controller: _remarksCtrl,
+            minLines: 2,
+            maxLines: 5,
+            decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), hintText: 'Remarks (shown on the printed note)'),
+          )
+        else
+          Text(shown.isEmpty ? '—' : shown, style: const TextStyle(fontSize: 13)),
+      ]),
+    );
+  }
 
   // ── Create new SRN (open-ended) ────────────────────────────────────────────
   Future<void> _createNew() async {
@@ -382,6 +446,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
   Future<void> _saveNote() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before saving'); return; }
+    await _saveRemarks(quiet: true); // typed remarks are kept with the note
     final bad = await _insufficientItem();
     if (bad != null) {
       if (!_allowShortStock) { _showSnack('Cannot save — "$bad" exceeds available stock at this branch'); return; }
@@ -576,6 +641,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       customerContact: sup?['contact_person'] as String?,
       customerPhone: (sup?['contact_number'] ?? sup?['phone']) as String?,
       salespersonName: _meta.salespersonName,
+      remarks: _remarksForPrint,
       lines: lines,
       // No financial totals for PRN (qty-only note)
       preparedBy: _meta.preparedBy,
@@ -593,6 +659,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       color: AppTheme.background,
       child: CollapsibleListPane(
         paneWidth: 360,
+        detailActive: _selectedId != null,
+        onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
         listChild: _buildList(),
         detailChild: _selectedId == null
             ? const Center(child: Text('Select or create a Purchase Return Note',
@@ -688,9 +756,9 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header
       Container(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+        padding: EdgeInsets.fromLTRB(context.isMobile ? 14 : 24, 16, context.isMobile ? 12 : 24, 16),
         decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+        child: AdaptiveHeaderRow(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(_detail['voucher_number'] as String? ?? '-',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
@@ -730,7 +798,7 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
       ),
       Expanded(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(context.isMobile ? 12 : 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (_isVoided) VoidedBanner(_detail),
             // Supplier chip + dates
@@ -859,6 +927,8 @@ class _ErpPurchaseReturnsScreenState extends ConsumerState<ErpPurchaseReturnsScr
 
             // Prices are set in the Purchase Return Invoice (PRI) — no totals at note stage.
 
+            const SizedBox(height: 16),
+            _remarksCard(),
             const SizedBox(height: 16),
             _AuditTrailWidget(voucherId: _selectedId ?? '', voucherType: 'PRN'),
           ]),

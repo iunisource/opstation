@@ -43,8 +43,69 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
   final _addQtyCtrl = TextEditingController(text: '1');
   final _addQtyFocus = FocusNode();
 
+  // ── Remarks ────────────────────────────────────────────────────────────────
+  // Free text about this Sales Return Note; printed on the note. Editable on a draft; admins can
+  // still correct it after it is saved (not on a voided note).
+  final _remarksCtrl = TextEditingController();
+  bool _remarksSaving = false;
+  bool get _canEditRemarks => !_isVoided && (_isDraft || _isAdmin);
+
+  Future<void> _saveRemarks({bool quiet = false}) async {
+    final id = _detail['id'] as String?;
+    if (id == null) return;
+    final v = _remarksCtrl.text.trim();
+    if (v == ((_detail['remarks'] as String?) ?? '').trim()) return;
+    setState(() => _remarksSaving = true);
+    try {
+      await Supabase.instance.client.from('sales_returns').update({'remarks': v.isEmpty ? null : v}).eq('id', id);
+      _detail['remarks'] = v.isEmpty ? null : v;
+      await _logAudit(id, 'edited', v.isEmpty ? 'Remarks cleared' : 'Remarks: $v');
+      if (!quiet) _showSnack('Remarks saved');
+    } catch (e) {
+      _showSnack(friendlyError('Remarks did not save', e));
+    }
+    if (mounted) setState(() => _remarksSaving = false);
+  }
+
+  /// The remarks to print: what is typed, else what is saved.
+  String? get _remarksForPrint {
+    final r = _remarksCtrl.text.trim().isNotEmpty ? _remarksCtrl.text.trim() : ((_detail['remarks'] as String?) ?? '').trim();
+    return r.isEmpty ? null : r;
+  }
+
+  Widget _remarksCard() {
+    final shown = ((_detail['remarks'] as String?) ?? '').trim();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Expanded(child: Text('Remarks', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+          if (_canEditRemarks)
+            TextButton.icon(
+              onPressed: _remarksSaving ? null : () => _saveRemarks(),
+              icon: _remarksSaving
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.save_outlined, size: 15),
+              label: const Text('Save'),
+            ),
+        ]),
+        const SizedBox(height: 6),
+        if (_canEditRemarks)
+          TextField(
+            controller: _remarksCtrl,
+            minLines: 2,
+            maxLines: 5,
+            decoration: const InputDecoration(isDense: true, border: OutlineInputBorder(), hintText: 'Remarks (shown on the printed note)'),
+          )
+        else
+          Text(shown.isEmpty ? '—' : shown, style: const TextStyle(fontSize: 13)),
+      ]),
+    );
+  }
+
   @override void initState() { super.initState(); _loadList(); _loadLookups(); }
-  @override void dispose() { _addQtyCtrl.dispose(); _addQtyFocus.dispose(); super.dispose(); }
+  @override void dispose() { _addQtyCtrl.dispose(); _addQtyFocus.dispose(); _remarksCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -149,7 +210,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       final meta = await VoucherMeta.fetch(orgId: _orgId ?? '', customerId: ret['customer_id'] as String?, createdById: ret['created_by'] as String?);
       final sris = await _activeSris(id);
       setState(() {
-        _detail = Map<String, dynamic>.from(ret); _items = List<Map<String, dynamic>>.from(items); _meta = meta;
+        _detail = Map<String, dynamic>.from(ret); _remarksCtrl.text = (ret['remarks'] as String?) ?? ''; _items = List<Map<String, dynamic>>.from(items); _meta = meta;
         _hasSri = sris.isNotEmpty;
         _sriRefs = [for (final x in sris) (x['voucher_number'] as String? ?? '').trim()].where((v) => v.isNotEmpty).toList();
         _detailLoading = false;
@@ -290,6 +351,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
 
   Future<void> _confirmReturn() async {
     if (_items.isEmpty) { _showSnack('Add at least one item before confirming'); return; }
+    await _saveRemarks(quiet: true); // typed remarks are kept with the note
     // Check if SRI already exists
     try {
       // Only a live (not voided) invoice blocks re-confirming. A voided SRI
@@ -463,6 +525,7 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
       customerContact: cust?['contact_person'] as String?,
       customerPhone: cust?['phone'] as String?,
       salespersonName: _meta.salespersonName,
+      remarks: _remarksForPrint,
       lines: _items.map((it) => VoucherLine(
         product: it['products']?['name'] as String? ?? '-',
         sku: it['products']?['sku'] as String?, uom: it['uoms']?['abbreviation'] as String?,
@@ -676,6 +739,8 @@ class _ErpSalesReturnsScreenState extends ConsumerState<ErpSalesReturnsScreen> {
             ]),
           );
         })),
+        const SizedBox(height: 16),
+        _remarksCard(),
         const SizedBox(height: 16),
         _SrnAuditTrail(voucherId: _selectedId ?? ''),
       ]))),

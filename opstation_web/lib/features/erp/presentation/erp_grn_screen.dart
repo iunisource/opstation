@@ -22,6 +22,7 @@ import '../widgets/void_flow.dart';
 import 'package:opstation_web/core/widgets/branch_empty_hint.dart';
 import 'package:opstation_web/core/widgets/voucher_sort.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/widgets/adaptive_header_row.dart';
 
 /// GRN — Goods Receipt Note.
 /// Acts like DO but in reverse: receives stock from supplier against a confirmed PO.
@@ -795,7 +796,9 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     ref.listen(selectedBranchProvider, (_, __) { _selectedId = null; _detail = {}; _items = []; _loadList(); });
     return Container(color: AppTheme.background, child: CollapsibleListPane(
       paneWidth: 360,
-      listChild: _buildList(),
+      detailActive: _selectedId != null,
+        onBack: () => setState(() { _selectedId = null; _detail = {}; _items = []; }),
+        listChild: _buildList(),
       detailChild: _selectedId == null
           ? const Center(child: Text('Select or create a GRN', style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)))
           : _buildDetail(),
@@ -874,8 +877,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     final sup = _detail['suppliers'] as Map?;
     final poVoucher = _detail['purchase_orders']?['voucher_number'] as String?;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Container(padding: const EdgeInsets.fromLTRB(24, 16, 24, 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-        child: Row(children: [
+      Container(padding: EdgeInsets.fromLTRB(context.isMobile ? 14 : 24, 16, context.isMobile ? 12 : 24, 16), decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
+        child: AdaptiveHeaderRow(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             const Text('Goods Receipt Note', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.2)),
@@ -929,7 +932,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
             if (_canDelete) deleteOrVoidButton(draft: !_isConfirmed, onDelete: _delete, onVoid: _void),
           ],
         ])),
-      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(context.isMobile ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (_isVoided) VoidedBanner(_detail),
         Wrap(spacing: 12, runSpacing: 8, children: [
           _GrnChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),

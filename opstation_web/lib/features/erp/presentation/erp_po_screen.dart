@@ -1407,7 +1407,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
           ]);
         }),
       ),
-      Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: SingleChildScrollView(padding: EdgeInsets.all(context.isMobile ? 12 : 24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, children: [
           Row(mainAxisSize: MainAxisSize.min, children: [
             _PoChip(label: 'Supplier', value: sup?['name'] as String? ?? '-'),

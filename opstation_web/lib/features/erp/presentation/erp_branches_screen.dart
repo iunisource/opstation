@@ -5,6 +5,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
+import '../widgets/branch_card.dart';
 
 class ErpBranchesScreen extends ConsumerStatefulWidget {
   const ErpBranchesScreen({super.key});
@@ -257,8 +258,8 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Text('Branches',
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            Text('Branches',
+                style: TextStyle(fontSize: context.isMobile ? 22 : 28, fontWeight: FontWeight.w800)),
             const Spacer(),
             ElevatedButton.icon(
               onPressed: () => _showDialog(context, null),
@@ -269,7 +270,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
           const SizedBox(height: 8),
           Text('${_branches.length} branches',
               style: const TextStyle(color: AppTheme.textSecondary)),
-          const SizedBox(height: 24),
+          SizedBox(height: context.isMobile ? 12 : 24),
           if (_loading)
             const Center(child: CircularProgressIndicator())
           else
@@ -282,6 +283,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                 ),
                 child: Column(
                   children: [
+                    if (!context.isMobile)
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                       decoration: const BoxDecoration(
@@ -295,7 +297,7 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                         SizedBox(width: 80),
                       ]),
                     ),
-                    const Divider(height: 1),
+                    if (!context.isMobile) const Divider(height: 1),
                     Expanded(
                       child: ListView.separated(
                         itemCount: _branches.length,
@@ -303,6 +305,16 @@ class _ErpBranchesScreenState extends ConsumerState<ErpBranchesScreen> {
                         itemBuilder: (_, i) {
                           final w = _branches[i];
                           final isActive = w['is_active'] as bool? ?? true;
+                          if (context.isMobile) {
+                            return BranchMobileCard(
+                              name: w['name'] as String? ?? '',
+                              location: w['location'] as String?,
+                              isActive: isActive,
+                              isProcessor: w['is_virtual'] as bool? ?? false,
+                              onEdit: () => _showDialog(context, w),
+                              onToggle: () => _toggleActive(w),
+                            );
+                          }
                           return Opacity(
                             opacity: isActive ? 1.0 : 0.5,
                             child: Padding(

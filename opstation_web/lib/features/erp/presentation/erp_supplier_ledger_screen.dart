@@ -21,6 +21,7 @@ import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/widgets/adaptive_header_row.dart';
 
 class ErpSupplierLedgerScreen extends ConsumerStatefulWidget {
   /// Account to open (global search / deep link) — wins over the last-viewed one.
@@ -703,8 +704,11 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               IconButton(icon: Icon(Icons.close, size: 14, color: Colors.orange.shade700), onPressed: () => setState(() => _errors = []), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
             ]),
           ),
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(width: 340, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Search + date range. On a phone the 340px search plus the date button did not
+          // fit the screen; now the search takes the width and the filters wrap beneath it.
+          AdaptiveFilterRow(
+            searchWidth: 340,
+            search: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Focus(
                 onKeyEvent: (_, event) {
                   if (!_showDropdown || event is! KeyDownEvent) return KeyEventResult.ignored;
@@ -727,7 +731,7 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               ),
               if (_showDropdown && _filteredSuppliers.isNotEmpty)
                 Container(
-                  constraints: const BoxConstraints(maxHeight: 260), width: 340,
+                  constraints: const BoxConstraints(maxHeight: 260), width: context.isMobile ? double.infinity : 340,
                   decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border),
                       boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 4))]),
                   child: ListView.separated(
@@ -752,9 +756,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                     },
                   ),
                 ),
-            ])),
+            ]),
+            trailing: [
             if (_selectedSupplier != null) ...[
-              const SizedBox(width: 12),
               OutlinedButton.icon(
                 icon: const Icon(Icons.date_range, size: 14),
                 label: Text(
@@ -772,11 +776,11 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
                 style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8)),
               ),
               if (_dateFrom != null || _dateTo != null) ...[
-                const SizedBox(width: 6),
                 TextButton(onPressed: () => setState(() { _dateFrom = null; _dateTo = null; }), child: const Text('Clear', style: TextStyle(fontSize: 12))),
               ],
             ],
-          ]),
+            ],
+          ),
           const SizedBox(height: 12),
           if (_selectedSupplier != null && _entries.isNotEmpty) ...[
             AdaptiveKpiRow(children: [
@@ -1132,10 +1136,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
       total = ((v['grand_total'] ?? v['total'] ?? v['total_amount'] ?? v['net_amount']) as num?)?.toDouble() ?? 0;
     }
     return Dialog(
+      // On a phone the voucher takes nearly the full width: the line tables need it.
+      insetPadding: EdgeInsets.symmetric(horizontal: context.isMobile ? 10 : 40, vertical: 24),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 800, maxHeight: 700),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(context.isMobile ? 12 : 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
