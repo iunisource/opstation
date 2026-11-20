@@ -4,13 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import '../../../core/storage/photo_url.dart';
 import '../../../core/theme/app_theme.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/utils/place_name.dart';
+import '../../auth/auth_controller.dart';
+import '../../logistics_reports/driver_job_report.dart';
+import '../job_sheet_pdf.dart';
 
 /// Read-only-ish detail page for a single delivery. Pulls the
 /// delivery row plus its stops from Supabase, shows everything that
@@ -109,10 +110,6 @@ class _DeliveryDetailScreenState
     }
   }
 
-  /// PDF-safe time: the base PDF font can't render the em dash "—" (it
-  /// showed as a box), so use a plain hyphen for "not yet".
-  String _pdfTime(dynamic v) => v == null ? '-' : _fmtTime(v);
-
   // A job can mix stop types; behaviour is decided per stop.
   static bool isPickupStop(Map<String, dynamic> s) =>
       (s['stop_type'] as String?) == 'pickup';
@@ -162,172 +159,22 @@ class _DeliveryDetailScreenState
   Future<void> _printDelivery() async {
     final d = _delivery;
     if (d == null) return;
-    final dels = _deliveryStops;
-    final picks = _pickupStops;
-    int totalAmount = 0, totalCash = 0, totalCredit = 0;
-    for (final s in dels) {
-      final amt = (s['amount'] as int?) ?? 0;
-      totalAmount += amt;
-      if (s['payment_type'] == 'cash') {
-        totalCash += amt;
-      } else if (s['payment_type'] == 'credit') {
-        totalCredit += amt;
-      }
-    }
-    final muted = PdfColor.fromInt(0xFF6B7280);
-    final border = PdfColor.fromInt(0xFFE5E7EB);
-
-    pw.Widget sectionTitle(String t) => pw.Padding(
-          padding: const pw.EdgeInsets.only(top: 12, bottom: 5),
-          child: pw.Text(t,
-              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-        );
-
-    // Deliveries: customer, DO/note, payment, amount, status, time, location.
-    pw.Widget deliveriesTable() => pw.Table(
-          border: pw.TableBorder.all(color: border, width: 0.5),
-          columnWidths: {
-            0: const pw.FixedColumnWidth(22),
-            1: const pw.FlexColumnWidth(2.0),
-            2: const pw.FlexColumnWidth(1.5),
-            3: const pw.FlexColumnWidth(0.9),
-            4: const pw.FlexColumnWidth(0.9),
-            5: const pw.FlexColumnWidth(1),
-            6: const pw.FlexColumnWidth(1.3),
-            7: const pw.FlexColumnWidth(1.3),
-          },
-          children: [
-            pw.TableRow(
-              decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
-              children: [
-                for (final h in ['#', 'Customer', 'DO# / Note', 'Payment', 'Amount', 'Status', 'Time', 'Location'])
-                  _pdfCell(h, bold: true),
-              ],
-            ),
-            for (final s in dels)
-              pw.TableRow(children: [
-                _pdfCell('${s['sequence'] ?? ''}'),
-                _pdfCell(partyLabel(s)),
-                _pdfCell([
-                  if ((s['so_invoice_number'] as String?)?.trim().isNotEmpty == true)
-                    'DO# ${s['so_invoice_number']}',
-                  if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
-                    'Note: ${s['driver_note']}',
-                ].join('\n')),
-                _pdfCell(payLabel(s['payment_type'] as String?)),
-                _pdfCell('Rs ${(s['amount'] as int?) ?? 0}'),
-                _pdfCell((s['status'] as String? ?? '').toUpperCase()),
-                _pdfCell(_pdfTime(s['delivered_at'])),
-                _pdfCell(verLabel(s)),
-              ]),
-          ],
-        );
-
-    // Pickups: supplier, remarks, status, time, location — no money columns.
-    pw.Widget pickupsTable() => pw.Table(
-          border: pw.TableBorder.all(color: border, width: 0.5),
-          columnWidths: {
-            0: const pw.FixedColumnWidth(22),
-            1: const pw.FlexColumnWidth(2.2),
-            2: const pw.FlexColumnWidth(2.4),
-            3: const pw.FlexColumnWidth(1),
-            4: const pw.FlexColumnWidth(1.3),
-            5: const pw.FlexColumnWidth(1.3),
-          },
-          children: [
-            pw.TableRow(
-              decoration: pw.BoxDecoration(color: PdfColor.fromInt(0xFFF3F4F6)),
-              children: [
-                for (final h in ['#', 'Supplier', 'Remarks', 'Status', 'Time', 'Location'])
-                  _pdfCell(h, bold: true),
-              ],
-            ),
-            for (final s in picks)
-              pw.TableRow(children: [
-                _pdfCell('${s['sequence'] ?? ''}'),
-                _pdfCell(partyLabel(s)),
-                _pdfCell([
-                  if ((s['item_description'] as String?)?.trim().isNotEmpty == true)
-                    s['item_description'] as String,
-                  if ((s['driver_note'] as String?)?.trim().isNotEmpty == true)
-                    'Note: ${s['driver_note']}',
-                ].join('\n')),
-                _pdfCell((s['status'] as String? ?? '').toUpperCase()),
-                _pdfCell(_pdfTime(s['delivered_at'])),
-                _pdfCell(verLabel(s)),
-              ]),
-          ],
-        );
-
-    final doc = pw.Document();
-    doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
-      build: (ctx) => [
-        pw.Row(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-              pw.Text('Job Sheet',
-                  style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
-              pw.SizedBox(height: 2),
-              pw.Text('Driver: ${d['driver_name'] ?? '-'}',
-                  style: const pw.TextStyle(fontSize: 12)),
-              pw.Text('Created ${_pdfTime(d['created_at'])} by ${d['created_by_name'] ?? '-'}',
-                  style: pw.TextStyle(fontSize: 9, color: muted)),
-            ]),
-            pw.Container(
-              padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: pw.BoxDecoration(
-                  border: pw.Border.all(color: border),
-                  borderRadius: pw.BorderRadius.circular(4)),
-              child: pw.Text((d['status'] as String? ?? '').toUpperCase(),
-                  style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
-            ),
-          ],
-        ),
-        pw.SizedBox(height: 6),
-        pw.Row(children: [
-          pw.Text('Started ${_pdfTime(d['started_at'])}',
-              style: pw.TextStyle(fontSize: 9, color: muted)),
-          pw.SizedBox(width: 16),
-          pw.Text('Completed ${_pdfTime(d['completed_at'])}',
-              style: pw.TextStyle(fontSize: 9, color: muted)),
-          pw.SizedBox(width: 16),
-          pw.Text('Deliveries ${dels.length}   Pickups ${picks.length}',
-              style: pw.TextStyle(fontSize: 9, color: muted)),
-        ]),
-        if (dels.isNotEmpty) ...[
-          pw.SizedBox(height: 4),
-          pw.Text('Total Rs $totalAmount   ·   Cash Rs $totalCash   ·   Credit Rs $totalCredit',
-              style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
-        ],
-        if (dels.isNotEmpty) ...[
-          sectionTitle('Deliveries (${dels.length})'),
-          deliveriesTable(),
-        ],
-        if (picks.isNotEmpty) ...[
-          sectionTitle('Pickups (${picks.length})'),
-          pickupsTable(),
-        ],
-        if ((d['notes'] as String?)?.trim().isNotEmpty == true) ...[
-          pw.SizedBox(height: 12),
-          pw.Text('Job notes: ${d['notes']}', style: const pw.TextStyle(fontSize: 10)),
-        ],
-      ],
-    ));
-    await outputPdf(await doc.save(), 'Job Sheet - ${d['driver_name'] ?? 'Delivery'}',
+    // The job's distances (start, between the stops, the way back); if they cannot be worked out now
+    // the sheet is still made, without them.
+    DriverJobReportContext? route;
+    try {
+      route = await DriverJobReport.build(
+        delivery: d,
+        stops: _stops,
+        orgId: ref.read(currentUserProvider)?.orgId,
+        placeLookup: (lat, lng, until) => placeName(lat, lng, until: until),
+      );
+    } catch (_) {}
+    final bytes = await JobSheetPdf.build(delivery: d, stops: _stops, route: route);
+    await outputPdf(bytes, 'Job Sheet - ${d['driver_name'] ?? 'Delivery'}',
         date: DateTime.tryParse('${d['created_at'] ?? ''}')?.toLocal());
   }
 
-  static pw.Widget _pdfCell(String text, {bool bold = false}) => pw.Padding(
-        padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-        child: pw.Text(text,
-            style: pw.TextStyle(
-                fontSize: 9,
-                fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal)),
-      );
 
   @override
   Widget build(BuildContext context) {

@@ -1,5 +1,5 @@
-/// The rows of the Logistics Reports page: what each line shows, worked out from the
-/// server rows. Kept apart from the page so it can be tested.
+/// The rows of the Logistics Reports page: what each line shows, worked out from the server rows.
+/// Kept apart from the page so it can be tested.
 
 class JobRow {
   const JobRow({
@@ -18,26 +18,15 @@ class JobRow {
   final DateTime? date;
   final String driver;
 
-  /// Delivery, Pickup or Delivery + pickup.
+  /// Delivery, Pickup, Delivery + pickup, or Free route.
   final String type;
   final int stops;
   final int delivered;
   final int failed;
   final String status;
 
-  /// A summary can be made once the job has started.
+  /// A report can be made once the job has started.
   final bool canReport;
-}
-
-class TripRow {
-  const TripRow({required this.id, required this.date, required this.driver, required this.route, required this.visits, required this.done});
-
-  final String id;
-  final DateTime? date;
-  final String driver;
-  final String route;
-  final int visits;
-  final bool done;
 }
 
 String deliveryStatusLabel(String? s) {
@@ -56,11 +45,13 @@ String deliveryStatusLabel(String? s) {
   return s == null || s.isEmpty ? '-' : s;
 }
 
-/// Delivery, Pickup, or Delivery + pickup (a job can mix both); falls back to the job's own type
-/// when it has no stops.
+/// Free route (the places a driver marked as he went), Delivery, Pickup, or Delivery + pickup (a job
+/// can mix both); falls back to the job's own type when it has no stops.
 String jobTypeLabel(Iterable<String?> stopTypes, String? jobType) {
+  if (jobType == 'free') return 'Free route';
   final types = stopTypes.toList();
   if (types.isEmpty) return jobType == 'pickup' ? 'Pickup' : 'Delivery';
+  if (types.every((t) => t == 'visit')) return 'Free route';
   final pickups = types.where((t) => t == 'pickup').length;
   if (pickups == 0) return 'Delivery';
   if (pickups == types.length) return 'Pickup';
@@ -87,19 +78,5 @@ List<JobRow> buildJobRows(List<Map<String, dynamic>> deliveries, Map<String, Lis
           canReport: status == 'in_progress' || status == 'completed' || (status == 'assigned' && stops.any((s) => s['status'] != 'pending')),
         );
       }(),
-  ];
-}
-
-List<TripRow> buildTripRows(List<Map<String, dynamic>> trips, Map<String, int> visitCounts) {
-  return [
-    for (final t in trips)
-      TripRow(
-        id: '${t['id']}',
-        date: _dt(t['started_at']),
-        driver: '${t['user_name'] ?? '-'}',
-        route: '${t['route_name'] ?? '-'}',
-        visits: visitCounts['${t['id']}'] ?? 0,
-        done: t['ended_at'] != null,
-      ),
   ];
 }

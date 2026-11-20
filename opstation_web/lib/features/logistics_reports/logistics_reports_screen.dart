@@ -4,22 +4,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/pdf/pdf_output.dart';
 import '../../core/utils/place_name.dart';
-import '../../core/utils/reimb.dart';
-import '../../core/utils/report_trail.dart';
 import '../auth/auth_controller.dart';
-import '../reports/pdf/report_pdf_builder.dart';
-import '../reports/visit_report_open.dart';
-import 'driver_job_pdf.dart';
+import '../deliveries/job_sheet_pdf.dart';
 import 'driver_job_report.dart';
 import 'logistics_report_rows.dart';
 import 'logistics_reports_view.dart';
 
-/// Logistics Reports: the summaries of the drivers' work, generated on the web —
-///  - Driver jobs (deliveries and pickups): the Driver Trip Summary with the stops in
-///    sequence and the distance of every leg, including the way from the start and back to
-///    the return location (the same document the driver's phone makes);
-///  - Free routes the drivers ran: the Trip Summary and the Visit Report, exactly as on the
-///    Reports page.
+/// Logistics Reports: the report of every driver job, generated on the web — deliveries, pickups and
+/// the free routes the drivers ran. It is the job sheet, with the distances merged in: where the job
+/// started and ended, the distance against each stop, the way back to the return location, the total.
 class LogisticsReportsScreen extends ConsumerStatefulWidget {
   const LogisticsReportsScreen({super.key});
 
@@ -28,12 +21,10 @@ class LogisticsReportsScreen extends ConsumerStatefulWidget {
 }
 
 class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen> {
-  LogisticsTab _tab = LogisticsTab.jobs;
   late DateTimeRange _range;
   String? _driverId;
   List<Map<String, dynamic>> _drivers = [];
   List<JobRow> _jobs = [];
-  List<TripRow> _trips = [];
   bool _loading = true;
   String? _error;
   String? _busyId;
@@ -65,48 +56,21 @@ class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen>
       }
       final from = DateTime(_range.start.year, _range.start.month, _range.start.day).toUtc().toIso8601String();
       final to = DateTime(_range.end.year, _range.end.month, _range.end.day).add(const Duration(days: 1)).toUtc().toIso8601String();
-      if (_tab == LogisticsTab.jobs) {
-        var q = _db.from('deliveries').select().eq('org_id', orgId).neq('status', 'draft').not('driver_id', 'is', null).gte('created_at', from).lt('created_at', to);
-        if (_driverId != null) q = q.eq('driver_id', _driverId!);
-        final deliveries = List<Map<String, dynamic>>.from(await q.order('created_at', ascending: false));
-        final stopsBy = <String, List<Map<String, dynamic>>>{};
-        for (final chunk in _chunks([for (final d in deliveries) '${d['id']}'], 100)) {
-          final rows = await _db.from('delivery_stops').select('delivery_id, stop_type, status').inFilter('delivery_id', chunk);
-          for (final r in rows) {
-            stopsBy.putIfAbsent('${r['delivery_id']}', () => []).add(Map<String, dynamic>.from(r));
-          }
+      var q = _db.from('deliveries').select().eq('org_id', orgId).neq('status', 'draft').not('driver_id', 'is', null).gte('created_at', from).lt('created_at', to);
+      if (_driverId != null) q = q.eq('driver_id', _driverId!);
+      final deliveries = List<Map<String, dynamic>>.from(await q.order('created_at', ascending: false));
+      final stopsBy = <String, List<Map<String, dynamic>>>{};
+      for (final chunk in _chunks([for (final d in deliveries) '${d['id']}'], 100)) {
+        final rows = await _db.from('delivery_stops').select('delivery_id, stop_type, status').inFilter('delivery_id', chunk);
+        for (final r in rows) {
+          stopsBy.putIfAbsent('${r['delivery_id']}', () => []).add(Map<String, dynamic>.from(r));
         }
-        if (!mounted || seq != _loadSeq) return;
-        setState(() {
-          _jobs = buildJobRows(deliveries, stopsBy);
-          _loading = false;
-        });
-      } else {
-        final ids = _driverId != null ? [_driverId!] : [for (final d in _drivers) '${d['id']}'];
-        var trips = <Map<String, dynamic>>[];
-        if (ids.isNotEmpty) {
-          trips = List<Map<String, dynamic>>.from(await _db
-              .from('trips')
-              .select()
-              .eq('org_id', orgId)
-              .inFilter('user_id', ids)
-              .gte('started_at', from)
-              .lt('started_at', to)
-              .order('started_at', ascending: false));
-        }
-        final counts = <String, int>{};
-        for (final chunk in _chunks([for (final t in trips) '${t['id']}'], 100)) {
-          final rows = await _db.from('visits').select('trip_id').inFilter('trip_id', chunk);
-          for (final r in rows) {
-            counts['${r['trip_id']}'] = (counts['${r['trip_id']}'] ?? 0) + 1;
-          }
-        }
-        if (!mounted || seq != _loadSeq) return;
-        setState(() {
-          _trips = buildTripRows(trips, counts);
-          _loading = false;
-        });
       }
+      if (!mounted || seq != _loadSeq) return;
+      setState(() {
+        _jobs = buildJobRows(deliveries, stopsBy);
+        _loading = false;
+      });
     } catch (e) {
       if (!mounted || seq != _loadSeq) return;
       setState(() {
@@ -143,9 +107,9 @@ class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen>
     }
   }
 
-  // ---- Driver job: the Driver Trip Summary ---------------------------------------------
+  // ---- A job: the job sheet with the distances ----------------------------------------
 
-  Future<void> _jobSummary(String id) => _generate(id, () async {
+  Future<void> _jobReport(String id) => _generate(id, () async {
         final d = await _db.from('deliveries').select().eq('id', id).maybeSingle();
         if (d == null) {
           _say('This job was not found.');
@@ -154,92 +118,24 @@ class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen>
         final stops = List<Map<String, dynamic>>.from(await _db.from('delivery_stops').select().eq('delivery_id', id).order('sequence'));
         final user = ref.read(currentUserProvider);
         final delivery = Map<String, dynamic>.from(d);
-        final ctx = await DriverJobReport.build(
-          delivery: delivery,
-          stops: stops,
-          orgId: user?.orgId,
-          placeLookup: (lat, lng, until) => placeName(lat, lng, until: until), // start / end area names
-        );
-        final bytes = await DriverJobPdf.build(ctx: ctx, orgName: user?.orgName ?? 'Opstation');
-        await outputPdf(bytes, 'Driver Trip Summary', date: DateTime.tryParse('${delivery['created_at'] ?? ''}')?.toLocal());
-      });
-
-  // ---- Free route: Trip Summary and Visit Report, as on the Reports page --------------
-
-  Future<bool> _registerReportIssue(String type, String key, String? orgId, String? by) async {
-    if (orgId == null) return false;
-    final role = ref.read(currentUserProvider)?.role;
-    final isAdmin = role == WebUserRole.admin || role == WebUserRole.masterAdmin || role == WebUserRole.superAdmin;
-    try {
-      final res = await _db.rpc('register_report_issue',
-          params: {'p_org': orgId, 'p_type': type, 'p_key': key, 'p_by': by, 'p_increment': !isAdmin});
-      return res == true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<void> _tripSummary(String tripId) => _generate(tripId, () async {
-        final t = await _db.from('trips').select().eq('id', tripId).maybeSingle();
-        if (t == null) {
-          _say('This route was not found.');
-          return;
-        }
-        final trip = Map<String, dynamic>.from(t);
-        final visits = List<Map<String, dynamic>>.from(await _db.from('visits').select().eq('trip_id', tripId).order('timestamp', ascending: true));
-        final custIds = {for (final v in visits) if (v['customer_id'] != null) v['customer_id'] as String}.toList();
-        final custs = <String, Map<String, dynamic>>{};
-        for (final chunk in _chunks(custIds, 400)) {
-          for (final c in await _db.from('customers').select('id, shop_name, code').inFilter('id', chunk)) {
-            custs[c['id'] as String] = Map<String, dynamic>.from(c);
-          }
-        }
-        final places = await tripPlaceNames(trip);
-        final ctx = await (await TripReportContext.buildRoad(
-          trip: trip,
-          visits: visits,
-          customersById: custs,
-          startAddress: places.$1,
-          endAddress: places.$2,
-        )).withFreePhotos();
-        final user = ref.read(currentUserProvider);
-        final orgName = user?.orgName ?? 'Opstation';
-        // The same sequence as the Reports page, so a summary made here is the same document
-        // (same re-issue watermark and claim record) as one made there.
-        final duplicate = await _registerReportIssue('trip_summary', tripId, user?.orgId, user?.id);
-        final isAdmin = user?.role == WebUserRole.admin || user?.role == WebUserRole.masterAdmin || user?.role == WebUserRole.superAdmin;
-        final trail = await logReportIssue(user?.orgId, 'trip_summary', tripId, counted: !isAdmin);
-        final started = DateTime.tryParse('${trip['started_at'] ?? ''}')?.toLocal();
-        final reimb = await reimbSubmit(
-          orgId: user?.orgId,
-          type: 'trip_summary',
-          key: tripId,
-          claimantId: trip['user_id'] as String?,
-          lines: [
-            {'trip': tripId, 'day': started ?? DateTime.now(), 'km': ctx.totalDistanceKm}
-          ],
-          record: true,
-        );
-        final bytes = await ReportPdfBuilder.buildTripSummary(ctx: ctx, orgName: orgName, duplicate: duplicate, trail: trail, reimb: reimb);
-        await outputPdf(bytes, 'Trip Summary', date: started);
-        if (reimbLastError != null) {
-          _say('Paid / already-generated details could not be checked: $reimbLastError', seconds: 8);
-        }
-      });
-
-  Future<void> _visitReport(String tripId) => _generate('$tripId#v', () async {
-        await openVisitReportForTrip(context, tripId, orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation');
+        // The distances; if they cannot be worked out now the sheet is still made, without them.
+        DriverJobReportContext? route;
+        try {
+          route = await DriverJobReport.build(
+            delivery: delivery,
+            stops: stops,
+            orgId: user?.orgId,
+            placeLookup: (lat, lng, until) => placeName(lat, lng, until: until), // start / end area names
+          );
+        } catch (_) {}
+        final bytes = await JobSheetPdf.build(delivery: delivery, stops: stops, route: route);
+        await outputPdf(bytes, 'Job Sheet - ${delivery['driver_name'] ?? 'Delivery'}',
+            date: DateTime.tryParse('${delivery['created_at'] ?? ''}')?.toLocal());
       });
 
   @override
   Widget build(BuildContext context) {
     return LogisticsReportsView(
-      tab: _tab,
-      onTab: (t) {
-        if (t == _tab) return;
-        setState(() => _tab = t);
-        _load();
-      },
       range: _range,
       onPickRange: _pickRange,
       drivers: _drivers,
@@ -252,11 +148,8 @@ class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen>
       error: _error,
       onRetry: _load,
       jobs: _jobs,
-      trips: _trips,
       busyId: _busyId,
-      onJobSummary: _jobSummary,
-      onTripSummary: _tripSummary,
-      onVisitReport: _visitReport,
+      onJobReport: _jobReport,
     );
   }
 }

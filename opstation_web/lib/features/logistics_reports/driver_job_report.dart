@@ -14,6 +14,8 @@ class DriverJobReportContext {
     required this.usedGoogle,
     this.startAddress,
     this.endAddress,
+    this.startPoint,
+    this.endPoint,
   });
 
   final Map<String, dynamic> delivery;
@@ -29,8 +31,29 @@ class DriverJobReportContext {
   final double returnDistanceKm;
   final double totalDistanceKm;
   final bool usedGoogle;
+
+  /// The place names of the start and the end (the recorded point's, else the first / last stop's).
   final String? startAddress;
   final String? endAddress;
+
+  /// Where the job started and ended (the return location), [lat, lng], as recorded by the driver's
+  /// phone; null when it was not recorded (older jobs, or no GPS fix at the time).
+  final List<double>? startPoint;
+  final List<double>? endPoint;
+
+  /// The distance of each stop that has a GPS point, by stop id: from the previous point (the start
+  /// for the first stop, when it was recorded).
+  Map<String, double> get legKmByStop {
+    final out = <String, double>{};
+    var i = 0;
+    for (final s in stops) {
+      if (DriverJobReport.hasGps(s)) {
+        if (i < distanceKm.length) out['${s['id']}'] = distanceKm[i];
+        i++;
+      }
+    }
+    return out;
+  }
 }
 
 /// Splits the consecutive leg distances of a job's route into the per-stop distances and the
@@ -92,14 +115,11 @@ class DriverJobReport {
 
     final lookup = placeLookup; // the page passes the shared place-name lookup; null = no names
     final until = DateTime.now().add(const Duration(seconds: 10));
-    Future<String?> place(double lat, double lng, {required bool withPoint}) async {
-      String? n;
+    Future<String?> place(double lat, double lng) async {
       try {
-        if (lookup != null) n = await lookup(lat, lng, until);
+        if (lookup != null) return await lookup(lat, lng, until);
       } catch (_) {}
-      final pt = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
-      if (withPoint) return n == null ? pt : '$n\n$pt';
-      return n;
+      return null;
     }
 
     String? startAddress, endAddress;
@@ -107,17 +127,17 @@ class DriverJobReport {
       if (delivery['started_at'] != null)
         () async {
           if (hasStart) {
-            startAddress = await place(sLat, sLng, withPoint: true);
+            startAddress = await place(sLat, sLng);
           } else if (gps.isNotEmpty) {
-            startAddress = await place((gps.first['captured_lat'] as num).toDouble(), (gps.first['captured_lng'] as num).toDouble(), withPoint: false);
+            startAddress = await place((gps.first['captured_lat'] as num).toDouble(), (gps.first['captured_lng'] as num).toDouble());
           }
         }(),
       if (delivery['completed_at'] != null)
         () async {
           if (hasEnd) {
-            endAddress = await place(eLat, eLng, withPoint: true);
+            endAddress = await place(eLat, eLng);
           } else if (gps.isNotEmpty) {
-            endAddress = await place((gps.last['captured_lat'] as num).toDouble(), (gps.last['captured_lng'] as num).toDouble(), withPoint: false);
+            endAddress = await place((gps.last['captured_lat'] as num).toDouble(), (gps.last['captured_lng'] as num).toDouble());
           }
         }(),
     ]);
@@ -132,6 +152,8 @@ class DriverJobReport {
         usedGoogle: false,
         startAddress: startAddress,
         endAddress: endAddress,
+        startPoint: hasStart ? [sLat, sLng] : null,
+        endPoint: hasEnd ? [eLat, eLng] : null,
       );
     }
 
@@ -161,6 +183,8 @@ class DriverJobReport {
       usedGoogle: road != null,
       startAddress: startAddress,
       endAddress: endAddress,
+      startPoint: hasStart ? [sLat, sLng] : null,
+      endPoint: hasEnd ? [eLat, eLng] : null,
     );
   }
 
