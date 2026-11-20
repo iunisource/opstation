@@ -3,6 +3,8 @@ import '../../../core/layout/main_layout.dart' show deviceChangePendingProvider;
 import 'dart:html' as html;
 import '../../../core/utils/place_name.dart';
 import '../../../core/utils/visit_outcome.dart' show visitIsFree, mapsLink;
+import '../../../core/utils/receipt_book_rules.dart';
+import '../../../core/utils/member_receipt_books.dart';
 import 'package:flutter/material.dart';
 import '../../operations/presentation/time_in_market.dart';
 import '../../operations/presentation/app_versions_screen.dart' show AppVersionInfo, appStatusPill;
@@ -90,6 +92,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   // filter by type. {cid, status, t: DateTime, amount, receipt, trip_id,
   // route_name}
   final List<Map<String, dynamic>> _visitRecords = [];
+  ReceiptCheckData? _receiptCheck; // null = still being read
   // Selected visit-type pill for the Visits / Reports tabs.
   String _visitTypeFilter = 'all';
 
@@ -169,6 +172,11 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     setState(() { _loading = true; _error = null; });
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) { setState(() => _loading = false); return; }
+    // Is the receipt-books flow ON, and this person's books: the missing-receipts
+    // note checks against the books when it is ON, and the old number check when OFF.
+    loadReceiptCheck(orgId: orgId, userId: _uid).then((c) {
+      if (mounted) setState(() => _receiptCheck = c);
+    });
     try {
       final client = Supabase.instance.client;
       _visitEvents.clear();
@@ -879,20 +887,22 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     }
     final burstPct = times.length < 2 ? 0.0 : burst / (times.length - 1) * 100;
 
-    // Receipt gaps — skips in sequence, ignoring big jumps (= new book).
+    // Receipt gaps. The flow is ON or OFF: ON = checked against this person's receipt
+    // books (a slip is missing only if it is not used, cancelled or cleared there);
+    // OFF = the old check: skips in the number sequence, big jumps = a new book.
     final nums = <int>[];
     for (final e in ev) {
       nums.addAll(receiptSlipNumbers((e['receipt'] as String?) ?? ''));
     }
-    nums.sort();
-    final missing = <int>[];
-    for (var i = 1; i < nums.length; i++) {
-      final gap = nums[i] - nums[i - 1];
-      if (gap > 1 && gap <= 20) {
-        for (var n = nums[i - 1] + 1; n < nums[i]; n++) missing.add(n);
-      }
-    }
+    final rc = _receiptCheck;
+    // Nothing is claimed while the setting is being read, or when it is ON but the books can't be read.
+    final receiptNoteOk = rc != null && !rc.unavailable;
+    final missing = receiptNoteOk
+        ? missingSlipLabels([for (final e in ev) (e['receipt'] as String?) ?? ''],
+            flowOn: rc.usesBooks, books: rc.books ?? const <BookSlips>[])
+        : <String>[];
     final skipped = missing.length;
+    final bookNote = (receiptNoteOk && rc.usesBooks) ? ' (checked against the receipt books)' : '';
 
     // Recency & active days.
     final now = DateTime.now();
@@ -907,7 +917,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
 
     final amber = Colors.amber.shade800;
     // 4th element = skipped receipt numbers to reveal via "View Receipts" (null = no action).
-    final notes = <(IconData, Color, String, List<int>?)>[];
+    final notes = <(IconData, Color, String, List<String>?)>[];
     if (verifiedPct != null) {
       if (verifiedPct >= 70) {
         notes.add((Icons.verified, AppTheme.success,
@@ -932,12 +942,12 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       notes.add((Icons.nightlight_round, amber,
           '$afterHours of $realVisits visits were entered late at night (after 8 PM) — suggesting a day\'s collections keyed in one sitting.', null));
     }
-    if (skipped > 0) {
+    if (receiptNoteOk && skipped > 0) {
       notes.add((Icons.receipt_long, amber,
-          '$skipped receipt number${skipped == 1 ? '' : 's'} skipped in sequence — collections may have been made but not entered.', missing));
-    } else if (nums.length >= 3) {
+          '$skipped receipt number${skipped == 1 ? '' : 's'} skipped in sequence — collections may have been made but not entered$bookNote.', missing));
+    } else if (receiptNoteOk && nums.length >= 3) {
       notes.add((Icons.receipt_long, AppTheme.success,
-          'Receipt numbers run in clean sequence — no obvious missed entries.', null));
+          'Receipt numbers run in clean sequence — no obvious missed entries$bookNote.', null));
     }
     if (daysSince != null && daysSince >= 3) {
       notes.add((Icons.event_busy, Colors.orange,
@@ -1006,7 +1016,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
 
   // Lists the receipt numbers missing from this member's sequence so an admin
   // can physically check whether a collection was made but never entered.
-  void _showSkippedReceipts(List<int> missing) {
+  void _showSkippedReceipts(List<String> missing) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1021,6 +1031,12 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
             const Text(
                 'These receipt numbers fall between ones this person entered but were never logged. Check the physical books — a gap can mean a collection was made but not entered (or a voided/torn slip).',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            if (_receiptCheck?.usesBooks == true)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('Checked against this person\'s receipt books: slips that were used, cancelled or cleared are not listed. Open Reports → Receipt Books for the full picture.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ),
             const SizedBox(height: 12),
             Flexible(
               child: SingleChildScrollView(

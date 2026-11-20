@@ -8,6 +8,8 @@ import 'package:opstation_web/core/utils/visit_outcome.dart';
 
 import '../../../core/format/money.dart';
 import '../../../core/utils/route_distances.dart';
+import '../../../core/utils/receipt_book_rules.dart';
+import '../../../core/utils/member_receipt_books.dart';
 import '../../../core/format/time_format.dart';
 
 /// How a trip report finds the place name of a visit's GPS point. Set once at
@@ -33,6 +35,10 @@ class TripReportContext {
   /// Place name of each visit marked without a customer (visit id → name).
   final Map<String, String> freePlaceNames;
 
+  /// Receipt-books flow ON/OFF and the salesperson's books, for the admin "Missing
+  /// receipts" line. Null = not read: the old number-sequence check is used.
+  final ReceiptCheckData? receiptCheck;
+
   const TripReportContext({
     required this.trip,
     required this.visits,
@@ -45,9 +51,10 @@ class TripReportContext {
     required this.totalDistanceKm,
     required this.usedGoogle,
     this.freePlaceNames = const {},
+    this.receiptCheck,
   });
 
-  TripReportContext _withPlaces(Map<String, String> names) => TripReportContext(
+  TripReportContext _withExtras({Map<String, String>? names, ReceiptCheckData? check}) => TripReportContext(
         trip: trip,
         visits: visits,
         customersById: customersById,
@@ -58,7 +65,8 @@ class TripReportContext {
         returnDistanceKm: returnDistanceKm,
         totalDistanceKm: totalDistanceKm,
         usedGoogle: usedGoogle,
-        freePlaceNames: names,
+        freePlaceNames: names ?? freePlaceNames,
+        receiptCheck: check ?? receiptCheck,
       );
 
   factory TripReportContext.build({
@@ -150,7 +158,25 @@ class TripReportContext {
       endAddress: endAddress,
     );
     final names = await _freePlaces(ctx);
-    return names.isEmpty ? ctx : ctx._withPlaces(names);
+    final check = await _tripReceiptCheck(ctx);
+    return (names.isEmpty && check == null) ? ctx : ctx._withExtras(names: names.isEmpty ? null : names, check: check);
+  }
+
+  /// The flow setting and the salesperson's books, for the "Missing receipts" line.
+  /// Null when the trip has no user or organisation — the old check is then used.
+  static Future<ReceiptCheckData?> _tripReceiptCheck(TripReportContext ctx) async {
+    final uid = ctx.trip['user_id'] as String?;
+    String? org = ctx.trip['org_id'] as String?;
+    if (org == null) {
+      for (final v in ctx.visits) {
+        if (v['org_id'] != null) {
+          org = v['org_id'] as String;
+          break;
+        }
+      }
+    }
+    if (uid == null || org == null) return null;
+    return loadReceiptCheck(orgId: org, userId: uid);
   }
 
   /// Place names of the visits marked without a customer: the name the phone
@@ -980,46 +1006,18 @@ class ReportPdfBuilder {
     );
   }
 
-  /// Expand a receipt field into every slip number it represents — combined
-  /// entries ("31457 & 31458", "31451 to 31452") and shorthand ("32282 83 84"
-  /// = 32282, 32283, 32284). Reading only the first number over-counted skips.
-  static List<int> _receiptSlipNumbers(String raw) {
-    final toks = RegExp(r'\d+').allMatches(raw).map((m) => m.group(0)!).toList();
-    final out = <int>[];
-    int? prevFull;
-    for (final t in toks) {
-      final n = int.parse(t);
-      final prevLen = prevFull?.toString().length ?? 0;
-      if (prevFull == null || t.length >= prevLen) {
-        out.add(n); prevFull = n;
-      } else {
-        var p10 = 1; for (var i = 0; i < t.length; i++) p10 *= 10;
-        final e = (prevFull - (prevFull % p10)) + n;
-        out.add(e); prevFull = e;
-      }
-    }
-    return out;
-  }
-
   /// Missing receipt numbers in the trip's sequence — a skip means a
   /// collection may have been made but never entered. Big jumps (> 20) are
   /// treated as a new receipt book and ignored. Admin control only.
-  static List<int> _skippedReceipts(TripReportContext ctx) {
-    final nums = <int>[];
-    for (final v in ctx.visits) {
-      nums.addAll(_receiptSlipNumbers(v['receipt_number'] as String? ?? ''));
-    }
-    nums.sort();
-    final missing = <int>[];
-    for (var i = 1; i < nums.length; i++) {
-      final gap = nums[i] - nums[i - 1];
-      if (gap > 1 && gap <= 20) {
-        for (var n = nums[i - 1] + 1; n < nums[i]; n++) {
-          missing.add(n);
-        }
-      }
-    }
-    return missing;
+  ///
+  /// The flow is ON or OFF. ON: checked against the salesperson's receipt books (a
+  /// slip is missing only when it is not used, cancelled or cleared there) — and
+  /// nothing is claimed if the books can't be read. OFF: the old check, unchanged.
+  static List<String> _skippedReceipts(TripReportContext ctx) {
+    final rc = ctx.receiptCheck;
+    if (rc != null && rc.unavailable) return const [];
+    return missingSlipLabels([for (final v in ctx.visits) v['receipt_number'] as String? ?? ''],
+        flowOn: rc?.usesBooks ?? false, books: rc?.books ?? const <BookSlips>[]);
   }
 
   /// Admin-only line listing skipped receipt numbers. Renders nothing when
