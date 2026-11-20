@@ -1,4 +1,5 @@
 import 'receipt_fix.dart';
+import '../../../core/utils/receipt_book_rules.dart';
 import 'package:flutter/material.dart';
 import '../../../core/utils/receipt_slip_key.dart';
 import 'package:flutter/services.dart';
@@ -88,17 +89,8 @@ class _Book {
     return (c.entries.where((e) => e.value > 1).map((e) => e.key).toList()..sort());
   }();
 
-  late final List<int> outOfOrder = () {
-    final seq = [...used]..sort((a, b) => '${a['at']}'.compareTo('${b['at']}'));
-    final out = <int>{};
-    var maxSoFar = -1;
-    for (final u in seq) {
-      final n = (u['serial'] as num).toInt();
-      if (n < maxSoFar) out.add(n);
-      if (n > maxSoFar) maxSoFar = n;
-    }
-    return out.toList()..sort();
-  }();
+  // Only the holder's own slips decide the order (see receipt_book_rules.dart).
+  late final List<int> outOfOrder = outOfOrderSerials(used, holderId);
 
   /// Slips of this book written by someone other than the holder.
   late final List<Map<String, dynamic>> byOthers =
@@ -509,18 +501,62 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
     });
   }
 
+  /// Close dialog: a note, and — when slips are still unused — a tick box to
+  /// account for them as "Returned blank" (cancelled) instead of leaving them
+  /// to show as missing.
+  Future<({String note, bool blank})?> _askClose(_Book b) async {
+    final c = TextEditingController();
+    final blankSlips = unaccountedSlips(b.start, b.end, b.usedSet, b.cancelMap.keys.toSet());
+    var blank = false;
+    return showDialog<({String note, bool blank})>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
+        title: Text('Close book ${b.range}?'),
+        content: SizedBox(
+          width: 440,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TextField(controller: c, autofocus: true, decoration: const InputDecoration(labelText: 'Note (optional)')),
+            if (blankSlips.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text('${blankSlips.length} slip${blankSlips.length == 1 ? ' is' : 's are'} not used yet.',
+                  style: const TextStyle(fontSize: 13)),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                dense: true,
+                value: blank,
+                onChanged: (v) => setLocal(() => blank = v ?? false),
+                title: Text(
+                    'They came back blank — mark ${blankSlips.length == 1 ? 'it' : 'all ${blankSlips.length}'} as returned blank',
+                    style: const TextStyle(fontSize: 13)),
+                subtitle: const Text('Leave unticked if slips are really missing: they will show as missing.',
+                    style: TextStyle(fontSize: 11.5)),
+              ),
+            ],
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, (note: c.text.trim(), blank: blank)), child: const Text('Close book')),
+        ],
+      )),
+    );
+  }
+
   Future<void> _bookAction(_Book b, String a) async {
     switch (a) {
       case 'cancel':
         return _cancelSlip(b);
       case 'close':
-        final note = await _askText('Close book ${b.range}?', 'Note (optional)',
-            body: b.unused > 0
-                ? '${b.unused} slip${b.unused == 1 ? ' is' : 's are'} not used yet — they will show as missing.\n'
-                : null);
-        if (note == null) return;
+        final r = await _askClose(b);
+        if (r == null) return;
         return _run('Book closed', () async {
-          await _db.rpc('receipt_book_close', params: {'p_id': b.id, 'p_note': note});
+          if (r.blank) {
+            for (final n in unaccountedSlips(b.start, b.end, b.usedSet, b.cancelMap.keys.toSet())) {
+              await _db.rpc('receipt_slip_cancel', params: {'p_book': b.id, 'p_serial': n, 'p_reason': 'Returned blank'});
+            }
+          }
+          await _db.rpc('receipt_book_close', params: {'p_id': b.id, 'p_note': r.note});
         });
       case 'reopen':
         return _run('Book reopened', () async {
