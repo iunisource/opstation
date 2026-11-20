@@ -65,20 +65,26 @@ class _Book {
   late final Map<int, Map<String, dynamic>> cancelMap = {
     for (final c in cancelled) (c['serial'] as num).toInt(): c,
   };
-  int get unused => size - usedSet.length - cancelMap.keys.where((n) => !usedSet.contains(n)).length;
+  /// Slips cleared with a reason: used, but could not be recorded under their number
+  /// (kind 'unrecorded' in receipt_slip_checks). Accounted for — not missing, not cancelled.
+  Set<int> get manual => {for (final c in checks) if (c['kind'] == 'unrecorded') (c['serial'] as num).toInt()};
+  int get manualCount => manual.where((n) => !usedSet.contains(n) && !cancelMap.containsKey(n)).length;
+  int get unused => size - usedSet.length - cancelMap.keys.where((n) => !usedSet.contains(n)).length - manualCount;
   int? get highestUsed => usedSet.isEmpty ? null : usedSet.reduce((a, b) => a > b ? a : b);
 
   /// Not used and not cancelled, below the highest used slip.
-  late final List<int> skipped = () {
+  List<int> get skipped {
     final hi = highestUsed;
     if (hi == null || !open) return <int>[]; // a closed book lists them under "Missing at close"
-    return [for (var n = start; n < hi; n++) if (!usedSet.contains(n) && !cancelMap.containsKey(n)) n];
-  }();
+    final m = manual;
+    return [for (var n = start; n < hi; n++) if (!usedSet.contains(n) && !cancelMap.containsKey(n) && !m.contains(n)) n];
+  }
 
   /// Unused slips of a CLOSED book are missing too.
-  late final List<int> missingAtClose = open
-      ? <int>[]
-      : [for (var n = start; n <= end; n++) if (!usedSet.contains(n) && !cancelMap.containsKey(n)) n];
+  List<int> get missingAtClose {
+    if (open) return <int>[];
+    return unaccountedSlips(start, end, usedSet, {...cancelMap.keys, ...manual});
+  }
 
   late final List<int> repeated = () {
     final c = <int, int>{};
@@ -101,7 +107,8 @@ class _Book {
   List<int> get openOutOfOrder => [for (final n in outOfOrder) if (checkOf('out_of_order', n) == null) n];
   List<Map<String, dynamic>> get checkedRows => [
         for (final c in checks)
-          if ((c['kind'] == 'repeated' && repeated.contains((c['serial'] as num).toInt())) ||
+          if (c['kind'] == 'unrecorded' ||
+              (c['kind'] == 'repeated' && repeated.contains((c['serial'] as num).toInt())) ||
               (c['kind'] == 'out_of_order' && outOfOrder.contains((c['serial'] as num).toInt())))
             c
       ];
@@ -543,6 +550,67 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
     );
   }
 
+  /// Clear ONE unused slip with a reason: it WAS used but could not be recorded
+  /// under its number (for example the app refused the number, so the collection
+  /// went in under another). It is kept as "used manually" with the reason and
+  /// the person who cleared it — not cancelled. Works on open and closed books.
+  Future<void> _clearUnusedSlip(_Book b, int n) async {
+    final reason = await _askText('Clear slip ${b.fmt(n)}', 'Reason',
+        hint: 'e.g. Used manually — the app refused this number; entered as A138',
+        required: true,
+        body: 'Use this when the slip WAS used but is not recorded under this number. '
+            'It is kept as used manually, with your reason — it is not cancelled.\n');
+    if (reason == null) return;
+    await _run('Slip ${b.fmt(n)} cleared', () async {
+      await _db.rpc('receipt_slip_clear', params: {
+        'p_book': b.id,
+        'p_serial': n,
+        'p_reason': reason,
+        'p_by': ref.read(currentUserProvider)?.name,
+      });
+    });
+  }
+
+  /// Cancel ONE unused slip from its own dialog — also in a CLOSED book (the book
+  /// menu offers "Cancel a slip" only while a book is open). If the server will
+  /// not cancel in a closed book, the book is reopened for a moment, the slip
+  /// cancelled and the book closed again; the close note keeps who closed it
+  /// first and when.
+  Future<void> _cancelUnusedSlip(_Book b, int n) async {
+    final reason = await _askText('Cancel slip ${b.fmt(n)}', 'Reason',
+        hint: 'e.g. torn, voided, returned blank',
+        required: true,
+        body: b.open ? null : 'This book is closed. If needed it is reopened for a moment and closed again.\n');
+    if (reason == null) return;
+    await _run('Slip ${b.fmt(n)} cancelled', () async {
+      Future<void> cancel() => _db.rpc('receipt_slip_cancel', params: {'p_book': b.id, 'p_serial': n, 'p_reason': reason});
+      if (b.open) {
+        await cancel();
+        return;
+      }
+      try {
+        await cancel(); // the server may allow it on a closed book
+        return;
+      } catch (e) {
+        final msg = '$e'.toLowerCase();
+        if (!(msg.contains('clos') || msg.contains('open'))) rethrow; // some other problem
+      }
+      final oldNote = '${b.row['close_note'] ?? ''}'.trim();
+      final who = '${b.row['closed_by_name'] ?? '—'}';
+      final when = _fmt(b.row['closed_at']);
+      await _db.rpc('receipt_book_reopen', params: {'p_id': b.id});
+      try {
+        await cancel();
+      } finally {
+        final note = [
+          if (oldNote.isNotEmpty) oldNote,
+          '(first closed by $who, $when; closed again after slip ${b.fmt(n)} was cancelled)'
+        ].join(' ');
+        await _db.rpc('receipt_book_close', params: {'p_id': b.id, 'p_note': note});
+      }
+    });
+  }
+
   Future<void> _bookAction(_Book b, String a) async {
     switch (a) {
       case 'cancel':
@@ -587,6 +655,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
 
   Future<void> _slipTap(_Book b, int n) async {
     final c = b.cancelMap[n];
+    final manualRow = b.checkOf('unrecorded', n);
     final uses = b.used.where((u) => (u['serial'] as num).toInt() == n).toList();
     await _ensureCustNames(uses.map((u) => u['customer_id']));
     if (!mounted) return;
@@ -607,6 +676,11 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                       : 'Reviewed by ${c['reviewed_by'] ?? '—'} · ${_fmt(c['reviewed_at'])}'
                           '${'${c['review_note'] ?? ''}'.isEmpty ? '' : ' — ${c['review_note']}'}',
                   style: TextStyle(fontSize: 12, color: c['reviewed_at'] == null ? Colors.orange.shade800 : AppTheme.success)),
+            ] else if (manualRow != null && uses.isEmpty) ...[
+              const Text('Used manually — not recorded under this number', style: TextStyle(fontWeight: FontWeight.w800)),
+              Text('${manualRow['note'] ?? ''}'),
+              Text('By ${manualRow['checked_by_name'] ?? '—'} · ${_fmt(manualRow['checked_at'])}',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ] else if (uses.isEmpty && !_released.values.any((r) => '${r['serial']}' == '$n'))
               const Text('Not used yet.')
             else
@@ -654,6 +728,32 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                 if (org != null && await receiptFixForSerial(context, org, n, letters: b.prefix ?? '')) _load();
               },
               child: const Text('Correct / release CR#'),
+            ),
+          if (c == null && uses.isEmpty && manualRow == null && _canIssue)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _clearUnusedSlip(b, n);
+              },
+              child: const Text('Clear with a reason…'),
+            ),
+          if (c == null && uses.isEmpty && manualRow == null && _canIssue)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _cancelUnusedSlip(b, n);
+              },
+              child: const Text('Cancel this slip…'),
+            ),
+          if (manualRow != null && uses.isEmpty && _canIssue)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _run('Slip ${b.fmt(n)} is open again', () async {
+                  await _db.rpc('receipt_slip_uncheck', params: {'p_id': manualRow['id']});
+                });
+              },
+              child: const Text('Undo'),
             ),
           if (c != null && _canIssue)
             TextButton(
@@ -917,7 +1017,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            Text('$used used · $cancelled cancelled · ${b.unused} not used yet',
+            Text('$used used${b.manualCount > 0 ? ' · ${b.manualCount} used manually' : ''} · $cancelled cancelled · ${b.unused} not used yet',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ]),
           trailing: _canIssue
@@ -963,6 +1063,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
             Align(alignment: Alignment.centerLeft,
                 child: Wrap(spacing: 12, children: [
                   _legend(AppTheme.success, 'Used'),
+                _legend(const Color(0xFF0D9488), 'Used manually'),
                   _legend(Colors.grey, 'Cancelled'),
                   _legend(Colors.amber.shade700, 'Skipped / missing'),
                   _legend(AppTheme.border, 'Not used yet'),
@@ -983,12 +1084,16 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   Widget _slipCell(_Book b, int n) {
     final used = b.usedSet.contains(n);
     final can = b.cancelMap.containsKey(n);
+    final man = !used && !can && b.manual.contains(n);
     final miss = b.skipped.contains(n) || b.missingAtClose.contains(n);
     final bad = b.openRepeated.contains(n) || b.openOutOfOrder.contains(n);
+    const manualColor = Color(0xFF0D9488);
     final Color bg = used ? AppTheme.success.withOpacity(0.15)
+        : man ? manualColor.withOpacity(0.15)
         : can ? Colors.grey.withOpacity(0.18)
         : miss ? Colors.amber.withOpacity(0.25) : Colors.white;
     final Color bd = bad ? AppTheme.danger : used ? AppTheme.success.withOpacity(0.5)
+        : man ? manualColor.withOpacity(0.7)
         : can ? Colors.grey : miss ? Colors.amber.shade700 : AppTheme.border;
     return InkWell(
       onTap: () => _slipTap(b, n),
@@ -1116,7 +1221,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.check_circle_outline, size: 18, color: AppTheme.success),
-                  title: Text('${r['serial']} · ${r['kind'] == 'repeated' ? 'Used more than once' : 'Out of order'}',
+                  title: Text('${r['serial']} · ${r['kind'] == 'repeated' ? 'Used more than once' : r['kind'] == 'unrecorded' ? 'Used manually' : 'Out of order'}',
                       style: const TextStyle(fontSize: 12.5)),
                   subtitle: Text('${r['note'] ?? ''} — ${r['checked_by_name'] ?? '—'}, ${_fmt(r['checked_at'])}',
                       style: const TextStyle(fontSize: 11.5)),
