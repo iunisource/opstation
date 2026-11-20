@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/device_guard.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -226,6 +228,47 @@ class SupabaseSyncService {
       'user_name': v.userName,
       'user_role': v.userRole,
     });
+  }
+
+  /// A visit marked on the Free Route without a customer: the same `visits` row
+  /// as [pushVisit], with customer_id NULL and skip_reason 'free', which the trip
+  /// reports look for. [r] is a row of FreeVisits.
+  ///
+  /// The organisation MUST be sent: the server fills it in from the customer
+  /// (trigger visits_default_org), and a visit without a customer has none, so
+  /// the row-level security rule (org_id = my organisation) would reject it.
+  Future<void> pushFreeVisit(Map<String, dynamic> r, {String? orgId}) async {
+    final org = (r['org_id'] as String?) ?? orgId;
+    if (org == null || org.isEmpty) {
+      throw StateError('Free visit ${r['id']} has no organisation yet'); // stays pending
+    }
+    await _client.from('visits').upsert({
+      'id': r['id'],
+      'org_id': org,
+      'trip_id': r['trip_id'],
+      'customer_id': null,
+      'status': 'verified', // the phone's GPS point was captured
+      'timestamp': _iso(DateTime.fromMillisecondsSinceEpoch((r['ts'] as num).toInt())),
+      'captured_lat': r['lat'],
+      'captured_lng': r['lng'],
+      'accuracy_meters': r['acc'],
+      'distance_meters': null,
+      'amount': 0,
+      'receipt_number': null,
+      'notes': null,
+      'skip_reason': 'free',
+      'photo_paths_json': jsonEncode(const <String>[]),
+      'sync_status': 'synced',
+      'user_id': r['user_id'],
+      'user_name': r['user_name'],
+      'user_role': r['user_role'],
+    });
+  }
+
+  /// The place name of a free visit, sent as its own update (the insert trigger
+  /// clears location_name on a new row, so the name goes after the row exists).
+  Future<void> pushFreeVisitPlace(String id, String name) async {
+    await _client.from('visits').update({'location_name': name}).eq('id', id);
   }
 
   Future<void> pushDelivery(DeliveriesData d) async {

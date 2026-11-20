@@ -9,6 +9,7 @@ import '../database/app_database_provider.dart';
 import 'supabase_sync_service.dart';
 import '../utils/customer_locations.dart';
 import '../utils/receipt_books.dart';
+import '../utils/free_visits.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Pulls org data from Supabase and writes it into local Drift DB.
@@ -589,6 +590,17 @@ class SupabasePullService {
   }
 
   Future<void> _pullVisits(List<Map<String, dynamic>> rows) async {
+    // Visits marked on the Free Route have no customer, so they don't fit the
+    // customer-visit table: keep them in the free-visit store (for reports).
+    final free = [
+      for (final r in rows)
+        if (r['customer_id'] == null && r['skip_reason'] == FreeVisits.marker) r
+    ];
+    if (free.isNotEmpty) {
+      try {
+        await FreeVisits.mergePulled(_db, free);
+      } catch (_) {}
+    }
     for (final r in rows) {
       try {
         await _db.into(_db.visits).insertOnConflictUpdate(VisitsCompanion(

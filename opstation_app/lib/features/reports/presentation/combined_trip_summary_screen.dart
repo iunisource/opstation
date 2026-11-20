@@ -13,6 +13,8 @@ import '../../salesperson/models/trip.dart';
 import '../../team/data/team_repository.dart';
 import '../../team/models/team_user.dart';
 import '../providers/report_service.dart';
+import '../../../core/database/app_database_provider.dart';
+import '../../../core/utils/free_visits.dart';
 
 /// Combined Trip Summary: a multi-date, distance-only reimbursement sheet.
 /// Pick a salesperson (or all) and a period; the PDF lists each day's total
@@ -87,9 +89,11 @@ class _CombinedTripSummaryScreenState
     for (final uid in targetIds) {
       trips.addAll(await salesRepo.tripsInRangeForUser(start, end, uid));
     }
-    // Abandoned trips (ended with no visits) are left out of the summary.
+    // Abandoned trips (ended with no visits) are left out of the summary. Visits
+    // marked on the Free Route without a customer count as visits.
+    final freeTrips = await FreeVisits.tripIdsWithVisits(ref.read(appDatabaseProvider));
     final filtered = (_routeId == null ? trips : trips.where((t) => t.routeId == _routeId))
-        .where((t) => !(t.endedAt != null && t.visits.isEmpty))
+        .where((t) => !(t.endedAt != null && t.visits.isEmpty && !freeTrips.contains(t.id)))
         .toList();
     return _LoadResult(trips: filtered, userNames: userNames);
   }

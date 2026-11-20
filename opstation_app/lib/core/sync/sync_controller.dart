@@ -15,6 +15,8 @@ import '../supabase/supabase_pull_service.dart';
 import '../supabase/supabase_sync_service.dart';
 import 'connectivity_service.dart';
 import 'trip_stops_synced.dart';
+import '../utils/free_visits.dart';
+import '../../features/reports/services/nominatim_client.dart';
 import '../../features/surveyor/services/survey_audit_service.dart';
 import '../../features/surveyor/services/survey_location_service.dart';
 
@@ -393,6 +395,7 @@ class SyncController extends Notifier<SyncStatus> {
           ? await _db.select(_db.trips).get()
           : await (_db.select(_db.trips)..where((t) => t.orgId.equals(orgId))).get();
       await _pushTripsRespectingServerClose(trips, tag: 'pushAll');
+      await _pushFreeVisits(); // visits marked without a customer (their trip is on the server now)
 
       // Shop lists in bulk, per trip (was one request per row: slow, and the
       // rows after a failure were simply lost until the next login).
@@ -516,6 +519,19 @@ class SyncController extends Notifier<SyncStatus> {
     }
   }
 
+  /// Free-route visits with no customer, and their place names. Best-effort;
+  /// whatever fails stays pending and goes with the next sync.
+  Future<void> _pushFreeVisits() async {
+    try {
+      final org = ref.read(orgIdProvider);
+      await FreeVisits.pushPending(_db, (r) => _supabase.pushFreeVisit(r, orgId: org));
+      await FreeVisits.fillPlaces(_db, (lat, lng) => ref.read(nominatimClientProvider).reverseGeocode(lat, lng));
+      await FreeVisits.pushPlaces(_db, _supabase.pushFreeVisitPlace);
+    } catch (e) {
+      print('pushFreeVisits FAILED: $e');
+    }
+  }
+
   Future<void> flushPending() async {
     print('FLUSH: entry online=$_currentlyOnline flushing=$_flushing');
     if (!_currentlyOnline) {
@@ -619,6 +635,10 @@ class SyncController extends Notifier<SyncStatus> {
       } catch (e) {
         SmsService.note('sync: recent-trip re-push block threw — $e');
       }
+
+      // Visits marked on the Free Route without a customer: their trip was just
+      // re-pushed above.
+      await _pushFreeVisits();
 
       if (pending.isEmpty) {
         await _refreshCounts();

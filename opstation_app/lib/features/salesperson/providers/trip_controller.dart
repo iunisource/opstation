@@ -1,6 +1,9 @@
 import 'dart:convert';
 import '../../../core/utils/customer_locations.dart';
 import '../../../core/utils/receipt_books.dart';
+import '../../../core/utils/free_visits.dart';
+import '../../../core/supabase/supabase_sync_service.dart';
+import '../../reports/services/nominatim_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/sms_service.dart';
 import '../../../core/services/notification_service.dart';
@@ -388,6 +391,75 @@ class TripController extends AsyncNotifier<TripState> {
       scan(t.visits);
     }
     return out;
+  }
+
+  /// Mark a visit on the Free Route WITHOUT a customer: the phone's GPS point is
+  /// the visit. Saved on the phone and sent to the server now (or with the next
+  /// sync when offline); its place name is looked up in the background. It
+  /// counts in the trip's distance and is listed in the trip reports by its
+  /// place name. Returns how many such visits this trip has now.
+  Future<int> markFreeVisit({
+    required double lat,
+    required double lng,
+    double? accuracyMeters,
+  }) async {
+    if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
+    final s = state.valueOrNull;
+    final active = s?.active;
+    if (s == null || active == null) throw StateError('No active trip.');
+    final db = ref.read(appDatabaseProvider);
+    final org = ref.read(orgIdProvider);
+    await FreeVisits.add(db, {
+      'id': _newId('visit'),
+      'trip_id': active.id,
+      'org_id': org,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+      'lat': lat,
+      'lng': lng,
+      'acc': accuracyMeters,
+      'user_id': active.userId,
+      'user_name': active.userName,
+      'user_role': active.userRole,
+    });
+
+    // Send it now; offline or trip not on the server yet → the periodic sync
+    // sends it later.
+    try {
+      await FreeVisits.pushPending(db, (r) => ref.read(supabaseSyncServiceProvider).pushFreeVisit(r, orgId: org));
+    } catch (_) {}
+
+    // The place name, without making the rep wait for it.
+    Future.microtask(() async {
+      try {
+        await FreeVisits.fillPlaces(db, (a, b) => ref.read(nominatimClientProvider).reverseGeocode(a, b));
+        await FreeVisits.pushPlaces(db, (id, name) => ref.read(supabaseSyncServiceProvider).pushFreeVisitPlace(id, name));
+      } catch (_) {}
+    });
+    return FreeVisits.countForTrip(db, active.id);
+  }
+
+  /// The latest slip written on this phone today (by visit time), or null.
+  /// Used to suggest the slip AFTER it — the numbers keep moving forward.
+  int? lastReceiptSlip() {
+    final s = state.valueOrNull;
+    if (s == null) return null;
+    final seen = <(DateTime, int)>[];
+    void scan(Iterable<Visit> vs) {
+      for (final v in vs) {
+        if (v.amount <= 0) continue;
+        final r = v.receiptNumber;
+        if (r == null || r.trim().isEmpty) continue;
+        final ks = receiptSlipKeys(r);
+        if (ks.isNotEmpty) seen.add((v.timestamp, ks.last));
+      }
+    }
+    if (s.active != null) scan(s.active!.visits);
+    for (final t in s.completedToday) {
+      scan(t.visits);
+    }
+    if (seen.isEmpty) return null;
+    seen.sort((a, b) => a.$1.compareTo(b.$1));
+    return seen.last.$2;
   }
 
   /// Receipt books ON (Admin Settings): the CR# must be an unused slip from

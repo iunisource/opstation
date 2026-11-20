@@ -13,6 +13,8 @@ import '../../customers/services/field_location_capture.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/services/sound_controller.dart';
 import '../../../core/services/device_gps_service.dart';
+import '../../../core/database/app_database_provider.dart';
+import '../../../core/utils/free_visits.dart';
 import '../../../core/utils/geo_utils.dart';
 import '../../../shared/widgets/status_badge.dart';
 import '../models/customer.dart';
@@ -122,6 +124,52 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
     );
   }
 
+  bool _freeBusy = false;
+  int _freeTick = 0; // bumps to refresh the "visits without a customer" count
+
+  /// Free route: mark a visit right here, without choosing a customer. The
+  /// phone's GPS point is the visit; the place name follows a moment later.
+  Future<void> _markFreeVisit() async {
+    if (_freeBusy) return;
+    setState(() => _freeBusy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    void say(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
+    try {
+      final gate = await ref.read(deviceGpsServiceProvider).getFixMandatory();
+      if (!mounted) return;
+      if (gate.outcome == GpsOutcome.serviceDisabled) {
+        say('Turn on your device location (GPS) to mark a visit, then try again.');
+        return;
+      }
+      if (gate.outcome == GpsOutcome.permissionBlocked) {
+        say('Location permission is blocked. Enable it for Opstation in your phone Settings, then try again.');
+        return;
+      }
+      if (gate.outcome == GpsOutcome.permissionDenied) {
+        say('Location permission is required to mark a visit. Please allow it and try again.');
+        return;
+      }
+      final fix = gate.fix;
+      if (fix == null) {
+        say('GPS is not responding, so the visit was not saved. Step outside or near a window for a few seconds, then try again.');
+        return;
+      }
+      final n = await ref.read(tripControllerProvider.notifier).markFreeVisit(
+            lat: fix.lat,
+            lng: fix.lng,
+            accuracyMeters: fix.accuracy,
+          );
+      ref.read(soundControllerProvider.notifier).play(AppSound.visitMarked);
+      say('Visit $n marked ✓');
+      if (mounted) setState(() => _freeTick++);
+    } catch (e) {
+      final m = '$e'.replaceFirst('Bad state: ', '').replaceFirst('Invalid argument(s): ', '');
+      if (mounted) say('Could not mark the visit: $m');
+    } finally {
+      if (mounted) setState(() => _freeBusy = false);
+    }
+  }
+
   /// Free route: pick an existing customer (excluding ones already added), add
   /// them as a stop, then open the normal visit modal immediately.
   Future<void> _addFreeCustomer(Trip trip) async {
@@ -160,7 +208,8 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
     final skipped = trip.skippedCount;
     final pending = trip.pendingCount;
     final total = trip.stopSnapshot.length;
-    final noActivity = visited == 0 && skipped == 0;
+    final freeMarked = await FreeVisits.countForTrip(ref.read(appDatabaseProvider), trip.id);
+    final noActivity = visited == 0 && skipped == 0 && freeMarked == 0;
     if (!noActivity && pending == 0) return true; // finished — no prompt
 
     final ok = await showDialog<bool>(
@@ -349,6 +398,36 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
                       : 'Add customer'),
                 ),
               ),
+            ),
+          // Free route, no customer needed: the GPS point is the visit.
+          if (trip.isFree && !isCompleted)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _freeBusy ? null : _markFreeVisit,
+                    icon: _freeBusy
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.place_outlined, size: 18),
+                    label: const Text('Mark visit here'),
+                  ),
+                ),
+                FutureBuilder<int>(
+                  key: ValueKey('free_${trip.id}_$_freeTick'),
+                  future: FreeVisits.countForTrip(ref.read(appDatabaseProvider), trip.id),
+                  builder: (ctx, snap) {
+                    final n = snap.data ?? 0;
+                    if (n == 0) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 4, left: 2),
+                      child: Text('Visits marked without a customer: $n',
+                          style: TextStyle(fontSize: 12, color: Theme.of(ctx).hintColor)),
+                    );
+                  },
+                ),
+              ]),
             ),
           if (!isCompleted) ...[
             Padding(

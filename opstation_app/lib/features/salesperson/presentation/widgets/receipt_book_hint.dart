@@ -45,7 +45,7 @@ class _ReceiptBookHintState extends ConsumerState<ReceiptBookHint> {
   void _prefill() {
     if (!mounted) return;
     if (ReceiptBooks.on) {
-      final n = ReceiptBooks.next(_localUsed);
+      final n = ReceiptBooks.next(_localUsed, lastKey: ref.read(tripControllerProvider.notifier).lastReceiptSlip());
       // Replace only an empty field or our own earlier suggestion.
       final cur = widget.crCtrl.text.trim();
       final single = receiptSlipKeys(cur).length == 1 && RegExp(r'^[A-Za-z]{0,3}[ \-]?\d+$').hasMatch(cur);

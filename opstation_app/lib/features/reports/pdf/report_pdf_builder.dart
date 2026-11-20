@@ -1019,6 +1019,19 @@ class ReportPdfBuilder {
 
     for (int i = 0; i < ctx.orderedVerifiedVisits.length; i++) {
       final v = ctx.orderedVerifiedVisits[i];
+      // A visit marked on the Free Route without a customer: listed by its place
+      // name (or its GPS point when no name could be found).
+      if (v.customerId.isEmpty) {
+        final km0 = ctx.distanceKm.length > i ? ctx.distanceKm[i] : 0.0;
+        rows.add([
+          '${i + 1}',
+          '-',
+          ctx.freePlaceNames[v.id] ?? _coordsOrDash(v.capturedLat, v.capturedLng),
+          km0.toStringAsFixed(2),
+          DateFormat('hh:mm a').format(v.timestamp),
+        ]);
+        continue;
+      }
       final c = customerById(v.customerId);
       // The route snapshot only holds stops planned at trip start, so an
       // ad-hoc visit — or an incompletely-synced snapshot on an admin's

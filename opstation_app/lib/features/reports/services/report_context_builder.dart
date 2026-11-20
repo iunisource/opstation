@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/maps_config.dart';
 import '../../../core/database/app_database_provider.dart';
+import '../../../core/utils/free_visits.dart';
 import '../../../core/services/google_directions_service.dart';
 import '../../salesperson/models/trip.dart';
 import 'nominatim_client.dart';
@@ -30,8 +31,12 @@ class TripReportContext {
   /// onto an admin's device, rendered as a blank dash. This is the fallback.
   final Map<String, ReportCustomerRef> extraCustomers;
 
-  /// Verified visits in timestamp order.
+  /// Verified visits in timestamp order (including visits marked on the Free
+  /// Route without a customer: customerId is '' for those).
   final List<Visit> orderedVerifiedVisits;
+
+  /// Place name of each such visit (visit id → "Gulberg Market, Lahore").
+  final Map<String, String> freePlaceNames;
 
   /// Road distance in km for each leg:
   ///   start→visit[0], visit[0]→visit[1], …
@@ -53,6 +58,7 @@ class TripReportContext {
     this.extraCustomers = const {},
     required this.endAddress,
     required this.orderedVerifiedVisits,
+    this.freePlaceNames = const {},
     required this.distanceKm,
     required this.returnDistanceKm,
     required this.totalDistanceKm,
@@ -105,6 +111,38 @@ class ReportContextBuilder {
         }(),
     ]);
 
+    // 1b. Visits marked on the Free Route without a customer: part of the trip's
+    //     visit sequence, listed by place name. Names still missing are looked up
+    //     now (OpenStreetMap, throttled); without one the GPS point is shown.
+    final freeVisits = <Visit>[];
+    final freeNames = <String, String>{};
+    try {
+      final db = _ref.read(appDatabaseProvider);
+      await FreeVisits.fillPlaces(db, (a, b) => nomi.reverseGeocode(a, b), max: 8, tripId: trip.id);
+      for (final r in await FreeVisits.forTrip(db, trip.id)) {
+        final lat = (r['lat'] as num?)?.toDouble();
+        final lng = (r['lng'] as num?)?.toDouble();
+        final ts = (r['ts'] as num?)?.toInt();
+        if (lat == null || lng == null || ts == null) continue;
+        final id = '${r['id']}';
+        freeVisits.add(Visit(
+          id: id,
+          customerId: '',
+          status: VisitStatus.verified,
+          timestamp: DateTime.fromMillisecondsSinceEpoch(ts),
+          capturedLat: lat,
+          capturedLng: lng,
+          accuracyMeters: (r['acc'] as num?)?.toDouble(),
+          skipReason: FreeVisits.marker,
+          userId: '${r['user_id'] ?? ''}',
+          userName: '${r['user_name'] ?? ''}',
+          userRole: '${r['user_role'] ?? ''}',
+        ));
+        final p = (r['place'] as String?)?.trim();
+        if (p != null && p.isNotEmpty) freeNames[id] = p;
+      }
+    } catch (_) {}
+
     // 2. Ordered verified visits with GPS.
     final ordered = [
       for (final v in trip.visits)
@@ -112,6 +150,7 @@ class ReportContextBuilder {
             v.capturedLat != null &&
             v.capturedLng != null)
           v,
+      ...freeVisits,
     ]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     // 3. Full point sequence for Google: [start?, visit0..N, end?]
@@ -181,6 +220,7 @@ class ReportContextBuilder {
       startAddress: startAddr,
       endAddress: endAddr,
       orderedVerifiedVisits: ordered,
+      freePlaceNames: freeNames,
       distanceKm: distances,
       returnDistanceKm: returnKm,
       totalDistanceKm: total,

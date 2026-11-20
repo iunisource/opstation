@@ -157,14 +157,43 @@ class ReceiptBooks {
     return null;
   }
 
-  /// The lowest slip not yet used or cancelled (oldest book first), written
-  /// as on the slip: "B1251" for a lettered book, "1251" otherwise.
-  static String? next(Set<int> localUsed) {
+  /// The slip to suggest next, written as on the slip: "B1251" for a lettered
+  /// book, "1251" otherwise. It always MOVES FORWARD: the first free slip after
+  /// the last one used ([lastKey] = the latest slip on this phone's collections;
+  /// without one, after the highest slip used in the first open book).
+  /// A skipped slip is not suggested again and again — it stays unused (the
+  /// Skipped Receipts report shows it) and can still be typed or cancelled.
+  /// Only when nothing is free after it does it fall back to a skipped slip.
+  static String? next(Set<int> localUsed, {int? lastKey}) {
     if (!on) return null;
-    for (final b in books) {
-      for (var n = b.start; n <= b.end; n++) {
-        if (!b.used.contains(n) && !b.cancelled.contains(n) && !localUsed.contains(b.keyOf(n))) return b.fmt(n);
+    bool free(ReceiptBook b, int n) =>
+        !b.used.contains(n) && !b.cancelled.contains(n) && !localUsed.contains(b.keyOf(n));
+    int? firstFree(ReceiptBook b, int from) {
+      for (var n = from < b.start ? b.start : from; n <= b.end; n++) {
+        if (free(b, n)) return n;
       }
+      return null;
+    }
+
+    // 1) Keep going in the book the rep is writing in right now.
+    if (lastKey != null) {
+      final cur = bookOf(lastKey);
+      if (cur != null) {
+        final n = firstFree(cur, slipNumber(lastKey) + 1);
+        if (n != null) return cur.fmt(n);
+      }
+    }
+    // 2) Otherwise the first open book, after the highest slip already used.
+    for (final b in books) {
+      var hi = b.start - 1;
+      for (final u in b.used) {
+        if (b.contains(u) && u > hi) hi = u;
+      }
+      for (final k in localUsed) {
+        if (b.holds(k) && slipNumber(k) > hi) hi = slipNumber(k);
+      }
+      final n = firstFree(b, hi + 1) ?? firstFree(b, b.start);
+      if (n != null) return b.fmt(n);
     }
     return null;
   }
