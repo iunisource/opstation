@@ -796,6 +796,39 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.float_alerts',
+    'Floating alerts',
+    'A new notification also appears as a small card in a corner of the screen, with a short chime, '
+        'and goes away by itself. Same alerts as the bell (what you set in Notifications above); the bell keeps all of them. '
+        'Shown only while Opstation is open and visible. Opening one from the card marks it read; '
+        'one that goes away by itself stays unread in the bell. Each person can turn the chime off for their own device with the speaker '
+        'button in the bell.',
+    number: _NumberField('org.float_alerts_seconds', 'Stays for', 6, suffix: 'seconds (3 to 30)'),
+    choice: _ChoiceField('org.float_alerts_position', 'Position', [
+      ('top_right', 'Top right'),
+      ('bottom_right', 'Bottom right'),
+    ], 'top_right'),
+    moreChoices: [
+      _ChoiceField('org.float_alerts_sound', 'Sound', [
+        ('chime', 'Short chime'),
+        ('off', 'No sound'),
+      ], 'chime'),
+      _ChoiceField('org.float_alerts_max', 'Shown at once', [
+        ('1', '1'),
+        ('2', '2'),
+        ('3', '3'),
+        ('4', '4'),
+        ('5', '5'),
+      ], '3'),
+      _ChoiceField('org.float_alerts_hover', 'Mouse over an alert', [
+        ('pause', 'Pause the countdown'),
+        ('none', 'Keep counting'),
+      ], 'pause'),
+    ],
+    defaultOn: true,
+  ),
+
+  _AdminToggle(
     'org.web_checkin',
     'Web check-in on office Wi-Fi',
     'ERP users can check in and out from Opstation while connected to an office network. '
@@ -1061,6 +1094,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.asset_suggest_flow',
     'org.compliance_reminders',
     'org.backup_enabled',
+    'org.float_alerts',
   ]),
   _ToggleGroup('Logistics & Fleet', Icons.local_shipping_outlined, [
     'org.fleet_alerts',

@@ -23,6 +23,7 @@ import '../notifications/global_transfer_alert.dart';
 import '../notifications/global_po_reject_alert.dart';
 import '../notifications/user_reminders.dart';
 import '../notifications/global_badge_sync.dart';
+import '../notifications/floating_alerts_host.dart';
 import '../onboarding/first_login_tour.dart';
 import '../widgets/org_switch_overlay.dart';
 import '../station_master/station_master.dart';
@@ -1210,7 +1211,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
     // so a wall display (e.g. the Attendance Board) shows only its own content.
     if (_fullscreen) {
       // Keep live counters + new-order pings working in full screen.
-      return Scaffold(body: Stack(children: [widget.child, const GlobalBadgeSync()]));
+      return Scaffold(body: Stack(children: [widget.child, const GlobalBadgeSync(), const FloatingAlertsHost()]));
     }
 
     // ── Mobile: hamburger AppBar + slide-in Drawer (nav as inline expanders) ──
@@ -1248,7 +1249,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           backgroundColor: AppTheme.sidebar,
           child: SafeArea(child: _mobileDrawer(user)),
         ),
-        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: _withScreenGear(widget.child))]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
+        body: Stack(children: [Column(children: [const TrialBanner(), Expanded(child: _withScreenGear(widget.child))]), const GlobalJobAlert(), const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(), const GlobalBadgeSync(), const FloatingAlertsHost(), const FirstLoginTour(), const StationMaster(), const SupportButtons()]),
       );
     }
 
@@ -1262,7 +1263,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
           ]),
           const GlobalJobAlert(),
           const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
-          const GlobalBadgeSync(),
+          const GlobalBadgeSync(), const FloatingAlertsHost(),
           const FirstLoginTour(),
           const StationMaster(),
           const SupportButtons(),
@@ -1278,7 +1279,7 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
         ]),
         const GlobalJobAlert(),
         const GlobalTransferAlert(), const GlobalPoRejectAlert(), const UserRemindersEngine(),
-        const GlobalBadgeSync(),
+        const GlobalBadgeSync(), const FloatingAlertsHost(),
         const FirstLoginTour(),
         const StationMaster(),
         const SupportButtons(),
@@ -1516,7 +1517,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/sales-return-report')) _menuItem(context, 'Sales Return Report',  Icons.summarize_outlined,         '/erp/sales-return-report',    location),
       if (show('/erp/dispatch-summary')) _menuItem(context, 'Dispatch Summary',     Icons.local_shipping_outlined,    '/erp/dispatch-summary',       location),
       if (show('/erp/schemes-report')) _menuItem(context, 'Scheme Performance',   Icons.local_offer_outlined,       '/erp/schemes-report',         location),
-      if (show('/erp/scheme-vouchers-report')) _menuItem(context, 'Scheme Vouchers',   Icons.fact_check_outlined,       '/erp/scheme-vouchers-report',         location),
+      if (show('/erp/scheme-vouchers-report')) _menuItem(context, 'Scheme Vouchers Report',   Icons.fact_check_outlined,       '/erp/scheme-vouchers-report',         location),
     ];
     final salesItems = <Widget>[
       if (modules.contains('sales')) ...[

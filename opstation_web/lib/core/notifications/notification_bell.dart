@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
+import 'alert_chime.dart';
 import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
 import '../../features/auth/auth_controller.dart';
@@ -248,6 +249,21 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
               const Expanded(
                   child: Text('Notifications',
                       style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14))),
+              // This device's own switch for the alert chime.
+              IconButton(
+                tooltip: AlertChime.muted ? 'Alert sound is off on this device' : 'Alert sound is on',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(AlertChime.muted ? Icons.volume_off_outlined : Icons.volume_up_outlined,
+                    size: 18, color: AppTheme.textSecondary),
+                onPressed: () {
+                  AlertChime.muted = !AlertChime.muted;
+                  if (!AlertChime.muted) {
+                    AlertChime.unlock();
+                    AlertChime.play(); // so the person hears what it sounds like
+                  }
+                  _overlay?.markNeedsBuild();
+                },
+              ),
               if (_unread > 0)
                 TextButton(
                     onPressed: _markAllRead,
