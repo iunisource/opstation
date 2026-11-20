@@ -6,11 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
+import 'core/utils/place_name.dart';
+import 'features/reports/pdf/report_pdf_builder.dart';
 
 const _sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Trip reports name a visit's GPS point ("Gulberg Market, Lahore") with the shared place-name lookup.
+  tripReportPlaceName = (lat, lng, until) => placeName(lat, lng, until: until);
 
   // Crash-proof error widget: renders build errors as readable on-screen text
   // instead of a blank white page, and keeps the crash contained to the failing

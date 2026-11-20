@@ -2,6 +2,7 @@
 import '../../../core/layout/main_layout.dart' show deviceChangePendingProvider;
 import 'dart:html' as html;
 import '../../../core/utils/place_name.dart';
+import '../../../core/utils/visit_outcome.dart' show visitIsFree, mapsLink;
 import 'package:flutter/material.dart';
 import '../../operations/presentation/time_in_market.dart';
 import '../../operations/presentation/app_versions_screen.dart' show AppVersionInfo, appStatusPill;
@@ -340,7 +341,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
           final vRes = await client
               .from('visits')
               .select(
-                  'trip_id, amount, customer_id, timestamp, receipt_number, status, captured_lat, captured_lng')
+                  'trip_id, amount, customer_id, timestamp, receipt_number, status, captured_lat, captured_lng, skip_reason, location_name')
               .inFilter('trip_id', [for (final t in trips) t['id'] as String]);
           final perTrip = <String, int>{};
           final perTripAmt = <String, int>{};
@@ -365,6 +366,8 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                 'route_name': routeNameByTrip[tid] ?? '—',
                 'lat': (v['captured_lat'] as num?)?.toDouble(),
                 'lng': (v['captured_lng'] as num?)?.toDouble(),
+                'free': visitIsFree(v as Map),
+                'place': (v['location_name'] as String?)?.trim(),
               });
             }
             perTrip[tid] = (perTrip[tid] ?? 0) + 1;
@@ -523,8 +526,10 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     return n;
   }
 
-  String _custName(String? id) =>
-      _custById[id]?['shop_name'] as String? ?? '(unknown)';
+  // A visit with no customer was marked on the Free Route (listed by its place).
+  String _custName(String? id) => id == null
+      ? 'Visit without a customer'
+      : (_custById[id]?['shop_name'] as String? ?? '(unknown)');
   String _custCode(String? id) => _custById[id]?['code'] as String? ?? '';
 
   String _fmtDate(String? iso) {
@@ -1445,14 +1450,26 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     final amount = (v['amount'] as int?) ?? 0;
     final lat = v['lat'] as double?;
     final lng = v['lng'] as double?;
-    final showCoords = key == 'outside' || key == 'noLocation';
+    final free = v['free'] == true;
+    final showCoords = free || key == 'outside' || key == 'noLocation';
     return _card(Row(children: [
       Icon(icon, size: 20, color: color),
       const SizedBox(width: 12),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_custName(cid),
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          if (free)
+            // Place name saved with the visit, else the shared place-name lookup.
+            FutureBuilder<String?>(
+              future: (v['place'] as String?)?.isNotEmpty == true
+                  ? Future.value(v['place'] as String?)
+                  : (lat != null && lng != null ? placeName(lat, lng) : Future.value(null)),
+              builder: (_, snap) => Text(
+                  (snap.data != null && snap.data!.isNotEmpty) ? snap.data! : _custName(cid),
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+            )
+          else
+            Text(_custName(cid),
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
           const SizedBox(height: 2),
           Text(
               '${_custCode(cid).isNotEmpty ? '${_custCode(cid)} · ' : ''}${v['route_name'] ?? '—'} · ${DateFormat(orgTime('d MMM yyyy · HH:mm')).format(t)}',
@@ -1462,9 +1479,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
             const SizedBox(height: 3),
             if (lat != null && lng != null)
               InkWell(
-                onTap: () => html.window.open(
-                    'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
-                    '_blank'),
+                onTap: () => html.window.open(mapsLink(lat, lng), '_blank'),
                 borderRadius: BorderRadius.circular(4),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.place_outlined, size: 13, color: color),

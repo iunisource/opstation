@@ -44,6 +44,14 @@ bool? visitHasGps(Map v) => v.containsKey('captured_lat') ? v['captured_lat'] !=
 /// visit that isn't a skip).
 bool visitIsAdhoc(Map v) => '${v['status'] ?? ''}' != 'skipped' && '${v['skip_reason'] ?? ''}' == 'adhoc';
 
+/// A visit marked on the Free Route WITHOUT a customer (customer_id NULL,
+/// skip_reason 'free', status 'verified' — the phone's GPS point was captured).
+/// Reports list it by its place name; its GPS point counts in the trip distance.
+bool visitIsFree(Map v) => '${v['skip_reason'] ?? ''}' == 'free';
+
+/// Opens a GPS point in Google Maps.
+String mapsLink(double lat, double lng) => 'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
+
 /// " · Ad-hoc receipt" and, when the visit didn't count as Visited and the GPS
 /// reading was rough (worse than 50 m), " · rough GPS (±90 m)". [outcome] is
 /// the label from [visitOutcomeLabel].

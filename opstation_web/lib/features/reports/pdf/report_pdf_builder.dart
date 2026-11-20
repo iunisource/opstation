@@ -10,6 +10,11 @@ import '../../../core/format/money.dart';
 import '../../../core/utils/route_distances.dart';
 import '../../../core/format/time_format.dart';
 
+/// How a trip report finds the place name of a visit's GPS point. Set once at
+/// start-up (main.dart: the shared place-name lookup). Null = no names, the GPS
+/// point is shown instead.
+Future<String?> Function(double lat, double lng, DateTime until)? tripReportPlaceName;
+
 /// Web port of mobile's TripReportContext.
 /// Pre-computed data for a trip report. [build] uses straight lines;
 /// [buildRoad] uses Google road distances via the server when available.
@@ -25,6 +30,9 @@ class TripReportContext {
   final double totalDistanceKm;
   final bool usedGoogle;
 
+  /// Place name of each visit marked without a customer (visit id → name).
+  final Map<String, String> freePlaceNames;
+
   const TripReportContext({
     required this.trip,
     required this.visits,
@@ -36,7 +44,22 @@ class TripReportContext {
     required this.returnDistanceKm,
     required this.totalDistanceKm,
     required this.usedGoogle,
+    this.freePlaceNames = const {},
   });
+
+  TripReportContext _withPlaces(Map<String, String> names) => TripReportContext(
+        trip: trip,
+        visits: visits,
+        customersById: customersById,
+        startAddress: startAddress,
+        endAddress: endAddress,
+        orderedVerifiedVisits: orderedVerifiedVisits,
+        distanceKm: distanceKm,
+        returnDistanceKm: returnDistanceKm,
+        totalDistanceKm: totalDistanceKm,
+        usedGoogle: usedGoogle,
+        freePlaceNames: names,
+      );
 
   factory TripReportContext.build({
     required Map<String, dynamic> trip,
@@ -47,7 +70,7 @@ class TripReportContext {
   }) {
     final ordered = visits
         .where((v) =>
-            v['status'] == 'verified' &&
+            (v['status'] == 'verified' || visitIsFree(v)) &&
             v['captured_lat'] != null &&
             v['captured_lng'] != null)
         .toList()
@@ -113,6 +136,48 @@ class TripReportContext {
   /// Same as [build], but with road distances from Google (via the server,
   /// saved per trip) when available; straight lines otherwise.
   static Future<TripReportContext> buildRoad({
+    required Map<String, dynamic> trip,
+    required List<Map<String, dynamic>> visits,
+    required Map<String, Map<String, dynamic>> customersById,
+    String? startAddress,
+    String? endAddress,
+  }) async {
+    final ctx = await _buildRoadDistances(
+      trip: trip,
+      visits: visits,
+      customersById: customersById,
+      startAddress: startAddress,
+      endAddress: endAddress,
+    );
+    final names = await _freePlaces(ctx);
+    return names.isEmpty ? ctx : ctx._withPlaces(names);
+  }
+
+  /// Place names of the visits marked without a customer: the name the phone
+  /// saved with the visit, else the shared place-name lookup (within a time
+  /// budget). A visit without a name is listed by its GPS point.
+  static Future<Map<String, String>> _freePlaces(TripReportContext ctx) async {
+    final out = <String, String>{};
+    final until = DateTime.now().add(const Duration(seconds: 10));
+    for (final v in ctx.orderedVerifiedVisits) {
+      if (!visitIsFree(v)) continue;
+      final id = '${v['id']}';
+      final saved = (v['location_name'] as String?)?.trim();
+      if (saved != null && saved.isNotEmpty) {
+        out[id] = saved;
+        continue;
+      }
+      final lookup = tripReportPlaceName;
+      if (lookup == null) continue;
+      try {
+        final n = await lookup((v['captured_lat'] as num).toDouble(), (v['captured_lng'] as num).toDouble(), until);
+        if (n != null && n.trim().isNotEmpty) out[id] = n.trim();
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  static Future<TripReportContext> _buildRoadDistances({
     required Map<String, dynamic> trip,
     required List<Map<String, dynamic>> visits,
     required Map<String, Map<String, dynamic>> customersById,
@@ -987,6 +1052,92 @@ class ReportPdfBuilder {
   }
 
   static pw.Widget _sequencedTable(TripReportContext ctx) {
+    // No visit without a customer on this trip: the table is exactly what it always was.
+    if (!ctx.orderedVerifiedVisits.any(visitIsFree)) return _sequencedTablePlain(ctx);
+    return _sequencedTableWithFree(ctx);
+  }
+
+  /// The same table; a visit marked without a customer is listed by its place
+  /// name, with its GPS point under it as a link that opens Google Maps.
+  static pw.Widget _sequencedTableWithFree(TripReportContext ctx) {
+    const headers = ['#', 'CODE', 'CUSTOMER', 'DISTANCE (KM)', 'TIME'];
+    final hdr = pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: _muted, letterSpacing: 0.3);
+    const cellStyle = pw.TextStyle(fontSize: 8.5, color: _ink);
+    pw.Widget cell(pw.Widget w, [pw.Alignment a = pw.Alignment.centerLeft]) =>
+        pw.Container(alignment: a, padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4), child: w);
+    pw.Widget txt(String t, {pw.Alignment a = pw.Alignment.centerLeft, pw.TextStyle? style}) =>
+        cell(pw.Text(t, style: style ?? cellStyle), a);
+    pw.Alignment alignOf(int i) => i == 0 ? pw.Alignment.center : (i == 3 || i == 4) ? pw.Alignment.centerRight : pw.Alignment.centerLeft;
+
+    final rows = <pw.TableRow>[
+      pw.TableRow(
+        decoration: const pw.BoxDecoration(color: _bg),
+        children: [for (var i = 0; i < headers.length; i++) txt(headers[i], a: alignOf(i), style: hdr)],
+      ),
+    ];
+
+    for (var i = 0; i < ctx.orderedVerifiedVisits.length; i++) {
+      final v = ctx.orderedVerifiedVisits[i];
+      final free = visitIsFree(v);
+      final cid = v['customer_id'] as String?;
+      final c = cid != null ? ctx.customersById[cid] : null;
+      final km = ctx.distanceKm.length > i ? ctx.distanceKm[i] : 0.0;
+      final time = DateFormat(orgTime('hh:mm a')).format(DateTime.parse(v['timestamp'] as String).toLocal());
+
+      pw.Widget custCell;
+      if (free) {
+        final lat = (v['captured_lat'] as num).toDouble();
+        final lng = (v['captured_lng'] as num).toDouble();
+        final name = ctx.freePlaceNames['${v['id']}'];
+        final pt = '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+        custCell = cell(pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          if (name != null && name.isNotEmpty) pw.Text(_pdfSafe(name), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: _ink)),
+          pw.UrlLink(
+            destination: mapsLink(lat, lng),
+            child: pw.Text(pt, style: pw.TextStyle(fontSize: name != null && name.isNotEmpty ? 7 : 8.5, color: PdfColors.blue, decoration: pw.TextDecoration.underline)),
+          ),
+        ]));
+      } else {
+        custCell = txt((c?['shop_name'] as String?) ?? '-');
+      }
+      rows.add(pw.TableRow(children: [
+        txt('${i + 1}', a: pw.Alignment.center),
+        txt(free ? '-' : ((c?['code'] as String?) ?? '-')),
+        custCell,
+        txt(km.toStringAsFixed(2), a: pw.Alignment.centerRight),
+        txt(time, a: pw.Alignment.centerRight),
+      ]));
+    }
+
+    if (ctx.returnDistanceKm > 0) {
+      rows.add(pw.TableRow(children: [
+        txt(''), txt(''), txt('Return to end location'),
+        txt(ctx.returnDistanceKm.toStringAsFixed(2), a: pw.Alignment.centerRight),
+        txt(ctx.trip['ended_at'] == null
+            ? '-'
+            : DateFormat(orgTime('hh:mm a')).format(DateTime.parse(ctx.trip['ended_at'] as String).toLocal()), a: pw.Alignment.centerRight),
+      ]));
+    }
+    rows.add(pw.TableRow(children: [
+      txt(''), txt(''), txt('Total Distance'),
+      txt('${ctx.totalDistanceKm.toStringAsFixed(2)} km', a: pw.Alignment.centerRight),
+      txt(''),
+    ]));
+
+    return pw.Table(
+      columnWidths: const {
+        0: pw.FixedColumnWidth(20),
+        1: pw.FixedColumnWidth(52),
+        2: pw.FlexColumnWidth(5),
+        3: pw.FixedColumnWidth(64),
+        4: pw.FixedColumnWidth(54),
+      },
+      border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
+      children: rows,
+    );
+  }
+
+  static pw.Widget _sequencedTablePlain(TripReportContext ctx) {
     final headers = ['#', 'CODE', 'CUSTOMER', 'DISTANCE (KM)', 'TIME'];
     final rows = <List<String>>[];
 
