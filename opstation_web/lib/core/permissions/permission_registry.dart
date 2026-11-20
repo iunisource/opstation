@@ -105,7 +105,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('dispatch_summary', 'Dispatch Summary', PermKind.report, '/erp/dispatch-summary'),
     PermItem('schemes', 'Schemes & Offers', PermKind.doc, '/erp/schemes'),
     PermItem('schemes_report', 'Scheme Performance', PermKind.report, '/erp/schemes-report'),
-    PermItem('scheme_vouchers_report', 'Scheme Vouchers', PermKind.report, '/erp/scheme-vouchers-report'),
+    PermItem('scheme_vouchers_report', 'Scheme Vouchers Report', PermKind.report, '/erp/scheme-vouchers-report'),
   ]),
   PermModule('pos', 'POS', Icons.storefront_outlined, [
     PermItem('pos_config', 'Configuration', PermKind.doc, '/erp/pos-config'),
@@ -205,6 +205,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('dispatch_orders', 'Dispatch Orders', PermKind.doc, '/dispatch-orders'),
     PermItem('dispatch_dashboard', 'Dispatch Dashboard', PermKind.report, '/dispatch-dashboard'),
     PermItem('fleet', 'Fleet', PermKind.doc, '/fleet'),
+    PermItem('logistics_reports', 'Logistics Reports', PermKind.report, '/logistics-reports'),
   ], moduleGated: false),
   // CRM is licensable in app_modules.dart but had no registry entry, so none
   // of its routes appeared in kRouteToModule and the menu showed for every

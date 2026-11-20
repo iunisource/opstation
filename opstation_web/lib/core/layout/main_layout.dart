@@ -1718,9 +1718,9 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       // Logistics — Deliveries (incl. supplier pickups) + Dispatch Orders.
       // Permission-scoped via the registry, so any user granted either item
       // sees this menu — not only admin-tier or the dispatch-manager role.
-      if (modules.contains('logistics') && (show('/deliveries') || show('/dispatch-orders') || show('/dispatch-dashboard') || show('/fleet')))
+      if (modules.contains('logistics') && (show('/deliveries') || show('/dispatch-orders') || show('/dispatch-dashboard') || show('/fleet') || show('/logistics-reports')))
         _navMenu(context, 'Logistics', Icons.local_shipping_outlined, location,
-          ['/deliveries', '/dispatch-orders', '/dispatch-dashboard', '/fleet'],
+          ['/deliveries', '/dispatch-orders', '/dispatch-dashboard', '/fleet', '/logistics-reports'],
           badge: show('/fleet') ? fleetDue : 0,
           [
             if (show('/dispatch-dashboard'))
@@ -1731,6 +1731,8 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Dispatch Orders', Icons.assignment_outlined, '/dispatch-orders', location),
             if (show('/fleet'))
               _menuItem(context, 'Fleet', Icons.directions_car_outlined, '/fleet', location, badge: fleetDue),
+            if (show('/logistics-reports'))
+              _menuItem(context, 'Logistics Reports', Icons.summarize_outlined, '/logistics-reports', location),
           ]),
       // Management (Assets/Facility) — lives here so ERP users see it too, not
       // just admin-tier. Self-gated by the /assets and /facility grants.
@@ -1814,6 +1816,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _navButton(context, 'Deliveries', Icons.local_shipping_outlined, '/deliveries', location),
           _navButton(context, 'Dispatch Orders', Icons.assignment_outlined, '/dispatch-orders', location),
           _navButton(context, 'Fleet', Icons.directions_car_outlined, '/fleet', location),
+          _navButton(context, 'Logistics Reports', Icons.summarize_outlined, '/logistics-reports', location),
         ],
 
         if (isAccountant)

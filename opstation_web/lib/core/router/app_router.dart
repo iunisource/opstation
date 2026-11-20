@@ -180,6 +180,7 @@ import '../../features/erp/presentation/erp_discount_policies_screen.dart' defer
 import '../../features/intelligence/presentation/intelligence_reports_screen.dart' deferred as _s167;
 import '../../features/deliveries/presentation/dispatch_dashboard_screen.dart' deferred as _s168;
 import '../../features/fleet/fleet_screen.dart' deferred as _s169;
+import '../../features/logistics_reports/logistics_reports_screen.dart' deferred as _s174;
 import '../../features/licences/licences_screen.dart' deferred as _s170;
 import '../../features/reimbursements/reimbursements_screen.dart' deferred as _s171;
 import '../../features/operations/presentation/app_versions_screen.dart' deferred as _s172;
@@ -296,6 +297,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc == '/dispatch-orders' ||
                 loc == '/dispatch-dashboard' ||
                 loc == '/fleet' ||
+                loc == '/logistics-reports' ||
                 loc.startsWith('/deliveries/');
           }
           if (role == WebUserRole.accountant) {
@@ -324,7 +326,8 @@ final webRouterProvider = Provider<GoRouter>((ref) {
                 loc.startsWith('/deliveries/') ||
                 loc == '/dispatch-orders' ||
                 loc == '/dispatch-dashboard' ||
-                loc == '/fleet';
+                loc == '/fleet' ||
+                loc == '/logistics-reports';
             // Route Roster (Operations) is registry-gated too.
             final permScopedOps = const {
               '/dashboard', '/team', '/routes', '/operations/route-roster', '/operations/time-in-market', '/live-map',
@@ -481,6 +484,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/fleet', builder: (_, state) => _deferred('_s169', _s169.loadLibrary, () => _s169.FleetScreen(openId: state.uri.queryParameters['v']))),
           GoRoute(path: '/dispatch-dashboard', builder: (_, __) => _deferred('_s168', _s168.loadLibrary, () => _s168.DispatchDashboardScreen())),
           GoRoute(path: '/dispatch-orders', builder: (_, __) => _deferred('_s061', _s061.loadLibrary, () => _s061.DispatchOrdersScreen())),
+          GoRoute(path: '/logistics-reports', builder: (_, __) => _deferred('_s174', _s174.loadLibrary, () => _s174.LogisticsReportsScreen())),
           GoRoute(path: '/orders', builder: (_, __) => _deferred('_s062', _s062.loadLibrary, () => _s062.OrdersScreen())),
           GoRoute(path: '/reports', builder: (_, __) => _deferred('_s058', _s058.loadLibrary, () => _s058.ReportsScreen())),
           GoRoute(path: '/reports/combined-summary', builder: (_, __) => _deferred('_s140', _s140.loadLibrary, () => _s140.CombinedTripSummaryScreen())),
@@ -1005,6 +1009,7 @@ final Map<String, Future<void> Function()> _allScreens = {
   '_s171': _s171.loadLibrary,
   '_s172': _s172.loadLibrary,
   '_s173': _s173.loadLibrary,
+  '_s174': _s174.loadLibrary,
 };
 
 /// Once the first screen is up, download the other screens' code one by one
