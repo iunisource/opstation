@@ -116,6 +116,18 @@ class _Book {
   int get issues => skipped.length + missingAtClose.length + openRepeated.length + openOutOfOrder.length + byOthers.length;
 }
 
+/// One kind of issue in one book, as the "Resolve issues" dialog shows it.
+class _Group {
+  _Group(this.book, this.kind, this.title, this.slips, this.actions) : picked = {...slips};
+  final _Book book;
+  final String kind; // missing | skipped | repeated | ooo
+  final String title;
+  final List<int> slips;
+  final List<(String, String)> actions; // (code, label)
+  String action = 'leave';
+  Set<int> picked;
+}
+
 class _State extends ConsumerState<ErpReceiptBooksScreen> {
   SupabaseClient get _db => Supabase.instance.client;
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -132,6 +144,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   bool _isAdmin = false; // admins / master admins can correct or release a CR# (SQL 479)
   Map<String, Map<String, dynamic>> _released = {}; // "visitId|serial" → release (SQL 482)
   String _status = 'open'; // open | closed | all
+  bool _byRep = false; // list the books under each salesperson
   String _query = '';
   bool _busy = false;
   final Map<String, String> _custNames = {}; // customer id -> shop name (for slip details)
@@ -827,6 +840,15 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               selected: _status == s,
               onSelected: (_) => setState(() => _status = s),
             ),
+          FilterChip(
+            avatar: const Icon(Icons.person_outline, size: 16),
+            label: const Text('By salesperson'),
+            selected: _byRep,
+            onSelected: (v) => setState(() {
+              _byRep = v;
+              if (v) _status = 'all'; // closed books carry most issues: show them too
+            }),
+          ),
           SizedBox(
             width: context.isMobile ? double.infinity : 280,
             child: TextField(
@@ -859,11 +881,272 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
                               _books.isEmpty ? 'No receipt books issued yet.' : 'No books here.',
                               style: const TextStyle(color: AppTheme.textSecondary))),
                         ),
-                      for (final b in list) _bookCard(b),
+                      if (_byRep) ..._repGroups(list) else for (final b in list) _bookCard(b),
                     ]),
         ),
       ]),
     );
+  }
+
+  // ── By salesperson ─────────────────────────────────────────────────────────
+
+  /// The books grouped under each salesperson, most issues first.
+  List<Widget> _repGroups(List<_Book> list) {
+    final by = <String, List<_Book>>{};
+    for (final b in list) {
+      (by[b.holderId.isEmpty ? b.holder : b.holderId] ??= []).add(b);
+    }
+    final reps = by.values.toList()
+      ..sort((a, b) {
+        final ia = a.fold<int>(0, (s, x) => s + x.issues), ib = b.fold<int>(0, (s, x) => s + x.issues);
+        return ib != ia ? ib.compareTo(ia) : a.first.holder.compareTo(b.first.holder);
+      });
+    return [for (final books in reps) _repCard(books)];
+  }
+
+  Widget _repCard(List<_Book> books) {
+    final name = books.first.holder.isEmpty ? '—' : books.first.holder;
+    final issues = books.fold<int>(0, (s, b) => s + b.issues);
+    final open = books.where((b) => b.open).length;
+    final sorted = [...books]
+      ..sort((a, b) {
+        if (a.open != b.open) return a.open ? -1 : 1;
+        return '${b.row['issued_at']}'.compareTo('${a.row['issued_at']}');
+      });
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: issues > 0 ? Colors.deepOrange.withOpacity(0.5) : AppTheme.border),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          title: Wrap(spacing: 10, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5)),
+            Text('${books.length} book${books.length == 1 ? '' : 's'} · $open open',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            if (issues > 0) _tag('$issues to check', Colors.deepOrange),
+            if (issues > 0 && _canIssue)
+              TextButton.icon(
+                onPressed: _busy ? null : () => _resolveRep(name, sorted),
+                icon: const Icon(Icons.task_alt, size: 16),
+                label: const Text('Resolve issues…'),
+              ),
+          ]),
+          children: [for (final b in sorted) _bookCard(b)],
+        ),
+      ),
+    );
+  }
+
+  Widget _groupTile(_Group g, StateSetter setD) {
+    final active = g.action != 'leave';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text('${g.title} (${g.slips.length})', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
+          DropdownButton<String>(
+            value: g.action,
+            isDense: true,
+            items: [
+              const DropdownMenuItem(value: 'leave', child: Text('Leave as is', style: TextStyle(fontSize: 12.5))),
+              for (final a in g.actions) DropdownMenuItem(value: a.$1, child: Text(a.$2, style: const TextStyle(fontSize: 12.5))),
+            ],
+            onChanged: (v) => setD(() => g.action = v ?? 'leave'),
+          ),
+        ]),
+        if (active) ...[
+          Wrap(spacing: 6, runSpacing: 4, children: [
+            for (final n in g.slips)
+              FilterChip(
+                label: Text(g.book.fmt(n), style: const TextStyle(fontSize: 11.5)),
+                selected: g.picked.contains(n),
+                visualDensity: VisualDensity.compact,
+                onSelected: (v) => setD(() => v ? g.picked.add(n) : g.picked.remove(n)),
+              ),
+          ]),
+          Row(children: [
+            TextButton(onPressed: () => setD(() => g.picked = {...g.slips}), child: const Text('All')),
+            TextButton(onPressed: () => setD(() => g.picked = {}), child: const Text('None')),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  /// One dialog for ALL of a salesperson's books: for each kind of issue choose what
+  /// it is (returned blank / used manually / verified), pick the slips, give one
+  /// reason, and apply. Slips left as they are stay flagged.
+  Future<void> _resolveRep(String holder, List<_Book> books) async {
+    final groups = <_Group>[];
+    for (final b in books) {
+      if (b.missingAtClose.isNotEmpty) {
+        groups.add(_Group(b, 'missing', 'Missing at close', b.missingAtClose,
+            const [('blank', 'Came back blank — void them'), ('manual', 'Were used — clear with the reason')]));
+      }
+      if (b.skipped.isNotEmpty) {
+        groups.add(_Group(b, 'skipped', 'Skipped', b.skipped,
+            const [('void', 'Voided / torn / blank — cancel them'), ('manual', 'Were used — clear with the reason')]));
+      }
+      if (b.openRepeated.isNotEmpty) {
+        groups.add(_Group(b, 'repeated', 'Used more than once', b.openRepeated, const [('check', 'Verified — mark as checked')]));
+      }
+      if (b.openOutOfOrder.isNotEmpty) {
+        groups.add(_Group(b, 'ooo', 'Out of order', b.openOutOfOrder, const [('check', 'Verified — mark as checked')]));
+      }
+    }
+    if (groups.isEmpty) {
+      _snack('Nothing to resolve for $holder.');
+      return;
+    }
+    final noteCtrl = TextEditingController();
+    String? err;
+    int count() => groups.where((g) => g.action != 'leave').fold<int>(0, (s, g) => s + g.picked.length);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
+        title: Text('Resolve issues — $holder'),
+        content: SizedBox(
+          width: 680,
+          child: SingleChildScrollView(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text(
+                  'For each kind of issue choose what it is. Pick the slips it applies to, write one reason, and apply. '
+                  'Anything left as is stays flagged. Slips written by someone else are fixed by correcting the CR# on the collection.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const SizedBox(height: 10),
+              for (final b in books)
+                if (groups.any((g) => g.book == b)) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 6),
+                    child: Text('${b.range} · ${b.open ? 'open' : 'closed'}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5)),
+                  ),
+                  for (final g in groups.where((g) => g.book == b)) _groupTile(g, setD),
+                ],
+              const SizedBox(height: 6),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(
+                    labelText: 'Reason / what was checked (required)',
+                    hintText: 'e.g. Book returned, blank slips seen · Genuine, written out of sequence'),
+              ),
+              if (err != null)
+                Padding(padding: const EdgeInsets.only(top: 8),
+                    child: Text(err!, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5))),
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Back')),
+          ElevatedButton(
+            onPressed: () {
+              if (count() == 0) return setD(() => err = 'Choose what to do for at least one kind of issue, with at least one slip.');
+              if (noteCtrl.text.trim().isEmpty) return setD(() => err = 'Write the reason / what was checked.');
+              Navigator.pop(ctx, true);
+            },
+            child: Text('Apply (${count()} slip${count() == 1 ? '' : 's'})'),
+          ),
+        ],
+      )),
+    );
+    if (ok != true) return;
+    await _applyResolve(holder, groups, noteCtrl.text.trim());
+  }
+
+  Future<void> _applyResolve(String holder, List<_Group> groups, String note) async {
+    setState(() => _busy = true);
+    var slips = 0;
+    final failed = <String>[];
+    final byBook = <_Book, List<_Group>>{};
+    for (final g in groups) {
+      if (g.action == 'leave' || g.picked.isEmpty) continue;
+      (byBook[g.book] ??= []).add(g);
+    }
+    for (final e in byBook.entries) {
+      final b = e.key;
+      try {
+        // Checks and "used manually" never need the book to be open.
+        final checks = <Map<String, dynamic>>[];
+        final cancels = <(int, String)>[];
+        for (final g in e.value) {
+          final picked = g.picked.toList()..sort();
+          if (g.action == 'check') {
+            for (final n in picked) {
+              checks.add({'serial': n, 'kind': g.kind == 'repeated' ? 'repeated' : 'out_of_order'});
+            }
+          } else if (g.action == 'manual') {
+            for (final n in picked) {
+              await _db.rpc('receipt_slip_clear', params: {
+                'p_book': b.id,
+                'p_serial': n,
+                'p_reason': note,
+                'p_by': ref.read(currentUserProvider)?.name,
+              });
+              slips++;
+            }
+          } else if (g.action == 'blank') {
+            for (final n in picked) {
+              cancels.add((n, 'Returned blank — $note'));
+            }
+          } else if (g.action == 'void') {
+            for (final n in picked) {
+              cancels.add((n, note));
+            }
+          }
+        }
+        if (checks.isNotEmpty) {
+          await _db.rpc('receipt_slip_check', params: {'p_book': b.id, 'p_items': checks, 'p_note': note});
+          slips += checks.length;
+        }
+        if (cancels.isNotEmpty) {
+          await _cancelMany(b, cancels);
+          slips += cancels.length;
+        }
+      } catch (err) {
+        failed.add('${b.range}: ${friendlyError('failed', err)}');
+      }
+    }
+    await _load();
+    ref.invalidate(receiptSlipPendingProvider);
+    if (mounted) {
+      _snack(failed.isEmpty
+          ? 'Resolved $slips slip${slips == 1 ? '' : 's'} for $holder'
+          : 'Resolved $slips for $holder, but: ${failed.join(' · ')}');
+      setState(() => _busy = false);
+    }
+  }
+
+  /// Cancel several unused slips of one book. A closed book is reopened for the
+  /// cancelling and closed again (the server refuses to cancel in a closed book);
+  /// its close note keeps who closed it first and when.
+  Future<void> _cancelMany(_Book b, List<(int, String)> items) async {
+    Future<void> all() async {
+      for (final it in items) {
+        await _db.rpc('receipt_slip_cancel', params: {'p_book': b.id, 'p_serial': it.$1, 'p_reason': it.$2});
+      }
+    }
+
+    if (b.open) return all();
+    final oldNote = '${b.row['close_note'] ?? ''}'.trim();
+    final who = '${b.row['closed_by_name'] ?? '—'}';
+    final when = _fmt(b.row['closed_at']);
+    await _db.rpc('receipt_book_reopen', params: {'p_id': b.id});
+    try {
+      await all();
+    } finally {
+      final note = [
+        if (oldNote.isNotEmpty) oldNote,
+        '(first closed by $who, $when; closed again after ${items.length} slip${items.length == 1 ? '' : 's'} were cancelled)'
+      ].join(' ');
+      await _db.rpc('receipt_book_close', params: {'p_id': b.id, 'p_note': note});
+    }
   }
 
   /// Cancelled slips not reviewed yet: (book, cancel row), newest first.
