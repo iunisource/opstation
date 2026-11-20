@@ -2269,6 +2269,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         customersById: custs,
         startAddress: places.$1,
         endAddress: places.$2,
+        withPlannedStops: true,
       );
       final bytes = await ReportPdfBuilder.buildVisitReport(
         ctx: ctx,

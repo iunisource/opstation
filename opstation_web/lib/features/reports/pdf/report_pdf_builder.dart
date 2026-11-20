@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:opstation_web/core/utils/visit_outcome.dart';
 
 import '../../../core/format/money.dart';
@@ -39,6 +40,11 @@ class TripReportContext {
   /// receipts" line. Null = not read: the old number-sequence check is used.
   final ReceiptCheckData? receiptCheck;
 
+  /// The customers the route planned for this trip, in route order (the trip's stops).
+  /// Empty for a free route or when they were not read: the report then lists only the
+  /// customers that were actually marked.
+  final List<String> plannedStops;
+
   const TripReportContext({
     required this.trip,
     required this.visits,
@@ -52,12 +58,19 @@ class TripReportContext {
     required this.usedGoogle,
     this.freePlaceNames = const {},
     this.receiptCheck,
+    this.plannedStops = const [],
   });
 
-  TripReportContext _withExtras({Map<String, String>? names, ReceiptCheckData? check}) => TripReportContext(
+  TripReportContext _withExtras({
+    Map<String, String>? names,
+    ReceiptCheckData? check,
+    List<String>? planned,
+    Map<String, Map<String, dynamic>>? customers,
+  }) =>
+      TripReportContext(
         trip: trip,
         visits: visits,
-        customersById: customersById,
+        customersById: customers ?? customersById,
         startAddress: startAddress,
         endAddress: endAddress,
         orderedVerifiedVisits: orderedVerifiedVisits,
@@ -67,6 +80,7 @@ class TripReportContext {
         usedGoogle: usedGoogle,
         freePlaceNames: names ?? freePlaceNames,
         receiptCheck: check ?? receiptCheck,
+        plannedStops: planned ?? plannedStops,
       );
 
   factory TripReportContext.build({
@@ -75,6 +89,7 @@ class TripReportContext {
     required Map<String, Map<String, dynamic>> customersById,
     String? startAddress,
     String? endAddress,
+    List<String> plannedStops = const [],
   }) {
     final ordered = visits
         .where((v) =>
@@ -138,6 +153,7 @@ class TripReportContext {
       returnDistanceKm: returnKm,
       totalDistanceKm: total,
       usedGoogle: false,
+      plannedStops: plannedStops,
     );
   }
 
@@ -149,6 +165,7 @@ class TripReportContext {
     required Map<String, Map<String, dynamic>> customersById,
     String? startAddress,
     String? endAddress,
+    bool withPlannedStops = false, // the Visit Report: list every stop of the route
   }) async {
     final ctx = await _buildRoadDistances(
       trip: trip,
@@ -159,7 +176,44 @@ class TripReportContext {
     );
     final names = await _freePlaces(ctx);
     final check = await _tripReceiptCheck(ctx);
-    return (names.isEmpty && check == null) ? ctx : ctx._withExtras(names: names.isEmpty ? null : names, check: check);
+    final stops = withPlannedStops ? await _readPlannedStops(ctx) : null;
+    if (names.isEmpty && check == null && stops == null) return ctx;
+    return ctx._withExtras(
+      names: names.isEmpty ? null : names,
+      check: check,
+      planned: stops?.$1,
+      customers: stops?.$2,
+    );
+  }
+
+  /// The trip's planned stops (trip_stops, in route order) and the customers among them that
+  /// the caller did not load (a stop never visited has no visit to load its customer from).
+  /// Null when there are none or they cannot be read: the report is then built as before.
+  static Future<(List<String>, Map<String, Map<String, dynamic>>)?> _readPlannedStops(TripReportContext ctx) async {
+    final tripId = ctx.trip['id'] as String?;
+    if (tripId == null) return null;
+    try {
+      final db = Supabase.instance.client;
+      final rows = await db.from('trip_stops').select('customer_id, position').eq('trip_id', tripId).order('position');
+      final ids = <String>[];
+      for (final r in rows as List) {
+        final c = r['customer_id'];
+        if (c != null && !ids.contains('$c')) ids.add('$c');
+      }
+      if (ids.isEmpty) return null;
+      final merged = <String, Map<String, dynamic>>{...ctx.customersById};
+      final missing = [for (final id in ids) if (!merged.containsKey(id)) id];
+      for (var i = 0; i < missing.length; i += 100) {
+        final chunk = missing.sublist(i, i + 100 > missing.length ? missing.length : i + 100);
+        final cs = await db.from('customers').select('id, code, shop_name').inFilter('id', chunk);
+        for (final c in cs as List) {
+          merged['${c['id']}'] = Map<String, dynamic>.from(c as Map);
+        }
+      }
+      return (ids, merged);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// The flow setting and the salesperson's books, for the "Missing receipts" line.
@@ -271,6 +325,18 @@ class TripReportContext {
 
 /// One aggregated line of a Combined Trip Summary: the total road distance a
 /// salesperson covered on a single date, and the route(s) they ran that day.
+/// The four numbers at the top of the Visit Report.
+class VisitReportSummary {
+  const VisitReportSummary({required this.customers, required this.visited, required this.completion, required this.collected});
+
+  final int customers;
+  final int visited;
+
+  /// Null when the route had no planned stops.
+  final double? completion;
+  final int collected;
+}
+
 class CombinedSummaryRow {
   final DateTime date;
   final String salesperson;
@@ -858,22 +924,30 @@ class ReportPdfBuilder {
     return out;
   }
 
-  static pw.Widget _summaryRow(Map<String, dynamic> trip, TripReportContext ctx) {
+  /// The four numbers at the top of the Visit Report, as on the phone: CUSTOMERS is the
+  /// number of planned stops (for a route with none: the customers actually marked, and
+  /// no completion %), VISITED counts the customers verified on the trip, COMPLETION is
+  /// visited over planned.
+  static VisitReportSummary visitSummary(TripReportContext ctx) {
     final lines = _custLines(ctx.visits);
-    final totalStops = lines.length;
-    final verifiedCount = lines
-        .where((l) => (l['shown'] as Map)['status'] == 'verified')
-        .length;
-    final totalCollected =
-        lines.fold<int>(0, (s, l) => s + (l['collected'] as int));
-    final completion =
-        totalStops == 0 ? 0.0 : (verifiedCount / totalStops) * 100;
+    final visited = lines.where((l) => (l['shown'] as Map)['status'] == 'verified').length;
+    final collected = lines.fold<int>(0, (s, l) => s + (l['collected'] as int));
+    final planned = ctx.plannedStops.length;
+    return VisitReportSummary(
+      customers: planned > 0 ? planned : lines.length,
+      visited: visited,
+      completion: planned > 0 ? (visited / planned) * 100 : null,
+      collected: collected,
+    );
+  }
 
+  static pw.Widget _summaryRow(Map<String, dynamic> trip, TripReportContext ctx) {
+    final sum = visitSummary(ctx);
     return pw.Row(children: [
-      _summaryCell('$totalStops', 'CUSTOMERS'),
-      _summaryCell('$verifiedCount', 'VISITED'),
-      _summaryCell('${completion.toStringAsFixed(1)}%', 'COMPLETION'),
-      _summaryCell('Rs. ${_fmtNum(totalCollected)}', 'COLLECTED'),
+      _summaryCell('${sum.customers}', 'CUSTOMERS'),
+      _summaryCell('${sum.visited}', 'VISITED'),
+      _summaryCell(sum.completion == null ? '-' : '${sum.completion!.toStringAsFixed(1)}%', 'COMPLETION'),
+      _summaryCell('Rs. ${_fmtNum(sum.collected)}', 'COLLECTED'),
     ]);
   }
 
@@ -914,14 +988,13 @@ class ReportPdfBuilder {
             fontSize: 12, fontWeight: pw.FontWeight.bold, color: _ink));
   }
 
-  static pw.Widget _visitDetailsTable(TripReportContext ctx) {
+  /// The rows of the Visit Details table: the customers marked, in the order they were
+  /// first marked, then the planned stops never marked (NOT VISITED) in route order.
+  static List<List<String>> visitDetailRows(TripReportContext ctx) {
     // In the order the shops were visited (time of the first mark at each).
     final lines = _custLines(ctx.visits)
       ..sort((a, b) => (a['first_at'] as DateTime).compareTo(b['first_at'] as DateTime));
 
-    final headers = [
-      '#', 'CODE', 'CUSTOMER', 'STATUS', 'COLLECTED', 'CR#', 'TIME', 'NOTES'
-    ];
     final rows = <List<String>>[];
     for (var i = 0; i < lines.length; i++) {
       final cid = lines[i]['cid'] as String;
@@ -943,6 +1016,25 @@ class ReportPdfBuilder {
         _notesFor(status, v),
       ]);
     }
+    final marked = {for (final l in lines) l['cid'] as String};
+    for (final cid in ctx.plannedStops) {
+      if (marked.contains(cid)) continue;
+      final cust = ctx.customersById[cid];
+      rows.add([
+        '${rows.length + 1}',
+        (cust?['code'] as String?) ?? '-',
+        (cust?['shop_name'] as String?) ?? '(customer)',
+        'NOT VISITED', '-', '-', '-', '-',
+      ]);
+    }
+    return rows;
+  }
+
+  static pw.Widget _visitDetailsTable(TripReportContext ctx) {
+    final headers = [
+      '#', 'CODE', 'CUSTOMER', 'STATUS', 'COLLECTED', 'CR#', 'TIME', 'NOTES'
+    ];
+    final rows = visitDetailRows(ctx);
 
     return pw.TableHelper.fromTextArray(
       headers: headers,

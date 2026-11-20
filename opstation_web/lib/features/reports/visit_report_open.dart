@@ -34,6 +34,7 @@ Future<void> openVisitReportForTrip(BuildContext context, String tripId, {requir
       customersById: custs,
       startAddress: places.$1,
       endAddress: places.$2,
+      withPlannedStops: true,
     );
     final bytes = await ReportPdfBuilder.buildVisitReport(ctx: ctx, orgName: orgName);
     await outputPdf(bytes, 'Visit Report', date: DateTime.tryParse('${t['started_at'] ?? ''}')?.toLocal());

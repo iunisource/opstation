@@ -255,6 +255,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         customersById: _customersById,
         startAddress: places.$1,
         endAddress: places.$2,
+        withPlannedStops: true,
       );
       final orgName =
           ref.read(currentUserProvider)?.orgName ?? 'Opstation';
