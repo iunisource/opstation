@@ -15,6 +15,7 @@ import '../../../core/notifications/floating_alerts_model.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
+import '../widgets/erp_look.dart';
 import '../widgets/company_logo_settings.dart';
 import 'notification_rules_screen.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -119,6 +120,14 @@ const List<_AdminToggle> _toggles = [
         'the popup lists both.',
     number: _NumberField('org.aging_alert_days', 'Aging threshold', 60,
         suffix: 'days'),
+  ),
+
+  _AdminToggle(
+    'org.modern_look',
+    'Modern look: Sales Orders, Delivery Orders, Sales Invoices',
+    'Gives these three screens a newer design (rounded cards, softer colours, pill-shaped status tags). '
+        'Only the appearance changes, nothing else. Turn it off at any time to go back to the Classic look. '
+        'Also available from the gear icon on each of these screens.',
   ),
 
   // ─── Add more org-level toggles here ─────────────────────────────────────
@@ -1022,6 +1031,7 @@ class _ToggleGroup {
 
 const List<_ToggleGroup> _toggleGroupsOrder = [
   _ToggleGroup('Sales & Customers', Icons.storefront_outlined, [
+    'org.modern_look',
     'org.retailer_info_enabled',
     'org.credit_limit_alert',
     'org.aging_alert',
@@ -1359,6 +1369,7 @@ class _ErpAdminSettingsScreenState
       'org_id': orgId,
     }, onConflict: 'key,org_id,branch_id');
     if (key == 'org.batch_tracking') ref.invalidate(batchTrackingEnabledProvider);
+    if (key == ErpLook.key) ref.invalidate(erpModernLookProvider);
     adminSettingsChangeTick.value++;
   }
 

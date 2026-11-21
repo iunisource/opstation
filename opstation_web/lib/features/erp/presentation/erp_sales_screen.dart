@@ -10,6 +10,7 @@ import '../../../core/format/money.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/audit_label.dart';
 import '../widgets/schemes_banner.dart';
+import '../widgets/erp_look.dart';
 import '../../../core/widgets/pulse_attention.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
@@ -1303,6 +1304,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(erpModernLookProvider); // rebuild when the Classic / Modern look is switched
+    return ErpLookScope(child: _buildScreen(context));
+  }
+
+  Widget _buildScreen(BuildContext context) {
     ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
       if (prev?['id'] != next?['id']) {
         setState(() { _selectedId = null; _detail = {}; _items = []; _listLoading = true; });
@@ -1319,6 +1325,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                 Row(children: [
                   const Text('Sales Orders', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
                   const Spacer(),
+                  const ErpLookGear(),
                   IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 24), onPressed: _createNew, tooltip: 'New SO'),
                 ]),
                 const SizedBox(height: 8),
@@ -1354,7 +1361,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                       ? const Center(child: BranchEmptyHint('No orders', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : VoucherSortedList(items: _filteredOrders, builder: (vsRows) => ListView.separated(
                           itemCount: vsRows.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          separatorBuilder: (_, __) => ErpLook.listDivider(),
                           itemBuilder: (_, i) {
                             final o = vsRows[i];
                             final isSelected = o['id'] == _selectedId;
@@ -1362,7 +1369,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                             return InkWell(
                               onTap: () => _loadDetail(o['id'] as String),
                               child: Container(
-                                color: isSelected ? AppTheme.primary.withOpacity(0.06) : null,
+                                color: ErpLook.modern ? null : (isSelected ? AppTheme.primary.withOpacity(0.06) : null),
+                                decoration: ErpLook.rowDecoration(isSelected),
+                                margin: ErpLook.rowMargin(),
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                   Row(children: [
@@ -1371,7 +1380,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                     const Spacer(),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                      decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(ErpLook.pill(4))),
                                       child: Text(status == 'partially_delivered' ? 'Partial' : status,
                                           style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w600)),
                                     ),
@@ -1412,7 +1421,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       // ── Voucher AppBar ─────────────────────────────────────
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-        decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+        decoration: ErpLook.appBar(),
         child: AdaptiveHeaderRow(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(voucherNum, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
@@ -1499,7 +1508,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             // ── Header Fields ───────────────────────────────────
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              decoration: ErpLook.card(),
               child: Column(children: [
                 Row(children: [
                   Expanded(child: _InfoRow(label: 'Voucher No.', value: voucherNum)),
@@ -1556,12 +1565,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
             // ── Items Table ─────────────────────────────────────
             Container(
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              decoration: ErpLook.card(),
               child: Column(children: [
                 // Header
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+                  decoration: ErpLook.tableHead(),
                   child: Row(children: [
                     const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
@@ -1964,7 +1973,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     InputDecoration dec(String l) => InputDecoration(isDense: true, border: const OutlineInputBorder(), labelText: l);
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+      decoration: ErpLook.card(),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Icon(Icons.local_shipping_outlined, size: 16, color: AppTheme.textSecondary),
@@ -3010,6 +3019,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(erpModernLookProvider); // rebuild when the Classic / Modern look is switched
+    return ErpLookScope(child: _buildScreen(context));
+  }
+
+  Widget _buildScreen(BuildContext context) {
     ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
       if (prev?['id'] != next?['id']) {
         setState(() { _selectedId = null; _detail = {}; _items = []; _soItems = []; _linkedSo = {}; _listLoading = true; });
@@ -3026,6 +3040,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                 Row(children: [
                   const Text('Delivery Orders', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                   const Spacer(),
+                  const ErpLookGear(),
                   IconButton(icon: const Icon(Icons.add_circle, color: AppTheme.primary, size: 24), onPressed: _createNew, tooltip: 'New DO'),
                 ]),
                 const SizedBox(height: 8),
@@ -3093,7 +3108,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                       ? const Center(child: BranchEmptyHint('No DOs', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : VoucherSortedList(items: _filteredOrders, builder: (vsRows) => ListView.separated(
                           itemCount: vsRows.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          separatorBuilder: (_, __) => ErpLook.listDivider(),
                           itemBuilder: (_, i) {
                             final o = vsRows[i];
                             final isSelected = o['id'] == _selectedId;
@@ -3101,7 +3116,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                             return InkWell(
                               onTap: () => _loadDetail(o['id'] as String),
                               child: Container(
-                                color: isSelected ? AppTheme.primary.withOpacity(0.06) : null,
+                                color: ErpLook.modern ? null : (isSelected ? AppTheme.primary.withOpacity(0.06) : null),
+                                decoration: ErpLook.rowDecoration(isSelected),
+                                margin: ErpLook.rowMargin(),
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                   Row(children: [
@@ -3121,7 +3138,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                                     else
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                                        decoration: BoxDecoration(color: _statusColor(status).withOpacity(0.1), borderRadius: BorderRadius.circular(ErpLook.pill(4))),
                                         child: Text(status, style: TextStyle(color: _statusColor(status), fontSize: 10, fontWeight: FontWeight.w600)),
                                       ),
                                   ]),
@@ -3162,7 +3179,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       // AppBar
       Container(
         padding: EdgeInsets.symmetric(horizontal: MediaQuery.of(context).size.width < 700 ? 14 : 24, vertical: 12),
-        decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+        decoration: ErpLook.appBar(),
         child: Builder(builder: (context) {
           final mobile = MediaQuery.of(context).size.width < 700;
           final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -3294,7 +3311,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             // DO header
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              decoration: ErpLook.card(),
               child: Row(children: [
                 Expanded(child: _InfoRow(label: 'DO No.', value: _detail['voucher_number'] as String? ?? '-')),
                 const SizedBox(width: 16),
@@ -3316,11 +3333,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               const Text('Delivered Items', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
               const SizedBox(height: 8),
               Container(
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+                decoration: ErpLook.card(),
                 child: Column(children: [
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+                    decoration: ErpLook.tableHead(),
                     child: const Row(children: [
                       Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                       Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
@@ -4453,7 +4470,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(4)),
+      decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(ErpLook.pill(4))),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 10, color: color),
         const SizedBox(width: 3),
@@ -4523,6 +4540,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(erpModernLookProvider); // rebuild when the Classic / Modern look is switched
+    return ErpLookScope(child: _buildScreen(context));
+  }
+
+  Widget _buildScreen(BuildContext context) {
     ref.listen<Map<String, dynamic>?>(selectedBranchProvider, (prev, next) {
       if (prev?['id'] != next?['id']) {
         setState(() { _selectedId = null; _detail = {}; _items = []; _listLoading = true; });
@@ -4534,7 +4556,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             Padding(
               padding: const EdgeInsets.all(16),
               child: Column(children: [
-                const Align(alignment: Alignment.centerLeft, child: Text('Sales Invoices', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800))),
+                const Row(children: [
+                  Text('Sales Invoices', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                  Spacer(),
+                  ErpLookGear(),
+                ]),
                 const SizedBox(height: 8),
                 TextField(
                   decoration: const InputDecoration(hintText: 'Search SI/SO/customer/remarks...', prefixIcon: Icon(Icons.search, size: 16), isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 8)),
@@ -4606,14 +4632,16 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                       ? const Center(child: BranchEmptyHint('No invoices', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)))
                       : VoucherSortedList(items: _filteredInvoices, builder: (vsRows) => ListView.separated(
                           itemCount: vsRows.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          separatorBuilder: (_, __) => ErpLook.listDivider(),
                           itemBuilder: (_, i) {
                             final inv = vsRows[i];
                             final isSelected = inv['id'] == _selectedId;
                             return InkWell(
                               onTap: () => _loadDetail(inv['id'] as String),
                               child: Container(
-                                color: isSelected ? AppTheme.primary.withOpacity(0.06) : null,
+                                color: ErpLook.modern ? null : (isSelected ? AppTheme.primary.withOpacity(0.06) : null),
+                                decoration: ErpLook.rowDecoration(isSelected),
+                                margin: ErpLook.rowMargin(),
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                   Row(children: [
@@ -4682,7 +4710,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     return Column(children: [
       Container(
         padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 24, vertical: 12),
-        decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border))),
+        decoration: ErpLook.appBar(),
         child: narrow
             ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
@@ -4889,7 +4917,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             // Header info
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              decoration: ErpLook.card(),
               child: Column(children: [
                 infoRow([
                   _InfoRow(label: 'SI No.', value: _detail['voucher_number'] as String? ?? '-'),
@@ -4939,11 +4967,11 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
 
             // Items
             Container(
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+              decoration: ErpLook.card(),
               child: Column(children: [
                 if (!narrow) Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+                  decoration: ErpLook.tableHead(),
                   child: const Row(children: [
                     Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
                     Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
@@ -5469,7 +5497,7 @@ class _AuditTrailList extends StatelessWidget {
         if (events.isEmpty) return const SizedBox.shrink();
         return Container(
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
+          decoration: ErpLook.card(),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Row(children: [
               Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
