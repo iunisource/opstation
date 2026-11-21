@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import '../../../core/widgets/map_tiles.dart';
+import 'dispatch_widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -78,6 +79,10 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
   Timer? _poll;
   Timer? _debounce;
   bool _fitted = false;
+  DateTime? _updatedAt; // when the data was last loaded
+  Timer? _clock; // redraws the "Updated" label so it can turn amber when refreshing stops getting through
+  final TextEditingController _driverSearch = TextEditingController();
+  String _driverQuery = '';
 
   SupabaseClient get _db => Supabase.instance.client;
   bool get _isToday {
@@ -90,6 +95,7 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
     _poll = Timer.periodic(const Duration(seconds: 45), (_) { if (_isToday) _load(quiet: true); });
+    _clock = Timer.periodic(const Duration(seconds: 30), (_) { if (mounted) setState(() {}); });
     _channel = _db
         .channel('dispatch_dashboard_${DateTime.now().millisecondsSinceEpoch}')
         .onPostgresChanges(event: PostgresChangeEvent.all, schema: 'public', table: 'delivery_stops', callback: (_) => _soon())
@@ -100,6 +106,8 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
   @override
   void dispose() {
     _poll?.cancel();
+    _clock?.cancel();
+    _driverSearch.dispose();
     _debounce?.cancel();
     if (_channel != null) _db.removeChannel(_channel!);
     super.dispose();
@@ -215,6 +223,7 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
         _drivers = list;
         _unassigned = unassigned;
         _loading = false;
+        _updatedAt = DateTime.now();
       });
       if (!_fitted) { _fitted = true; _fitAll(); }
     } catch (err) {
@@ -322,6 +331,7 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
             SizedBox(width: 5),
             Text('Live', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF059669))),
           ]),
+        LastUpdatedLabel(at: _updatedAt, format: (d) => DateFormat(orgTime('h:mm:ss a')).format(d)),
       ]),
     );
 
@@ -339,7 +349,9 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
       body = ListView(padding: const EdgeInsets.only(bottom: 16), children: [
         SizedBox(height: 320, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _mapCard())),
         const SizedBox(height: 10),
+        if (_hasDriverCards) _driverSearchBox(),
         ..._driverCards(),
+        if (_hasDriverCards && _driverCards().isEmpty) _noDriverMatch(),
       ]);
     }
 
@@ -368,20 +380,61 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
       );
 
   Widget _driverList() {
-    final cards = _driverCards();
-    if (cards.isEmpty) {
+    if (!_hasDriverCards) {
       return const Padding(
         padding: EdgeInsets.all(24),
         child: Text('No deliveries for this day.', style: TextStyle(color: AppTheme.textSecondary)),
       );
     }
-    return ListView(padding: const EdgeInsets.fromLTRB(16, 0, 12, 16), children: cards);
+    final cards = _driverCards();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _driverSearchBox(),
+      Expanded(
+        child: cards.isEmpty
+            ? Align(alignment: Alignment.topLeft, child: _noDriverMatch())
+            : ListView(padding: const EdgeInsets.fromLTRB(16, 0, 12, 16), children: cards),
+      ),
+    ]);
   }
 
+  bool _isOnList(_Driver d) => d.total > 0 || d.jobs.isNotEmpty;
+  bool get _hasDriverCards => _drivers.any(_isOnList);
+  String _regOf(_Driver d) => '${_vehOf[d.id]?['reg_no'] ?? ''}'.trim();
+
+  /// The drivers on screen: those with jobs for the day, narrowed by the search (driver name or the
+  /// registration number of his vehicle).
   List<Widget> _driverCards() => [
         for (final d in _drivers)
-          if (d.total > 0 || d.jobs.isNotEmpty) _driverCard(d),
+          if (_isOnList(d) && driverMatches(_driverQuery, name: d.name, regNo: _regOf(d))) _driverCard(d),
       ];
+
+  Widget _driverSearchBox() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+        child: TextField(
+          controller: _driverSearch,
+          onChanged: (v) => setState(() => _driverQuery = v.trim()),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: 'Search drivers or vehicle no.',
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _driverQuery.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear',
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: () => setState(() {
+                      _driverSearch.clear();
+                      _driverQuery = '';
+                    }),
+                  ),
+          ),
+        ),
+      );
+
+  Widget _noDriverMatch() => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 12, 16),
+        child: Text('No driver or vehicle matches "$_driverQuery".', style: const TextStyle(color: AppTheme.textSecondary)),
+      );
 
   Widget _driverCard(_Driver d) {
     final sel = _selId == d.id;
@@ -411,7 +464,10 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
                 _truck(d.color, 30),
                 const SizedBox(width: 10),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(d.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis),
+                  Row(children: [
+                    Flexible(child: Text(d.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
+                    if (_regOf(d).isNotEmpty) ...[const SizedBox(width: 8), Flexible(flex: 0, child: RegNoPill(_regOf(d)))],
+                  ]),
                   Text(state, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600,
                       color: d.finished ? const Color(0xFF059669) : d.started ? AppTheme.primary : AppTheme.textSecondary)),
                 ])),
