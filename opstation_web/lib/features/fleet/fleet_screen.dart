@@ -12,6 +12,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/friendly_error.dart';
 import '../auth/auth_controller.dart';
 import 'fleet_common.dart';
+import 'fleet_sync.dart';
 import 'vehicle_profile.dart';
 
 /// Logistics → Fleet (SQL 463).
@@ -49,7 +50,7 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
     if (org == null) return;
     try {
       if (sync) {
-        try { await fleetDb.rpc('fleet_sync', params: {'p_org': org}); } catch (_) {}
+        await FleetSync.ensure(org, (o) => fleetDb.rpc('fleet_sync', params: {'p_org': o}), force: true);
       }
       final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
       final r = await Future.wait([

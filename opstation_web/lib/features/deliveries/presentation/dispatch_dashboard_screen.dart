@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../core/widgets/map_tiles.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -490,7 +491,8 @@ class _DispatchDashboardScreenState extends ConsumerState<DispatchDashboardScree
             mapController: _map,
             options: const MapOptions(initialCenter: LatLng(31.5204, 74.3587), initialZoom: 11, minZoom: 3, maxZoom: 18),
             children: [
-              TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.opstation.web', maxNativeZoom: 19),
+              appTileLayer(),
+              mapAttribution(),
               if (sel != null)
                 PolylineLayer(polylines: [
                   Polyline(points: [for (final st in sel.stops) if (_stopPoint(st) != null) _stopPoint(st)!], color: sel.color.withOpacity(0.5), strokeWidth: 3),

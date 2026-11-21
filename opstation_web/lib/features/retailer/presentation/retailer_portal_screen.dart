@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../core/widgets/map_tiles.dart';
 import 'package:latlong2/latlong.dart';
 import '../../auth/retailer_auth_controller.dart';
 import '../../erp/services/voucher_pdf.dart';
@@ -1167,11 +1168,8 @@ class _LocationTabState extends ConsumerState<_LocationTab> {
                                 InteractiveFlag.doubleTapZoom),
                       ),
                       children: [
-                        TileLayer(
-                          urlTemplate:
-                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'app.opstation.web',
-                        ),
+                        appTileLayer(userAgent: 'app.opstation.web'),
+                        mapAttribution(),
                         MarkerLayer(markers: [
                           Marker(
                             point: LatLng((lat).toDouble(), (lng).toDouble()),

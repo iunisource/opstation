@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/friendly_error.dart';
 import 'fleet_common.dart';
+import 'fleet_sync.dart';
 
 /// Vehicle profile (Logistics → Fleet). [readOnly] is the view opened from the
 /// Dispatch Dashboard: everything visible, nothing editable.
@@ -72,9 +74,19 @@ class _VehicleProfileState extends State<VehicleProfile> {
         _lead = lead;
         _loading = false;
       });
+      unawaited(_syncThenReload()); // the profile shows at once; the kilometres are brought up to date behind it
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Brings the vehicles' kilometres up to date (the trips and deliveries of its drivers) and, when that
+  /// ran, reads the profile again, so a job done since the Fleet page was last opened shows here too.
+  Future<void> _syncThenReload() async {
+    final org = _v?['org_id'] as String?;
+    if (org == null) return;
+    final ran = await FleetSync.ensure(org, (o) => fleetDb.rpc('fleet_sync', params: {'p_org': o}));
+    if (ran && mounted) await _load();
   }
 
   void _changed() {

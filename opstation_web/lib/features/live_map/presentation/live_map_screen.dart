@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import '../../../core/widgets/map_tiles.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
@@ -1832,11 +1833,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen> {
   }
 
   List<Widget> _mapChildren() => [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.opstation.web',
-              maxNativeZoom: 19,
-            ),
+            appTileLayer(),
+            mapAttribution(),
             // Planned route path (selected route, stops in order).
             if (_routeStops.length >= 2)
               PolylineLayer(polylines: [
