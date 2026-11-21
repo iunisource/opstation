@@ -9,6 +9,8 @@ import '../../../core/auth/session_diagnostics.dart';
 import '../../../core/theme/app_theme.dart';
 import 'signup_wizard_screen.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
+import 'login_shell.dart';
+import 'login_video_api.dart';
 
 /// Destination for the "Partner Retailer Portal" button.
 /// Opened in the same tab; swap for any URL (in-app hash route or external).
@@ -37,6 +39,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // while the browser autofilled / the user typed left the password field
   // hard to edit at times.
   final _rotIndex = ValueNotifier<int>(0);
+  final _videoCtl = LoginVideoController(); // pause / play for the background video
   Timer? _rotTimer;
 
   // Shown above the form: the computer clock is wrong, and/or the last session
@@ -164,6 +167,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     _emailFocus.dispose();
     _passFocus.dispose();
     _rotIndex.dispose();
+    _videoCtl.dispose();
     super.dispose();
   }
 
@@ -378,38 +382,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
     });
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: Stack(
-        children: [
-          LayoutBuilder(
-            builder: (context, c) {
-              if (c.maxWidth < 900) return _formPanel(isLoading, showLogo: true);
-              return Row(
-                children: [
-                  Expanded(flex: 6, child: _brandPanel()),
-                  SizedBox(width: 520, child: _formPanel(isLoading, showLogo: false)),
-                ],
-              );
-            },
-          ),
-          Positioned(
-            top: 18,
-            right: 24,
-            child: OutlinedButton.icon(
-              onPressed: _openRetailerLogin,
-              icon: const Icon(Icons.storefront_outlined, size: 18),
-              label: const Text('Partner Retailer Portal'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.primary,
-                backgroundColor: Colors.white,
-                side: const BorderSide(color: AppTheme.primary, width: 1.4),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-        ],
+      backgroundColor: const Color(0xFF0B1220),
+      body: LoginShell(
+        controller: _videoCtl,
+        logo: _brandLogoRow(),
+        headline: _brandHeadline(),
+        compactHeadline: _compactHeadline(),
+        footer: _brandFooter(),
+        retailerButton: _retailerButton,
+        form: (frame) => _formPanel(isLoading, showLogo: false, frame: frame),
       ),
     );
   }
@@ -418,29 +399,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     html.window.open(_kRetailerLoginUrl, '_self');
   }
 
-  // ───────────────────────────── brand panel (left) ─────────────────────────
-  // Dark, premium, quietly animated. The one job: make signing in feel like
-  // stepping onto the bridge of the operation.
-  Widget _brandPanel() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0B1220), Color(0xFF111B33), Color(0xFF16234A)],
-        ),
-      ),
-      child: Stack(
-        children: [
-          Positioned(top: -120, right: -60, child: _orb(420, 0.16)),
-          Positioned(bottom: -180, left: -120, child: _orb(520, 0.10)),
-          Positioned(top: 180, left: -140, child: _orb(300, 0.08)),
-          Padding(
-            padding: const EdgeInsets.all(56),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
+  // ------------------------------ brand (left side / top of a phone) ------------------------------
+  // Sits on the background video (or the still picture): see LoginShell.
+  Widget _brandLogoRow() =>
+                Row(mainAxisSize: MainAxisSize.min, children: [
                   _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
                     BrandLogo(size: 44, glow: true),
                     SizedBox(width: 12),
@@ -462,8 +424,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             fontWeight: FontWeight.w800,
                             letterSpacing: 1.2)),
                   ),
-                ]),
-                const Spacer(),
+                ]);
+
+  Widget _brandHeadline() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
                 Text('PLANET\'S BEST ERP FOR TRADING & DISTRIBUTION',
                     style: TextStyle(
                         color: const Color(0xFF9DBBFA).withOpacity(0.9),
@@ -514,7 +480,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 Text(
                   'Purchase to profit, warehouse to doorstep — every branch, every book,\nlive in one place. Sign in and take the wheel.',
                   style: TextStyle(
-                      color: Colors.white.withOpacity(0.62),
+                      color: Colors.white.withOpacity(0.82),
                       fontSize: 15.5,
                       height: 1.6,
                       fontWeight: FontWeight.w400),
@@ -539,56 +505,94 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               fontWeight: FontWeight.w600)),
                     ),
                 ]),
-                const Spacer(),
-                _reassurance(),
-                const SizedBox(height: 18),
-                Text('© 2026 Opstation · All rights reserved',
-                    style: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 12)),
-              ],
+        ],
+      );
+
+  /// The short headline for a phone: no subtitle, no module tags.
+  Widget _compactHeadline() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('Built to run',
+              style: TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w800, height: 1.08, letterSpacing: -0.9)),
+          SizedBox(
+            height: 44,
+            child: ValueListenableBuilder<int>(
+              valueListenable: _rotIndex,
+              builder: (_, rot, __) => AnimatedSwitcher(
+                duration: const Duration(milliseconds: 450),
+                transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
+                child: Align(
+                  key: ValueKey(rot),
+                  alignment: Alignment.centerLeft,
+                  child: Text(_rotWords[rot],
+                      style: const TextStyle(color: Color(0xFF4B84F5), fontSize: 36, fontWeight: FontWeight.w800, height: 1.08, letterSpacing: -0.9)),
+                ),
+              ),
             ),
           ),
         ],
-      ),
-    );
-  }
+      );
+
+  Widget _brandFooter() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+                _reassurance(),
+                const SizedBox(height: 8),
+                Text('© 2026 Opstation · All rights reserved',
+                    style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12)),
+        ],
+      );
+
+  Widget _retailerButton(bool compact) => OutlinedButton.icon(
+        onPressed: _openRetailerLogin,
+        icon: const Icon(Icons.storefront_outlined, size: 18),
+        label: Text(compact ? 'Retailer Portal' : 'Partner Retailer Portal'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppTheme.primary,
+          backgroundColor: Colors.white,
+          side: const BorderSide(color: AppTheme.primary, width: 1.4),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          minimumSize: const Size(44, 44),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+      );
 
   // A quiet trust line — what matters to someone signing in to run their
   // business, not a feature pitch.
   Widget _reassurance() => Row(
         children: [
-          Icon(Icons.lock_outline_rounded, size: 16, color: Colors.white.withOpacity(0.45)),
+          Icon(Icons.lock_outline_rounded, size: 16, color: Colors.white.withOpacity(0.7)),
           const SizedBox(width: 8),
           Text('Secured & encrypted',
-              style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13, fontWeight: FontWeight.w500)),
+              style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 13, fontWeight: FontWeight.w500)),
           Container(
             width: 3,
             height: 3,
             margin: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.3), shape: BoxShape.circle),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.5), shape: BoxShape.circle),
           ),
-          Icon(Icons.cloud_done_outlined, size: 16, color: Colors.white.withOpacity(0.45)),
+          Icon(Icons.cloud_done_outlined, size: 16, color: Colors.white.withOpacity(0.7)),
           const SizedBox(width: 8),
           Text('Backed up nightly',
-              style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13, fontWeight: FontWeight.w500)),
+              style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 13, fontWeight: FontWeight.w500)),
         ],
       );
 
-  Widget _orb(double size, double opacity) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(colors: [AppTheme.primary.withOpacity(opacity), Colors.transparent]),
-        ),
-      );
 
   // ───────────────────────────── form panel (right) ─────────────────────────
-  Widget _formPanel(bool isLoading, {required bool showLogo}) {
+  Widget _formPanel(bool isLoading, {required bool showLogo, LoginFormFrame frame = LoginFormFrame.card}) {
+    final sheet = frame == LoginFormFrame.sheet;
     return Container(
-      color: Colors.white,
-      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.97),
+        borderRadius: sheet ? const BorderRadius.vertical(top: Radius.circular(24)) : BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 60, offset: const Offset(0, 24))],
+      ),
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(40),
+        padding: sheet ? const EdgeInsets.fromLTRB(24, 28, 24, 24) : const EdgeInsets.fromLTRB(40, 36, 40, 32),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 400),
           child: AutofillGroup(
