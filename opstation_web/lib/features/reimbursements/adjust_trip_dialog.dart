@@ -8,6 +8,7 @@ import '../../core/utils/friendly_error.dart';
 import '../../core/utils/place_name.dart';
 import '../reports/pdf/report_pdf_builder.dart';
 import '../../core/format/time_format.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 /// "Adjusted by approver" text for one trip's adjustment row
 /// (reimb_adjustments): who, when, what was left out and the km change.
@@ -135,7 +136,7 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
           _custs[c['id'] as String] = Map<String, dynamic>.from(c);
         }
       }
-      _places = await tripPlaceNames(_trip!);
+      _places = await tripPlaceNames(_trip!, until: DateTime.now().add(const Duration(seconds: 10))); // the dialog opens quickly; the printed report waits longer
       _orig = await TripReportContext.buildRoad(
           trip: _trip!, visits: _visits, customersById: _custs, startAddress: _places.$1, endAddress: _places.$2);
       await _recalc();
@@ -211,7 +212,9 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
     }
   }
 
-  Future<void> _print() async {
+  Future<void> _print() => withGenerating(context, () => _printRun());
+
+  Future<void> _printRun() async {
     final a = _adj, t = _trip;
     if (a == null || t == null) return;
     final err = _changed ? _check() : null;
@@ -465,6 +468,32 @@ class _AdjustTripDialogState extends State<_AdjustTripDialog> {
 /// Print one claim day's Trip Summary as it stands on the claim: the
 /// approver's adjustment applied (if any), allowance and Approved By.
 Future<void> printClaimTripSummary(
+  BuildContext context, {
+  required String tripId,
+  required double lineKm,
+  Map<String, dynamic>? existing,
+  double? rate,
+  double allowanceDefault = 0,
+  required String orgName,
+  String? approvedBy,
+  DateTime? approvedAt,
+  String? verifyUrl,
+}) =>
+    withGenerating(
+      context,
+      () => _printClaimTripSummaryRun(context,
+          tripId: tripId,
+          lineKm: lineKm,
+          existing: existing,
+          rate: rate,
+          allowanceDefault: allowanceDefault,
+          orgName: orgName,
+          approvedBy: approvedBy,
+          approvedAt: approvedAt,
+          verifyUrl: verifyUrl),
+    );
+
+Future<void> _printClaimTripSummaryRun(
   BuildContext context, {
   required String tripId,
   required double lineKm,

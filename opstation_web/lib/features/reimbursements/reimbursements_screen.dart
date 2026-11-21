@@ -15,6 +15,7 @@ import '../reports/visit_report_open.dart';
 import '../reports/pdf/report_pdf_builder.dart' show ReportPdfBuilder, CombinedSummaryRow, ReimbInfo;
 import '../../core/pdf/pdf_output.dart';
 import 'adjust_trip_dialog.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 SupabaseClient get _db => Supabase.instance.client;
 
@@ -758,7 +759,9 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
 
   /// Combined Trip Summary of the claim with the approver's adjustments: one
   /// row per day (adjusted km), and what was left out on each day and why.
-  Future<void> _printAdjustedCombined(Map<String, dynamic> c) async {
+  Future<void> _printAdjustedCombined(Map<String, dynamic> c) => withGenerating(context, () => _printAdjustedCombinedRun(c));
+
+  Future<void> _printAdjustedCombinedRun(Map<String, dynamic> c) async {
     try {
       final lines = _lines[c['id']] ?? const <Map<String, dynamic>>[];
       final tripIds = [for (final l in lines) if ((l['trip_id'] ?? '') != '') '${l['trip_id']}'];

@@ -14,6 +14,7 @@ import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/salesperson_picker.dart';
 import 'package:printing/printing.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
   const ReportsScreen({super.key});
@@ -182,7 +183,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
   }
 
-  Future<void> _generateTripSummary(Map<String, dynamic> trip) async {
+  Future<void> _generateTripSummary(Map<String, dynamic> trip) => withGenerating(context, () => _generateTripSummaryRun(trip));
+
+  Future<void> _generateTripSummaryRun(Map<String, dynamic> trip) async {
     if (!_visitsReady) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Still loading visits — try again in a moment.')));
@@ -243,7 +246,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
   }
 
-  Future<void> _generateVisitReport(Map<String, dynamic> trip) async {
+  Future<void> _generateVisitReport(Map<String, dynamic> trip) => withGenerating(context, () => _generateVisitReportRun(trip));
+
+  Future<void> _generateVisitReportRun(Map<String, dynamic> trip) async {
     if (!_visitsReady) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Still loading visits — try again in a moment.')));

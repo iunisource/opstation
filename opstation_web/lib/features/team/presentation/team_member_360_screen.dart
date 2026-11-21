@@ -24,6 +24,7 @@ import '../services/trip_sessions.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import 'package:opstation_web/features/reports/pdf/report_pdf_builder.dart';
 import '../../../core/format/time_format.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 /// Expand a receipt-number field into every slip number it represents.
 /// Salespeople routinely staple several slips to one collection and type
@@ -2235,7 +2236,9 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
   }
 
   /// Detailed Market Visit Report for one trip (per-row button).
-  Future<void> _marketVisitReport(Map<String, dynamic> t) async {
+  Future<void> _marketVisitReport(Map<String, dynamic> t) => withGenerating(context, () => _marketVisitReportRun(t));
+
+  Future<void> _marketVisitReportRun(Map<String, dynamic> t) async {
     try {
       final client = Supabase.instance.client;
       final vRes = await client

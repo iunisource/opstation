@@ -4,10 +4,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/pdf/pdf_output.dart';
 import '../../core/utils/place_name.dart';
 import 'pdf/report_pdf_builder.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 /// Market Visit Report for one trip, built the same way as on the Reports
 /// screen and in Team 360 (so it is identical wherever it is opened).
-Future<void> openVisitReportForTrip(BuildContext context, String tripId, {required String orgName}) async {
+Future<void> openVisitReportForTrip(BuildContext context, String tripId, {required String orgName}) =>
+    withGenerating(context, () => _openVisitReportForTripRun(context, tripId, orgName: orgName));
+
+Future<void> _openVisitReportForTripRun(BuildContext context, String tripId, {required String orgName}) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   try {
     final client = Supabase.instance.client;

@@ -158,7 +158,8 @@ class _Osm {
 /// Start / end place for a trip row (start_lat … end_lng), as
 /// "Area, City\n31.47680, 74.24280" — or null when unknown.
 Future<(String?, String?)> tripPlaceNames(Map<String, dynamic> trip, {DateTime? until}) async {
-  final deadline = until ?? DateTime.now().add(const Duration(seconds: 10));
+  // The free lookup can be slow; the report shows "Generating report..." meanwhile, so it gets time.
+  final deadline = until ?? DateTime.now().add(const Duration(seconds: 25));
   Future<String?> one(String la, String lo) async {
     final lat = (trip[la] as num?)?.toDouble(), lng = (trip[lo] as num?)?.toDouble();
     if (lat == null || lng == null) return null;

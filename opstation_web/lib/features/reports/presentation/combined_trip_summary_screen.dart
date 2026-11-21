@@ -13,6 +13,7 @@ import '../../../core/widgets/salesperson_picker.dart';
 import '../../auth/auth_controller.dart';
 import '../pdf/report_pdf_builder.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 /// Combined Trip Summary — a multi-date, distance-only reimbursement sheet.
 /// Pick a salesperson (or all) and a date range; each day's total road
@@ -249,7 +250,9 @@ class _CombinedTripSummaryScreenState
     }
   }
 
-  Future<void> _generatePdf() async {
+  Future<void> _generatePdf() => withGenerating(context, () => _generatePdfRun());
+
+  Future<void> _generatePdfRun() async {
     try {
       final showSalesperson = _selectedUserId == null;
       final salespersonLabel = _selectedUserId == null

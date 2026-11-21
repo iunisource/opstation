@@ -9,6 +9,7 @@ import '../deliveries/delivery_report_pdf.dart';
 import 'driver_job_report.dart';
 import 'logistics_report_rows.dart';
 import 'logistics_reports_view.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 /// Logistics Reports: the report of every driver job, generated on the web — deliveries, pickups and
 /// the free routes the drivers ran. It is the same Delivery Report the driver's phone makes, with the
@@ -100,7 +101,7 @@ class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen>
     if (_busyId != null) return;
     setState(() => _busyId = id);
     try {
-      await job();
+      await withGenerating(context, job);
     } catch (e) {
       _say('Failed to generate PDF: $e');
     } finally {

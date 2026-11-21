@@ -12,6 +12,7 @@ import '../../../core/utils/place_name.dart';
 import '../../auth/auth_controller.dart';
 import '../../logistics_reports/driver_job_report.dart';
 import '../delivery_report_pdf.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 /// Read-only-ish detail page for a single delivery. Pulls the
 /// delivery row plus its stops from Supabase, shows everything that
@@ -169,7 +170,9 @@ class _DeliveryDetailScreenState
     }
   }
 
-  Future<void> _printDelivery() async {
+  Future<void> _printDelivery() => withGenerating(context, () => _printDeliveryRun());
+
+  Future<void> _printDeliveryRun() async {
     final d = _delivery;
     if (d == null) return;
     // The job's distances (start, between the stops, the way back); if they cannot be worked out now
