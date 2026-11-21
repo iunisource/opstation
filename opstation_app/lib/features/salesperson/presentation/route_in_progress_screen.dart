@@ -26,6 +26,7 @@ import 'dialogs/mark_visit_dialog.dart';
 import 'dialogs/skip_visit_dialog.dart';
 import 'widgets/status_count_cell.dart';
 import 'widgets/free_visit_buttons.dart';
+import 'widgets/empty_route_notice.dart';
 import '../services/free_visit_photo_service.dart';
 import 'widgets/route_guide_widgets.dart';
 import '../services/route_guide.dart';
@@ -53,10 +54,43 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
 
   late final RouteGuideController _guide = ref.read(routeGuideProvider.notifier);
 
+  bool _healing = false;
+
   @override
   void initState() {
     super.initState();
     _guide; // keep a handle so the guide can be stopped when leaving
+    // A trip keeps the customers its route had when it started. If the phone did not have them all
+    // then, they are brought in now (nothing is fetched when all are here).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _healCustomers());
+  }
+
+  /// Brings in the route's customers that this trip is missing; [refresh] asks the server first.
+  Future<void> _healCustomers({bool refresh = false}) async {
+    if (_healing) return;
+    setState(() => _healing = true);
+    try {
+      final r = await ref.read(tripControllerProvider.notifier).healActiveTripStops(refresh: refresh);
+      if (!mounted) return;
+      String? msg;
+      if (r.added > 0) {
+        msg = '${r.added} customer${r.added == 1 ? '' : 's'} added to this route';
+      } else if (r.stillMissing > 0) {
+        msg = '${r.stillMissing} customer${r.stillMissing == 1 ? '' : 's'} of this route could not be loaded. '
+            'Check your internet connection, or tell your manager (they may not be available to your account).';
+      } else if (refresh) {
+        msg = 'Customers are up to date';
+      }
+      if (msg != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 5)));
+      }
+    } catch (_) {
+      if (refresh && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not refresh. Check your internet connection and try again.')));
+      }
+    } finally {
+      if (mounted) setState(() => _healing = false);
+    }
   }
 
   List<Customer> _filter(Trip trip) {
@@ -456,6 +490,8 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
               readOnly: isCompleted,
               onMarkVisit: _openMarkVisit,
               onSkip: _openSkip,
+              refreshing: _healing,
+              onRefreshCustomers: () => _healCustomers(refresh: true),
             ),
           ),
           if (!isCompleted)
@@ -614,12 +650,18 @@ class _StopsList extends ConsumerWidget {
   final Future<void> Function(Customer) onMarkVisit;
   final Future<void> Function(Customer) onSkip;
 
+  /// A route with no customers on the phone shows a notice with a button that fetches them.
+  final bool refreshing;
+  final VoidCallback onRefreshCustomers;
+
   const _StopsList({
     required this.trip,
     required this.filtered,
     required this.readOnly,
     required this.onMarkVisit,
     required this.onSkip,
+    required this.refreshing,
+    required this.onRefreshCustomers,
   });
 
   @override
@@ -639,6 +681,8 @@ class _StopsList extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       children: [
+        if (!trip.isFree && !readOnly && trip.stopSnapshot.isEmpty)
+          EmptyRouteNotice(refreshing: refreshing, onRefresh: onRefreshCustomers),
         for (int i = 0; i < filtered.length; i++) ...[
           _StopCard(
             index: trip.stopSnapshot.indexOf(filtered[i]) + 1,

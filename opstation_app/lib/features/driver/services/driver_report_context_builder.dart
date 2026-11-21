@@ -124,7 +124,7 @@ class DriverReportContextBuilder {
         () async {
           final p = locs.start;
           if (p != null) {
-            startAddress = await nomi.reverseGeocode(p.lat, p.lng);
+            startAddress = p.name ?? await nomi.reverseGeocode(p.lat, p.lng);
           } else if (gpsStops.isNotEmpty) {
             startAddress = await nomi.reverseGeocode(
               gpsStops.first.capturedLat!,
@@ -136,7 +136,7 @@ class DriverReportContextBuilder {
         () async {
           final p = locs.end;
           if (p != null) {
-            endAddress = await nomi.reverseGeocode(p.lat, p.lng);
+            endAddress = p.name ?? await nomi.reverseGeocode(p.lat, p.lng);
           } else if (gpsStops.isNotEmpty) {
             endAddress = await nomi.reverseGeocode(
               gpsStops.last.capturedLat!,

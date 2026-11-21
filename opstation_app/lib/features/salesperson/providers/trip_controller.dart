@@ -21,6 +21,8 @@ import '../data/salesperson_repository.dart';
 import '../models/customer.dart';
 import '../models/sales_route.dart';
 import '../models/trip.dart';
+import '../services/route_start_check.dart';
+import '../../../core/supabase/supabase_pull_service.dart';
 
 class TripState {
   final Trip? active;
@@ -161,6 +163,65 @@ class TripController extends AsyncNotifier<TripState> {
     await _refresh();
   }
 
+  /// The customers a route starts with. Nothing is fetched when the phone has them all; when none (or
+  /// fewer than the route has stops) are shown, they are fetched from the server first. A route that
+  /// still shows none is not started — it used to start empty and stay empty for the whole trip.
+  Future<List<Customer>> _readyStops(SalesRoute route) async {
+    if (route.kind == RouteKind.free) return route.stops;
+    var stops = route.stops;
+    final expected = await _repo.routeStopCount(route.id);
+    if (!RouteStartCheck.needsRefresh(visible: stops.length, expected: expected)) return stops;
+    await _refreshRoutesFromServer();
+    stops = (await _repo.routeById(route.id))?.stops ?? stops;
+    final message = RouteStartCheck.blockMessage(visible: stops.length, expected: await _repo.routeStopCount(route.id));
+    if (message != null) throw StateError(message);
+    return stops;
+  }
+
+  Future<void> _refreshRoutesFromServer() async {
+    final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
+    if (orgId == null || orgId.isEmpty) return;
+    try {
+      // Routes, their stops, and the customers the phone is missing (it handles its own errors).
+      await ref.read(supabasePullServiceProvider).pullRoutesAndStops(orgId).timeout(const Duration(seconds: 15));
+    } catch (_) {}
+  }
+
+  /// Repairs the running trip's customers. A trip keeps the customers its route had when it started; if
+  /// the phone did not have them all then (or customers were added to the route since), they are
+  /// brought in now. [refresh] fetches the route from the server first (the "Refresh customers"
+  /// button); it also happens by itself when the trip has no customers or fewer than its route has stops.
+  Future<RouteHealResult> healActiveTripStops({bool refresh = false}) async {
+    final trip = state.valueOrNull?.active;
+    if (trip == null || trip.isFree || trip.routeId.isEmpty) return const RouteHealResult(0, 0);
+    var route = await _repo.routeById(trip.routeId);
+    final expected = await _repo.routeStopCount(trip.routeId);
+    if (refresh || trip.stopSnapshot.isEmpty || route == null || route.stops.length < expected) {
+      await _refreshRoutesFromServer();
+      route = await _repo.routeById(trip.routeId);
+    }
+    if (route == null) return const RouteHealResult(0, 0);
+    final missing = RouteStartCheck.missingStops(
+      snapshotIds: {for (final c in trip.stopSnapshot) c.id},
+      routeStops: route.stops,
+    );
+    final expectedNow = await _repo.routeStopCount(trip.routeId);
+    final stillMissing = expectedNow > route.stops.length ? expectedNow - route.stops.length : 0;
+    if (missing.isEmpty) return RouteHealResult(0, stillMissing);
+    var position = trip.stopSnapshot.length;
+    for (final c in missing) {
+      await _repo.addTripStop(trip.id, c.id, position++);
+    }
+    final s = state.valueOrNull;
+    final current = s?.active;
+    if (s != null && current != null && current.id == trip.id) {
+      state = AsyncData(s.copyWith(
+        active: current.copyWith(stopSnapshot: List.unmodifiable([...current.stopSnapshot, ...missing])),
+      ));
+    }
+    return RouteHealResult(missing.length, stillMissing);
+  }
+
   Future<Trip> startTrip(SalesRoute route) async {
     if (DeviceGuard.blocked) throw StateError(DeviceGuard.message ?? DeviceGuard.blockedMessage);
     final s = state.valueOrNull;
@@ -232,6 +293,10 @@ class TripController extends AsyncNotifier<TripState> {
       return resumed;
     }
 
+    // The route's customers, checked before the trip freezes them: a phone that has not got all of
+    // them yet refreshes them first, and a route with none on the phone is not started.
+    final routeStops = await _readyStops(route);
+
     final fix = await ref.read(deviceGpsServiceProvider).getFix();
 
     final trip = Trip(
@@ -239,7 +304,7 @@ class TripController extends AsyncNotifier<TripState> {
       routeId: route.id,
       routeName: route.name,
       routeKind: route.kind,
-      stopSnapshot: List.unmodifiable(route.stops),
+      stopSnapshot: List.unmodifiable(routeStops),
       startedAt: DateTime.now(),
       startLat: fix?.lat,
       startLng: fix?.lng,

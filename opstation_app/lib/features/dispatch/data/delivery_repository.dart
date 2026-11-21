@@ -10,6 +10,7 @@ import '../../../core/utils/delivery_locations.dart';
 import '../../../core/supabase/supabase_sync_service.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../../reports/services/nominatim_client.dart';
 import '../models/delivery.dart';
 
 /// Describes one stop when building or editing a delivery. The ID is
@@ -41,9 +42,13 @@ class DeliveryRepository {
   final AppDatabase _db;
   final String? _orgId;
   final SupabaseSyncService? _sync;
-  DeliveryRepository(this._db, {String? orgId, SupabaseSyncService? sync})
+
+  /// Looks up the name of a place (the phone's lookup, which retries and has Google as a back-up).
+  final Future<String?> Function(double lat, double lng)? _placeNamer;
+  DeliveryRepository(this._db, {String? orgId, SupabaseSyncService? sync, Future<String?> Function(double lat, double lng)? placeNamer})
       : _orgId = orgId,
-        _sync = sync;
+        _sync = sync,
+        _placeNamer = placeNamer;
 
   String _newDeliveryId() => _newId('del');
   String _newStopId() => _newId('stp');
@@ -514,6 +519,20 @@ class DeliveryRepository {
         final cur = await DeliveryLocations.read(_db, id);
         _inBackground(() => sync.pushDeliveryLocations(id, DeliveryLocations.serverColumns(cur.start, cur.end)));
       }
+      // The place name, looked up once and kept with the point (and sent to the server), so a report
+      // never has to wait for a lookup: "Johar Town, Lahore" instead of only coordinates.
+      final namer = _placeNamer;
+      if (namer != null) {
+        _inBackground(() async {
+          final name = await namer(lat, lng);
+          if (name == null || name.trim().isEmpty) return;
+          await DeliveryLocations.saveName(_db, id, isStart: isStart, name: name, lat: lat, lng: lng);
+          if (sync != null) {
+            final cur = await DeliveryLocations.read(_db, id);
+            await sync.pushDeliveryLocations(id, DeliveryLocations.serverColumns(cur.start, cur.end));
+          }
+        });
+      }
     } catch (_) {}
   }
 
@@ -755,5 +774,6 @@ final deliveryRepositoryProvider = Provider<DeliveryRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
   final orgId = ref.watch(orgIdProvider);
   final sync = ref.watch(supabaseSyncServiceProvider);
-  return DeliveryRepository(db, orgId: orgId, sync: sync);
+  final nomi = ref.watch(nominatimClientProvider);
+  return DeliveryRepository(db, orgId: orgId, sync: sync, placeNamer: nomi.reverseGeocode);
 });

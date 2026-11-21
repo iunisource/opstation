@@ -7,6 +7,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dispatch/models/delivery.dart';
 import '../../dispatch/pdf/delivery_pdf_builder.dart';
+import '../../../shared/widgets/generating_overlay.dart';
 import '../services/driver_report_context_builder.dart';
 
 Future<void> showDriverExportSheet(
@@ -40,12 +41,14 @@ class _DriverExportSheetState extends ConsumerState<_DriverExportSheet> {
 
   Future<List<int>> _buildPdf() async {
     // The Delivery Report with the distances merged in (the same report as the one opened from
-    // the job itself).
-    DriverReportContext? route;
-    try {
-      route = await ref.read(driverReportContextBuilderProvider).build(widget.delivery);
-    } catch (_) {}
-    return DeliveryPdfBuilder.build(delivery: widget.delivery, orgName: _orgName, route: route);
+    // the job itself); "Generating report..." shows meanwhile.
+    return withGenerating(context, () async {
+      DriverReportContext? route;
+      try {
+        route = await ref.read(driverReportContextBuilderProvider).build(widget.delivery);
+      } catch (_) {}
+      return DeliveryPdfBuilder.build(delivery: widget.delivery, orgName: _orgName, route: route);
+    });
   }
 
   Future<void> _preview() async {

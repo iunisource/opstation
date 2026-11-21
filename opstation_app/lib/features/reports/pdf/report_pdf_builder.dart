@@ -612,8 +612,8 @@ class ReportPdfBuilder {
         ? 'In progress'
         : DateFormat('hh:mm a - MMM d, y').format(trip.endedAt!);
 
-    String startLoc = startAddr ?? _coordsOrDash(trip.startLat, trip.startLng);
-    String endLoc = endAddr ?? _coordsOrDash(trip.endLat, trip.endLng);
+    String startLoc = placeAndCoords(startAddr, trip.startLat, trip.startLng);
+    String endLoc = placeAndCoords(endAddr, trip.endLat, trip.endLng);
 
     final leftCells = <List<String>>[
       ['SALESPERSON', trip.userName.isEmpty ? '-' : trip.userName.toUpperCase()],
@@ -1395,6 +1395,16 @@ class ReportPdfBuilder {
       if (count % 3 == 0 && i != 0) buf.write(',');
     }
     return buf.toString().split('').reversed.join();
+  }
+
+  /// The place name (when it is known) with its coordinates under it — as on the web reports and the
+  /// delivery report: "Johar Town, Lahore" then "31.47680, 74.24280". Coordinates alone when there is no
+  /// name; the name alone when there is no position.
+  static String placeAndCoords(String? name, double? lat, double? lng) {
+    final coords = _coordsOrDash(lat, lng);
+    final n = (name ?? '').trim();
+    if (n.isEmpty) return coords;
+    return coords == 'No GPS' ? n : '$n\n$coords';
   }
 
   static String _coordsOrDash(double? lat, double? lng) {

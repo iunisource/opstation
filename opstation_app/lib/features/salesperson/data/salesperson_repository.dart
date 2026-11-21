@@ -106,6 +106,13 @@ class SalespersonRepository {
     return _hydrateRoutes(await q.get());
   }
 
+  /// How many customers this phone has recorded for a route (whether or not their customer rows are
+  /// on the phone): the number the route should show.
+  Future<int> routeStopCount(String routeId) async {
+    final rows = await (_db.select(_db.routeStops)..where((s) => s.routeId.equals(routeId))).get();
+    return rows.length;
+  }
+
   Future<SalesRoute?> routeById(String id) async {
     final row = await (_db.select(_db.salesRoutesTable)
           ..where((r) => r.id.equals(id)))

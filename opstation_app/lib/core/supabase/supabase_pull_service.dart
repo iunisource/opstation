@@ -438,34 +438,46 @@ class SupabasePullService {
     }
   }
 
+  /// Text as the phone stores it, whatever the server holds: blank fields arrive as NULL, and a code or
+  /// phone number typed as a number arrives as a number. A strict `as String` threw on either and the
+  /// catch dropped the WHOLE customer — every route stop pointing to it then vanished ("no customers").
+  static String _text(Object? v) => v == null ? '' : '$v';
+  static String? _textOrNull(Object? v) => v == null ? null : '$v';
+  static double? _decimal(Object? v) => v is num ? v.toDouble() : (v is String ? double.tryParse(v.trim()) : null);
+  static bool _flag(Object? v) => v is bool ? v : (v is num ? v != 0 : (v is String ? v.toLowerCase() != 'false' && v != '0' : true));
+
+  @visibleForTesting
+  Future<void> pullCustomersForTest(List<Map<String, dynamic>> rows) => _pullCustomers(rows);
+
   Future<void> _pullCustomers(List<Map<String, dynamic>> rows) async {
+    var failed = 0;
     for (final r in rows) {
       try {
         await _db.into(_db.customers).insertOnConflictUpdate(CustomersCompanion(
-          // Blank fields can arrive as NULL. A hard `as String` threw here and
-          // the catch below silently dropped the WHOLE customer — so it never
-          // reached the phone and every route stop pointing to it vanished
-          // ("0 customers"). Treat missing text as empty instead.
-          id: Value(r['id'] as String),
-          code: Value(r['code'] as String? ?? ''),
-          shopName: Value(r['shop_name'] as String? ?? ''),
-          contactPerson: Value(r['contact_person'] as String? ?? ''),
-          phone: Value(r['phone'] as String? ?? ''),
-          address: Value(r['address'] as String? ?? ''),
-          category: Value(r['category'] as String?),
-          groupName: Value(r['group_name'] as String?),
-          latitude: Value((r['latitude'] as num?)?.toDouble()),
-          longitude: Value((r['longitude'] as num?)?.toDouble()),
-          isActive: Value(r['is_active'] as bool? ?? true),
+          id: Value('${r['id']}'),
+          code: Value(_text(r['code'])),
+          shopName: Value(_text(r['shop_name'])),
+          contactPerson: Value(_text(r['contact_person'])),
+          phone: Value(_text(r['phone'])),
+          address: Value(_text(r['address'])),
+          category: Value(_textOrNull(r['category'])),
+          groupName: Value(_textOrNull(r['group_name'])),
+          latitude: Value(_decimal(r['latitude'])),
+          longitude: Value(_decimal(r['longitude'])),
+          isActive: Value(_flag(r['is_active'])),
           updatedAt: Value(_parseDateNullable(r['updated_at'])),
-          ntnGst: Value(r['ntn_gst'] as String?),
-          orgId: Value(r['org_id'] as String?),
+          ntnGst: Value(_textOrNull(r['ntn_gst'])),
+          orgId: Value(_textOrNull(r['org_id'])),
           // Server is canonical for customers. Without this, pulled rows
           // default to sync_status='pending' and queue up for pointless
           // push-back — caused the thousands-of-failed-POSTs storm.
         ));
-      } catch (_) {}
+      } catch (e) {
+        failed++;
+        if (failed <= 3) print('customer ${r['id']} could not be saved: $e');
+      }
     }
+    if (failed > 0) print('PULL: $failed customer(s) could not be saved');
   }
 
   /// Cache the sellable ERP catalog for offline order-taking. Server is

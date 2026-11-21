@@ -22,6 +22,7 @@ import '../../dispatch/data/delivery_repository.dart';
 import '../../dispatch/models/delivery.dart';
 import '../../dispatch/pdf/delivery_pdf_builder.dart';
 import '../services/driver_report_context_builder.dart';
+import '../../../shared/widgets/generating_overlay.dart';
 import '../../uploads/data/upload_queue_repository.dart';
 import '../services/delivery_photo_capture_service.dart';
 import '../../../core/services/sms_service.dart';
@@ -125,15 +126,18 @@ class _DeliveryExecutionScreenState
     try {
       // The distances are worked out for the report (start, stops, way back); if that cannot be
       // done now the report is still made, without them.
-      DriverReportContext? route;
-      try {
-        route = await ref.read(driverReportContextBuilderProvider).build(d);
-      } catch (_) {}
-      final bytes = Uint8List.fromList(await DeliveryPdfBuilder.build(
-        delivery: d,
-        orgName: orgName,
-        route: route,
-      ));
+      // "Generating report..." shows while the distances and the PDF are worked out.
+      final bytes = await withGenerating(context, () async {
+        DriverReportContext? route;
+        try {
+          route = await ref.read(driverReportContextBuilderProvider).build(d);
+        } catch (_) {}
+        return Uint8List.fromList(await DeliveryPdfBuilder.build(
+          delivery: d,
+          orgName: orgName,
+          route: route,
+        ));
+      });
       final filename =
           'delivery_${d.id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}.pdf';
       await Printing.sharePdf(bytes: bytes, filename: filename);
