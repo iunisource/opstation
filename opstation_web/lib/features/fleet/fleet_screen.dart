@@ -12,6 +12,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/friendly_error.dart';
 import '../auth/auth_controller.dart';
 import 'fleet_common.dart';
+import 'fleet_filter.dart';
 import 'fleet_sync.dart';
 import 'vehicle_profile.dart';
 
@@ -35,6 +36,8 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
   bool _loading = true;
   bool _missing = false;
   String _search = '';
+  final TextEditingController _searchCtrl = TextEditingController();
+  final Set<FleetFilter> _filters = {}; // the counters pressed to narrow the list
   bool _openedFromLink = false;
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
@@ -43,6 +46,12 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load(sync: true));
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _load({bool sync = false}) async {
@@ -124,15 +133,20 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.of(context).size.width >= 900;
-    final list = _vehicles.where((v) {
-      if (_search.isEmpty) return true;
-      final q = _search.toLowerCase();
-      return '${v['reg_no']} ${vehicleTitle(v)} ${_driversOf(v)}'.toLowerCase().contains(q);
-    }).toList();
     final states = {for (final v in _vehicles) v['id']: vehicleState(_services[v['id']] ?? const [], v['odometer'] as num?, _lead)};
     final due = states.values.where((s) => s == 'due').length;
     final overdue = states.values.where((s) => s == 'overdue').length;
     final repairs = _openTasks.values.fold<int>(0, (a, b) => a + b);
+    // What is on screen, and what Print / PDF prints.
+    final list = filterVehicles(
+      _vehicles,
+      search: _search,
+      filters: _filters,
+      states: states,
+      openTasks: {for (final e in _openTasks.entries) '${e.key}': e.value},
+      searchText: (v) => '${v['reg_no']} ${vehicleTitle(v)} ${_driversOf(v)}',
+    );
+    final narrowed = describeFleetFilter(_filters, _search);
 
     return Container(
       color: AppTheme.background,
@@ -141,22 +155,44 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
         Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('Fleet', style: TextStyle(fontSize: wide ? 26 : 22, fontWeight: FontWeight.w800)),
           const SizedBox(width: 4),
-          _chip('${_vehicles.length}', 'vehicles', AppTheme.primary),
-          if (due > 0) _chip('$due', 'service due', const Color(0xFFD97706)),
-          if (overdue > 0) _chip('$overdue', 'overdue', const Color(0xFFDC2626)),
-          if (repairs > 0) _chip('$repairs', 'repairs ongoing', const Color(0xFF7C3AED)),
+          // The counters are filters: press one to see only those vehicles, press it again to let it go.
+          // The vehicles counter shows them all again.
+          FleetCountChip(value: '${_vehicles.length}', label: 'vehicles', color: AppTheme.primary, selected: _filters.isEmpty, onTap: _filters.isEmpty ? null : () => setState(_filters.clear)),
+          if (due > 0 || _filters.contains(FleetFilter.due))
+            FleetCountChip(value: '$due', label: 'service due', color: const Color(0xFFD97706), selected: _filters.contains(FleetFilter.due), onTap: () => _toggleFilter(FleetFilter.due)),
+          if (overdue > 0 || _filters.contains(FleetFilter.overdue))
+            FleetCountChip(value: '$overdue', label: 'overdue', color: const Color(0xFFDC2626), selected: _filters.contains(FleetFilter.overdue), onTap: () => _toggleFilter(FleetFilter.overdue)),
+          if (repairs > 0 || _filters.contains(FleetFilter.repairs))
+            FleetCountChip(value: '$repairs', label: 'repairs ongoing', color: const Color(0xFF7C3AED), selected: _filters.contains(FleetFilter.repairs), onTap: () => _toggleFilter(FleetFilter.repairs)),
           const SizedBox(width: 12),
           SizedBox(
             width: 220,
             child: TextField(
+              controller: _searchCtrl,
               decoration: const InputDecoration(isDense: true, hintText: 'Search vehicles…', prefixIcon: Icon(Icons.search, size: 18)),
               onChanged: (v) => setState(() => _search = v.trim()),
             ),
           ),
-          OutlinedButton.icon(onPressed: _vehicles.isEmpty ? null : _printList, icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
+          OutlinedButton.icon(onPressed: list.isEmpty ? null : () => _printList(list), icon: const Icon(Icons.print_outlined, size: 16), label: const Text('Print / PDF')),
           OutlinedButton.icon(onPressed: _copyFromAssets, icon: const Icon(Icons.copy_all_outlined, size: 16), label: const Text('Copy from assets')),
           ElevatedButton.icon(onPressed: () => _wizard(), icon: const Icon(Icons.add, size: 16), label: const Text('Add vehicle')),
         ]),
+        if (narrowed.isNotEmpty && !_loading)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              Text('Showing ${list.length} of ${_vehicles.length} vehicles · $narrowed', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              TextButton(
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: const Size(0, 28)),
+                onPressed: () => setState(() {
+                  _filters.clear();
+                  _search = '';
+                  _searchCtrl.clear();
+                }),
+                child: const Text('Show all', style: TextStyle(fontSize: 12)),
+              ),
+            ]),
+          ),
         const SizedBox(height: 14),
         Expanded(
           child: _loading
@@ -164,7 +200,7 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
               : _missing
                   ? const Center(child: Text('Run SQL 463 to set up Fleet.', style: TextStyle(color: AppTheme.textSecondary)))
                   : list.isEmpty
-                      ? const Center(child: Text('No vehicles yet. Add one, or copy from Assets.', style: TextStyle(color: AppTheme.textSecondary)))
+                      ? Center(child: Text(_vehicles.isEmpty ? 'No vehicles yet. Add one, or copy from Assets.' : 'No vehicles match this filter.', style: const TextStyle(color: AppTheme.textSecondary)))
                       : RefreshIndicator(
                           onRefresh: () => _load(sync: true),
                           child: ListView(children: [for (final v in list) _row(v, states[v['id']] ?? 'ok', wide)]),
@@ -173,15 +209,6 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
       ]),
     );
   }
-
-  Widget _chip(String v, String l, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(color: c.withOpacity(0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: c.withOpacity(0.25))),
-        child: Text.rich(TextSpan(style: TextStyle(fontSize: 12, color: c), children: [
-          TextSpan(text: v, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
-          TextSpan(text: '  $l'),
-        ])),
-      );
 
   Widget _statePill(String st) {
     final c = st == 'overdue' ? const Color(0xFFDC2626) : st == 'due' ? const Color(0xFFD97706) : const Color(0xFF059669);
@@ -621,11 +648,16 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
     );
   }
 
-  void _printList() {
+  void _toggleFilter(FleetFilter f) => setState(() => _filters.contains(f) ? _filters.remove(f) : _filters.add(f));
+
+  /// Prints / saves as PDF the vehicles that are on screen (the search and the pressed counters apply).
+  void _printList(List<Map<String, dynamic>> list) {
+    final narrowed = describeFleetFilter(_filters, _search);
+    final count = narrowed.isEmpty ? '${list.length} vehicles' : '${list.length} of ${_vehicles.length} vehicles';
     final b = StringBuffer()
-      ..write('<h1>Fleet</h1><div class="meta">${_vehicles.length} vehicles</div>')
+      ..write('<h1>Fleet</h1><div class="meta">$count${narrowed.isEmpty ? '' : ' · ${esc(narrowed)}'}</div>')
       ..write('<table><tr><th>Vehicle</th><th>Driver</th><th class="num">Odometer</th><th>Next service</th><th>Repairs</th><th>Status</th></tr>');
-    for (final v in _vehicles) {
+    for (final v in list) {
       final nx = _next(v);
       final st = vehicleState(_services[v['id']] ?? const [], v['odometer'] as num?, _lead);
       b.write('<tr><td><b>${esc(v['reg_no'])}</b><br>${esc(vehicleTitle(v))}</td><td>${esc(_driversOf(v))}</td>'
