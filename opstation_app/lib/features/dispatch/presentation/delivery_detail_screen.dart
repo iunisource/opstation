@@ -16,6 +16,7 @@ import '../../../core/services/notification_service.dart';
 import '../data/delivery_repository.dart';
 import '../models/delivery.dart';
 import '../pdf/delivery_pdf_builder.dart';
+import '../../driver/services/driver_report_context_builder.dart';
 
 /// Read + act screen for an existing delivery.
 ///
@@ -60,9 +61,14 @@ class _DeliveryDetailScreenState
     final user = ref.read(authControllerProvider).valueOrNull;
     final orgName = user?.organizationName ?? 'Opstation';
     try {
+      DriverReportContext? route; // the distances; the report is still made without them
+      try {
+        route = await ref.read(driverReportContextBuilderProvider).build(d);
+      } catch (_) {}
       final bytes = Uint8List.fromList(await DeliveryPdfBuilder.build(
         delivery: d,
         orgName: orgName,
+        route: route,
       ));
       final filename =
           'delivery_${d.id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}.pdf';

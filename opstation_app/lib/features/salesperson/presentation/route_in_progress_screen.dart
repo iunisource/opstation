@@ -131,7 +131,7 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
 
   /// Free route: mark a visit right here, without choosing a customer. The
   /// phone's GPS point is the visit; the place name follows a moment later.
-  Future<void> _markFreeVisit({bool photo = false}) async {
+  Future<void> _markFreeVisit() async {
     if (_freeBusy) return;
     setState(() => _freeBusy = true);
     final messenger = ScaffoldMessenger.of(context);
@@ -156,14 +156,16 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
         say('GPS is not responding, so the visit was not saved. Step outside or near a window for a few seconds, then try again.');
         return;
       }
-      // "Photo": the camera opens first; the picture is stamped with this visit's own
-      // GPS point. If the camera is closed without a picture nothing is marked.
-      String? photoPath;
-      if (photo) {
-        photoPath = await ref.read(freeVisitPhotoServiceProvider).capture(lat: fix.lat, lng: fix.lng);
-        if (photoPath == null) return;
-        if (!mounted) return;
+      // The camera opens first; the picture is stamped with this visit's own GPS point. Closing
+      // the camera without a picture marks nothing; a camera that cannot be opened still marks the
+      // visit (without a picture).
+      final shot = await ref.read(freeVisitPhotoServiceProvider).shoot(lat: fix.lat, lng: fix.lng);
+      if (!mounted) return;
+      if (shot.result == FreeVisitShotResult.cancelled) {
+        say('Visit not marked. Take the picture to mark the visit.');
+        return;
       }
+      final photoPath = shot.path;
       final n = await ref.read(tripControllerProvider.notifier).markFreeVisit(
             lat: fix.lat,
             lng: fix.lng,
@@ -171,7 +173,7 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
             photoPath: photoPath,
           );
       ref.read(soundControllerProvider.notifier).play(AppSound.visitMarked);
-      say(photoPath == null ? 'Visit $n marked ✓' : 'Visit $n marked with a photo ✓');
+      say(photoPath == null ? 'Visit $n marked (the camera could not be opened, so no picture)' : 'Visit $n marked with a photo ✓');
       if (mounted) setState(() => _freeTick++);
     } catch (e) {
       final m = '$e'.replaceFirst('Bad state: ', '').replaceFirst('Invalid argument(s): ', '');
@@ -415,11 +417,7 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                FreeVisitButtons(
-                  busy: _freeBusy,
-                  onMark: _markFreeVisit,
-                  onPhoto: () => _markFreeVisit(photo: true),
-                ),
+                FreeVisitButton(busy: _freeBusy, onPressed: _markFreeVisit),
                 FutureBuilder<int>(
                   key: ValueKey('free_${trip.id}_$_freeTick'),
                   future: FreeVisits.countForTrip(ref.read(appDatabaseProvider), trip.id),

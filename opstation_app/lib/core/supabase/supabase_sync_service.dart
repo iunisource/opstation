@@ -286,6 +286,7 @@ class SupabaseSyncService {
       'status': d.status,
       'notes': d.notes,
       'org_id': d.orgId,
+      'job_type': d.jobType, // delivery | pickup | free (a driver's free route)
     });
   }
 
@@ -301,9 +302,10 @@ class SupabaseSyncService {
     await _client.from('delivery_stops').upsert({
       'id': s.id,
       'delivery_id': s.deliveryId,
-      'customer_id': s.customerId,
+      'customer_id': s.customerId.isEmpty ? null : s.customerId, // a free-route visit has no customer
       'customer_code': s.customerCode,
       'customer_name': s.customerName,
+      'stop_type': s.stopType,
       'sequence': s.sequence,
       'item_description': s.itemDescription,
       'amount': s.amount,
@@ -420,6 +422,23 @@ class SupabaseSyncService {
       offset += pageSize;
     }
     return out;
+  }
+
+  /// The driver's running jobs (assigned / in progress) and their stops — the small fetch behind
+  /// the driver home's automatic refresh.
+  Future<({List<Map<String, dynamic>> deliveries, List<Map<String, dynamic>> stops})> pullMyDeliveries(String driverId) async {
+    final deliveries = List<Map<String, dynamic>>.from(await _client
+        .from('deliveries')
+        .select()
+        .eq('driver_id', driverId)
+        .inFilter('status', ['assigned', 'in_progress']));
+    final ids = [for (final d in deliveries) d['id'] as String];
+    final stops = <Map<String, dynamic>>[];
+    for (var i = 0; i < ids.length; i += 100) {
+      final chunk = ids.sublist(i, i + 100 > ids.length ? ids.length : i + 100);
+      stops.addAll(List<Map<String, dynamic>>.from(await _client.from('delivery_stops').select().inFilter('delivery_id', chunk)));
+    }
+    return (deliveries: deliveries, stops: stops);
   }
 
   Future<OrgPullData> pullOrgData(String orgId) async {

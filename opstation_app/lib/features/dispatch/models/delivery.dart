@@ -259,6 +259,9 @@ class DeliveryStop {
 
   bool get isPickup => stopType == 'pickup';
 
+  /// A place the driver marked on a free route (no customer): the GPS point is the visit.
+  bool get isVisit => stopType == 'visit';
+
   factory DeliveryStop.fromRow(DeliveryStopsData r) {
     List<String> paths;
     try {
@@ -363,11 +366,15 @@ class Delivery {
 
   /// Heading noun. A job is just a "Job"; the per-stop chips say which
   /// stops are pickups vs deliveries.
-  String get jobNoun => 'Job';
-  String get jobNounLower => 'job';
+  /// A free route the driver ran (marking places as he goes) instead of an assigned job.
+  bool get isFreeRoute => jobType == 'free';
+
+  String get jobNoun => isFreeRoute ? 'Free route' : 'Job';
+  String get jobNounLower => isFreeRoute ? 'free route' : 'job';
 
   /// "2 deliveries · 1 pickup" — for cards and push bodies.
   String get composition {
+    if (isFreeRoute) return 'Free route';
     final parts = <String>[
       if (deliveryCount > 0)
         '$deliveryCount ${deliveryCount == 1 ? 'delivery' : 'deliveries'}',

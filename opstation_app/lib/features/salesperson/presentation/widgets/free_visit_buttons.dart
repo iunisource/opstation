@@ -1,40 +1,27 @@
 import 'package:flutter/material.dart';
 
-/// The two buttons of a free route: "Mark visit here" (the GPS point is the visit) and
-/// "Photo" (opens the camera, then marks the visit here with the picture, stamped with
-/// the coordinates).
-class FreeVisitButtons extends StatelessWidget {
-  const FreeVisitButtons({super.key, required this.busy, required this.onMark, required this.onPhoto});
+/// "Mark visit" on a free route: opens the camera, takes the picture (stamped with the
+/// coordinates) and marks the visit at the point the phone is at — one button for both.
+class FreeVisitButton extends StatelessWidget {
+  const FreeVisitButton({super.key, required this.busy, required this.onPressed});
 
   final bool busy;
-  final VoidCallback onMark;
-  final VoidCallback onPhoto;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return Row(children: [
-      Expanded(
-        flex: 5,
+    return Tooltip(
+      message: 'Take a picture and mark the visit here',
+      child: SizedBox(
+        width: double.infinity,
         child: OutlinedButton.icon(
-          onPressed: busy ? null : onMark,
+          onPressed: busy ? null : onPressed,
           icon: busy
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.place_outlined, size: 18),
-          label: const Text('Mark visit here'),
+              : const Icon(Icons.photo_camera_outlined, size: 18),
+          label: const Text('Mark visit'),
         ),
       ),
-      const SizedBox(width: 8),
-      Expanded(
-        flex: 3,
-        child: Tooltip(
-          message: 'Take a picture and mark the visit here',
-          child: OutlinedButton.icon(
-            onPressed: busy ? null : onPhoto,
-            icon: const Icon(Icons.photo_camera_outlined, size: 18),
-            label: const Text('Photo'),
-          ),
-        ),
-      ),
-    ]);
+    );
   }
 }

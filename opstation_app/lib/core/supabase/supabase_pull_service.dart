@@ -634,6 +634,27 @@ class SupabasePullService {
   @visibleForTesting
   Future<void> pullDeliveriesForTest(List<Map<String, dynamic>> rows) => _pullDeliveries(rows);
 
+  /// The driver's own running jobs only (assigned and in progress, with their stops): a few rows
+  /// instead of the whole organisation's data, so a job assigned on the web shows up in a moment.
+  /// Returns the ids of jobs that were not on this phone yet (new assignments).
+  Future<List<String>> pullMyDeliveries(String driverId) async {
+    final data = await _sync.pullMyDeliveries(driverId);
+    return applyMyDeliveries(data.deliveries, data.stops);
+  }
+
+  /// Writes the driver's jobs that were fetched, and says which of them are new on this phone.
+  @visibleForTesting
+  Future<List<String>> applyMyDeliveries(List<Map<String, dynamic>> deliveries, List<Map<String, dynamic>> stops) async {
+    if (deliveries.isEmpty) return const [];
+    final known = {for (final d in await _db.select(_db.deliveries).get()) d.id};
+    final fresh = [for (final d in deliveries) if (!known.contains('${d['id']}')) '${d['id']}'];
+    await _db.transaction(() async {
+      await _pullDeliveries(deliveries);
+      await _pullDeliveryStops(stops);
+    });
+    return fresh;
+  }
+
   Future<void> _pullDeliveries(List<Map<String, dynamic>> rows) async {
     final local = {for (final d in await _db.select(_db.deliveries).get()) d.id: d};
     final ahead = <DeliveriesData>[];
@@ -685,13 +706,19 @@ class SupabasePullService {
   }
 
   Future<void> _pullDeliveryStops(List<Map<String, dynamic>> rows) async {
+    // A stop marked on this phone that has not reached the server yet is newer than the server's
+    // copy: it is kept (and sent by the next sync) instead of being overwritten.
+    final waiting = {
+      for (final s in await (_db.select(_db.deliveryStops)..where((t) => t.syncStatus.equals('pending'))).get()) s.id,
+    };
     for (final r in rows) {
+      if (waiting.contains('${r['id']}')) continue;
       try {
         await _db.into(_db.deliveryStops).insertOnConflictUpdate(
             DeliveryStopsCompanion(
           id: Value(r['id'] as String),
           deliveryId: Value(r['delivery_id'] as String),
-          customerId: Value(r['customer_id'] as String),
+          customerId: Value(r['customer_id'] as String? ?? ''), // a free-route visit has none
           customerCode: Value(r['customer_code'] as String? ?? ''),
           customerName: Value(r['customer_name'] as String? ?? ''),
           sequence: Value(r['sequence'] as int),

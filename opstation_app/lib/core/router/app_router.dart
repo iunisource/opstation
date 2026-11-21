@@ -25,6 +25,7 @@ import '../../features/driver/presentation/delivery_execution_screen.dart';
 import '../../features/driver/presentation/driver_history_screen.dart';
 import '../../features/driver/presentation/driver_reports_screen.dart';
 import '../../features/driver/presentation/driver_home_screen.dart';
+import '../../features/driver/presentation/driver_free_route_screen.dart';
 import '../../features/orgs/presentation/org_detail_screen.dart';
 import '../../features/master_admin/presentation/master_admin_home_screen.dart';
 import '../../features/master_admin/presentation/super_admin_home_screen.dart';
@@ -224,6 +225,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/driver/delivery/:id',
         builder: (_, state) => DeliveryExecutionScreen(
+          deliveryId: state.pathParameters['id']!,
+        ),
+      ),
+      GoRoute(
+        path: '/driver/free-route/:id',
+        builder: (_, state) => DriverFreeRouteScreen(
           deliveryId: state.pathParameters['id']!,
         ),
       ),

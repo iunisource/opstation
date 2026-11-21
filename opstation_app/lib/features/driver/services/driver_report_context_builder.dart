@@ -30,6 +30,11 @@ class DriverReportContext {
   /// Reverse geocoded end address (nullable).
   final String? endAddress;
 
+  /// Where the job started and ended (the return location), as recorded by the driver's phone;
+  /// null when it was not recorded (older jobs, or no GPS fix at the time).
+  final DeliveryLocation? startPoint;
+  final DeliveryLocation? endPoint;
+
   const DriverReportContext({
     required this.delivery,
     required this.orderedStops,
@@ -39,7 +44,23 @@ class DriverReportContext {
     required this.usedGoogle,
     this.startAddress,
     this.endAddress,
+    this.startPoint,
+    this.endPoint,
   });
+
+  /// The distance of each stop that has a GPS point (delivered, with its position), by stop id:
+  /// from the previous point (the start for the first stop, when it was recorded).
+  Map<String, double> get legKmByStop {
+    final out = <String, double>{};
+    var i = 0;
+    for (final s in orderedStops) {
+      if (s.status == DeliveryStopStatus.delivered && s.capturedLat != null && s.capturedLng != null) {
+        if (i < distanceKm.length) out[s.id] = distanceKm[i];
+        i++;
+      }
+    }
+    return out;
+  }
 }
 
 /// Splits the consecutive leg distances of a job's route into the per-stop distances
@@ -135,6 +156,8 @@ class DriverReportContextBuilder {
         usedGoogle: false,
         startAddress: startAddress,
         endAddress: endAddress,
+        startPoint: locs.start,
+        endPoint: locs.end,
       );
     }
 
@@ -178,6 +201,8 @@ class DriverReportContextBuilder {
       usedGoogle: usedGoogle,
       startAddress: startAddress,
       endAddress: endAddress,
+      startPoint: locs.start,
+      endPoint: locs.end,
     );
   }
 

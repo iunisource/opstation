@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -60,6 +61,13 @@ class DeliveryRepository {
   /// driver's "complete delivery" / "cancel" / "auto-complete" flows
   /// updated only the local DB, leaving Supabase forever in the prior
   /// status — which then re-hydrated on the next login as still-active.
+  /// Sends to the server without making the driver wait for the network: the phone is the
+  /// source of truth, and a push that did not get through is repeated by the periodic sync and
+  /// by the refresh (which sends a job that is ahead of the server's copy again).
+  void _inBackground(Future<void> Function() job) {
+    unawaited(job().catchError((_) {}));
+  }
+
   Future<void> _pushDeliveryById(String id) async {
     final sync = _sync;
     if (sync == null) return;
@@ -377,8 +385,122 @@ class DeliveryRepository {
         startedAt: Value(DateTime.now()),
       ),
     );
-    await _pushDeliveryById(id);
+    _inBackground(() => _pushDeliveryById(id));
     await _recordLocation(id, isStart: true, lat: lat, lng: lng, accuracy: accuracy);
+  }
+
+  /// Keeps the start point of a job (taken a moment after it started, so starting is instant).
+  Future<void> recordStart(String id, {double? lat, double? lng, double? accuracy}) =>
+      _recordLocation(id, isStart: true, lat: lat, lng: lng, accuracy: accuracy);
+
+  /// Keeps the return location of a job (taken a moment after it ended, so ending is instant).
+  Future<void> recordEnd(String id, {double? lat, double? lng, double? accuracy}) =>
+      _recordLocation(id, isStart: false, lat: lat, lng: lng, accuracy: accuracy);
+
+  // ---- Driver free route ----------------------------------------------------------
+
+  /// The driver starts a free route: a job of his own with no stops yet, already in progress.
+  /// He marks the places he goes to as he goes ([addFreeVisit]) and ends it with the slide
+  /// to end ([endDelivery]) — so its summary is the driver's own report (stops, distance of
+  /// every leg, the way back). One job at a time: when a free route is already running it is
+  /// returned instead of a second one; another running job blocks it.
+  Future<Delivery> startFreeRoute({
+    required String driverId,
+    required String driverName,
+    required String driverRole,
+    double? lat,
+    double? lng,
+    double? accuracy,
+  }) async {
+    final running = await list(statuses: {DeliveryStatus.inProgress}, driverId: driverId);
+    for (final r in running) {
+      if (r.isFreeRoute) return r;
+    }
+    if (running.isNotEmpty) {
+      throw StateError('You have a job in progress. Finish it first, then start a free route.');
+    }
+    final id = _newDeliveryId();
+    final now = DateTime.now();
+    await _db.into(_db.deliveries).insert(DeliveriesCompanion(
+          id: Value(id),
+          driverId: Value(driverId),
+          driverName: Value(driverName),
+          driverRole: Value(driverRole),
+          createdBy: Value(driverId),
+          createdByName: Value(driverName),
+          createdByRole: Value(driverRole),
+          createdAt: Value(now),
+          startedAt: Value(now),
+          status: const Value('in_progress'),
+          orgId: Value(_orgId),
+          jobType: const Value('free'),
+        ));
+    _inBackground(() => _pushDeliveryById(id));
+    await _recordLocation(id, isStart: true, lat: lat, lng: lng, accuracy: accuracy);
+    return (await byId(id))!;
+  }
+
+  /// Marks a place on a running free route: the GPS point is the visit, with the picture
+  /// taken there ([photoRemotePath], already queued for upload). The place name follows
+  /// later ([renameStop]).
+  Future<DeliveryStop> addFreeVisit({
+    required String deliveryId,
+    required double lat,
+    required double lng,
+    double? accuracy,
+    String? photoRemotePath,
+    String? name,
+  }) async {
+    final d = await byId(deliveryId);
+    if (d == null) throw StateError('Route not found');
+    if (d.status != DeliveryStatus.inProgress) throw StateError('This route is not running any more');
+    final seq = d.stops.length;
+    final stopId = _newStopId();
+    await _db.into(_db.deliveryStops).insert(DeliveryStopsCompanion(
+          id: Value(stopId),
+          deliveryId: Value(deliveryId),
+          customerId: const Value(''), // no customer: sent to the server as null
+          customerCode: const Value(''),
+          customerName: Value((name ?? '').trim().isEmpty ? 'Visit ${seq + 1}' : name!.trim()),
+          stopType: const Value('visit'),
+          sequence: Value(seq),
+          itemDescription: const Value(''),
+          amount: const Value(0),
+          paymentType: Value(PaymentType.notRequired.wire),
+          status: const Value('delivered'),
+          deliveredAt: Value(DateTime.now()),
+          capturedLat: Value(lat),
+          capturedLng: Value(lng),
+          verification: const Value('verified'), // the phone's GPS point is the visit
+          photoPathsJson: Value(jsonEncode(photoRemotePath == null ? const <String>[] : [photoRemotePath])),
+          syncStatus: const Value('pending'),
+        ));
+    await _pushStopById(stopId);
+    return (await byId(deliveryId))!.stops.firstWhere((s) => s.id == stopId);
+  }
+
+  /// Gives a free-route visit the name of its place (looked up after it was marked).
+  Future<void> renameStop(String stopId, String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    await (_db.update(_db.deliveryStops)..where((t) => t.id.equals(stopId))).write(
+      DeliveryStopsCompanion(customerName: Value(n), syncStatus: const Value('pending')),
+    );
+    await _pushStopById(stopId);
+  }
+
+  /// Sends one stop; once the server has it, it is marked synced (otherwise the periodic
+  /// sync sends it later).
+  Future<void> _pushStopById(String stopId) async {
+    final sync = _sync;
+    if (sync == null) return;
+    try {
+      final row = await (_db.select(_db.deliveryStops)..where((t) => t.id.equals(stopId))).getSingleOrNull();
+      if (row == null) return;
+      await sync.pushDeliveryStop(row);
+      await (_db.update(_db.deliveryStops)..where((t) => t.id.equals(stopId)))
+          .write(const DeliveryStopsCompanion(syncStatus: Value('synced')));
+    } catch (_) {}
   }
 
   /// Keeps the start (or return) point of a job, here and on the server. Best effort: a
@@ -390,7 +512,7 @@ class DeliveryRepository {
       final sync = _sync;
       if (sync != null) {
         final cur = await DeliveryLocations.read(_db, id);
-        await sync.pushDeliveryLocations(id, DeliveryLocations.serverColumns(cur.start, cur.end));
+        _inBackground(() => sync.pushDeliveryLocations(id, DeliveryLocations.serverColumns(cur.start, cur.end)));
       }
     } catch (_) {}
   }
@@ -429,7 +551,7 @@ class DeliveryRepository {
         completedAt: Value(now),
       ),
     );
-    await _pushDeliveryById(deliveryId);
+    _inBackground(() => _pushDeliveryById(deliveryId));
     await _recordLocation(deliveryId, isStart: false, lat: lat, lng: lng, accuracy: accuracy);
   }
 
@@ -602,8 +724,10 @@ class DeliveryRepository {
     });
     // Push outside the transaction. Pushes the delivery row (now
     // completed) and each stop (some flipped to failed).
-    await _pushDeliveryById(deliveryId);
-    await _pushDeliveryStopsForDelivery(deliveryId);
+    _inBackground(() async {
+      await _pushDeliveryById(deliveryId);
+      await _pushDeliveryStopsForDelivery(deliveryId);
+    });
     await _recordLocation(deliveryId, isStart: false, lat: lat, lng: lng, accuracy: accuracy);
   }
 

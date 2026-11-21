@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
@@ -10,11 +14,11 @@ import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/role_home_scaffold.dart';
 import '../../../shared/widgets/quick_actions_menu.dart';
 import '../../../core/services/sound_controller.dart';
-import '../../salesperson/models/trip.dart';
-import '../../salesperson/providers/trip_controller.dart';
+import '../../../core/services/device_gps_service.dart';
 import '../../../shared/widgets/temp_password_banner.dart';
 import '../../../shared/widgets/update_app_banner.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
+import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dispatch/data/delivery_repository.dart';
 import '../../dispatch/models/delivery.dart';
@@ -77,10 +81,19 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
   // Throttle resume pulls: the OS can fire resumed several times in a row.
   DateTime? _lastResumePull;
 
+  // The driver's own jobs are refreshed by themselves: a small pull every 20 seconds while this
+  // screen is open, and at once when the server says one of his jobs changed (realtime).
+  Timer? _poll;
+  Timer? _debounce;
+  RealtimeChannel? _jobsChannel;
+  bool _pulling = false;
+  bool _firstPullDone = false; // jobs found by the first pull are not "new"
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _startAutoRefresh();
     // Catch up on anything assigned while the screen was not mounted (e.g.
     // the push arrived while the app was closed and the driver opened it
     // from the launcher instead of the banner).
@@ -158,7 +171,62 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _poll?.cancel();
+    _debounce?.cancel();
+    final ch = _jobsChannel;
+    if (ch != null) {
+      try {
+        Supabase.instance.client.removeChannel(ch);
+      } catch (_) {}
+    }
     super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _pullMine());
+    final uid = ref.read(authControllerProvider).valueOrNull?.id;
+    if (uid == null) return;
+    try {
+      // Needs the deliveries table in the realtime publication (driver_free_route.sql); without it
+      // the 20-second pull above does the job.
+      _jobsChannel = Supabase.instance.client
+          .channel('driver_jobs_$uid')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'deliveries',
+            filter: PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'driver_id', value: uid),
+            callback: (_) {
+              // The dispatcher adds the job's stops a moment after the job itself.
+              _debounce?.cancel();
+              _debounce = Timer(const Duration(milliseconds: 1200), _pullMine);
+            },
+          )
+          .subscribe();
+    } catch (_) {}
+  }
+
+  /// The driver's own running jobs, fetched on their own (a few rows, not the whole organisation).
+  /// A job that was not on this phone yet is announced.
+  Future<void> _pullMine({bool announce = true}) async {
+    if (_pulling) return;
+    final user = ref.read(authControllerProvider).valueOrNull;
+    if (user == null) return;
+    _pulling = true;
+    try {
+      final fresh = await ref.read(supabasePullServiceProvider).pullMyDeliveries(user.id);
+      if (announce && _firstPullDone && fresh.isNotEmpty && mounted) {
+        HapticFeedback.mediumImpact();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(fresh.length == 1 ? 'New job assigned to you' : '${fresh.length} new jobs assigned to you')),
+        );
+      }
+      _firstPullDone = true;
+    } catch (_) {
+      // Offline: the next try catches up.
+    } finally {
+      _pulling = false;
+    }
   }
 
   /// Phone unlocked / app brought back to the foreground: pull the org so a
@@ -176,6 +244,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
       return;
     }
     _lastResumePull = now;
+    _pullMine(); // the driver's jobs first: quick
     final orgId =
         ref.read(authControllerProvider).valueOrNull?.organizationId;
     if (orgId == null || orgId.isEmpty) return;
@@ -209,14 +278,14 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
     );
   }
 
-  /// Quick Actions: Free route. A driver can run a free route like a salesperson: mark
-  /// visits as they go (with or without a picture), and the trip report lists them.
+  /// Quick Actions: Free route. The driver marks the places he goes to (each with a picture) and ends
+  /// the route when done; it is a job of his own, so its summary is his driver report.
   Future<void> _showQuickActions() async {
     final picked = await showQuickActionsMenu(context, const [
       QuickActionItem(
         id: 'free',
         label: 'Free route',
-        hint: 'Mark visits as you go',
+        hint: 'Mark places as you go',
         icon: Icons.add_road,
         bg: AppColors.warningLight,
         fg: AppColors.warningDark,
@@ -226,21 +295,48 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
     await _openFreeRoute();
   }
 
-  /// Starts a free route, or opens the one already running.
+  /// Starts a free route, or opens the one already running. A progress circle shows at once (the
+  /// start waits a few seconds at most for GPS, and used to look as if nothing was happening).
   Future<void> _openFreeRoute() async {
     final messenger = ScaffoldMessenger.of(context);
     void say(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
+    final nav = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(canPop: false, child: Center(child: CircularProgressIndicator())),
+    );
+    void closeProgress() {
+      if (nav.canPop()) nav.pop();
+    }
+
     try {
-      final state = await ref.read(tripControllerProvider.future);
-      if (state.active == null) {
-        await ref.read(tripControllerProvider.notifier).startFreeTrip();
-        ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
-      }
+      final user = ref.read(authControllerProvider).valueOrNull;
+      if (user == null) throw StateError('Please sign in again.');
+      DeviceFix? fix;
+      try {
+        fix = await ref
+            .read(deviceGpsServiceProvider)
+            .getFix(timeout: const Duration(seconds: 5))
+            .timeout(const Duration(seconds: 7), onTimeout: () => null);
+      } catch (_) {}
+      final d = await ref.read(deliveryRepositoryProvider).startFreeRoute(
+            driverId: user.id,
+            driverName: user.name,
+            driverRole: user.role.label,
+            lat: fix?.lat,
+            lng: fix?.lng,
+            accuracy: fix?.accuracy,
+          );
+      ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
+      closeProgress();
       if (!mounted) return;
-      context.push('/salesperson/route');
+      context.push('/driver/free-route/${d.id}');
     } on StateError catch (e) {
+      closeProgress();
       say(e.message);
     } catch (_) {
+      closeProgress();
       say('Could not start a free route. Please try again.');
     }
   }
@@ -249,7 +345,6 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
   Widget build(BuildContext context) {
     final user = ref.watch(authControllerProvider).valueOrNull;
     final firstName = user?.name.split(' ').first ?? 'Driver';
-    final activeTrip = ref.watch(tripControllerProvider).valueOrNull?.active;
     final dateStr = DateFormat('EEEE, d MMMM y').format(DateTime.now());
 
     return RoleHomeScaffold(
@@ -270,19 +365,12 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
             // appear without forcing the driver to log out and back in.
             // Local DB rebuild after the pull picks up the new rows.
             onRefresh: () async {
-              final orgId = ref
-                  .read(authControllerProvider)
-                  .valueOrNull
-                  ?.organizationId;
+              // The driver's own jobs first (quick), the rest of the organisation's data afterwards
+              // in the background, so the swipe no longer waits for everything.
+              await _pullMine(announce: false);
+              final orgId = ref.read(authControllerProvider).valueOrNull?.organizationId;
               if (orgId != null && orgId.isNotEmpty) {
-                try {
-                  await ref
-                      .read(supabasePullServiceProvider)
-                      .pullOrgData(orgId);
-                } catch (_) {
-                  // Network error → fall through; UI still rebuilds
-                  // off whatever's in local DB.
-                }
+                ref.read(supabasePullServiceProvider).pullOrgData(orgId).catchError((_) {});
               }
               if (mounted) setState(() {});
             },
@@ -310,12 +398,6 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
                 const SizedBox(height: 24),
                 const TempPasswordBanner(),
                 const UpdateAppBanner(padding: EdgeInsets.only(top: 8)),
-                if (activeTrip != null) ...[
-                  const _SectionTitle('FREE ROUTE IN PROGRESS', AppColors.warningDark),
-                  const SizedBox(height: 8),
-                  _FreeRouteCard(trip: activeTrip, onTap: () => context.push('/salesperson/route')),
-                  const SizedBox(height: 20),
-                ],
                 if (data.inProgress != null) ...[
                   const _SectionTitle(
                       'IN PROGRESS', AppColors.warningDark),
@@ -420,6 +502,10 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
   }
 
   Future<void> _openActive(Delivery d) async {
+    if (d.isFreeRoute) {
+      await context.push<bool>('/driver/free-route/${d.id}');
+      return;
+    }
     final changed =
         await context.push<bool>('/driver/delivery/${d.id}');
     if (changed == true && mounted) setState(() {});
@@ -438,46 +524,6 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen>
     final changed =
         await context.push<bool>('/driver/delivery/${d.id}');
     if (changed == true && mounted) setState(() {});
-  }
-}
-
-/// The free route the driver is on: tap to go back to it.
-class _FreeRouteCard extends StatelessWidget {
-  const _FreeRouteCard({required this.trip, required this.onTap});
-
-  final Trip trip;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(color: AppColors.warningLight, borderRadius: BorderRadius.circular(10)),
-              alignment: Alignment.center,
-              child: const Icon(Icons.add_road, color: AppColors.warningDark, size: 22),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Free route', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text('Started ${DateFormat('hh:mm a').format(trip.startedAt)} - tap to continue',
-                    style: Theme.of(context).textTheme.bodySmall),
-              ]),
-            ),
-            const Icon(Icons.chevron_right, size: 20, color: AppColors.textTertiaryLight),
-          ]),
-        ),
-      ),
-    );
   }
 }
 
@@ -608,25 +654,39 @@ class _ActiveDeliveryCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _stat('${delivery.stops.length}', 'STOPS'),
-                ),
-                Expanded(
-                  child: _stat(
-                    '${delivery.deliveredCount}/${delivery.stops.length}',
-                    'DONE',
+            if (delivery.isFreeRoute)
+              Row(
+                children: [
+                  Expanded(child: _stat('${delivery.stops.length}', 'VISITS')),
+                  Expanded(
+                    child: _stat(
+                      delivery.startedAt == null ? '-' : DateFormat('hh:mm a').format(delivery.startedAt!),
+                      'STARTED',
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: delivery.hasDeliveries
-                      ? _stat('Rs ${delivery.cashCollected}', 'COLLECTED')
-                      : _stat('${delivery.pickupCount}', 'PICKUPS'),
-                ),
-              ],
-            ),
+                ],
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: _stat('${delivery.stops.length}', 'STOPS'),
+                  ),
+                  Expanded(
+                    child: _stat(
+                      '${delivery.deliveredCount}/${delivery.stops.length}',
+                      'DONE',
+                    ),
+                  ),
+                  Expanded(
+                    child: delivery.hasDeliveries
+                        ? _stat('Rs ${delivery.cashCollected}', 'COLLECTED')
+                        : _stat('${delivery.pickupCount}', 'PICKUPS'),
+                  ),
+                ],
+              ),
             const SizedBox(height: 12),
+            if (!delivery.isFreeRoute)
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(

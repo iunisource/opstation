@@ -6,7 +6,7 @@ import 'package:printing/printing.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../../dispatch/models/delivery.dart';
-import '../pdf/driver_summary_pdf_builder.dart';
+import '../../dispatch/pdf/delivery_pdf_builder.dart';
 import '../services/driver_report_context_builder.dart';
 
 Future<void> showDriverExportSheet(
@@ -39,10 +39,13 @@ class _DriverExportSheetState extends ConsumerState<_DriverExportSheet> {
       ref.read(authControllerProvider).valueOrNull?.organizationName ?? 'Opstation';
 
   Future<List<int>> _buildPdf() async {
-    final ctx = await ref
-        .read(driverReportContextBuilderProvider)
-        .build(widget.delivery);
-    return DriverSummaryPdfBuilder.build(ctx: ctx, orgName: _orgName);
+    // The Delivery Report with the distances merged in (the same report as the one opened from
+    // the job itself).
+    DriverReportContext? route;
+    try {
+      route = await ref.read(driverReportContextBuilderProvider).build(widget.delivery);
+    } catch (_) {}
+    return DeliveryPdfBuilder.build(delivery: widget.delivery, orgName: _orgName, route: route);
   }
 
   Future<void> _preview() async {

@@ -98,6 +98,23 @@ class DeviceGpsService {
     }
   }
 
+  /// A position right away: the phone's last-known one when it is recent (default 90 seconds),
+  /// otherwise null. It never waits for a live fix and never asks for permission — for the moments
+  /// (starting or ending a job) where the driver must not be kept waiting.
+  Future<DeviceFix?> getQuickFix({Duration maxAge = const Duration(seconds: 90)}) async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return null;
+      final perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return null;
+      final last = await Geolocator.getLastKnownPosition();
+      if (last == null) return null;
+      if (DateTime.now().difference(last.timestamp.toLocal()).abs() > maxAge) return null;
+      return DeviceFix(lat: last.latitude, lng: last.longitude, accuracy: last.accuracy);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// A position for a visit / receipt — coordinates are mandatory, accuracy is
   /// not. Tries a high-accuracy fix, then a coarser one (network / Wi-Fi
   /// positioning, which works in dense markets), then the phone's last-known

@@ -122,8 +122,13 @@ class NotificationService {
   /// Pull this org's data so a newly-assigned job lands in local Drift and
   /// the driver-home stream refreshes on its own. Fire-and-forget.
   void pullOrgNow() {
-    final orgId = _ref.read(authControllerProvider).valueOrNull?.organizationId;
+    final user = _ref.read(authControllerProvider).valueOrNull;
+    final orgId = user?.organizationId;
     if (orgId == null || orgId.isEmpty) return;
+    // The driver's own jobs first (a few rows: the new job shows at once), then the rest.
+    if (user != null) {
+      _ref.read(supabasePullServiceProvider).pullMyDeliveries(user.id).catchError((_) => <String>[]);
+    }
     _ref.read(supabasePullServiceProvider).pullOrgData(orgId).catchError((_) {});
   }
 

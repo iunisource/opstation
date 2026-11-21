@@ -21,6 +21,7 @@ import '../../salesperson/models/customer.dart';
 import '../../dispatch/data/delivery_repository.dart';
 import '../../dispatch/models/delivery.dart';
 import '../../dispatch/pdf/delivery_pdf_builder.dart';
+import '../services/driver_report_context_builder.dart';
 import '../../uploads/data/upload_queue_repository.dart';
 import '../services/delivery_photo_capture_service.dart';
 import '../../../core/services/sms_service.dart';
@@ -94,12 +95,15 @@ class _DeliveryExecutionScreenState
       return;
     }
     try {
-      // Where the job starts (the report counts the way to the first stop); a slow or
-      // missing GPS fix never stops the driver from starting.
-      final fix = await _tryGps();
-      await repo.startDelivery(id: d.id, driverId: user.id, lat: fix?.lat, lng: fix?.lng, accuracy: fix?.accuracy);
-      await ref.read(auditLoggerProvider).deliveryStarted(deliveryId: d.id);
+      // Starting is instant: where the job starts (the report counts the way to the first stop) is
+      // the phone's recent position when it has one, else taken a moment later. Nothing here waits
+      // for GPS or for the network.
+      final gps = ref.read(deviceGpsServiceProvider);
+      final quick = await gps.getQuickFix();
+      await repo.startDelivery(id: d.id, driverId: user.id, lat: quick?.lat, lng: quick?.lng, accuracy: quick?.accuracy);
+      _quietly(ref.read(auditLoggerProvider).deliveryStarted(deliveryId: d.id));
       ref.read(soundControllerProvider.notifier).play(AppSound.routeStart);
+      if (quick == null) _quietly(_recordLaterAt(repo, gps, d.id, isStart: true));
       await _reload();
     } catch (e) {
       setState(() {
@@ -119,9 +123,16 @@ class _DeliveryExecutionScreenState
     final user = ref.read(authControllerProvider).valueOrNull;
     final orgName = user?.organizationName ?? 'Opstation';
     try {
+      // The distances are worked out for the report (start, stops, way back); if that cannot be
+      // done now the report is still made, without them.
+      DriverReportContext? route;
+      try {
+        route = await ref.read(driverReportContextBuilderProvider).build(d);
+      } catch (_) {}
       final bytes = Uint8List.fromList(await DeliveryPdfBuilder.build(
         delivery: d,
         orgName: orgName,
+        route: route,
       ));
       final filename =
           'delivery_${d.id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}.pdf';
@@ -340,13 +351,12 @@ class _DeliveryExecutionScreenState
     // replaces the older tap-then-dialog flow. Slide commits
     // immediately on release at the right edge.
     try {
-      final fix = await _tryGps(); // the return location
-      await ref
-          .read(deliveryRepositoryProvider)
-          .completeEarly(deliveryId: d.id, lat: fix?.lat, lng: fix?.lng, accuracy: fix?.accuracy);
-      await ref
-          .read(auditLoggerProvider)
-          .deliveryCompleted(deliveryId: d.id, early: true);
+      final repo = ref.read(deliveryRepositoryProvider);
+      final gps = ref.read(deviceGpsServiceProvider);
+      final quick = await gps.getQuickFix(); // the return location, without waiting
+      await repo.completeEarly(deliveryId: d.id, lat: quick?.lat, lng: quick?.lng, accuracy: quick?.accuracy);
+      _quietly(ref.read(auditLoggerProvider).deliveryCompleted(deliveryId: d.id, early: true));
+      if (quick == null) _quietly(_recordLaterAt(repo, gps, d.id, isStart: false));
       ref.read(soundControllerProvider.notifier).play(AppSound.routeEnd);
       await _reload();
     } catch (e) {
@@ -365,16 +375,14 @@ class _DeliveryExecutionScreenState
     if (d == null) return;
     setState(() => _ending = true);
     try {
-      final fix = await _tryGps();
-      await ref
-          .read(deliveryRepositoryProvider)
-          .endDelivery(deliveryId: d.id, lat: fix?.lat, lng: fix?.lng, accuracy: fix?.accuracy);
-      await ref.read(auditLoggerProvider).deliveryCompleted(deliveryId: d.id, early: false);
+      final repo = ref.read(deliveryRepositoryProvider);
+      final gps = ref.read(deviceGpsServiceProvider);
+      final quick = await gps.getQuickFix(); // the return location, without waiting
+      await repo.endDelivery(deliveryId: d.id, lat: quick?.lat, lng: quick?.lng, accuracy: quick?.accuracy);
+      _quietly(ref.read(auditLoggerProvider).deliveryCompleted(deliveryId: d.id, early: false));
       ref.read(soundControllerProvider.notifier).play(AppSound.routeEnd);
-      if (fix == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Job ended. The return location was not recorded (GPS not available).')));
-      }
+      // No recent position at hand: it is taken a moment later and added to the job.
+      if (quick == null) _quietly(_recordLaterAt(repo, gps, d.id, isStart: false));
       await _reload();
     } catch (e) {
       if (mounted) {
@@ -383,6 +391,23 @@ class _DeliveryExecutionScreenState
       }
     } finally {
       if (mounted) setState(() => _ending = false);
+    }
+  }
+
+  /// Runs something the driver does not need to wait for; a failure is not shown.
+  void _quietly(Future<void> f) {
+    f.catchError((_) {});
+  }
+
+  /// The start (or return) point of a job, when the phone had no recent position to give at the
+  /// moment: a live fix, a few seconds later, recorded on the job.
+  Future<void> _recordLaterAt(DeliveryRepository repo, DeviceGpsService gps, String id, {required bool isStart}) async {
+    final fix = await gps.getFix(timeout: const Duration(seconds: 20));
+    if (fix == null) return;
+    if (isStart) {
+      await repo.recordStart(id, lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy);
+    } else {
+      await repo.recordEnd(id, lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy);
     }
   }
 
@@ -498,6 +523,7 @@ class _DeliveryExecutionScreenState
                 customer: _customerIndex[s.customerId],
                 canAct: d.status == DeliveryStatus.inProgress,
                 isPickup: s.isPickup,
+                isVisit: s.isVisit,
                 onMarkDelivered: () => _handleMarkDelivered(s),
                 onMarkFailed: () => _handleMarkFailed(s),
               ),
@@ -723,6 +749,9 @@ class _StopCard extends StatelessWidget {
   final Customer? customer;
   final bool canAct;
   final bool isPickup;
+
+  /// A place marked on a free route: no payment, read as "Visited".
+  final bool isVisit;
   final VoidCallback onMarkDelivered;
   final VoidCallback onMarkFailed;
 
@@ -731,6 +760,7 @@ class _StopCard extends StatelessWidget {
     required this.customer,
     required this.canAct,
     this.isPickup = false,
+    this.isVisit = false,
     required this.onMarkDelivered,
     required this.onMarkFailed,
   });
@@ -847,7 +877,7 @@ class _StopCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          isPickup ? 'PICKUP' : 'DELIVERY',
+                          isVisit ? 'VISIT' : (isPickup ? 'PICKUP' : 'DELIVERY'),
                           style: TextStyle(
                             fontSize: 9,
                             fontWeight: FontWeight.w800,
@@ -986,7 +1016,7 @@ class _StopCard extends StatelessWidget {
                         ],
                       ),
                     ],
-                    if (!isPickup) ...[
+                    if (!isPickup && !isVisit) ...[
                     const SizedBox(height: 4),
                     Row(
                       children: [
@@ -1186,7 +1216,9 @@ class _StopCard extends StatelessWidget {
       ),
       child: Text(
         // A settled pickup reads "Picked up" rather than "Delivered".
-        (isPickup && s == DeliveryStopStatus.delivered) ? 'Picked up' : s.label,
+        (isVisit && s == DeliveryStopStatus.delivered)
+            ? 'Visited'
+            : (isPickup && s == DeliveryStopStatus.delivered) ? 'Picked up' : s.label,
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,

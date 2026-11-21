@@ -3,6 +3,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../../dispatch/models/delivery.dart';
+import '../../../core/utils/delivery_locations.dart';
+import '../../driver/services/driver_report_context_builder.dart';
 
 class DeliveryPdfBuilder {
   static const _brandBlue = PdfColor.fromInt(0xFF1E3A8A);
@@ -17,9 +19,13 @@ class DeliveryPdfBuilder {
   static final _dtFmt = DateFormat('d MMM y · HH:mm');
   static final _timeFmt = DateFormat('HH:mm · d MMM y');
 
+  /// The Delivery Report. With [route] (the job's distances) it also shows where the job started
+  /// and ended, the distance against each stop, the way back to the return location and the
+  /// total; without it the report is as it always was.
   static Future<List<int>> build({
     required Delivery delivery,
     required String orgName,
+    DriverReportContext? route,
   }) async {
     final doc = pw.Document();
     doc.addPage(
@@ -29,13 +35,13 @@ class DeliveryPdfBuilder {
         header: (c) => _pageHeader(orgName),
         footer: (c) => _pageFooter(c, orgName),
         build: (c) => [
-          _metaBlock(delivery),
+          _metaBlock(delivery, route),
           pw.SizedBox(height: 14),
-          _summaryStrip(delivery),
+          _summaryStrip(delivery, route),
           pw.SizedBox(height: 14),
           _sectionTitle('Stop Details'),
           pw.SizedBox(height: 6),
-          _stopsTable(delivery),
+          _stopsTable(delivery, route),
           pw.SizedBox(height: 24),
           _signatureLine(),
         ],
@@ -99,17 +105,27 @@ class DeliveryPdfBuilder {
     );
   }
 
-  static pw.Widget _metaBlock(Delivery d) {
+  /// "Place name (lat, lng)" of a recorded start / end point; "Not recorded" when there is none.
+  static String placeText(DeliveryLocation? p, String? name) {
+    if (p == null) return 'Not recorded';
+    final pt = '${p.lat.toStringAsFixed(5)}, ${p.lng.toStringAsFixed(5)}';
+    final n = (name ?? '').trim();
+    return n.isEmpty ? pt : '$n ($pt)';
+  }
+
+  static pw.Widget _metaBlock(Delivery d, DriverReportContext? route) {
     final rows = [
       ['Driver', d.driverName ?? 'Unassigned'],
       ['Created by', '${d.createdByName} (${d.createdByRole})'],
       ['Created', _dtFmt.format(d.createdAt)],
       if (d.startedAt != null) ['Started', _dtFmt.format(d.startedAt!)],
+      if (route != null && d.startedAt != null) ['Start location', placeText(route.startPoint, route.startAddress)],
       if (d.completedAt != null)
         [
           d.status == DeliveryStatus.cancelled ? 'Cancelled' : 'Completed',
           _dtFmt.format(d.completedAt!),
         ],
+      if (route != null && d.completedAt != null) ['End location', placeText(route.endPoint, route.endAddress)],
       ['Status', d.status.label],
       if (d.notes != null && d.notes!.isNotEmpty) ['Notes', d.notes!],
     ];
@@ -154,7 +170,7 @@ class DeliveryPdfBuilder {
     );
   }
 
-  static pw.Widget _summaryStrip(Delivery d) {
+  static pw.Widget _summaryStrip(Delivery d, DriverReportContext? route) {
     return pw.Container(
       decoration: const pw.BoxDecoration(
         color: PdfColor.fromInt(0xFFEFF6FF),
@@ -169,6 +185,7 @@ class DeliveryPdfBuilder {
           _summaryCell('FAILED', '${d.failedCount}', _dangerRed),
           _summaryCell('SHOULD COLLECT', 'Rs ${d.cashAmount}', _brandBlue),
           _summaryCell('COLLECTED', 'Rs ${d.cashCollected}', _successGreen),
+          if (route != null) _summaryCell('DISTANCE', route.totalDistanceKm > 0 ? '${route.totalDistanceKm.toStringAsFixed(2)} km' : '-', _brandBlue),
         ],
       ),
     );
@@ -210,9 +227,29 @@ class DeliveryPdfBuilder {
     );
   }
 
-  static pw.Widget _stopsTable(Delivery d) {
+  /// The distance cell of a stop: kilometres from the previous point; a dash when the stop has no
+  /// GPS point (or is the first stop and the job's start was not recorded).
+  static String kmText(double? km) => (km == null || km <= 0) ? '-' : km.toStringAsFixed(2);
+
+  static pw.Widget _stopsTable(Delivery d, DriverReportContext? route) {
     pw.TextStyle headerBold() =>
         pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _muted);
+    final legKm = route?.legKmByStop ?? const <String, double>{};
+    final withKm = route != null;
+    pw.Widget kmCell(String text, {bool bold = false}) => pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+          child: pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Text(text, style: pw.TextStyle(fontSize: 8, fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal)),
+          ),
+        );
+    // The way back and the total, under the stops.
+    pw.TableRow extraRow(String label, double km, {bool bold = false}) => pw.TableRow(children: [
+          _td('', pw.TextStyle(fontSize: 8)),
+          _td(label, pw.TextStyle(fontSize: 8, fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal)),
+          for (var i = 0; i < 5; i++) _td('', pw.TextStyle(fontSize: 8)),
+          kmCell('${km.toStringAsFixed(2)}${bold ? ' km' : ''}', bold: bold),
+        ]);
 
     return pw.Table(
       columnWidths: {
@@ -223,6 +260,7 @@ class DeliveryPdfBuilder {
         4: const pw.FixedColumnWidth(46),  // Collected
         5: const pw.FixedColumnWidth(50),  // Outcome
         6: const pw.FixedColumnWidth(36),  // Photo
+        if (withKm) 7: const pw.FixedColumnWidth(46), // Distance (km)
       },
       border: pw.TableBorder(
         horizontalInside: pw.BorderSide(color: _ruleSoft, width: 0.5),
@@ -239,6 +277,7 @@ class DeliveryPdfBuilder {
             _th('Collected', headerBold()),
             _th('Outcome', headerBold()),
             _th('Photo', headerBold()),
+            if (withKm) _th('Distance (km)', headerBold()),
           ],
         ),
         // Data rows
@@ -305,8 +344,13 @@ class DeliveryPdfBuilder {
 
               // Photo validation
               _photoCell(s),
+
+              // Distance from the previous point
+              if (withKm) kmCell(kmText(legKm[s.id])),
             ],
           ),
+        if (route != null && route.returnDistanceKm > 0) extraRow('Return to end location', route.returnDistanceKm),
+        if (route != null && route.totalDistanceKm > 0) extraRow('Total distance', route.totalDistanceKm, bold: true),
       ],
     );
   }
@@ -331,7 +375,7 @@ class DeliveryPdfBuilder {
     switch (s.status) {
       case DeliveryStopStatus.delivered:
         color = _successGreen;
-        label = 'Delivered';
+        label = s.isVisit ? 'Visited' : 'Delivered'; // a place marked on a free route
         break;
       case DeliveryStopStatus.failed:
         color = _dangerRed;
