@@ -5,14 +5,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/pdf/pdf_output.dart';
 import '../../core/utils/place_name.dart';
 import '../auth/auth_controller.dart';
-import '../deliveries/job_sheet_pdf.dart';
+import '../deliveries/delivery_report_pdf.dart';
 import 'driver_job_report.dart';
 import 'logistics_report_rows.dart';
 import 'logistics_reports_view.dart';
 
 /// Logistics Reports: the report of every driver job, generated on the web — deliveries, pickups and
-/// the free routes the drivers ran. It is the job sheet, with the distances merged in: where the job
-/// started and ended, the distance against each stop, the way back to the return location, the total.
+/// the free routes the drivers ran. It is the same Delivery Report the driver's phone makes, with the
+/// distances merged in: where the job started and ended, the distance against each stop, the way back
+/// to the return location, the total.
 class LogisticsReportsScreen extends ConsumerStatefulWidget {
   const LogisticsReportsScreen({super.key});
 
@@ -128,8 +129,13 @@ class _LogisticsReportsScreenState extends ConsumerState<LogisticsReportsScreen>
             placeLookup: (lat, lng, until) => placeName(lat, lng, until: until), // start / end area names
           );
         } catch (_) {}
-        final bytes = await JobSheetPdf.build(delivery: delivery, stops: stops, route: route);
-        await outputPdf(bytes, 'Job Sheet - ${delivery['driver_name'] ?? 'Delivery'}',
+        final bytes = await DeliveryReportPdf.build(
+          delivery: delivery,
+          stops: stops,
+          orgName: user?.orgName ?? 'Opstation',
+          route: route,
+        );
+        await outputPdf(bytes, 'Delivery Report - ${delivery['driver_name'] ?? 'Delivery'}',
             date: DateTime.tryParse('${delivery['created_at'] ?? ''}')?.toLocal());
       });
 

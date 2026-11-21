@@ -8,7 +8,7 @@ import 'logistics_report_rows.dart';
 
 /// The Logistics Reports page, drawn from the data it is given (the screen loads it and makes the
 /// reports): the drivers' jobs — deliveries, pickups and the free routes they ran — each with a
-/// button for its report (the job sheet with the distances).
+/// button for its report (the delivery report with the distances).
 class LogisticsReportsView extends StatelessWidget {
   const LogisticsReportsView({
     super.key,
@@ -119,7 +119,7 @@ class LogisticsReportsView extends StatelessWidget {
                           id: j.id,
                           icon: Icons.summarize_outlined,
                           color: AppTheme.primary,
-                          tooltip: j.canReport ? 'Job sheet with distances' : 'Available once the job has started',
+                          tooltip: j.canReport ? 'Delivery report with distances' : 'Available once the job has started',
                           onPressed: j.canReport ? () => onJobReport(j.id) : null,
                         ),
                       ),

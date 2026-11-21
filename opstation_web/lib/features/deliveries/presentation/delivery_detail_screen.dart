@@ -11,7 +11,7 @@ import '../../../core/format/time_format.dart';
 import '../../../core/utils/place_name.dart';
 import '../../auth/auth_controller.dart';
 import '../../logistics_reports/driver_job_report.dart';
-import '../job_sheet_pdf.dart';
+import '../delivery_report_pdf.dart';
 
 /// Read-only-ish detail page for a single delivery. Pulls the
 /// delivery row plus its stops from Supabase, shows everything that
@@ -170,8 +170,13 @@ class _DeliveryDetailScreenState
         placeLookup: (lat, lng, until) => placeName(lat, lng, until: until),
       );
     } catch (_) {}
-    final bytes = await JobSheetPdf.build(delivery: d, stops: _stops, route: route);
-    await outputPdf(bytes, 'Job Sheet - ${d['driver_name'] ?? 'Delivery'}',
+    final bytes = await DeliveryReportPdf.build(
+      delivery: d,
+      stops: _stops,
+      orgName: ref.read(currentUserProvider)?.orgName ?? 'Opstation',
+      route: route,
+    );
+    await outputPdf(bytes, 'Delivery Report - ${d['driver_name'] ?? 'Delivery'}',
         date: DateTime.tryParse('${d['created_at'] ?? ''}')?.toLocal());
   }
 
