@@ -840,11 +840,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         // Column header
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: const BoxDecoration(color: AppTheme.background),
+          decoration: ErpLook.footRow(),
           child: Row(children: [
-            const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-            const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-            const Expanded(flex: 2, child: Text('Qty (free)', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+            Expanded(flex: 4, child: Text(ErpLook.cap('Product'), style: ErpLook.th())),
+            Expanded(flex: 1, child: Text(ErpLook.cap('UOM'), style: ErpLook.th())),
+            Expanded(flex: 2, child: Text(ErpLook.cap('Qty (free)'), style: ErpLook.th())),
             SizedBox(width: _canEditLines ? 40 : 0),
           ]),
         ),
@@ -1411,7 +1411,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     );
   }
 
-  Widget _buildDetail() {
+  Widget _buildDetail() => ErpLook.page(_buildDetailBody());
+
+  Widget _buildDetailBody() {
     final status = _detail['status'] as String? ?? 'draft';
     final voucherNum = _detail['voucher_number'] as String? ?? '-';
     final isLocked = _detail['is_locked'] as bool? ?? false;
@@ -1424,7 +1426,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
         decoration: ErpLook.appBar(),
         child: AdaptiveHeaderRow(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(voucherNum, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            Text(voucherNum, style: TextStyle(fontSize: ErpLook.modern ? 22 : 18, fontWeight: FontWeight.w800, letterSpacing: ErpLook.modern ? -0.4 : 0)),
             Text('Sales Order', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ]),
           const SizedBox(width: 16),
@@ -1572,9 +1574,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: ErpLook.tableHead(),
                   child: Row(children: [
-                    const Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    const Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    const Expanded(flex: 2, child: Text('Qty Ordered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                    Expanded(flex: 4, child: Text(ErpLook.cap('Product'), style: ErpLook.th())),
+                    Expanded(flex: 1, child: Text(ErpLook.cap('UOM'), style: ErpLook.th())),
+                    Expanded(flex: 2, child: Text(ErpLook.cap('Qty Ordered'), style: ErpLook.th())),
                     SizedBox(width: _canEditLines ? 40 : 0),
                   ]),
                 ),
@@ -1624,7 +1626,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                         .fold<double>(0, (s, it) => s + ((it['quantity'] as num?)?.toDouble() ?? 0));
                     return Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      decoration: const BoxDecoration(color: AppTheme.background),
+                      decoration: ErpLook.footRow(),
                       child: Row(children: [
                         const Expanded(flex: 5, child: Text('Total Quantity', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
                         Expanded(flex: 2, child: Text(
@@ -3164,7 +3166,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     );
   }
 
-  Widget _buildDetail() {
+  Widget _buildDetail() => ErpLook.page(_buildDetailBody());
+
+  Widget _buildDetailBody() {
     final status = _detail['status'] as String? ?? 'saved';
     final isInvoiced = status == 'invoiced';
     final isVoided = _detail['is_voided'] == true;
@@ -3338,12 +3342,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     decoration: ErpLook.tableHead(),
-                    child: const Row(children: [
-                      Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('SO Qty', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Available', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Delivered', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                    child: Row(children: [
+                      Expanded(flex: 4, child: Text(ErpLook.cap('Product'), style: ErpLook.th())),
+                      Expanded(flex: 1, child: Text(ErpLook.cap('UOM'), style: ErpLook.th())),
+                      Expanded(flex: 2, child: Text(ErpLook.cap('SO Qty'), style: ErpLook.th())),
+                      Expanded(flex: 2, child: Text(ErpLook.cap('Available'), style: ErpLook.th())),
+                      Expanded(flex: 2, child: Text(ErpLook.cap('Delivered'), style: ErpLook.th())),
                     ]),
                   ),
                   const Divider(height: 1),
@@ -3367,7 +3371,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   ])),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: const BoxDecoration(color: AppTheme.background),
+                    decoration: ErpLook.footRow(),
                     child: Row(children: [
                       const Expanded(flex: 9, child: Text('Total Delivered', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12))),
                       Expanded(flex: 2, child: Builder(builder: (_) {
@@ -3442,11 +3446,11 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     decoration: BoxDecoration(color: Colors.orange.withOpacity(0.05), borderRadius: const BorderRadius.vertical(top: Radius.circular(8))),
-                    child: const Row(children: [
-                      Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Pending', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                      Expanded(flex: 2, child: Text('Available', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                    child: Row(children: [
+                      Expanded(flex: 4, child: Text(ErpLook.cap('Product'), style: ErpLook.th())),
+                      Expanded(flex: 1, child: Text(ErpLook.cap('UOM'), style: ErpLook.th())),
+                      Expanded(flex: 2, child: Text(ErpLook.cap('Pending'), style: ErpLook.th())),
+                      Expanded(flex: 2, child: Text(ErpLook.cap('Available'), style: ErpLook.th())),
                       Expanded(flex: 2, child: Text('Deliver Qty *', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.primary))),
                     ]),
                   ),
@@ -4686,7 +4690,9 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
     );
   }
 
-  Widget _buildDetail() {
+  Widget _buildDetail() => ErpLook.page(_buildDetailBody());
+
+  Widget _buildDetailBody() {
     double subtotal = 0, discountTotal = 0;
     for (final item in _items) {
       final qty = (item['qty_delivered'] as num?)?.toDouble() ?? 0;
@@ -4972,14 +4978,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                 if (!narrow) Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: ErpLook.tableHead(),
-                  child: const Row(children: [
-                    Expanded(flex: 4, child: Text('Product', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 1, child: Text('UOM', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Qty', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Unit Price', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Discount %', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Disc. Price/Unit', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
-                    Expanded(flex: 2, child: Text('Line Total', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary))),
+                  child: Row(children: [
+                    Expanded(flex: 4, child: Text(ErpLook.cap('Product'), style: ErpLook.th())),
+                    Expanded(flex: 1, child: Text(ErpLook.cap('UOM'), style: ErpLook.th())),
+                    Expanded(flex: 2, child: Text(ErpLook.cap('Qty'), style: ErpLook.th())),
+                    Expanded(flex: 2, child: Text(ErpLook.cap('Unit Price'), style: ErpLook.th())),
+                    Expanded(flex: 2, child: Text(ErpLook.cap('Discount %'), style: ErpLook.th())),
+                    Expanded(flex: 2, child: Text(ErpLook.cap('Disc. Price/Unit'), style: ErpLook.th())),
+                    Expanded(flex: 2, child: Text(ErpLook.cap('Line Total'), style: ErpLook.th())),
                   ]),
                 ),
                 const Divider(height: 1),
@@ -5547,11 +5553,24 @@ class _StatusChip extends StatelessWidget {
   final Color color;
   const _StatusChip({required this.status, required this.color});
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-    child: Text(status, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
-  );
+  Widget build(BuildContext context) {
+    if (ErpLook.modern) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(99)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 6),
+          Text(status, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+        ]),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+      child: Text(status, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+    );
+  }
 }
 
 class _LockedBadge extends StatelessWidget {
@@ -5559,7 +5578,7 @@ class _LockedBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+    decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(ErpLook.pill(6))),
     child: const Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(Icons.lock_outline, size: 12, color: Colors.orange),
       SizedBox(width: 4),
@@ -5574,15 +5593,28 @@ class _InfoRow extends StatelessWidget {
   final String? sub; // optional secondary line (e.g. customer code)
   const _InfoRow({required this.label, required this.value, this.sub});
   @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
-    const SizedBox(height: 2),
-    Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-    if (sub != null && sub!.isNotEmpty) ...[
-      const SizedBox(height: 1),
-      Text(sub!, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-    ],
-  ]);
+  Widget build(BuildContext context) {
+    if (ErpLook.modern) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label.toUpperCase(), style: const TextStyle(fontSize: 10.5, color: Color(0xFF8B95AD), fontWeight: FontWeight.w700, letterSpacing: 0.6)),
+        const SizedBox(height: 4),
+        Text(value, style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700)),
+        if (sub != null && sub!.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(sub!, style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+        ],
+      ]);
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
+      const SizedBox(height: 2),
+      Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      if (sub != null && sub!.isNotEmpty) ...[
+        const SizedBox(height: 1),
+        Text(sub!, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      ],
+    ]);
+  }
 }
 
 class _TotalsRow extends StatelessWidget {

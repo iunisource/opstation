@@ -19,7 +19,20 @@ class ErpLook {
   static const key = 'org.modern_look';
   static const _bg = Color(0xFFF4F6FB);
   static const _edge = Color(0xFFE5E9F2);
-  static const _shadow = Color(0x141E3A8A);
+
+  /// Heading text of a table column (modern: small, bold, spaced capitals).
+  static TextStyle th() => modern
+      ? const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 0.6, color: Color(0xFF5B6B8C))
+      : const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.textSecondary);
+
+  static String cap(String s) => modern ? s.toUpperCase() : s;
+
+  /// The totals strip at the foot of a line table.
+  static BoxDecoration footRow() =>
+      modern ? const BoxDecoration(color: Color(0xFFEAF0FF)) : const BoxDecoration(color: AppTheme.background);
+
+  /// The page colour behind the cards of an open voucher.
+  static Widget page(Widget child) => modern ? ColoredBox(color: _bg, child: child) : child;
 
   /// A white content card (header fields, line tables, totals ...).
   static BoxDecoration card() => modern
@@ -27,21 +40,21 @@ class ErpLook {
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: _edge),
-          boxShadow: const [BoxShadow(color: _shadow, blurRadius: 14, offset: Offset(0, 4))],
+          boxShadow: const [BoxShadow(color: Color(0x1F1E3A8A), blurRadius: 22, offset: Offset(0, 8))],
         )
       : BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border));
 
   /// The grey heading row of a line table (sits on top of a [card]).
   static BoxDecoration tableHead() => modern
-      ? const BoxDecoration(color: Color(0xFFF1F4FA), borderRadius: BorderRadius.vertical(top: Radius.circular(14)))
+      ? const BoxDecoration(color: Color(0xFFEAF0FF), borderRadius: BorderRadius.vertical(top: Radius.circular(14)))
       : const BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.vertical(top: Radius.circular(8)));
 
   /// The bar across the top of an open voucher (number, status, buttons).
   static BoxDecoration appBar() => modern
       ? const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: _edge)),
-          boxShadow: [BoxShadow(color: _shadow, blurRadius: 10, offset: Offset(0, 3))],
+          gradient: LinearGradient(colors: [Colors.white, Color(0xFFEFF4FF)]),
+          border: Border(bottom: BorderSide(color: Color(0x404B84F5), width: 2)),
+          boxShadow: [BoxShadow(color: Color(0x1A1E3A8A), blurRadius: 14, offset: Offset(0, 5))],
         )
       : const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border)));
 
@@ -82,10 +95,18 @@ class ErpLook {
         style: (t.elevatedButtonTheme.style ?? const ButtonStyle()).copyWith(
           shape: shape,
           elevation: const WidgetStatePropertyAll<double>(0),
+          minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 44)),
+          padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.symmetric(horizontal: 20)),
+          textStyle: const WidgetStatePropertyAll<TextStyle>(TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
-        style: (t.outlinedButtonTheme.style ?? const ButtonStyle()).copyWith(shape: shape),
+        style: (t.outlinedButtonTheme.style ?? const ButtonStyle()).copyWith(
+          shape: shape,
+          minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 44)),
+          padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.symmetric(horizontal: 18)),
+          textStyle: const WidgetStatePropertyAll<TextStyle>(TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+        ),
       ),
       dialogTheme: t.dialogTheme.copyWith(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
     );
