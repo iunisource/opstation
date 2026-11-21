@@ -15,6 +15,8 @@ import '../reports/visit_report_open.dart';
 import '../reports/pdf/report_pdf_builder.dart' show ReportPdfBuilder, CombinedSummaryRow, ReimbInfo;
 import '../../core/pdf/pdf_output.dart';
 import 'adjust_trip_dialog.dart';
+import 'reimb_tools.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:opstation_web/core/widgets/generating_overlay.dart';
 
 SupabaseClient get _db => Supabase.instance.client;
@@ -57,6 +59,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   bool _paMode = false; // Admin Settings: approving creates a Payment Advice
   String _tab = 'pending';
   String _q = '';
+  bool _onlyCombined = false; // the "Combined summary" pill
   bool _openedLink = false;
 
   String? get _org => ref.read(currentUserProvider)?.orgId;
@@ -214,14 +217,36 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         _ => '',
       };
 
-  List<Map<String, dynamic>> get _shown => _claims.where((c) {
-        if (_tab != 'all' && c['status'] != _tab) return false;
-        if (_q.isNotEmpty) {
-          final s = '${c['claimant_name']} ${c['paid_ref'] ?? ''}'.toLowerCase();
-          if (!s.contains(_q.toLowerCase())) return false;
-        }
-        return true;
-      }).toList();
+  List<Map<String, dynamic>> get _shown => claimsShown(claims: _claims, tab: _tab, query: _q, onlyCombined: _onlyCombined);
+
+  /// Shares an approved claim: a message with its details and the public check link, on WhatsApp, or just
+  /// the link copied.
+  Future<void> _share(Map<String, dynamic> c, ClaimShare how) async {
+    final link = _verifyUrl(c);
+    if (link == null) {
+      _snack('This claim has no link yet. Open it once and try again.');
+      return;
+    }
+    if (how == ClaimShare.copyLink) {
+      await Clipboard.setData(ClipboardData(text: link));
+      _snack('Link copied');
+      return;
+    }
+    final amt = _amount(c);
+    final rateUsed = c['rate'] ?? _rate;
+    final text = reimbShareText(
+      claimant: '${c['claimant_name'] ?? ''}',
+      docLabel: c['doc_type'] == 'combined_summary' ? 'Combined Trip Summary' : 'Trip Summary',
+      dates: _dates(c),
+      km: _km(c['km'] as num?),
+      amount: amt == null ? '' : _rs(amt),
+      rateNote: rateUsed == null ? null : '@ Rs ${NumberFormat('#,##0.##').format(rateUsed)}/km',
+      link: link,
+    );
+    final ok = await launchUrl(whatsAppShareUri(text), mode: LaunchMode.externalApplication);
+    if (!ok) _snack('Could not open WhatsApp. The link is copied instead.');
+    if (!ok) await Clipboard.setData(ClipboardData(text: link));
+  }
 
   // ── UI ────────────────────────────────────────────────────────────────────
   @override
@@ -263,6 +288,16 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   onSelected: (_) => setState(() => _tab = t.$1),
                 ),
               ),
+            // Only Combined Trip Summaries (works with whichever tab is open).
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: FilterChip(
+                avatar: const Icon(Icons.layers_outlined, size: 16),
+                label: Text('Combined summary (${combinedCount(claims: _claims, tab: _tab, query: _q)})'),
+                selected: _onlyCombined,
+                onSelected: (v) => setState(() => _onlyCombined = v),
+              ),
+            ),
           ]),
         ),
         const SizedBox(height: 10),
@@ -380,6 +415,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
           style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
     ]);
     final action = _action(c);
+    // Approved claims can be shared (WhatsApp, or the link).
+    final share = c['status'] == 'approved' ? ClaimShareMenu(onSelected: (h) => _share(c, h)) : null;
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 8),
@@ -398,7 +435,13 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   Expanded(flex: 3, child: money),
                   Expanded(flex: 3, child: gen),
                   SizedBox(width: 140, child: Align(alignment: Alignment.centerLeft, child: _statusPill(c))),
-                  SizedBox(width: 100, child: Align(alignment: Alignment.centerRight, child: action ?? const SizedBox())),
+                  SizedBox(
+                    width: 150,
+                    child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      if (share != null) share,
+                      if (action != null) action,
+                    ]),
+                  ),
                 ])
               : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [Expanded(child: person), _statusPill(c)]),
@@ -408,7 +451,16 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                     Text('${_dates(c)}\n${_km(c['km'] as num?)}', style: const TextStyle(fontSize: 12)),
                     money,
                   ]),
-                  if (action != null) ...[const SizedBox(height: 8), Align(alignment: Alignment.centerRight, child: action)],
+                  if (action != null || share != null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        if (share != null) share,
+                        if (action != null) action,
+                      ]),
+                    ),
+                  ],
                 ]),
         ),
       ),

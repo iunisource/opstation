@@ -8,6 +8,7 @@ import '../../../core/storage/photo_url.dart';
 import '../../../core/theme/app_theme.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/utils/maps_link.dart';
 import '../../../core/utils/place_name.dart';
 import '../../auth/auth_controller.dart';
 import '../../logistics_reports/driver_job_report.dart';
@@ -561,9 +562,13 @@ class _StopRow extends StatelessWidget {
                 _miniKV('Location check',
                     _DeliveryDetailScreenState.verLabel(stop)),
                 if (stop['captured_lat'] != null && stop['captured_lng'] != null)
-                  _miniKV('GPS',
-                      '${(stop['captured_lat'] as num).toStringAsFixed(5)}, '
-                      '${(stop['captured_lng'] as num).toStringAsFixed(5)}'),
+                  // Click the coordinates to see the spot in Google Maps.
+                  _miniKVWidget(
+                      'GPS',
+                      CoordinatesLink(
+                        lat: (stop['captured_lat'] as num).toDouble(),
+                        lng: (stop['captured_lng'] as num).toDouble(),
+                      )),
               ]),
             ),
             if (driverNote != null && driverNote.isNotEmpty) ...[
@@ -696,6 +701,15 @@ class _StopRow extends StatelessWidget {
       fullscreenDialog: true,
       builder: (_) => _PhotoViewer(paths: paths, initialIndex: initialIndex),
     ));
+  }
+
+  Widget _miniKVWidget(String label, Widget value) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label.toUpperCase(),
+          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8, color: AppTheme.textSecondary)),
+      const SizedBox(height: 2),
+      value,
+    ]);
   }
 
   Widget _miniKV(String label, String value) {

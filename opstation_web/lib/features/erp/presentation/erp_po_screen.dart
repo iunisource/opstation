@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/utils/voucher_audit_policy.dart';
 import 'package:intl/intl.dart';
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
@@ -620,13 +621,36 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
 
+  /// voucher id -> has it been saved (confirmed) at least once? Until then it is a draft being typed and its
+  /// line edits are not put in the trail (see voucher_audit_policy.dart).
+  final Map<String, bool> _savedCache = {};
+
+  Future<bool> _isSaved(String id) async {
+    final cached = _savedCache[id];
+    if (cached != null) return cached;
+    final st = _detail['id'] == id ? _detail['status'] as String? : null;
+    if (st != null && st != 'draft') return _savedCache[id] = true;
+    try {
+      final r = await Supabase.instance.client.from('voucher_audit_log').select('id')
+          .eq('voucher_id', id).eq('action', 'confirmed').limit(1);
+      return _savedCache[id] = (r as List).isNotEmpty;
+    } catch (_) {
+      return true; // cannot tell: record as before
+    }
+  }
+
   Future<void> _logAudit(String id, String action, String? details) async {
+    if (isDraftNoise(action) && !(await _isSaved(id))) return;
+    await _writeAudit(id, action, details);
+  }
+
+  Future<void> _writeAudit(String id, String action, String? details, {DateTime? at, String? by}) async {
     try {
       await Supabase.instance.client.from('voucher_audit_log').insert({
         'id': uniqueId('val'),
         'org_id': _orgId, 'voucher_id': id, 'voucher_type': 'PO',
-        'action': action, 'details': details, 'performed_by': ref.read(currentUserProvider)?.id,
-        'performed_at': DateTime.now().toUtc().toIso8601String(),
+        'action': action, 'details': details, 'performed_by': by ?? ref.read(currentUserProvider)?.id,
+        'performed_at': (at ?? DateTime.now()).toUtc().toIso8601String(),
       });
       if (mounted) setState(() => _auditRefresh++);
     } catch (e) { print('[Audit PO] $e'); }
@@ -755,7 +779,15 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         'locked_by': userId, 'locked_at': DateTime.now().toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
-      await _logAudit(_detail['id'] as String, 'confirmed', 'PO confirmed and locked');
+      final poId = _detail['id'] as String;
+      if (!await _isSaved(poId)) {
+        // The first save: the trail starts here. The draft's creation is recorded now, at the time it was
+        // really created, then the confirmation.
+        await _writeAudit(poId, 'created', 'PO ${_detail['voucher_number']} created',
+            at: DateTime.tryParse('${_detail['created_at'] ?? ''}'), by: _detail['created_by'] as String?);
+        _savedCache[poId] = true;
+      }
+      await _logAudit(poId, 'confirmed', 'PO confirmed and locked - ${_items.length} line${_items.length == 1 ? '' : 's'}');
       _showSnack('Purchase Order confirmed');
       ref.invalidate(poPendingApprovalCountProvider);
       _loadDetail(_detail['id'] as String);
