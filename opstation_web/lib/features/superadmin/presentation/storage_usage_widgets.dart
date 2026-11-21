@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'super_admin_diagnostic.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -793,16 +794,20 @@ class _ServerOverviewState extends State<_ServerOverview> {
           return const SizedBox(height: 120, child: Center(child: CircularProgressIndicator()));
         }
         if (snap.hasError) {
-          return Row(children: [
-            Expanded(
-              child: Text(
-                snap.error.toString().contains('platform_storage_overview')
-                    ? 'This feature isn\'t set up yet — please contact Opstation support.'
-                    : 'Could not load: ${snap.error.toString().split('\n').first}',
-                style: const TextStyle(color: AppTheme.danger, fontSize: 12),
+          return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Text(
+                  snap.error.toString().contains('platform_storage_overview')
+                      ? 'This feature isn\'t set up yet — please contact Opstation support.'
+                      : 'Could not load: ${snap.error.toString().split('\n').first}',
+                  style: const TextStyle(color: AppTheme.danger, fontSize: 12),
+                ),
               ),
-            ),
-            TextButton(onPressed: () => setState(() => _f = _get()), child: const Text('Retry')),
+              TextButton(onPressed: () => setState(() => _f = _get()), child: const Text('Retry')),
+            ]),
+            // "Super Admin only": show which login the app is using and what the database's checks say for it.
+            if (snap.error.toString().contains('Super Admin only')) const SuperAdminDiagnostic(),
           ]);
         }
         final d = snap.data!;
