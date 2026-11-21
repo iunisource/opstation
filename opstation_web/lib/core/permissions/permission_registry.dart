@@ -242,6 +242,7 @@ const List<PermModule> kPermissionRegistry = [
     PermItem('intel_competitors', 'Competitor Spotting', PermKind.report, '/intelligence/competitors'),
     PermItem('intel_reports', 'Survey Reports', PermKind.report, '/intelligence/reports'),
     PermItem('intel_products', 'Survey Products', PermKind.doc, '/products'),
+    PermItem('product_lines', 'Product Lines', PermKind.doc, '/product-lines'),
     PermItem('competitor_categories', 'Competitor Categories', PermKind.doc, '/competitor-categories'),
     PermItem('competitor_brand_aliases', 'Competitor Brand Aliases', PermKind.doc, '/competitor-brand-aliases'),
   ]),

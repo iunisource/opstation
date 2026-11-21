@@ -83,17 +83,26 @@ class PlacementScorecard {
 
 /// [customers] are the shops in the scope, [products] the SKUs listed, [latest] is customer id -> product id ->
 /// the latest audit row (`is_present`); a missing row means "never audited".
+///
+/// [applies] says whether a SKU applies to a shop (the shop carries its product line). A shop that does not
+/// carry a SKU's line is not counted for that SKU at all: not as displayed, not as missing, and not among
+/// the shops it should have been audited in. Without it every SKU applies to every shop.
 PlacementScorecard buildScorecard({
   required List<Map<String, dynamic>> customers,
   required List<Map<String, dynamic>> products,
   required Map<String, Map<String, Map<String, dynamic>>> latest,
+  bool Function(Map<String, dynamic> customer, Map<String, dynamic> product)? applies,
 }) {
-  final shopIds = [for (final c in customers) '${c['id']}'];
   final skus = <SkuScore>[];
+  final shopsInScope = <String>{};
   for (final p in products) {
     final pid = '${p['id']}';
-    var yes = 0, no = 0;
-    for (final cid in shopIds) {
+    var yes = 0, no = 0, applicable = 0;
+    for (final c in customers) {
+      if (applies != null && !applies(c, p)) continue;
+      final cid = '${c['id']}';
+      applicable++;
+      shopsInScope.add(cid);
       final row = latest[cid]?[pid];
       if (row == null) continue;
       if (row['is_present'] == true) {
@@ -108,7 +117,7 @@ PlacementScorecard buildScorecard({
       code: '${p['sku_code'] ?? ''}'.trim(),
       displayed: yes,
       notDisplayed: no,
-      totalShops: shopIds.length,
+      totalShops: applicable,
     ));
   }
   skus.sort((a, b) {
@@ -121,5 +130,36 @@ PlacementScorecard buildScorecard({
     final d = b.audited.compareTo(a.audited);
     return d != 0 ? d : a.name.toLowerCase().compareTo(b.name.toLowerCase());
   });
-  return PlacementScorecard(skus: skus, shops: shopIds.length);
+  return PlacementScorecard(skus: skus, shops: applies == null ? customers.length : shopsInScope.length);
+}
+
+/// One section of the "all lines" report: a line's name and its own scorecard.
+class ScorecardSection {
+  const ScorecardSection(this.name, this.card);
+
+  final String name;
+  final PlacementScorecard card;
+}
+
+/// The scorecard of each product line, in the lines' order: only lines that have a listed SKU. SKUs with no
+/// line come last as "No line". [lines] are (id, name) in display order.
+List<ScorecardSection> buildLineSections({
+  required List<Map<String, dynamic>> customers,
+  required List<Map<String, dynamic>> products,
+  required Map<String, Map<String, Map<String, dynamic>>> latest,
+  required List<({String id, String name})> lines,
+  bool Function(Map<String, dynamic> customer, Map<String, dynamic> product)? applies,
+}) {
+  final out = <ScorecardSection>[];
+  final known = {for (final l in lines) l.id};
+  for (final l in lines) {
+    final ps = [for (final p in products) if (p['line_id'] == l.id) p];
+    if (ps.isEmpty) continue;
+    out.add(ScorecardSection(l.name, buildScorecard(customers: customers, products: ps, latest: latest, applies: applies)));
+  }
+  final rest = [for (final p in products) if (p['line_id'] == null || !known.contains('${p['line_id']}')) p];
+  if (rest.isNotEmpty) {
+    out.add(ScorecardSection('No line', buildScorecard(customers: customers, products: rest, latest: latest, applies: applies)));
+  }
+  return out;
 }

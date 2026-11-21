@@ -19,6 +19,8 @@ import 'customer_history_screen.dart';
 import 'customer_edit_review.dart';
 import 'customer_other_locations.dart';
 import '../../intelligence/services/autopilot.dart';
+import '../../product_lines/product_line_rules.dart';
+import '../../product_lines/product_lines_repo.dart';
 import 'customer_shop_notes.dart';
 import '../../erp/widgets/customer_receipt_dialog.dart';
 import '../../../core/format/time_format.dart';
@@ -1168,22 +1170,33 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           'ref': r['ref'],
         });
       }
+      // Product lines: this shop shows only the SKUs of the lines it carries.
+      final lineOrg = ref.read(currentUserProvider)?.orgId;
+      final lineRules = lineOrg == null ? LineRules.empty : await ProductLinesRepo.loadForCustomer(lineOrg, _customerId);
+      final lineOf = <String, String?>{};
       if (placement.isNotEmpty) {
         final pids = placement.map((e) => e['product_id'] as String).toList();
         final prod = await client
             .from('intelligence_products')
-            .select('id, name, sku_code')
+            .select(lineRules.isEmpty ? 'id, name, sku_code' : 'id, name, sku_code, line_id')
             .inFilter('id', pids);
         final names = <String, String>{};
         final skus = <String, String?>{};
         for (final p in prod) {
           names[p['id'] as String] = (p['name'] as String?) ?? '—';
           skus[p['id'] as String] = p['sku_code'] as String?;
+          lineOf[p['id'] as String] = p['line_id'] as String?;
         }
         for (final e in placement) {
           e['name'] = names[e['product_id']] ?? '(removed product)';
           e['sku'] = skus[e['product_id']];
         }
+      }
+      if (!lineRules.isEmpty) {
+        final group = widget.customer['group_name'] as String?;
+        bool applies(String pid) => lineRules.applies(_customerId, group, lineOf[pid]);
+        placement.removeWhere((e) => !applies(e['product_id'] as String));
+        history.removeWhere((e) => !applies(e['pid'] as String));
       }
 
       // --- Competitor presence (latest per category) ---

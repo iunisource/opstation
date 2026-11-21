@@ -212,6 +212,9 @@ class IntelligencePdfService {
               for (final p in products)
                 () {
                   final a = latest[shops[r]['id'] as String]?[p['id'] as String];
+                  if (a != null && a['n_a'] == true) {
+                    return c(pw.Text('n/a', style: pw.TextStyle(fontSize: z.font - 0.5, color: PdfColors.grey500)));
+                  }
                   if (a == null) {
                     return c(pw.Text('-', style: pw.TextStyle(fontSize: z.font, color: PdfColors.grey500)));
                   }
@@ -369,6 +372,10 @@ class IntelligencePdfService {
             ...products.map((p) {
               final pid = p['id'] as String;
               final audit = latest[cid]?[pid];
+              if (audit != null && audit['n_a'] == true) {
+                return _padCell(pw.Center(child: pw.Text('n/a',
+                  style: const pw.TextStyle(color: PdfColors.grey500, fontSize: 8))));
+              }
               if (audit == null) {
                 return _padCell(pw.Center(child: pw.Text('-',
                   style: const pw.TextStyle(color: PdfColors.grey500, fontSize: 10))));

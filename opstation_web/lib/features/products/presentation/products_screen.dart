@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
+import '../../product_lines/product_line_rules.dart';
+import '../../product_lines/product_lines_repo.dart';
 
 class ProductsScreen extends ConsumerStatefulWidget {
   const ProductsScreen({super.key});
@@ -19,6 +21,9 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
   Map<String, List<Map<String, dynamic>>> _links = {};
   List<Map<String, dynamic>> _sysProducts = []; // id, name, sku
   Map<String, Map<String, dynamic>> _sysById = {};
+  // Product lines (Lights, PVC...): none until the database file has been run.
+  LineRules _lineRules = LineRules.empty;
+  String? _lineFilter;
 
   @override
   void initState() {
@@ -43,11 +48,15 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
           .eq('org_id', orgId)
           .order('position')
           .order('name');
+      final rules = await ProductLinesRepo.loadRules(orgId);
       setState(() {
         _products = List<Map<String, dynamic>>.from(rows);
         _filtered = _products;
+        _lineRules = rules;
+        if (_lineFilter != null && rules.byId(_lineFilter) == null) _lineFilter = null;
         _loading = false;
       });
+      _filter();
       _loadLinks();
     } catch (_) {
       setState(() => _loading = false);
@@ -267,6 +276,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
     final q = _searchCtrl.text.toLowerCase();
     setState(() {
       _filtered = _products.where((p) {
+        if (_lineFilter != null && p['line_id'] != _lineFilter) return false;
         if (q.isEmpty) return true;
         final name = (p['name'] as String? ?? '').toLowerCase();
         final sku = (p['sku_code'] as String? ?? '').toLowerCase();
@@ -303,6 +313,12 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
     final nameCtrl = TextEditingController(text: product?['name'] ?? '');
     final skuCtrl = TextEditingController(text: product?['sku_code'] ?? '');
     final posCtrl = TextEditingController(text: (product?['position'] ?? 0).toString());
+    // Which line the SKU belongs to (only once lines exist). A new SKU starts on the line being filtered.
+    String? lineId = product?['line_id'] as String? ?? (product == null ? _lineFilter : null);
+    final lineChoices = [
+      for (final l in _lineRules.lines)
+        if (l.isActive || l.id == lineId) l,
+    ];
 
     showDialog(
       context: context,
@@ -310,12 +326,25 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
         title: Text(product == null ? 'Add Product' : 'Edit Product'),
         content: SizedBox(
           width: 480,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: StatefulBuilder(builder: (ctx, setSB) => Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: nameCtrl,
               decoration: const InputDecoration(labelText: 'Product Name *'),
               autofocus: true,
             ),
+            if (lineChoices.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: lineChoices.any((l) => l.id == lineId) ? lineId : null,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Product line *',
+                  helperText: 'Only shops that carry this line are audited for this SKU.',
+                ),
+                items: [for (final l in lineChoices) DropdownMenuItem(value: l.id, child: Text(l.isActive ? l.name : '${l.name} (off)'))],
+                onChanged: (v) => setSB(() => lineId = v),
+              ),
+            ],
             const SizedBox(height: 12),
             TextField(
               controller: skuCtrl,
@@ -333,7 +362,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
               ),
               keyboardType: TextInputType.number,
             ),
-          ]),
+          ])),
         ),
         actions: [
           TextButton(
@@ -347,6 +376,11 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                     const SnackBar(content: Text('Name is required')));
                 return;
               }
+              if (lineChoices.isNotEmpty && lineId == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Choose the product line of this SKU')));
+                return;
+              }
               final orgId = ref.read(currentUserProvider)?.orgId;
               final position = int.tryParse(posCtrl.text.trim()) ?? 0;
               final sku = skuCtrl.text.trim();
@@ -354,6 +388,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                 'name': nameCtrl.text.trim(),
                 'sku_code': sku.isEmpty ? null : sku,
                 'position': position,
+                if (lineChoices.isNotEmpty) 'line_id': lineId,
                 'org_id': orgId,
                 'is_active': true,
                 'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -421,13 +456,36 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
             style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _searchCtrl,
-            decoration: const InputDecoration(
-              hintText: 'Search by name or SKU code...',
-              prefixIcon: Icon(Icons.search),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _searchCtrl,
+                decoration: const InputDecoration(
+                  hintText: 'Search by name or SKU code...',
+                  prefixIcon: Icon(Icons.search),
+                ),
+              ),
             ),
-          ),
+            if (!_lineRules.isEmpty) ...[
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 200,
+                child: DropdownButtonFormField<String?>(
+                  value: _lineFilter,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Product line'),
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('All lines')),
+                    for (final l in _lineRules.lines) DropdownMenuItem<String?>(value: l.id, child: Text(l.name)),
+                  ],
+                  onChanged: (v) {
+                    _lineFilter = v;
+                    _filter();
+                  },
+                ),
+              ),
+            ],
+          ]),
           const SizedBox(height: 16),
           if (_loading)
             const Expanded(child: Center(child: CircularProgressIndicator()))
@@ -446,9 +504,10 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                       color: AppTheme.background,
                       borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
                     ),
-                    child: const Row(children: [
+                    child: Row(children: [
                       Expanded(flex: 4, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 2, child: Text('SKU Code', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                      if (!_lineRules.isEmpty) const Expanded(flex: 2, child: Text('Line', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       Expanded(flex: 5, child: Text('Linked system products', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       SizedBox(width: 80, child: Text('Position', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                       SizedBox(width: 80, child: Text('Status', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
@@ -468,6 +527,18 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                           child: Row(children: [
                             Expanded(flex: 4, child: Text(p['name'] as String? ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
                             Expanded(flex: 2, child: Text(p['sku_code'] as String? ?? '-', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary))),
+                            if (!_lineRules.isEmpty)
+                              Expanded(flex: 2, child: Align(alignment: Alignment.centerLeft, child: (() {
+                                final ln = _lineRules.byId(p['line_id'] as String?);
+                                if (ln == null) {
+                                  return const Text('No line', style: TextStyle(fontSize: 12, color: Color(0xFFB45309), fontWeight: FontWeight.w600));
+                                }
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(10)),
+                                  child: Text(ln.name, style: const TextStyle(fontSize: 11.5, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                                );
+                              })())),
                             Expanded(flex: 5, child: Padding(
                               padding: const EdgeInsets.only(right: 8),
                               child: (() {

@@ -15,6 +15,9 @@ import '../../../core/widgets/responsive.dart';
 
 
 import 'customer_history_screen.dart';
+import '../../product_lines/product_line_rules.dart';
+import '../../product_lines/product_line_widgets.dart';
+import '../../product_lines/product_lines_repo.dart';
 import 'erp_customer_360_screen.dart';
 import 'customer_edit_review.dart';
 import 'customer_other_locations.dart';
@@ -490,6 +493,12 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 label: Text('Clear (${_selectedIds.length})'),
               ),
               const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _bulkLines,
+                icon: const Icon(Icons.layers_outlined, size: 18),
+                label: Text('Product lines (${_selectedIds.length})'),
+              ),
+              const SizedBox(width: 8),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
                 onPressed: _bulkDelete,
@@ -947,6 +956,27 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     }
   }
 
+  /// Sets which product lines the selected shops carry (check / uncheck, or back to the group's default).
+  Future<void> _bulkLines() async {
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null || _selectedIds.isEmpty) return;
+    final rules = await ProductLinesRepo.loadRules(orgId);
+    if (!mounted) return;
+    if (rules.activeLines.isEmpty) {
+      _showSnack('There are no product lines yet. Create them under Intelligence > Product Lines.');
+      return;
+    }
+    final ids = _selectedIds.toList();
+    final choices = await showBulkLinesDialog(context, lines: rules.activeLines, count: ids.length);
+    if (choices == null) return;
+    try {
+      await ProductLinesRepo.bulkSet(orgId: orgId, customerIds: ids, choices: choices);
+      _showSnack('Product lines updated for ${ids.length} shop${ids.length == 1 ? '' : 's'}');
+    } catch (e) {
+      _showSnack('Failed: ${e.toString().split('\n').first}');
+    }
+  }
+
   /// Bulk-delete the currently selected customers. Deletes per-id so one row
   /// that can't be removed (e.g. it has transactions / FK references) doesn't
   /// block the rest; reports how many succeeded and how many were blocked.
@@ -1178,6 +1208,11 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
           .from('customer_branches').select('branch_id').eq('customer_id', customer['id']);
       selectedBranches = (existing as List).map((b) => b['branch_id'] as String).toSet();
     }
+    // Product lines (Lights, PVC...): which ones this shop carries. Nothing is shown until lines exist.
+    final lineRules = orgId != null
+        ? await ProductLinesRepo.loadForCustomer(orgId, customer?['id'] as String?)
+        : LineRules.empty;
+    final lineOverrides = <String, bool>{...?lineRules.overrides[customer?['id']]};
     // Processor / off-site (virtual) locations don't sell to customers — keep
     // them out of the list. One already ticked on an old customer still shows,
     // so it can be unticked.
@@ -1357,6 +1392,16 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                       ),
                     ],
                   )),
+                if (!lineRules.isEmpty) ...[
+                  const SizedBox(height: 16),
+                  CustomerLinesChecklist(
+                    rules: lineRules,
+                    group: group,
+                    overrides: lineOverrides,
+                    onToggle: (id, v) => setS(() => lineOverrides[id] = v),
+                    onReset: () => setS(() => lineOverrides.clear()),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 // Location
                 Row(children: [
@@ -1495,6 +1540,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                     await _logCustomerEdit(customer, data);
                   }
                   if (locWarned && savedId != null) await markLocationWarned(savedId);
+                  if (!lineRules.isEmpty && savedId != null && orgId != null) {
+                    try {
+                      await ProductLinesRepo.saveCustomerOverrides(savedId, orgId, lineRules.overridesFor(group, lineOverrides));
+                    } catch (e) {
+                      _showSnack('Customer saved, but its product lines could not be saved: ${e.toString().split('\n').first}');
+                    }
+                  }
                   if (ctx.mounted) Navigator.of(ctx, rootNavigator: true).pop();
                   _showSnack(isNew ? 'Customer added' : 'Customer updated');
                   _load();

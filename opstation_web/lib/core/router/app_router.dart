@@ -181,6 +181,7 @@ import '../../features/intelligence/presentation/intelligence_reports_screen.dar
 import '../../features/deliveries/presentation/dispatch_dashboard_screen.dart' deferred as _s168;
 import '../../features/fleet/fleet_screen.dart' deferred as _s169;
 import '../../features/logistics_reports/logistics_reports_screen.dart' deferred as _s174;
+import '../../features/product_lines/product_lines_screen.dart' deferred as _s175;
 import '../../features/licences/licences_screen.dart' deferred as _s170;
 import '../../features/reimbursements/reimbursements_screen.dart' deferred as _s171;
 import '../../features/operations/presentation/app_versions_screen.dart' deferred as _s172;
@@ -341,7 +342,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
             // Intelligence screens (surveys) are registry-gated too.
             final permScopedIntel = const {
               '/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement',
-              '/intelligence/score-distribution', '/intelligence/competitors', '/intelligence/reports', '/products', '/competitor-categories', '/competitor-brand-aliases',
+              '/intelligence/score-distribution', '/intelligence/competitors', '/intelligence/reports', '/products', '/product-lines', '/competitor-categories', '/competitor-brand-aliases',
             }.contains(loc);
             if (!inErp && !permScopedCrm && !permScopedCustomers && !permScopedReportBuilder && !permScopedLogistics && !permScopedOps && !permScopedMgmt && !permScopedIntel) return false;
             if (loc == '/erp/admin-settings') return false; // admin-tier only
@@ -485,6 +486,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/dispatch-dashboard', builder: (_, __) => _deferred('_s168', _s168.loadLibrary, () => _s168.DispatchDashboardScreen())),
           GoRoute(path: '/dispatch-orders', builder: (_, __) => _deferred('_s061', _s061.loadLibrary, () => _s061.DispatchOrdersScreen())),
           GoRoute(path: '/logistics-reports', builder: (_, __) => _deferred('_s174', _s174.loadLibrary, () => _s174.LogisticsReportsScreen())),
+          GoRoute(path: '/product-lines', builder: (_, __) => _deferred('_s175', _s175.loadLibrary, () => _s175.ProductLinesScreen())),
           GoRoute(path: '/orders', builder: (_, __) => _deferred('_s062', _s062.loadLibrary, () => _s062.OrdersScreen())),
           GoRoute(path: '/reports', builder: (_, __) => _deferred('_s058', _s058.loadLibrary, () => _s058.ReportsScreen())),
           GoRoute(path: '/reports/combined-summary', builder: (_, __) => _deferred('_s140', _s140.loadLibrary, () => _s140.CombinedTripSummaryScreen())),

@@ -65,7 +65,9 @@ class IntelligenceExcelService {
         final cells = <xls.CellValue>[];
         for (final p in products) {
           final a = latest[cid]?[p['id'] as String];
-          if (a == null) {
+          if (a != null && a['n_a'] == true) {
+            cells.add(_t('n/a')); // the shop does not carry this SKU's product line
+          } else if (a == null) {
             cells.add(_t('-'));
           } else {
             surveyed++;

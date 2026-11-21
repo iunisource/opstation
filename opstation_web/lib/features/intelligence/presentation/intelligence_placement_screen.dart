@@ -6,7 +6,12 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import 'dart:typed_data';
+import 'package:archive/archive.dart';
 import 'package:printing/printing.dart';
+import '../../product_lines/product_line_rules.dart';
+import '../../product_lines/product_lines_repo.dart';
+import '../../../core/share/share_file.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../services/intelligence_excel_service.dart';
 import '../services/placement_scorecard.dart';
@@ -185,6 +190,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     if (orgId == null) return;
     try {
       final client = Supabase.instance.client;
+      final rules = await ProductLinesRepo.loadRules(orgId);
       final auditRows = await client
           .from('placement_audit')
           .select('customer_id, product_id, is_present, surveyed_at, surveyed_by_user_id, source')
@@ -213,7 +219,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         for (var i = 0; i < ids.length; i += 150) {
           final rows = await client
               .from('customers')
-              .select('id, shop_name, code')
+              .select('id, shop_name, code, group_name')
               .eq('org_id', orgId)
               .eq('is_active', true)
               .inFilter('id', ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150));
@@ -224,7 +230,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
       final productRows = await client
           .from('intelligence_products')
-          .select('id, name, sku_code, position')
+          .select(rules.isEmpty ? 'id, name, sku_code, position' : 'id, name, sku_code, position, line_id')
           .eq('org_id', orgId)
           .eq('is_active', true)
           .order('position');
@@ -232,7 +238,13 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
 
       setState(() {
         _customers = customers;
-        _products = List<Map<String, dynamic>>.from(productRows);
+        _rules = rules;
+        if (_lineFilter != null && rules.byId(_lineFilter) == null) _lineFilter = null;
+        // A line that is switched off takes its SKUs out of the grid and the reports.
+        _products = [
+          for (final p in productRows)
+            if (rules.isEmpty || rules.byId(p['line_id'] as String?)?.isActive != false) Map<String, dynamic>.from(p),
+        ];
         _latest = latest;
         _auditIdx = auditIdx;
         _loading = false;
@@ -267,15 +279,44 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       result = result.where((c) =>
           _auditIdx.matchesFilter(_auditFilter, c['id'] as String, _lastSurvey(c['id'] as String)));
     }
+    // One line chosen: only the shops that carry it.
+    if (_lineFilter != null) {
+      result = result.where((c) => _rules.carries('${c['id']}', c['group_name'] as String?, _lineFilter!));
+    }
     return result.toList();
   }
 
   List<Map<String, dynamic>> get _filteredProducts {
     final q = _productSearchCtrl.text.toLowerCase();
-    if (q.isEmpty) return _products;
-    return _products.where((p) =>
+    Iterable<Map<String, dynamic>> result = _products;
+    if (_lineFilter != null) result = result.where((p) => p['line_id'] == _lineFilter);
+    if (q.isEmpty) return result.toList();
+    return result.where((p) =>
       matchesQuery('${p['name'] ?? ''} ${p['sku_code'] ?? ''}', q)
     ).toList();
+  }
+
+  // Product lines: which shops carry which SKUs. Empty (everything applies) until lines exist.
+  LineRules _rules = LineRules.empty;
+  String? _lineFilter;
+
+  /// Does this SKU apply to this shop (does the shop carry the SKU's line)?
+  bool _applies(Map<String, dynamic> c, Map<String, dynamic> p) =>
+      _rules.applies('${c['id']}', c['group_name'] as String?, p['line_id'] as String?);
+
+  /// The audit rows for an export: a pair that does not apply is marked n/a (not "never audited").
+  Map<String, Map<String, Map<String, dynamic>>> _latestWithNa(List<Map<String, dynamic>> shops, List<Map<String, dynamic>> products) {
+    if (_rules.isEmpty) return _latest;
+    final out = <String, Map<String, Map<String, dynamic>>>{};
+    for (final c in shops) {
+      final cid = '${c['id']}';
+      final row = <String, Map<String, dynamic>>{...?_latest[cid]};
+      for (final p in products) {
+        if (!_applies(c, p)) row['${p['id']}'] = const {'is_present': null, 'n_a': true};
+      }
+      out[cid] = row;
+    }
+    return out;
   }
 
   bool _canRemoveSurvey = false;
@@ -450,6 +491,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       final filters = [
         if (spName.isNotEmpty) 'Salesperson: $spName',
         routeName.isNotEmpty ? 'Route: $routeName' : 'All routes',
+        if (_lineFilter != null) 'Line: ${_rules.byId(_lineFilter)?.name ?? ''}',
       ].join('   ·   ');
       final markets = _selectedRouteId == null
           ? _marketsFor(shops)
@@ -459,7 +501,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         filters: filters,
         customers: shops,
         products: _filteredProducts,
-        latest: _latest,
+        latest: _latestWithNa(shops, _filteredProducts),
         markets: markets,
       );
     } catch (e) {
@@ -488,6 +530,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     return [
       sp.isNotEmpty ? 'Salesperson: $sp' : 'All salespeople',
       route.isNotEmpty ? 'Route: $route' : 'All routes',
+      if (_lineFilter != null) 'Line: ${_rules.byId(_lineFilter)?.name ?? ''}',
       if (_auditFilter != 'all') 'Audit status: ${surveyAuditFilterLabels[_auditFilter] ?? _auditFilter}',
       if (shopQ.isNotEmpty) 'Shops matching "$shopQ"',
       if (productQ.isNotEmpty) 'Products matching "$productQ"',
@@ -503,11 +546,70 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nothing to export. Adjust the filters.')));
       return;
     }
+    // Several product lines on screen: one document with a section per line, or one file per line.
+    final sections = (_rules.isEmpty || _lineFilter != null)
+        ? <ScorecardSection>[]
+        : buildLineSections(
+            customers: shops,
+            products: products,
+            latest: _latest,
+            lines: [for (final l in _rules.activeLines) (id: l.id, name: l.name)],
+            applies: _applies,
+          );
+    var perLineFiles = false;
+    if (sections.length > 1) {
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (c) => SimpleDialog(
+          title: const Text('SKU scorecard'),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(c, 'one'),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text('One PDF with a section for each line (${sections.length} lines)', style: const TextStyle(fontSize: 14)),
+              ),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(c, 'zip'),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text('A separate PDF for each line, in one zip file (${sections.length} PDFs)', style: const TextStyle(fontSize: 14)),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (choice == null) return;
+      perLineFiles = choice == 'zip';
+    }
     try {
       final orgName = ref.read(currentUserProvider)?.orgName ?? '';
+      final scope = _scopeText();
+      if (sections.length > 1 && perLineFiles) {
+        final zip = await withGenerating(context, () async {
+          final archive = Archive();
+          for (final sec in sections) {
+            final pdf = await PlacementScorecardPdf.build(orgName: orgName, scope: scope, card: sec.card, lineName: sec.name);
+            final safe = sec.name.replaceAll(RegExp(r'[^A-Za-z0-9 _-]+'), '').trim();
+            archive.addFile(ArchiveFile('SKU Scorecard - ${safe.isEmpty ? 'Line' : safe}.pdf', pdf.length, pdf));
+          }
+          return Uint8List.fromList(ZipEncoder().encode(archive)!);
+        });
+        await shareFileOnly(zip, 'SKU Scorecards.zip', mime: 'application/zip');
+        return;
+      }
       final bytes = await withGenerating(context, () async {
-        final card = buildScorecard(customers: shops, products: products, latest: _latest);
-        return PlacementScorecardPdf.build(orgName: orgName, scope: _scopeText(), card: card);
+        if (sections.length > 1) {
+          return PlacementScorecardPdf.buildSections(orgName: orgName, scope: scope, sections: sections);
+        }
+        final card = buildScorecard(
+          customers: shops,
+          products: products,
+          latest: _latest,
+          applies: _rules.isEmpty ? null : _applies,
+        );
+        return PlacementScorecardPdf.build(orgName: orgName, scope: scope, card: card, lineName: _lineFilter == null ? null : _rules.byId(_lineFilter)?.name);
       });
       await outputPdf(bytes, 'SKU Placement Scorecard');
     } catch (e) {
@@ -524,7 +626,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         orgName: orgName,
         customers: _filteredCustomers,
         products: _filteredProducts,
-        latest: _latest,
+        latest: _latestWithNa(_filteredCustomers, _filteredProducts),
         markets: _selectedRouteId == null ? _marketsFor(_filteredCustomers) : null,
       );
       await outputPdf(bytes, 'Placement Audit');
@@ -582,6 +684,24 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
         ),
       ),
     );
+    final activeLines = _rules.activeLines;
+    final lineDropdown = activeLines.length < 2
+        ? null
+        : InputDecorator(
+            decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.layers_outlined, size: 18)),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String?>(
+                value: _lineFilter,
+                isDense: true,
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem<String?>(value: null, child: Text('All product lines')),
+                  for (final l in activeLines) DropdownMenuItem<String?>(value: l.id, child: Text(l.name)),
+                ],
+                onChanged: (v) => setState(() => _lineFilter = v),
+              ),
+            ),
+          );
     final chartBtn = TextButton.icon(
       onPressed: _showChart,
       icon: const Icon(Icons.show_chart, size: 18),
@@ -623,6 +743,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           productSearch,
           const SizedBox(height: 10),
           auditDropdown,
+          if (lineDropdown != null) ...[const SizedBox(height: 10), lineDropdown],
           const SizedBox(height: 6),
           Wrap(spacing: 4, children: [chartBtn, scorecardBtn, excelBtn, pdfBtn]),
         ] else ...[
@@ -632,6 +753,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
             Expanded(child: routeDropdown),
             const SizedBox(width: 12),
             Expanded(child: auditDropdown),
+            if (lineDropdown != null) ...[const SizedBox(width: 12), Expanded(child: lineDropdown)],
           ]),
           const SizedBox(height: 12),
           if (MediaQuery.of(context).size.width >= 1100)
@@ -739,6 +861,17 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
                         ..._filteredProducts.map((p) {
                           final pid = p['id'] as String;
                           final audit = _latest[cid]?[pid];
+                          if (!_applies(c, p)) {
+                            return DataCell(SizedBox(
+                              width: isMobile ? 80 : 100,
+                              child: Center(
+                                child: Tooltip(
+                                  message: 'This shop does not carry ${_rules.byId(p['line_id'] as String?)?.name ?? 'this line'}',
+                                  child: const Text('n/a', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12, fontWeight: FontWeight.w600)),
+                                ),
+                              ),
+                            ));
+                          }
                           return DataCell(
                             InkWell(
                               onTap: () => _showCellDetail(c, p, audit),

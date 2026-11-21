@@ -69,21 +69,124 @@ class PlacementScorecardPdf {
       .replaceAll('\u201C', '"')
       .replaceAll('\u201D', '"');
 
+  /// One scorecard. With [lineName] it is the report of that product line (the name is the heading).
   static Future<Uint8List> build({
     required String orgName,
     required String scope,
     required PlacementScorecard card,
     DateTime? at,
+    String? lineName,
+  }) async {
+    final doc = pw.Document();
+    doc.addPage(_scorecardPage(orgName, scope, card, at ?? DateTime.now(), lineName: lineName));
+    return doc.save();
+  }
+
+  /// All product lines in one document: an overview of the lines, then a section for each line with its own
+  /// score, its SKUs ranked, and who needs attention. A single section is just that line's scorecard.
+  static Future<Uint8List> buildSections({
+    required String orgName,
+    required String scope,
+    required List<ScorecardSection> sections,
+    DateTime? at,
   }) async {
     final when = at ?? DateTime.now();
+    if (sections.length == 1) {
+      return build(orgName: orgName, scope: scope, card: sections.single.card, at: when, lineName: sections.single.name);
+    }
     final doc = pw.Document();
-    doc.addPage(pw.MultiPage(
+    doc.addPage(_overviewPage(orgName, scope, sections, when));
+    for (final s in sections) {
+      doc.addPage(_scorecardPage(orgName, scope, s.card, when, lineName: s.name));
+    }
+    return doc.save();
+  }
+
+  static pw.Page _overviewPage(String orgName, String scope, List<ScorecardSection> sections, DateTime when) {
+    return pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.fromLTRB(28, 26, 28, 26),
+      header: (c) => _pageHeader(orgName, repeatColumns: false),
+      footer: (c) => _pageFooter(c, orgName, label: 'Overview'),
+      build: (c) => [
+        pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          pw.Text('SKU Placement Scorecard', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: _ink)),
+          pw.SizedBox(height: 3),
+          pw.Text('All product lines at a glance', style: const pw.TextStyle(fontSize: 12, color: _muted)),
+          pw.SizedBox(height: 6),
+          pw.Text('${_safe(scope)}   \u00B7   As at ${DateFormat('d MMM y').format(when)}', style: const pw.TextStyle(fontSize: 9, color: _muted)),
+        ]),
+        pw.SizedBox(height: 16),
+        _howToRead(),
+        pw.SizedBox(height: 16),
+        _sectionTitle('Product lines'),
+        pw.SizedBox(height: 6),
+        _linesHeader(),
+        for (var i = 0; i < sections.length; i++) _lineOverviewRow(sections[i], i.isOdd),
+        pw.SizedBox(height: 10),
+        pw.Text('Each line is scored over the shops that carry it. The pages that follow rank the SKUs of every line.',
+            style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+      ],
+    );
+  }
+
+  static pw.Widget _linesHeader() {
+    pw.TextStyle h() => pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: _muted, letterSpacing: 0.4);
+    return pw.Container(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+      decoration: const pw.BoxDecoration(color: _bg),
+      child: pw.Row(children: [
+        pw.Expanded(child: pw.Text('LINE', style: h())),
+        pw.SizedBox(width: 150, child: pw.Text('OVERALL SCORE', style: h())),
+        pw.SizedBox(width: 48, child: pw.Text('SKUS', textAlign: pw.TextAlign.right, style: h())),
+        pw.SizedBox(width: 48, child: pw.Text('SHOPS', textAlign: pw.TextAlign.right, style: h())),
+        pw.SizedBox(width: 110, child: pw.Text('STRONG / AVG / WEAK', textAlign: pw.TextAlign.right, style: h())),
+      ]),
+    );
+  }
+
+  static pw.Widget _lineOverviewRow(ScorecardSection s, bool shaded) {
+    final card = s.card;
+    final band = card.overallBand;
+    return pw.Container(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      decoration: pw.BoxDecoration(color: shaded ? _bg : null, border: const pw.Border(bottom: pw.BorderSide(color: _ruleSoft, width: 0.4))),
+      child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
+        pw.Expanded(child: pw.Text(_safe(s.name), maxLines: 1, style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold, color: _ink))),
+        pw.SizedBox(
+          width: 150,
+          child: card.overall == null
+              ? pw.Text('Not audited yet', style: const pw.TextStyle(fontSize: 8.5, color: _grey))
+              : pw.Row(children: [
+                  _bar(card.overall, 92),
+                  pw.SizedBox(width: 8),
+                  pw.Text(pct(card.overall), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: bandColor(band))),
+                ]),
+        ),
+        pw.SizedBox(width: 48, child: pw.Text('${card.skus.length}', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 9.5, color: _ink))),
+        pw.SizedBox(width: 48, child: pw.Text('${card.shops}', textAlign: pw.TextAlign.right, style: const pw.TextStyle(fontSize: 9.5, color: _ink))),
+        pw.SizedBox(
+          width: 110,
+          child: pw.Row(mainAxisAlignment: pw.MainAxisAlignment.end, children: [
+            pw.Text('${card.count(ScoreBand.strong)}', style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: _green)),
+            pw.Text('  /  ', style: const pw.TextStyle(fontSize: 9.5, color: _grey)),
+            pw.Text('${card.count(ScoreBand.average)}', style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: _amber)),
+            pw.Text('  /  ', style: const pw.TextStyle(fontSize: 9.5, color: _grey)),
+            pw.Text('${card.count(ScoreBand.weak)}', style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: _red)),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  static pw.Page _scorecardPage(String orgName, String scope, PlacementScorecard card, DateTime when, {String? lineName}) {
+    return pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.fromLTRB(28, 26, 28, 26),
       header: (c) => _pageHeader(orgName, repeatColumns: c.pageNumber > 1 && card.skus.isNotEmpty),
-      footer: (c) => _pageFooter(c, orgName),
+      footer: (c) => _pageFooter(c, orgName, label: lineName),
       build: (c) => [
-        _title(scope, card, when),
+        _title(scope, card, when, lineName: lineName),
         pw.SizedBox(height: 14),
         _kpiRow(card),
         pw.SizedBox(height: 12),
@@ -106,8 +209,7 @@ class PlacementScorecardPdf {
         pw.Text('Each shop is counted by its most recent audit. A shop that was never audited for a SKU is not counted against it.',
             style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
       ],
-    ));
-    return doc.save();
+    );
   }
 
   // ---- page furniture --------------------------------------------------------------------
@@ -123,22 +225,28 @@ class PlacementScorecardPdf {
     ]);
   }
 
-  static pw.Widget _pageFooter(pw.Context c, String orgName) {
+  static pw.Widget _pageFooter(pw.Context c, String orgName, {String? label}) {
     return pw.Column(children: [
       pw.Divider(color: _rule, thickness: 0.5),
       pw.SizedBox(height: 4),
       pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
         pw.Text('Generated by Opstation \u00B7 ${_safe(orgName)}', style: const pw.TextStyle(fontSize: 8, color: _muted)),
-        pw.Text('Page ${c.pageNumber} of ${c.pagesCount}', style: const pw.TextStyle(fontSize: 8, color: _muted)),
+        pw.Text(label == null ? 'Page ${c.pageNumber} of ${c.pagesCount}' : '${_safe(label)}  \u00B7  Page ${c.pageNumber} of ${c.pagesCount}',
+            style: const pw.TextStyle(fontSize: 8, color: _muted)),
       ]),
     ]);
   }
 
-  static pw.Widget _title(String scope, PlacementScorecard card, DateTime when) {
+  static pw.Widget _title(String scope, PlacementScorecard card, DateTime when, {String? lineName}) {
     return pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-      pw.Text('SKU Placement Scorecard', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: _ink)),
+      if (lineName != null) ...[
+        pw.Text('PRODUCT LINE', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: _brandBlue, letterSpacing: 1.2)),
+        pw.SizedBox(height: 2),
+      ],
+      pw.Text(lineName == null ? 'SKU Placement Scorecard' : _safe(lineName), style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: _ink)),
       pw.SizedBox(height: 3),
-      pw.Text('How well each product is displayed in our shops', style: const pw.TextStyle(fontSize: 12, color: _muted)),
+      pw.Text(lineName == null ? 'How well each product is displayed in our shops' : 'SKU placement scorecard: how well each product is displayed in the shops that carry this line',
+          style: const pw.TextStyle(fontSize: 12, color: _muted)),
       pw.SizedBox(height: 6),
       pw.Text('${_safe(scope)}   \u00B7   As at ${DateFormat('d MMM y').format(when)}', style: const pw.TextStyle(fontSize: 9, color: _muted)),
     ]);

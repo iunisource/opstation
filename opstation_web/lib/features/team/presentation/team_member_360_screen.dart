@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../product_lines/product_lines_repo.dart';
 
 import '../services/team_report_pdf.dart';
 
@@ -427,6 +428,26 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
         _productNames
           ..clear()
           ..addAll({for (final p in prods) p['id'] as String: (p['name'] as String?) ?? '-'});
+        // Product lines: a shop counts only the SKUs of the lines it carries.
+        try {
+          final lineRules = await ProductLinesRepo.loadRules(orgId);
+          if (!lineRules.isEmpty && _audit.isNotEmpty) {
+            final lineProds = await client.from('intelligence_products').select('id, line_id').eq('org_id', orgId);
+            final lineOf = {for (final p in lineProds) '${p['id']}': p['line_id'] as String?};
+            final groupOf = <String, String?>{};
+            final ids = _audit.keys.toList();
+            for (var i = 0; i < ids.length; i += 150) {
+              final rows = await client.from('customers').select('id, group_name').inFilter('id', ids.sublist(i, i + 150 > ids.length ? ids.length : i + 150));
+              for (final r in rows) {
+                groupOf['${r['id']}'] = r['group_name'] as String?;
+              }
+            }
+            for (final cid in _audit.keys.toList()) {
+              _audit[cid]!.removeWhere((pid, _) => !lineRules.applies(cid, groupOf[cid], lineOf[pid]));
+            }
+            _audit.removeWhere((_, m) => m.isEmpty);
+          }
+        } catch (_) {/* lines not set up: every SKU counts */}
       }
 
       // ── Competitor spotting ─────────────────────────────────────────────

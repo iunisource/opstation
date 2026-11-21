@@ -8,6 +8,8 @@ import 'package:excel/excel.dart' as xls;
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
+import '../../product_lines/product_line_rules.dart';
+import '../../product_lines/product_lines_repo.dart';
 import '../services/autopilot.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
@@ -40,6 +42,14 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
   bool _byMarket = false;
   String? _routeId;
   String? _salespersonId;
+
+  // Product lines: with two or more, the distribution is of one line at a time (a shop is scored on the
+  // SKUs of the line, and only shops that carry it are in).
+  LineRules _rules = LineRules.empty;
+  String? _lineId;
+  final Map<String, Map<String, dynamic>> _latestAll = {}; // 'shop|product' -> latest audit row
+  final Map<String, Map<String, dynamic>> _activeShops = {};
+  final Map<String, String?> _prodLine = {}; // active SKU -> its line id (null = no line)
 
   int _outOf = 0;
   final Map<String, int> _score = {}; // shop -> score
@@ -75,17 +85,23 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
     });
     try {
       final c = Supabase.instance.client;
+      final rules = await ProductLinesRepo.loadRules(orgId);
       final res = await Future.wait<List<Map<String, dynamic>>>([
-        c.from('intelligence_products').select('id').eq('org_id', orgId).eq('is_active', true),
+        c.from('intelligence_products').select(rules.isEmpty ? 'id' : 'id, line_id').eq('org_id', orgId).eq('is_active', true),
         _paged(() => c.from('placement_audit')
             .select('id, customer_id, product_id, is_present, surveyed_at').eq('org_id', orgId), 'id'),
-        _paged(() => c.from('customers').select('id, shop_name, code')
+        _paged(() => c.from('customers').select('id, shop_name, code, group_name')
             .eq('org_id', orgId).eq('is_active', true), 'id'),
         c.from('sales_routes').select('id, name, is_unassigned').eq('org_id', orgId),
         _paged(() => c.from('route_stops').select('route_id, customer_id').eq('org_id', orgId), 'customer_id'),
         c.from('users').select('id, name').eq('org_id', orgId),
       ]);
-      final prodIds = {for (final p in res[0]) p['id'] as String};
+      // SKUs of a line that is switched off are left out.
+      final prodLine = <String, String?>{
+        for (final p in res[0])
+          if (rules.isEmpty || rules.byId(p['line_id'] as String?)?.isActive != false) p['id'] as String: p['line_id'] as String?,
+      };
+      final prodIds = prodLine.keys.toSet();
       // Auto Pilot: placements from sales invoices count too (newest wins).
       final autoRows = await autopilotRows(orgId);
       final active = {for (final s in res[2]) s['id'] as String: s};
@@ -99,11 +115,6 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
         final k = '$cid|$pid';
         final prev = latest[k];
         if (prev == null || '${a['surveyed_at']}'.compareTo('${prev['surveyed_at']}') > 0) latest[k] = a;
-      }
-      final score = <String, int>{};
-      for (final a in latest.values) {
-        final cid = a['customer_id'] as String;
-        score[cid] = (score[cid] ?? 0) + (a['is_present'] == true ? 1 : 0);
       }
 
       final routeName = <String, String>{
@@ -132,9 +143,16 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
 
       if (!mounted) return;
       setState(() {
-        _outOf = prodIds.length;
-        _score..clear()..addAll(score);
-        _shop..clear()..addAll({for (final id in score.keys) id: active[id]!});
+        _rules = rules;
+        if (rules.activeLines.length >= 2) {
+          if (_lineId == null || rules.byId(_lineId)?.isActive != true) _lineId = rules.activeLines.first.id;
+        } else {
+          _lineId = null;
+        }
+        _prodLine..clear()..addAll(prodLine);
+        _latestAll..clear()..addAll(latest);
+        _activeShops..clear()..addAll(active);
+        _recompute();
         _routeName..clear()..addAll(routeName);
         _shopRoutes..clear()..addAll(shopRoutes);
         _routeUsers..clear()..addAll(routeUsers);
@@ -151,6 +169,26 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
   }
 
   // ── grouping ──────────────────────────────────────────────────────────────
+
+  /// The scores for the line chosen (or all SKUs when there is only one line): each shop's displayed SKUs,
+  /// counting only SKUs that apply to it.
+  void _recompute() {
+    final lineId = _lineId;
+    final pids = <String>{for (final e in _prodLine.entries) if (lineId == null || e.value == lineId) e.key};
+    final score = <String, int>{};
+    for (final a in _latestAll.values) {
+      final pid = a['product_id'] as String;
+      final cid = a['customer_id'] as String;
+      if (!pids.contains(pid)) continue;
+      final shop = _activeShops[cid];
+      if (shop == null) continue;
+      if (!_rules.applies(cid, shop['group_name'] as String?, _prodLine[pid])) continue; // the shop does not carry this SKU's line
+      score[cid] = (score[cid] ?? 0) + (a['is_present'] == true ? 1 : 0);
+    }
+    _outOf = pids.length;
+    _score..clear()..addAll(score);
+    _shop..clear()..addAll({for (final id in score.keys) id: _activeShops[id]!});
+  }
 
   bool _inScope(String cid) {
     final rs = _shopRoutes[cid] ?? const <String>{};
@@ -215,6 +253,7 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
     final parts = <String>[_byMarket ? 'By market' : 'By salesperson'];
     if (_routeId != null) parts.add('Route: ${_routeName[_routeId] ?? ''}');
     if (_salespersonId != null) parts.add('Salesperson: ${_userName[_salespersonId] ?? ''}');
+    if (_lineId != null) parts.add('Line: ${_rules.byId(_lineId)?.name ?? ''}');
     return parts.join('   ·   ');
   }
 
@@ -406,6 +445,23 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
       options: [for (final r in routeOptions) MapEntry<String?, String>(r.key, r.value)],
       onChanged: (v) => setState(() => _routeId = v),
     );
+    final lineDropdown = _rules.activeLines.length < 2
+        ? null
+        : InputDecorator(
+            decoration: const InputDecoration(isDense: true, prefixIcon: Icon(Icons.layers_outlined, size: 18), labelText: 'Product line'),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _lineId,
+                isDense: true,
+                isExpanded: true,
+                items: [for (final l in _rules.activeLines) DropdownMenuItem(value: l.id, child: Text(l.name))],
+                onChanged: (v) => setState(() {
+                  _lineId = v;
+                  _recompute();
+                }),
+              ),
+            ),
+          );
     final modeSwitch = SegmentedButton<bool>(
       segments: const [
         ButtonSegment(value: false, label: Text('By salesperson'), icon: Icon(Icons.person_outline, size: 16)),
@@ -445,6 +501,7 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
           spDropdown,
           const SizedBox(height: 10),
           routeDropdown,
+          if (lineDropdown != null) ...[const SizedBox(height: 10), lineDropdown],
           const SizedBox(height: 6),
           Wrap(spacing: 6, children: [excelBtn, pdfBtn]),
         ] else ...[
@@ -452,6 +509,7 @@ class _State extends ConsumerState<IntelligenceScoreDistributionScreen> {
             Expanded(child: spDropdown),
             const SizedBox(width: 12),
             Expanded(child: routeDropdown),
+            if (lineDropdown != null) ...[const SizedBox(width: 12), Expanded(child: lineDropdown)],
           ]),
           const SizedBox(height: 12),
           Row(children: [modeSwitch, const Spacer(), excelBtn, const SizedBox(width: 8), pdfBtn]),

@@ -9,6 +9,7 @@ import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../services/autopilot.dart';
+import '../../product_lines/product_lines_repo.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/format/time_format.dart';
 
@@ -344,6 +345,8 @@ class _IntelligenceDashboardScreenState
 
       // ── Phase A: audits + small reference tables (independent of which shops
       // were audited). These are all small or window-bounded.
+      // Product lines: which shops carry which SKUs (empty = every SKU applies to every shop).
+      final lineRules = await ProductLinesRepo.loadRules(orgId);
       final resA = await Future.wait<dynamic>([
         usedLatestRpc
             ? Future.value(const <Map<String, dynamic>>[])
@@ -362,7 +365,7 @@ class _IntelligenceDashboardScreenState
                 .inFilter('route_id', orgRouteIds)
                 .range(f, t)),
         client.from('users').select('id, name').eq('org_id', orgId).or('role.is.null,role.neq.retailer'),
-        pageAll((f, t) => client.from('intelligence_products').select('id, name').eq('org_id', orgId).range(f, t)),
+        pageAll((f, t) => client.from('intelligence_products').select(lineRules.isEmpty ? 'id, name' : 'id, name, line_id').eq('org_id', orgId).range(f, t)),
         usedCompRpc
             ? Future.value(const <Map<String, dynamic>>[])
             : pageAll((f, t) {
@@ -414,7 +417,7 @@ class _IntelligenceDashboardScreenState
       final resB = await Future.wait<dynamic>([
         custIdList.isEmpty
             ? Future.value(const <Map<String, dynamic>>[])
-            : fetchByIds('customers', 'id', custIdList, 'id, shop_name, code, is_active'),
+            : fetchByIds('customers', 'id', custIdList, 'id, shop_name, code, is_active, group_name'),
         custIdList.isEmpty
             ? Future.value(const <Map<String, dynamic>>[])
             : fetchByIds('route_stops', 'customer_id', custIdList, 'route_id, customer_id'),
@@ -459,6 +462,13 @@ class _IntelligenceDashboardScreenState
             latest[key] = a;
           }
         }
+      }
+
+      // Product lines: a shop is only counted for the SKUs of the lines it carries.
+      if (!lineRules.isEmpty) {
+        final groupOf = <String, String?>{for (final c in custRaw) '${(c as Map)['id']}': c['group_name'] as String?};
+        final lineOf = <String, String?>{for (final p in prodRaw) '${(p as Map)['id']}': p['line_id'] as String?};
+        latest.removeWhere((k, a) => !lineRules.applies('${a['customer_id']}', groupOf['${a['customer_id']}'], lineOf['${a['product_id']}']));
       }
 
       // Per-customer tallies.

@@ -1778,6 +1778,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     if (show('/intelligence/competitors')) _menuItem(context, 'Competitor Spotting', Icons.flag_outlined, '/intelligence/competitors', location),
     if (show('/intelligence/reports')) _menuItem(context, 'Reports', Icons.assessment_outlined, '/intelligence/reports', location),
     if (show('/products')) _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
+    if (show('/product-lines')) _menuItem(context, 'Product Lines', Icons.layers_outlined, '/product-lines', location),
     if (show('/competitor-categories')) _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
     if (show('/competitor-brand-aliases')) _menuItem(context, 'Competitor Brand Aliases', Icons.spellcheck_outlined, '/competitor-brand-aliases', location),
   ];
@@ -1862,7 +1863,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           ),
           if (modules.contains('intelligence'))
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
-            ['/intelligence/dashboard', '/products', '/competitor-categories', '/competitor-brand-aliases', '/intelligence/placement', '/intelligence/score-distribution', '/intelligence/competitors', '/intelligence/reports',
+            ['/intelligence/dashboard', '/products', '/product-lines', '/competitor-categories', '/competitor-brand-aliases', '/intelligence/placement', '/intelligence/score-distribution', '/intelligence/competitors', '/intelligence/reports',
              if (targetsOn) '/intelligence/performance'],
             [
               _menuItem(context, 'Dashboard', Icons.dashboard_outlined, '/intelligence/dashboard', location),
@@ -1875,6 +1876,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
               _menuItem(context, 'Reports', Icons.assessment_outlined, '/intelligence/reports', location),
               _menuLabel('Setup'),
               _menuItem(context, 'Products', Icons.inventory_2_outlined, '/products', location),
+              _menuItem(context, 'Product Lines', Icons.layers_outlined, '/product-lines', location),
               _menuItem(context, 'Competitor Categories', Icons.category_outlined, '/competitor-categories', location),
               _menuItem(context, 'Competitor Brand Aliases', Icons.spellcheck_outlined, '/competitor-brand-aliases', location),
             ],
@@ -1885,7 +1887,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
         if (isErpUser && intelErpItems.isNotEmpty && modules.contains('intelligence'))
           _navMenu(context, 'Intelligence', Icons.insights_outlined, location,
             const ['/intelligence/dashboard', '/intelligence/performance', '/intelligence/placement', '/intelligence/score-distribution', '/intelligence/competitors', '/intelligence/reports',
-             '/products', '/competitor-categories', '/competitor-brand-aliases'],
+             '/products', '/product-lines', '/competitor-categories', '/competitor-brand-aliases'],
             intelErpItems),
 
         // ERP users get an Operations menu with just the screens granted to them.
