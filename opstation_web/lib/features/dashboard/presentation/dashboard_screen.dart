@@ -12,6 +12,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/utils/driver_users.dart';
+import 'active_drivers_view.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -289,7 +291,40 @@ class _DashboardStatsState extends State<_DashboardStats> {
     return '$arrow ${pct.abs()}% vs $amt $when';
   }
 
+  /// The tiles, then the drivers split out of them: the active-routes figure is the salespeople's only,
+  /// and the drivers who are out are counted on their own tile.
   Future<void> _load() async {
+    await _loadStats();
+    await _applyDriverSplit();
+  }
+
+  Future<void> _applyDriverSplit() async {
+    if (!mounted) return;
+    if (!_isToday) {
+      setState(() => _stats['activeDrivers'] = 0);
+      return;
+    }
+    try {
+      final client = Supabase.instance.client;
+      final driverIds = await loadDriverIds(widget.orgId);
+      var driverTrips = 0;
+      if (driverIds.isNotEmpty) {
+        final open = await client.from('trips').select('id, user_id').eq('org_id', widget.orgId).filter('ended_at', 'is', null);
+        driverTrips = [for (final t in (open as List)) if (driverIds.contains('${(t as Map)['user_id']}')) t].length;
+      }
+      final out = await loadActiveDrivers(widget.orgId);
+      if (!mounted) return;
+      setState(() {
+        _stats['activeRoutes'] = activeRoutesWithoutDrivers(_stats['activeRoutes'] as int?, driverTrips);
+        _stats['activeDrivers'] = countActiveDrivers(out);
+      });
+    } catch (_) {
+      // The drivers could not be read now: the figures stay as the summary gave them.
+      if (mounted && _stats['activeDrivers'] == null) setState(() => _stats['activeDrivers'] = null);
+    }
+  }
+
+  Future<void> _loadStats() async {
     _loadLastWeek(); // runs alongside; fills in the small comparison line
     final client = Supabase.instance.client;
     final d = _selectedDate;
@@ -536,6 +571,8 @@ class _DashboardStatsState extends State<_DashboardStats> {
     );
   }
 
+  void _showActiveDrivers() => showActiveDriversDialog(context, orgId: widget.orgId);
+
   void _showCompletedToday() {
     showDialog<void>(
       context: context,
@@ -571,6 +608,14 @@ class _DashboardStatsState extends State<_DashboardStats> {
           value: _cnt('activeRoutes'),
           color: AppTheme.success,
           onTap: _locked ? null : _showActiveRoutes,
+        ),
+      if (_isToday)
+        _StatCard(
+          icon: Icons.local_shipping_outlined,
+          label: 'Active Drivers',
+          value: _cnt('activeDrivers'),
+          color: const Color(0xFF8B5CF6),
+          onTap: _locked ? null : _showActiveDrivers,
         ),
       _StatCard(
         icon: Icons.check_circle_outline,
@@ -1599,7 +1644,7 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
           .toIso8601String();
       final base = client
           .from('trips')
-          .select('id, route_name, user_name, started_at, ended_at')
+          .select('id, user_id, route_name, user_name, started_at, ended_at')
           .eq('org_id', widget.orgId);
       final tripRows = widget.completed
           ? await base
@@ -1608,9 +1653,13 @@ class _ActiveRoutesViewState extends State<_ActiveRoutesView> {
               .not('ended_at', 'is', null)
           : await base.filter('ended_at', 'is', null);
 
-      final trips = (tripRows as List)
+      var trips = (tripRows as List)
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();
+      // Active routes are the salespeople's: drivers are on the Active Drivers tile.
+      if (!widget.completed) {
+        trips = withoutUsers(trips, await loadDriverIds(widget.orgId).catchError((_) => <String>{}));
+      }
       if (trips.isEmpty) {
         if (!mounted) return;
         setState(() {

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/driver_users.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -54,9 +55,12 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
     final orgId = ref.read(currentUserProvider)?.orgId;
     if (orgId == null) return;
     try {
-      final r = await Supabase.instance.client.from('trips').select('id')
+      final r = await Supabase.instance.client.from('trips').select('id, user_id')
           .eq('org_id', orgId).filter('ended_at', 'is', null);
-      if (mounted) setState(() => _activeCount = (r as List).length);
+      // Drivers are not salespeople on a route: they are counted as Active Drivers on the dashboard.
+      final driverIds = await loadDriverIds(orgId).catchError((_) => <String>{});
+      final trips = withoutUsers([for (final t in (r as List)) Map<String, dynamic>.from(t as Map)], driverIds);
+      if (mounted) setState(() => _activeCount = trips.length);
     } catch (_) {}
   }
 

@@ -1,3 +1,4 @@
+import '../../../core/utils/driver_users.dart';
 import '../../../core/utils/place_name.dart';
 import '../../../core/utils/report_trail.dart';
 import '../../../core/utils/reimb.dart';
@@ -70,7 +71,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         tripsQ.order('started_at', ascending: false),
       ]);
       final users = first[0];
-      final trips = first[1];
+      // Drivers' work is reported in Logistics Reports, not here.
+      final driverIds = await loadDriverIds(orgId).catchError((_) => <String>{});
+      final trips = withoutUsers(first[1], driverIds);
       if (mounted) {
         // Trips show immediately; stop counts fill in once visits arrive.
         setState(() => _loading = false);
