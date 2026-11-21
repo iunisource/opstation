@@ -73,7 +73,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       margin: const EdgeInsets.only(bottom: 18),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: (clock ? AppTheme.danger : Colors.orange).withOpacity(0.08),
+        color: Color.alphaBlend((clock ? AppTheme.danger : Colors.orange).withOpacity(0.10), Colors.white.withOpacity(0.94)),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: (clock ? AppTheme.danger : Colors.orange).withOpacity(0.4)),
       ),
@@ -585,10 +585,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // ───────────────────────────── form panel (right) ─────────────────────────
   Widget _formPanel(bool isLoading, {required bool showLogo, LoginFormFrame frame = LoginFormFrame.card}) {
     final sheet = frame == LoginFormFrame.sheet;
+    // On a wide screen the card is see-through (the video shows behind it); on a phone it stays a solid sheet.
+    final glass = !sheet;
+    final ink = glass ? Colors.white : _ink;
+    final sec = glass ? const Color(0xC7FFFFFF) : AppTheme.textSecondary;
+    final link = glass ? const Color(0xFF8FB4FF) : AppTheme.primary;
+    final fill = glass ? const Color(0x1FFFFFFF) : const Color(0xFFFAFBFC);
+    final edge = glass ? const Color(0x59FFFFFF) : null;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.97),
+        color: glass ? const Color(0x730B1220) : Colors.white.withOpacity(0.97),
         borderRadius: sheet ? const BorderRadius.vertical(top: Radius.circular(24)) : BorderRadius.circular(20),
+        border: glass ? Border.all(color: const Color(0x47FFFFFF)) : null,
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 60, offset: const Offset(0, 24))],
       ),
       child: SingleChildScrollView(
@@ -607,29 +615,29 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             children: [
               if (showLogo) ...[
                 Row(children: [
-                  _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                  _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: [
                     BrandLogo(size: 44),
                     SizedBox(width: 12),
                     Text('Opstation',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _ink)),
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: ink)),
                   ])),
                 ]),
                 const SizedBox(height: 36),
               ],
               _diagnosticBanner(),
-              const Text('Welcome back',
+              Text('Welcome back',
                   style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
                       height: 1.1,
                       letterSpacing: -0.5,
-                      color: _ink)),
+                      color: ink)),
               const SizedBox(height: 8),
-              const Text('Sign in to your workspace',
-                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
+              Text('Sign in to your workspace',
+                  style: TextStyle(color: sec, fontSize: 14)),
               const SizedBox(height: 36),
-              const Text('Email',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
+              Text('Email',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: ink)),
               const SizedBox(height: 6),
               TextField(
                 controller: _emailCtrl,
@@ -638,23 +646,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 autofillHints: const [AutofillHints.email],
                 textInputAction: TextInputAction.next,
                 onSubmitted: (_) => _passFocus.requestFocus(),
-                style: const TextStyle(fontSize: 14, color: _ink),
+                style: TextStyle(fontSize: 14, color: ink),
                 decoration: InputDecoration(
                   hintText: 'name@company.com',
-                  hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
-                  prefixIcon: const Icon(Icons.email_outlined, size: 18, color: AppTheme.textSecondary),
+                  hintStyle: TextStyle(color: sec, fontSize: 14),
+                  prefixIcon: Icon(Icons.email_outlined, size: 18, color: sec),
                   contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                   filled: true,
-                  fillColor: const Color(0xFFFAFBFC),
-                  border: _border(),
-                  enabledBorder: _border(),
+                  fillColor: fill,
+                  border: _border(edge),
+                  enabledBorder: _border(edge),
                   focusedBorder: _border(AppTheme.primary).copyWith(
                       borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
                 ),
               ),
               const SizedBox(height: 18),
-              const Text('Password',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
+              Text('Password',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: ink)),
               const SizedBox(height: 6),
               TextField(
                 controller: _passCtrl,
@@ -662,24 +670,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 obscureText: _obscure,
                 autofillHints: const [AutofillHints.password],
                 onSubmitted: (_) => _submit(),
-                style: const TextStyle(fontSize: 14, color: _ink),
+                style: TextStyle(fontSize: 14, color: ink),
                 decoration: InputDecoration(
                   hintText: '••••••••',
-                  hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
-                  prefixIcon: const Icon(Icons.lock_outline, size: 18, color: AppTheme.textSecondary),
+                  hintStyle: TextStyle(color: sec, fontSize: 14),
+                  prefixIcon: Icon(Icons.lock_outline, size: 18, color: sec),
                   suffixIcon: IconButton(
                     icon: Icon(
                         _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
                         size: 18,
-                        color: AppTheme.textSecondary),
+                        color: sec),
                     onPressed: () => setState(() => _obscure = !_obscure),
                     tooltip: _obscure ? 'Show password' : 'Hide password',
                   ),
                   contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                   filled: true,
-                  fillColor: const Color(0xFFFAFBFC),
-                  border: _border(),
-                  enabledBorder: _border(),
+                  fillColor: fill,
+                  border: _border(edge),
+                  enabledBorder: _border(edge),
                   focusedBorder: _border(AppTheme.primary).copyWith(
                       borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
                 ),
@@ -703,11 +711,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             visualDensity: VisualDensity.compact,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                            side: BorderSide(color: sec, width: 1.5),
                           ),
                         ),
                         const SizedBox(width: 10),
-                        const Text('Keep me signed in',
-                            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                        Text('Keep me signed in',
+                            style: TextStyle(fontSize: 13, color: sec)),
                       ]),
                     ),
                   ),
@@ -718,8 +727,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('Forgot password?',
-                        style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                    child: Text('Forgot password?',
+                        style: TextStyle(fontSize: 13, color: link, fontWeight: FontWeight.w600)),
                   ),
                 ],
               ),
@@ -756,8 +765,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               const SizedBox(height: 18),
               Center(
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('New to Opstation?',
-                      style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  Text('New to Opstation?',
+                      style: TextStyle(fontSize: 13, color: sec)),
                   TextButton(
                     onPressed: _openSignup,
                     style: TextButton.styleFrom(
@@ -765,19 +774,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('Sign up',
-                        style: TextStyle(fontSize: 13, color: AppTheme.primary, fontWeight: FontWeight.w700)),
+                    child: Text('Sign up',
+                        style: TextStyle(fontSize: 13, color: link, fontWeight: FontWeight.w700)),
                   ),
                 ]),
               ),
               const SizedBox(height: 14),
               Center(
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.lock_outline, size: 13, color: AppTheme.textSecondary),
+                  Icon(Icons.lock_outline, size: 13, color: sec),
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text('Secured & encrypted connection.',
-                        style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary.withOpacity(0.9)),
+                        style: TextStyle(fontSize: 11.5, color: sec),
                         textAlign: TextAlign.center),
                   ),
                 ]),
@@ -789,7 +798,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 6)),
                   onPressed: () => html.window.open('https://opstationerp.com/privacy', '_blank'),
                   child: Text('Privacy policy',
-                      style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary.withOpacity(0.9),
+                      style: TextStyle(fontSize: 11.5, color: sec,
                           decoration: TextDecoration.underline)),
                 ),
               ),
