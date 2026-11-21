@@ -1430,15 +1430,31 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     final isLocked = _detail['is_locked'] as bool? ?? false;
     final custId = _detail['customer_id'] as String?;
 
+    String joinNn(List<String?> p) => p.where((s) => s != null && s.trim().isNotEmpty && s != '-').join(' · ');
+    final soHeroDate = _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    final soHero = ErpLook.modern
+        ? ErpLook.hero(
+            kind: 'Sales Order',
+            number: voucherNum,
+            subtitle: joinNn([_detail['customers']?['shop_name'] as String?, soHeroDate, _detail['branches']?['name'] as String?]),
+            steps: [
+              ErpFlowStep('Sales Order', voucherNum, ErpStepState.current),
+              ErpFlowStep('Delivery Order', _linkedDoId != null ? 'Created' : 'Not created yet', _linkedDoId != null ? ErpStepState.done : ErpStepState.todo),
+              const ErpFlowStep('Sales Invoice', 'After delivery', ErpStepState.todo),
+            ],
+          )
+        : const SizedBox.shrink();
+
     return Column(children: [
+      if (ErpLook.modern) soHero,
       // ── Voucher AppBar ─────────────────────────────────────
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
         decoration: ErpLook.appBar(),
         child: AdaptiveHeaderRow(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(voucherNum, style: TextStyle(fontSize: ErpLook.modern ? 22 : 18, fontWeight: FontWeight.w800, letterSpacing: ErpLook.modern ? -0.4 : 0)),
-            Text('Sales Order', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ErpLook.classicOnly(Text(voucherNum, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+            ErpLook.classicOnly(const Text('Sales Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ]),
           const SizedBox(width: 16),
           _StatusChip(status: status.replaceAll('_', ' '), color: _statusColor(status)),
@@ -1517,7 +1533,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       Expanded(
         child: SingleChildScrollView(
           padding: EdgeInsets.all(context.isMobile ? 12 : 24),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: ErpLook.columns(children: [
             // ── Header Fields ───────────────────────────────────
             Container(
               padding: const EdgeInsets.all(16),
@@ -1703,6 +1719,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               _buildFocSection(),
             ],
 
+            const ErpSideBreak(),
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
@@ -3190,7 +3207,23 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       return !existingSoItemIds.contains(i['id'] as String) && delivered < ordered;
     }).toList();
 
+    String joinNn(List<String?> p) => p.where((s) => s != null && s.trim().isNotEmpty && s != '-').join(' · ');
+    final doHeroDate = _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    final doHero = ErpLook.modern
+        ? ErpLook.hero(
+            kind: 'Delivery Order',
+            number: _detail['voucher_number'] as String? ?? '-',
+            subtitle: joinNn([_linkedSo['customers']?['shop_name'] as String?, doHeroDate, _detail['branches']?['name'] as String?]),
+            steps: [
+              ErpFlowStep('Sales Order', _linkedSo['voucher_number'] as String? ?? '', ErpStepState.done),
+              ErpFlowStep('Delivery Order', _detail['voucher_number'] as String? ?? '', ErpStepState.current),
+              ErpFlowStep('Sales Invoice', _linkedSiId != null ? 'Created' : 'Invoice pending', _linkedSiId != null ? ErpStepState.done : ErpStepState.todo),
+            ],
+          )
+        : const SizedBox.shrink();
+
     return Column(children: [
+      if (ErpLook.modern) doHero,
       // AppBar
       Container(
         padding: EdgeInsets.symmetric(horizontal: MediaQuery.of(context).size.width < 700 ? 14 : 24, vertical: 12),
@@ -3198,8 +3231,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         child: Builder(builder: (context) {
           final mobile = MediaQuery.of(context).size.width < 700;
           final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Text('Delivery Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ErpLook.classicOnly(Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+            ErpLook.classicOnly(const Text('Delivery Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ]);
           final statusChildren = <Widget>[
             if (_deliveryFlow) ...[
@@ -3290,7 +3323,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       Expanded(
         child: SingleChildScrollView(
           padding: EdgeInsets.all(context.isMobile ? 12 : 24),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: ErpLook.columns(children: [
             // Linked SO info
             Container(
               padding: const EdgeInsets.all(14),
@@ -3533,6 +3566,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
               ),
             ],
 
+            const ErpSideBreak(),
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
@@ -4724,7 +4758,27 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             ],
           ]);
 
+    String joinNn(List<String?> p) => p.where((s) => s != null && s.trim().isNotEmpty && s != '-').join(' · ');
+    final siHeroDate = _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
+    final siHero = ErpLook.modern
+        ? ErpLook.hero(
+            kind: 'Sales Invoice',
+            number: _detail['voucher_number'] as String? ?? '-',
+            subtitle: joinNn([
+              (_detail['customers']?['shop_name'] ?? _detail['sales_orders']?['customers']?['shop_name']) as String?,
+              siHeroDate,
+              _detail['branches']?['name'] as String?,
+            ]),
+            steps: [
+              ErpFlowStep('Sales Order', _detail['sales_orders']?['voucher_number'] as String? ?? '', ErpStepState.done),
+              ErpFlowStep('Delivery Order', _detail['delivery_orders']?['voucher_number'] as String? ?? '', ErpStepState.done),
+              ErpFlowStep('Sales Invoice', _detail['voucher_number'] as String? ?? '', ErpStepState.current),
+            ],
+          )
+        : const SizedBox.shrink();
+
     return Column(children: [
+      if (ErpLook.modern) siHero,
       Container(
         padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 24, vertical: 12),
         decoration: ErpLook.appBar(),
@@ -4732,8 +4786,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ErpLook.classicOnly(Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+            ErpLook.classicOnly(const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ]),
           const SizedBox(width: 12),
           if (_isLocked) const _LockedBadge(),
@@ -4831,8 +4885,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               ])
             : Row(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ErpLook.classicOnly(Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+            ErpLook.classicOnly(const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ]),
           const SizedBox(width: 12),
           if (_isLocked) const _LockedBadge(),
@@ -4930,7 +4984,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
       Expanded(
         child: SingleChildScrollView(
           padding: EdgeInsets.all(narrow ? 12 : 24),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: ErpLook.columns(children: [
             // Header info
             Container(
               padding: const EdgeInsets.all(16),
@@ -5158,6 +5212,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               const SizedBox(height: 16),
               _appliedSchemesBanner(),
             ],
+            const ErpSideBreak(),
             const SizedBox(height: 16),
             _VoucherInfoStrip(
               salesperson: _meta.salespersonName,
@@ -5301,13 +5356,15 @@ class _VoucherInfoStrip extends StatelessWidget {
       tiles.add(_tile(Icons.phone_outlined, 'Phone', customerPhone!));
     }
     return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.background,
-        border: Border.all(color: AppTheme.border),
-        borderRadius: BorderRadius.circular(8),
-      ),
+      margin: EdgeInsets.only(top: ErpLook.modern ? 0 : 8),
+      padding: EdgeInsets.all(ErpLook.modern ? 18 : 12),
+      decoration: ErpLook.modern
+          ? ErpLook.card()
+          : BoxDecoration(
+              color: AppTheme.background,
+              border: Border.all(color: AppTheme.border),
+              borderRadius: BorderRadius.circular(8),
+            ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 24, runSpacing: 8, children: tiles),
         if (preparedBy != null && preparedBy!.isNotEmpty) ...[

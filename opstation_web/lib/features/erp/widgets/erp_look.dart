@@ -20,6 +20,101 @@ class ErpLook {
   static const _bg = Color(0xFFF4F6FB);
   static const _edge = Color(0xFFE5E9F2);
 
+  /// Shown in the classic look only (the modern look moves the title into the blue header band).
+  static Widget classicOnly(Widget w) => modern ? const SizedBox.shrink() : w;
+
+  /// The scrolling body of an open voucher. Classic: one column. Modern, on a wide screen: the main
+  /// sections on the left and everything after an [ErpSideBreak] in a narrow column on the right.
+  static Widget columns({required List<Widget> children}) {
+    Widget one() => Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    if (!modern) return one();
+    final i = children.indexWhere((w) => w is ErpSideBreak);
+    if (i < 0) return one();
+    final main = children.sublist(0, i);
+    var side = children.sublist(i + 1);
+    if (side.isNotEmpty && side.first is SizedBox) side = side.sublist(1);
+    return LayoutBuilder(builder: (context, c) {
+      if (c.maxWidth < 920) return one();
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: main)),
+        const SizedBox(width: 20),
+        SizedBox(width: 340, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: side)),
+      ]);
+    });
+  }
+
+  /// The blue header band of an open voucher: kind, big number, one-line summary and the document flow.
+  static Widget hero({
+    required String kind,
+    required String number,
+    required String subtitle,
+    required List<ErpFlowStep> steps,
+  }) =>
+      Builder(builder: (context) {
+        final narrow = MediaQuery.of(context).size.width < 700;
+        return Container(
+          width: double.infinity,
+          padding: EdgeInsets.fromLTRB(narrow ? 16 : 28, narrow ? 14 : 18, narrow ? 16 : 28, narrow ? 14 : 20),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF0F1F4D), Color(0xFF1D3F94)]),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(kind, style: const TextStyle(color: Color(0xFFB9C8F0), fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(number, style: TextStyle(color: Colors.white, fontSize: narrow ? 24 : 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
+            if (subtitle.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(subtitle, style: const TextStyle(color: Color(0xFFB9C8F0), fontSize: 13.5)),
+            ],
+            if (steps.isNotEmpty && !narrow) ...[
+              const SizedBox(height: 16),
+              Row(children: [
+                for (var i = 0; i < steps.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 10),
+                  Expanded(child: _flowStep(i, steps[i])),
+                ],
+              ]),
+            ],
+          ]),
+        );
+      });
+
+  static Widget _flowStep(int i, ErpFlowStep s) {
+    final cur = s.state == ErpStepState.current;
+    final done = s.state == ErpStepState.done;
+    final ink = cur ? const Color(0xFF101828) : Colors.white;
+    final mute = cur ? const Color(0xFF667085) : const Color(0xFFB9C8F0);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: cur ? Colors.white : const Color(0x17FFFFFF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cur ? Colors.white : const Color(0x2EFFFFFF)),
+      ),
+      child: Row(children: [
+        Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: cur ? AppTheme.primary : (done ? const Color(0xFF33C28F) : const Color(0x33FFFFFF)),
+          ),
+          child: done
+              ? const Icon(Icons.check, size: 15, color: Colors.white)
+              : Text('${i + 1}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+        ),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(s.label, style: TextStyle(color: ink, fontSize: 13.5, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+            if (s.sub.isNotEmpty) Text(s.sub, style: TextStyle(color: mute, fontSize: 11.5), overflow: TextOverflow.ellipsis),
+          ]),
+        ),
+      ]),
+    );
+  }
+
   /// Heading text of a table column (modern: small, bold, spaced capitals).
   static TextStyle th() => modern
       ? const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 0.6, color: Color(0xFF5B6B8C))
@@ -52,9 +147,9 @@ class ErpLook {
   /// The bar across the top of an open voucher (number, status, buttons).
   static BoxDecoration appBar() => modern
       ? const BoxDecoration(
-          gradient: LinearGradient(colors: [Colors.white, Color(0xFFEFF4FF)]),
-          border: Border(bottom: BorderSide(color: Color(0x404B84F5), width: 2)),
-          boxShadow: [BoxShadow(color: Color(0x1A1E3A8A), blurRadius: 14, offset: Offset(0, 5))],
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: _edge)),
+          boxShadow: [BoxShadow(color: Color(0x141E3A8A), blurRadius: 12, offset: Offset(0, 4))],
         )
       : const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: AppTheme.border)));
 
@@ -232,4 +327,21 @@ class _LookDialogState extends State<_LookDialog> {
       actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
     );
   }
+}
+
+enum ErpStepState { done, current, todo }
+
+/// One step of the Sales Order → Delivery Order → Sales Invoice strip in the header band.
+class ErpFlowStep {
+  const ErpFlowStep(this.label, this.sub, this.state);
+  final String label;
+  final String sub;
+  final ErpStepState state;
+}
+
+/// Marks where the right-hand column starts in [ErpLook.columns]. Draws nothing.
+class ErpSideBreak extends StatelessWidget {
+  const ErpSideBreak({super.key});
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
