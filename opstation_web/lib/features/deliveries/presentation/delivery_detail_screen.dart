@@ -44,6 +44,18 @@ class _DeliveryDetailScreenState
     _load();
   }
 
+  /// Starts looking up the names of the job's start and end places now, so they are ready (and
+  /// remembered) by the time the report is printed. Nothing waits for it.
+  void _warmPlaceNames(Map<String, dynamic> d) {
+    for (final p in const ['start', 'end']) {
+      final lat = d['${p}_lat'], lng = d['${p}_lng'];
+      final saved = '${d['${p}_place'] ?? ''}'.trim();
+      if (lat is num && lng is num && saved.isEmpty) {
+        placeName(lat.toDouble(), lng.toDouble()).catchError((_) => null);
+      }
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -73,6 +85,7 @@ class _DeliveryDetailScreenState
         _stops = List<Map<String, dynamic>>.from(stops);
         _loading = false;
       });
+      _warmPlaceNames(_delivery!);
     } catch (e) {
       setState(() {
         _loading = false;

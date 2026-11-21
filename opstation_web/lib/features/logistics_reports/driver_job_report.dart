@@ -114,7 +114,14 @@ class DriverJobReport {
     final hasEnd = eLat != null && eLng != null;
 
     final lookup = placeLookup; // the page passes the shared place-name lookup; null = no names
-    final until = DateTime.now().add(const Duration(seconds: 10));
+    // The free lookup can be slow; the person waits for the report anyway, so it gets time.
+    final until = DateTime.now().add(const Duration(seconds: 25));
+    // A name the driver's phone already looked up and saved with the point (deliveries.start_place / end_place).
+    String? stored(Object? v) {
+      final t = '${v ?? ''}'.trim();
+      return t.isEmpty ? null : t;
+    }
+
     Future<String?> place(double lat, double lng) async {
       try {
         if (lookup != null) return await lookup(lat, lng, until);
@@ -127,7 +134,7 @@ class DriverJobReport {
       if (delivery['started_at'] != null)
         () async {
           if (hasStart) {
-            startAddress = await place(sLat, sLng);
+            startAddress = stored(delivery['start_place']) ?? await place(sLat, sLng);
           } else if (gps.isNotEmpty) {
             startAddress = await place((gps.first['captured_lat'] as num).toDouble(), (gps.first['captured_lng'] as num).toDouble());
           }
@@ -135,7 +142,7 @@ class DriverJobReport {
       if (delivery['completed_at'] != null)
         () async {
           if (hasEnd) {
-            endAddress = await place(eLat, eLng);
+            endAddress = stored(delivery['end_place']) ?? await place(eLat, eLng);
           } else if (gps.isNotEmpty) {
             endAddress = await place((gps.last['captured_lat'] as num).toDouble(), (gps.last['captured_lng'] as num).toDouble());
           }
