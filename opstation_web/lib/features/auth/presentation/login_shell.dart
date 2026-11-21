@@ -81,7 +81,7 @@ class LoginShell extends StatelessWidget {
     required this.footer,
     required this.retailerButton,
     required this.form,
-    this.videoSrc = 'login_bg_v3.mp4',
+    this.videoSrc = 'login_bg_v4.mp4',
     this.wideAt = 900,
   });
 
