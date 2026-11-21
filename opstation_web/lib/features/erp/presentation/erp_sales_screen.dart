@@ -152,6 +152,17 @@ Future<String?> _bankCancelledVoucherNumber({
     // ignore: avoid_print
     print('[VoucherBank] $voucherNumber banked for reuse');
     return null;
+  } on PostgrestException catch (e) {
+    // 23505 = this number is already banked for reuse (e.g. it was banked when the voucher was
+    // cancelled earlier). That is the outcome we want, so it is not an error.
+    if (e.code == '23505') {
+      // ignore: avoid_print
+      print('[VoucherBank] $voucherNumber already banked');
+      return null;
+    }
+    // ignore: avoid_print
+    print('[VoucherBank] failed to bank $voucherNumber: $e');
+    return e.toString().split('\n').first;
   } catch (e) {
     // ignore: avoid_print
     print('[VoucherBank] failed to bank $voucherNumber: $e');
