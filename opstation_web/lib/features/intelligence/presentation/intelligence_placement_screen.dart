@@ -9,6 +9,9 @@ import '../../auth/auth_controller.dart';
 import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../services/intelligence_excel_service.dart';
+import '../services/placement_scorecard.dart';
+import '../services/placement_scorecard_pdf.dart';
+import 'package:opstation_web/core/widgets/generating_overlay.dart';
 import '../services/intel_delete_access.dart';
 import '../widgets/searchable_dropdown.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
@@ -468,6 +471,52 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
     }
   }
 
+  /// What the report covers, in words, for its heading: the salesperson, the route, the audit status and the
+  /// product filter that are on the screen (everything, when none is set).
+  String _scopeText() {
+    String nameIn(List<Map<String, dynamic>> list, String? id) {
+      if (id == null) return '';
+      for (final x in list) {
+        if (x['id'] == id) return '${x['name'] ?? ''}';
+      }
+      return '';
+    }
+    final sp = nameIn(_salespeople, _selectedSalespersonId);
+    final route = nameIn(_routes, _selectedRouteId);
+    final productQ = _productSearchCtrl.text.trim();
+    final shopQ = _customerSearchCtrl.text.trim();
+    return [
+      sp.isNotEmpty ? 'Salesperson: $sp' : 'All salespeople',
+      route.isNotEmpty ? 'Route: $route' : 'All routes',
+      if (_auditFilter != 'all') 'Audit status: ${surveyAuditFilterLabels[_auditFilter] ?? _auditFilter}',
+      if (shopQ.isNotEmpty) 'Shops matching "$shopQ"',
+      if (productQ.isNotEmpty) 'Products matching "$productQ"',
+    ].join('   \u00B7   ');
+  }
+
+  /// The SKU Placement Scorecard (PDF): each listed SKU's overall placement score over the shops on screen —
+  /// the same shops and products as the grid — ready to share with the sales team.
+  Future<void> _exportScorecard() async {
+    final shops = _filteredCustomers;
+    final products = _filteredProducts;
+    if (shops.isEmpty || products.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nothing to export. Adjust the filters.')));
+      return;
+    }
+    try {
+      final orgName = ref.read(currentUserProvider)?.orgName ?? '';
+      final bytes = await withGenerating(context, () async {
+        final card = buildScorecard(customers: shops, products: products, latest: _latest);
+        return PlacementScorecardPdf.build(orgName: orgName, scope: _scopeText(), card: card);
+      });
+      await outputPdf(bytes, 'SKU Placement Scorecard');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Scorecard export failed: $e')));
+      }
+    }
+  }
+
   Future<void> _exportPdf() async {
     try {
       final orgName = ref.read(currentUserProvider)?.orgName ?? '';
@@ -538,6 +587,11 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
       icon: const Icon(Icons.show_chart, size: 18),
       label: Text(isMobile ? 'Chart' : 'Visual chart'),
     );
+    final scorecardBtn = FilledButton.tonalIcon(
+      onPressed: _exportScorecard,
+      icon: const Icon(Icons.leaderboard_outlined, size: 18),
+      label: Text(isMobile ? 'Scorecard' : 'SKU scorecard'),
+    );
     final excelBtn = OutlinedButton.icon(
       onPressed: _exportExcel,
       icon: const Icon(Icons.grid_on_outlined, size: 18),
@@ -570,7 +624,7 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
           const SizedBox(height: 10),
           auditDropdown,
           const SizedBox(height: 6),
-          Wrap(spacing: 4, children: [chartBtn, excelBtn, pdfBtn]),
+          Wrap(spacing: 4, children: [chartBtn, scorecardBtn, excelBtn, pdfBtn]),
         ] else ...[
           Row(children: [
             Expanded(child: spDropdown),
@@ -580,17 +634,30 @@ class _IntelligencePlacementScreenState extends ConsumerState<IntelligencePlacem
             Expanded(child: auditDropdown),
           ]),
           const SizedBox(height: 12),
-          Row(children: [
-            Expanded(child: shopSearch),
-            const SizedBox(width: 12),
-            Expanded(child: productSearch),
-            const SizedBox(width: 12),
-            chartBtn,
-            const SizedBox(width: 8),
-            excelBtn,
-            const SizedBox(width: 8),
-            pdfBtn,
-          ]),
+          if (MediaQuery.of(context).size.width >= 1100)
+            Row(children: [
+              Expanded(child: shopSearch),
+              const SizedBox(width: 12),
+              Expanded(child: productSearch),
+              const SizedBox(width: 12),
+              chartBtn,
+              const SizedBox(width: 8),
+              scorecardBtn,
+              const SizedBox(width: 8),
+              excelBtn,
+              const SizedBox(width: 8),
+              pdfBtn,
+            ])
+          else ...[
+            // A narrower window: the four buttons go under the search boxes instead of squeezing them.
+            Row(children: [
+              Expanded(child: shopSearch),
+              const SizedBox(width: 12),
+              Expanded(child: productSearch),
+            ]),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 4, children: [chartBtn, scorecardBtn, excelBtn, pdfBtn]),
+          ],
         ],
         const SizedBox(height: 16),
         if (_loading)
