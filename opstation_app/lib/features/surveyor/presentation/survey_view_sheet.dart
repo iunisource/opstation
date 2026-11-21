@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/database/app_database_provider.dart';
 import 'survey_audit_screen.dart' show fixStatusText, fixStatusColor;
+import '../services/product_lines.dart';
 import '../services/survey_audit_service.dart';
 import '../services/survey_feedback.dart';
 
@@ -135,7 +136,9 @@ class _SurveyViewState extends ConsumerState<_SurveyView> {
     final placement = <(String, bool)>[];
     DateTime? pAt;
     String? pBy;
-    for (final p in products.where((p) => p.orgId == widget.shop.orgId || widget.shop.orgId == null)) {
+    // Only the SKUs of the product lines this shop carries.
+    final lines = await ProductLinesStore.load(db);
+    for (final p in products.where((p) => (p.orgId == widget.shop.orgId || widget.shop.orgId == null) && lines.applies(cid, widget.shop.groupName, p.id))) {
       final a = latest[p.id];
       if (a == null) continue;
       placement.add((p.name, a.isPresent));

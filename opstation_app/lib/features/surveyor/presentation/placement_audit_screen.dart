@@ -8,6 +8,7 @@ import '../../auth/providers/auth_controller.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../../core/services/device_gps_service.dart';
 import '../../admin_settings/providers/org_settings_controller.dart';
+import '../services/product_lines.dart';
 import '../services/survey_location_service.dart';
 import 'survey_customer_filter.dart';
 import 'survey_view_sheet.dart';
@@ -23,6 +24,9 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
   List<CustomersData> _allCustomers = [];
   List<CustomersData> _filteredCustomers = [];
   List<ProductRow> _products = [];
+  // Product lines: the lines this shop carries (empty when no lines are set up).
+  String _shopLines = '';
+  bool _linesOn = false;
   final Map<String, bool> _toggleState = {};
   final _searchCtrl = TextEditingController();
   bool _loading = true;
@@ -104,6 +108,9 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
           ]))
         .get();
     final orgProducts = orgId == null ? allProducts : allProducts.where((p) => p.orgId == orgId).toList();
+    // Only the SKUs of the product lines this shop carries are asked about (and saved).
+    final lines = await ProductLinesStore.load(db);
+    final shopProducts = lines.forShop(orgProducts, customer.id, customer.groupName, (p) => p.id);
 
     // Pre-fill toggles from last known is_present per product
     final history = await (db.select(db.placementAudits)
@@ -118,9 +125,11 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
     if (!mounted) return;
     setState(() {
       _selectedCustomer = customer;
-      _products = orgProducts;
+      _products = shopProducts;
+      _linesOn = !lines.isEmpty;
+      _shopLines = lines.describe(customer.id, customer.groupName);
       _toggleState.clear();
-      for (final p in orgProducts) {
+      for (final p in shopProducts) {
         _toggleState[p.id] = latest[p.id] ?? false;
       }
     });
@@ -370,6 +379,7 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
                 children: [
                   Text(_selectedCustomer!.shopName, style: const TextStyle(fontWeight: FontWeight.w600)),
                   Text(_selectedCustomer!.code, style: const TextStyle(fontSize: 12)),
+                  if (_shopLines.isNotEmpty) Text('Lines: $_shopLines', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -378,11 +388,13 @@ class _PlacementAuditScreenState extends ConsumerState<PlacementAuditScreen> {
         ),
         Expanded(
           child: _products.isEmpty
-              ? const Center(
+              ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(32),
+                    padding: const EdgeInsets.all(32),
                     child: Text(
-                      'No active products in catalog. Ask your admin to add products via the web admin.',
+                      _linesOn
+                          ? 'This shop carries no product line that has SKUs. Ask your admin to tick this shop\'s group for a line, or to check a line on the shop.'
+                          : 'No active products in catalog. Ask your admin to add products via the web admin.',
                       textAlign: TextAlign.center,
                     ),
                   ),

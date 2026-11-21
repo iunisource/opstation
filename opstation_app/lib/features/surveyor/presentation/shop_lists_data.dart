@@ -6,6 +6,7 @@ import '../../../core/database/app_database_provider.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../auth/models/user_role.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../services/product_lines.dart';
 import '../services/survey_audit_service.dart';
 
 /// What Surveyed shops and Non-surveyed shops show: the org's active shops
@@ -100,6 +101,15 @@ Future<ShopListData> loadShopLists(WidgetRef ref, {bool withAudits = true}) asyn
         if (rows.length < 1000) break;
       }
     } catch (_) {}
+  }
+  // Product lines: a shop's score counts only the SKUs of the lines it carries.
+  final lines = await ProductLinesStore.load(db);
+  if (!lines.isEmpty) {
+    for (final e in latest.entries) {
+      final shop = shops[e.key];
+      if (shop == null) continue;
+      e.value.removeWhere((pid, _) => !lines.applies(e.key, shop.groupName, pid));
+    }
   }
   final placement = {
     for (final e in latest.entries) e.key: (e.value.values.where((a) => a.$1).length, e.value.length),

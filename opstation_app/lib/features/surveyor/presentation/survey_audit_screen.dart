@@ -19,6 +19,7 @@ import '../../../core/services/device_gps_service.dart';
 import '../../../core/supabase/supabase_pull_service.dart';
 import '../../admin_settings/providers/org_settings_controller.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../services/product_lines.dart';
 import '../services/survey_audit_service.dart';
 
 /// Auditor: re-check surveyed shops. Each audit is "Matches" or "Issue" with a
@@ -460,6 +461,7 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
           ..where((p) => p.isActive.equals(true))
           ..orderBy([(p) => OrderingTerm.asc(p.position), (p) => OrderingTerm.asc(p.name)]))
         .get();
+    final lines = await ProductLinesStore.load(db);
     final pa = await (db.select(db.placementAudits)
           ..where((a) => a.customerId.equals(cid))
           ..orderBy([(a) => OrderingTerm.desc(a.surveyedAt)]))
@@ -499,7 +501,8 @@ class _ShopAuditPageState extends ConsumerState<ShopAuditPage> {
     if (!mounted) return;
     setState(() {
       _users = users;
-      _products = [for (final p in products) if (orgId == null || p.orgId == orgId) p];
+      // Only the SKUs of the product lines this shop carries.
+      _products = lines.forShop([for (final p in products) if (orgId == null || p.orgId == orgId) p], cid, widget.shop.groupName, (p) => p.id);
       for (final p in _products) {
         _present[p.id] = _latestP[p.id]?.isPresent ?? false;
       }

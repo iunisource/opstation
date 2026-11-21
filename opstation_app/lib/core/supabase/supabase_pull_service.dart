@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/app_database.dart';
 import '../../features/dispatch/models/delivery.dart';
 import '../utils/delivery_locations.dart';
+import '../../features/surveyor/services/product_lines.dart';
 import '../database/app_database_provider.dart';
 import 'supabase_sync_service.dart';
 import '../utils/customer_locations.dart';
@@ -124,6 +125,10 @@ class SupabasePullService {
         await _pullCompetitorCategories(_asList(r[0]));
         await _pullProducts(_asList(r[1]));
       });
+    } catch (_) {}
+    // Which shops carry which product line (Lights, PVC...), so a surveyor sees only a shop's own SKUs.
+    try {
+      await ProductLinesStore.refresh(_db, orgId).timeout(const Duration(seconds: 25));
     } catch (_) {}
   }
 
@@ -802,6 +807,7 @@ class SupabasePullService {
             .go();
         await _pullCustomers(custs.where((c) => !pending.contains(c['id'])).toList());
       });
+      await ProductLinesStore.refresh(_db, orgId); // which shops carry which product line
       return true;
     } catch (e) {
       print('SURVEY REFERENCE REFRESH ERROR (org=$orgId): $e');
@@ -840,6 +846,7 @@ class SupabasePullService {
         await _dropRemovedAudits(orgId, {for (final a in audits) '${a['id']}'});
         await _dropRemovedSpottings(orgId, {for (final a in spots) '${a['id']}'});
       });
+      await ProductLinesStore.refresh(_db, orgId);
     } catch (e) {
       print('INTEL PULL ERROR (org=$orgId): $e');
     }
