@@ -114,8 +114,8 @@ class DriverJobReport {
     final hasEnd = eLat != null && eLng != null;
 
     final lookup = placeLookup; // the page passes the shared place-name lookup; null = no names
-    // The free lookup can be slow; the person waits for the report anyway, so it gets time.
-    final until = DateTime.now().add(const Duration(seconds: 25));
+    // A name normally takes a second or two; this is only the limit for when the free lookup is slow or down.
+    final until = DateTime.now().add(const Duration(seconds: 12));
     // A name the driver's phone already looked up and saved with the point (deliveries.start_place / end_place).
     String? stored(Object? v) {
       final t = '${v ?? ''}'.trim();
@@ -128,6 +128,25 @@ class DriverJobReport {
       } catch (_) {}
       return null;
     }
+
+    // The route: [start] -> stops -> [return location]. Its road distances are asked for NOW, while the
+    // place names are being looked up, instead of after them.
+    final points = <List<double>>[
+      if (gps.isNotEmpty) ...[
+        if (hasStart) [sLat, sLng],
+        for (final s in gps) [(s['captured_lat'] as num).toDouble(), (s['captured_lng'] as num).toDouble()],
+        if (hasEnd) [eLat, eLng],
+      ],
+    ];
+    final roadFuture = points.length >= 2
+        ? () async {
+            try {
+              return await (roadLegs ?? roadLegsKm)(orgId, points);
+            } catch (_) {
+              return null;
+            }
+          }()
+        : Future<List<double>?>.value(null);
 
     String? startAddress, endAddress;
     await Future.wait([
@@ -164,18 +183,7 @@ class DriverJobReport {
       );
     }
 
-    // The route: [start] -> stops -> [return location].
-    final points = <List<double>>[
-      if (hasStart) [sLat, sLng],
-      for (final s in gps) [(s['captured_lat'] as num).toDouble(), (s['captured_lng'] as num).toDouble()],
-      if (hasEnd) [eLat, eLng],
-    ];
-    List<double>? road;
-    if (points.length >= 2) {
-      try {
-        road = await (roadLegs ?? roadLegsKm)(orgId, points);
-      } catch (_) {}
-    }
+    final road = await roadFuture;
     final legs = <double>[
       for (var k = 0; k + 1 < points.length; k++)
         (road != null && k < road.length) ? road[k] : _haversineKm(points[k][0], points[k][1], points[k + 1][0], points[k + 1][1]),

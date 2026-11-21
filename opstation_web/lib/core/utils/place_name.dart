@@ -5,6 +5,9 @@ import 'dart:html' as html;
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'pending_lookups.dart';
+import 'place_key.dart';
+
 /// Area name for a GPS point ("Johar Town, Lahore").
 ///
 /// 1. This page's memory.
@@ -21,9 +24,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 final Map<String, String> _names = {};
 final Map<String, DateTime> _failedAt = {}; // retry after a minute
-final Map<String, Future<String?>> _pending = {};
+final _pending = PendingLookups<String?>();
 
-String _key(double lat, double lng) => '${lat.toStringAsFixed(4)},${lng.toStringAsFixed(4)}';
+String _key(double lat, double lng) => placeKey(lat, lng);
 
 Future<String?> placeName(double lat, double lng, {DateTime? until}) {
   final key = _key(lat, lng);
@@ -31,11 +34,8 @@ Future<String?> placeName(double lat, double lng, {DateTime? until}) {
   if (hit != null) return Future.value(hit);
   final f = _failedAt[key];
   if (f != null && DateTime.now().difference(f) < const Duration(minutes: 1)) return Future.value(null);
-  final running = _pending[key];
-  if (running != null) return _withDeadline(running, until);
-  final job = _resolve(key, lat, lng).whenComplete(() => _pending.remove(key));
-  _pending[key] = job;
-  return _withDeadline(job, until);
+  // One lookup per spot at a time; asked again meanwhile, the caller shares it (see PendingLookups).
+  return _withDeadline(_pending.run(key, () => _resolve(key, lat, lng)), until);
 }
 
 Future<String?> _withDeadline(Future<String?> f, DateTime? until) {
@@ -46,8 +46,10 @@ Future<String?> _withDeadline(Future<String?> f, DateTime? until) {
 }
 
 Future<String?> _resolve(String key, double lat, double lng) async {
-  // 2. shared list (several keys asked together)
-  final saved = await _Batch.get(key);
+  // 2. shared list: the ~100 m key, and the older exact key names were saved under (asked in one request)
+  final f1 = _Batch.get(key);
+  final f2 = _Batch.get(placeKeyExact(lat, lng));
+  final saved = (await f1) ?? (await f2);
   if (saved != null && saved.isNotEmpty) {
     _names[key] = saved;
     return saved;
@@ -69,7 +71,7 @@ Future<String?> _resolve(String key, double lat, double lng) async {
 
 void _save(String key, double lat, double lng, String name) {
   Supabase.instance.client.from('place_names').upsert(
-    {'key': key, 'lat': double.parse(lat.toStringAsFixed(4)), 'lng': double.parse(lng.toStringAsFixed(4)), 'name': name},
+    {'key': key, 'lat': double.parse(lat.toStringAsFixed(3)), 'lng': double.parse(lng.toStringAsFixed(3)), 'name': name},
     onConflict: 'key',
     ignoreDuplicates: true,
   ).then((_) {}, onError: (_) {}); // table not there yet → just not shared
@@ -158,8 +160,9 @@ class _Osm {
 /// Start / end place for a trip row (start_lat … end_lng), as
 /// "Area, City\n31.47680, 74.24280" — or null when unknown.
 Future<(String?, String?)> tripPlaceNames(Map<String, dynamic> trip, {DateTime? until}) async {
-  // The free lookup can be slow; the report shows "Generating report..." meanwhile, so it gets time.
-  final deadline = until ?? DateTime.now().add(const Duration(seconds: 25));
+  // A lookup normally takes a second or two. This is only the limit for when the free service is slow or
+  // down: the report then shows coordinates, and the lookup carries on and is saved for next time.
+  final deadline = until ?? DateTime.now().add(const Duration(seconds: 12));
   Future<String?> one(String la, String lo) async {
     final lat = (trip[la] as num?)?.toDouble(), lng = (trip[lo] as num?)?.toDouble();
     if (lat == null || lng == null) return null;

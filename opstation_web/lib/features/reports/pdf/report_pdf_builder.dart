@@ -186,16 +186,31 @@ class TripReportContext {
     String? endAddress,
     bool withPlannedStops = false, // the Visit Report: list every stop of the route
   }) async {
-    final ctx = await _buildRoadDistances(
+    // The road distances, the names of the free visits, the receipt check and the planned stops do not
+    // depend on each other, so they are read at the same time (they used to be one after another).
+    final quick = TripReportContext.build(
       trip: trip,
       visits: visits,
       customersById: customersById,
       startAddress: startAddress,
       endAddress: endAddress,
     );
-    final names = await _freePlaces(ctx);
-    final check = await _tripReceiptCheck(ctx);
-    final stops = withPlannedStops ? await _readPlannedStops(ctx) : null;
+    final r = await Future.wait<dynamic>([
+      _buildRoadDistances(
+        trip: trip,
+        visits: visits,
+        customersById: customersById,
+        startAddress: startAddress,
+        endAddress: endAddress,
+      ),
+      _freePlaces(quick),
+      _tripReceiptCheck(quick),
+      if (withPlannedStops) _readPlannedStops(quick) else Future<dynamic>.value(null),
+    ]);
+    final ctx = r[0] as TripReportContext;
+    final names = r[1] as Map<String, String>;
+    final check = r[2] as ReceiptCheckData?;
+    final stops = r[3] as (List<String>, Map<String, Map<String, dynamic>>)?;
     if (names.isEmpty && check == null && stops == null) return ctx;
     return ctx._withExtras(
       names: names.isEmpty ? null : names,
@@ -203,6 +218,50 @@ class TripReportContext {
       planned: stops?.$1,
       customers: stops?.$2,
     );
+  }
+
+  /// The same context with the start and end place names set (a name that is null leaves the address as it was).
+  TripReportContext withAddresses(String? start, String? end) => TripReportContext(
+        trip: trip,
+        visits: visits,
+        customersById: customersById,
+        startAddress: start ?? startAddress,
+        endAddress: end ?? endAddress,
+        orderedVerifiedVisits: orderedVerifiedVisits,
+        distanceKm: distanceKm,
+        returnDistanceKm: returnDistanceKm,
+        totalDistanceKm: totalDistanceKm,
+        usedGoogle: usedGoogle,
+        freePlaceNames: freePlaceNames,
+        receiptCheck: receiptCheck,
+        plannedStops: plannedStops,
+        freePhotos: freePhotos,
+      );
+
+  /// The same context with the pictures of [other] (its [freePhotos]).
+  TripReportContext withPhotosFrom(TripReportContext other) => other.freePhotos.isEmpty ? this : _withExtras(photos: other.freePhotos);
+
+  /// Everything a report needs, fetched AT THE SAME TIME instead of one after another: the road
+  /// distances, the start / end place names ([placesOf], the slow free lookup) and, with [withPhotos],
+  /// the thumbnails of the free visits. The slowest of them sets the time, not their sum.
+  static Future<TripReportContext> buildComplete({
+    required Map<String, dynamic> trip,
+    required List<Map<String, dynamic>> visits,
+    required Map<String, Map<String, dynamic>> customersById,
+    required Future<(String?, String?)> Function(Map<String, dynamic> trip) placesOf,
+    bool withPlannedStops = false,
+    bool withPhotos = false,
+  }) async {
+    final quick = TripReportContext.build(trip: trip, visits: visits, customersById: customersById);
+    final r = await Future.wait<dynamic>([
+      buildRoad(trip: trip, visits: visits, customersById: customersById, withPlannedStops: withPlannedStops),
+      placesOf(trip),
+      if (withPhotos) quick.withFreePhotos() else Future<dynamic>.value(quick),
+    ]);
+    final places = r[1] as (String?, String?);
+    var ctx = (r[0] as TripReportContext).withAddresses(places.$1, places.$2);
+    if (withPhotos) ctx = ctx.withPhotosFrom(r[2] as TripReportContext);
+    return ctx;
   }
 
   /// The first picture stored with a visit (its photo_paths_json is a JSON list of storage paths).

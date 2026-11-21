@@ -31,13 +31,11 @@ Future<void> _openVisitReportForTripRun(BuildContext context, String tripId, {re
         custs[c['id'] as String] = Map<String, dynamic>.from(c);
       }
     }
-    final places = await tripPlaceNames(t);
-    final ctx = await TripReportContext.buildRoad(
+    final ctx = await TripReportContext.buildComplete(
       trip: t,
       visits: visits,
       customersById: custs,
-      startAddress: places.$1,
-      endAddress: places.$2,
+      placesOf: tripPlaceNames, // start / end area names, fetched together with the road distances
       withPlannedStops: true,
     );
     final bytes = await ReportPdfBuilder.buildVisitReport(ctx: ctx, orgName: orgName);

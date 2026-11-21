@@ -193,14 +193,14 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
-      final places = await tripPlaceNames(trip); // start / end area names
-      final ctx = await (await TripReportContext.buildRoad(
+      // Road distances, the start / end area names and the free-visit thumbnails are fetched at the same time.
+      final ctx = await TripReportContext.buildComplete(
         trip: trip,
         visits: visits,
         customersById: _customersById,
-        startAddress: places.$1,
-        endAddress: places.$2,
-      )).withFreePhotos(); // thumbnails of free-visit pictures, click to enlarge
+        placesOf: tripPlaceNames,
+        withPhotos: true, // thumbnails of free-visit pictures, click to enlarge
+      );
       final user = ref.read(currentUserProvider);
       final orgName = user?.orgName ?? 'Opstation';
       // Reimbursement doc: flag re-issues with a DUPLICATE watermark.
@@ -256,13 +256,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
     try {
       final visits = _visitsByTrip[trip['id']] ?? const <Map<String, dynamic>>[];
-      final places = await tripPlaceNames(trip); // start / end area names
-      final ctx = await TripReportContext.buildRoad(
+      final ctx = await TripReportContext.buildComplete(
         trip: trip,
         visits: visits,
         customersById: _customersById,
-        startAddress: places.$1,
-        endAddress: places.$2,
+        placesOf: tripPlaceNames, // start / end area names, fetched together with the road distances
         withPlannedStops: true,
       );
       final orgName =
