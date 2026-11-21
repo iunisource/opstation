@@ -32,6 +32,8 @@ class DriverFreeRouteScreen extends ConsumerStatefulWidget {
 class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
   Delivery? _d;
   bool _loading = true;
+  String? _loadError; // the route could not be read: a message and Retry instead of an endless spinner
+  String _step = ''; // what Mark visit is doing now
   bool _marking = false;
   bool _ending = false;
 
@@ -42,11 +44,22 @@ class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
   }
 
   Future<void> _reload() async {
-    final d = await ref.read(deliveryRepositoryProvider).byId(widget.deliveryId);
+    Delivery? d;
+    try {
+      d = await ref.read(deliveryRepositoryProvider).byId(widget.deliveryId).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        if (_d == null) _loadError = 'This route could not be opened. Please try again.';
+      });
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _d = d;
       _loading = false;
+      _loadError = null;
     });
     // Already ended (e.g. opened again from the list): show its report screen instead.
     if (d != null && d.status != DeliveryStatus.inProgress) {
@@ -67,7 +80,10 @@ class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
   Future<void> _markVisit() async {
     final d = _d;
     if (_marking || d == null) return;
-    setState(() => _marking = true);
+    setState(() {
+      _marking = true;
+      _step = 'Getting your location...';
+    });
     try {
       final gate = await ref.read(deviceGpsServiceProvider).getFixMandatory();
       if (!mounted) return;
@@ -91,12 +107,14 @@ class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
       }
       // The camera opens first. Closing it without a picture marks nothing; a camera that cannot be
       // opened still marks the visit (without a picture).
+      setState(() => _step = 'Opening the camera...');
       final shot = await ref.read(freeVisitPhotoServiceProvider).shoot(lat: fix.lat, lng: fix.lng);
       if (!mounted) return;
       if (shot.result == FreeVisitShotResult.cancelled) {
         _say('Visit not marked. Take the picture to mark the visit.');
         return;
       }
+      setState(() => _step = 'Saving the visit...');
       final repo = ref.read(deliveryRepositoryProvider);
       final user = ref.read(authControllerProvider).valueOrNull;
       final stopNumber = d.stops.length + 1;
@@ -117,13 +135,15 @@ class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
           remote = null;
         }
       }
-      final stop = await repo.addFreeVisit(
-        deliveryId: d.id,
-        lat: fix.lat,
-        lng: fix.lng,
-        accuracy: fix.accuracy,
-        photoRemotePath: remote,
-      );
+      final stop = await repo
+          .addFreeVisit(
+            deliveryId: d.id,
+            lat: fix.lat,
+            lng: fix.lng,
+            accuracy: fix.accuracy,
+            photoRemotePath: remote,
+          )
+          .timeout(const Duration(seconds: 20), onTimeout: () => throw StateError('The phone took too long to save the visit. Please try again.'));
       ref.read(soundControllerProvider.notifier).play(AppSound.visitMarked);
       _say(shot.path == null
           ? 'Visit $stopNumber marked (the camera could not be opened, so no picture)'
@@ -197,7 +217,25 @@ class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : d == null
-              ? const Center(child: Text('This route was not found.'))
+              ? Center(
+                  child: _loadError == null
+                      ? const Text('This route was not found.')
+                      : Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text(_loadError!, textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                _loading = true;
+                                _loadError = null;
+                              });
+                              _reload();
+                            },
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: const Text('Try again'),
+                          ),
+                        ]),
+                )
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                   children: [
@@ -256,7 +294,7 @@ class _DriverFreeRouteScreenState extends ConsumerState<DriverFreeRouteScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  FreeVisitButton(busy: _marking, onPressed: _markVisit),
+                  FreeVisitButton(busy: _marking, step: _step, onPressed: _markVisit),
                   const SizedBox(height: 8),
                   SlideToConfirm(
                     key: const ValueKey('slide-end-free'),

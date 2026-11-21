@@ -141,19 +141,28 @@ class FreeVisits {
             if (r['synced'] != true) r
         ]);
     final sentIds = <String>{};
+    final failed = <String, String>{}; // why a visit did not get through (shown on the visit)
     for (final r in pending) {
       try {
         await push(r);
         sentIds.add('${r['id']}');
-      } catch (_) {
+      } catch (e) {
         // offline / trip not on the server yet: stays pending, retried next sync
+        final why = '$e'.split('\n').first.trim();
+        failed['${r['id']}'] = why.length > 140 ? why.substring(0, 140) : why;
       }
     }
-    if (sentIds.isNotEmpty) {
+    if (sentIds.isNotEmpty || failed.isNotEmpty) {
       await _locked(() async {
         final rows = await _read(db);
         for (final r in rows) {
-          if (sentIds.contains('${r['id']}')) r['synced'] = true;
+          final id = '${r['id']}';
+          if (sentIds.contains(id)) {
+            r['synced'] = true;
+            r.remove('err');
+          } else if (failed.containsKey(id)) {
+            r['err'] = failed[id];
+          }
         }
         await _write(db, rows);
       });

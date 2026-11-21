@@ -27,6 +27,7 @@ import 'dialogs/skip_visit_dialog.dart';
 import 'widgets/status_count_cell.dart';
 import 'widgets/free_visit_buttons.dart';
 import 'widgets/empty_route_notice.dart';
+import 'widgets/free_visits_list.dart';
 import '../services/free_visit_photo_service.dart';
 import 'widgets/route_guide_widgets.dart';
 import '../services/route_guide.dart';
@@ -47,6 +48,7 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
 
   @override
   void dispose() {
+    _freeTimer?.cancel();
     _searchCtrl.dispose();
     try { _guide.stop(); } catch (_) {}
     super.dispose();
@@ -63,6 +65,9 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
     // A trip keeps the customers its route had when it started. If the phone did not have them all
     // then, they are brought in now (nothing is fetched when all are here).
     WidgetsBinding.instance.addPostFrameCallback((_) => _healCustomers());
+    _freeTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) setState(() => _freeTick++);
+    });
   }
 
   /// Brings in the route's customers that this trip is missing; [refresh] asks the server first.
@@ -161,13 +166,18 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
   }
 
   bool _freeBusy = false;
+  String _freeStep = ''; // what Mark visit is doing now
+  Timer? _freeTimer; // refreshes the list so a visit shows when it has been sent
   int _freeTick = 0; // bumps to refresh the "visits without a customer" count
 
   /// Free route: mark a visit right here, without choosing a customer. The
   /// phone's GPS point is the visit; the place name follows a moment later.
   Future<void> _markFreeVisit() async {
     if (_freeBusy) return;
-    setState(() => _freeBusy = true);
+    setState(() {
+      _freeBusy = true;
+      _freeStep = 'Getting your location...';
+    });
     final messenger = ScaffoldMessenger.of(context);
     void say(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
     try {
@@ -193,12 +203,14 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
       // The camera opens first; the picture is stamped with this visit's own GPS point. Closing
       // the camera without a picture marks nothing; a camera that cannot be opened still marks the
       // visit (without a picture).
+      setState(() => _freeStep = 'Opening the camera...');
       final shot = await ref.read(freeVisitPhotoServiceProvider).shoot(lat: fix.lat, lng: fix.lng);
       if (!mounted) return;
       if (shot.result == FreeVisitShotResult.cancelled) {
         say('Visit not marked. Take the picture to mark the visit.');
         return;
       }
+      setState(() => _freeStep = 'Saving the visit...');
       final photoPath = shot.path;
       final n = await ref.read(tripControllerProvider.notifier).markFreeVisit(
             lat: fix.lat,
@@ -451,19 +463,12 @@ class _RouteInProgressScreenState extends ConsumerState<RouteInProgressScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                FreeVisitButton(busy: _freeBusy, onPressed: _markFreeVisit),
-                FutureBuilder<int>(
+                FreeVisitButton(busy: _freeBusy, step: _freeStep, onPressed: _markFreeVisit),
+                // The visits marked so far, as a list (not just a count).
+                FutureBuilder<List<Map<String, dynamic>>>(
                   key: ValueKey('free_${trip.id}_$_freeTick'),
-                  future: FreeVisits.countForTrip(ref.read(appDatabaseProvider), trip.id),
-                  builder: (ctx, snap) {
-                    final n = snap.data ?? 0;
-                    if (n == 0) return const SizedBox.shrink();
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 4, left: 2),
-                      child: Text('Visits marked without a customer: $n',
-                          style: TextStyle(fontSize: 12, color: Theme.of(ctx).hintColor)),
-                    );
-                  },
+                  future: FreeVisits.forTrip(ref.read(appDatabaseProvider), trip.id),
+                  builder: (ctx, snap) => FreeVisitsList(rows: snap.data ?? const []),
                 ),
               ]),
             ),

@@ -13,6 +13,10 @@ import '../database/app_database.dart';
 /// `.toUtc().toIso8601String()` produces a string with a trailing `Z` so
 /// Postgres parses it unambiguously as UTC.
 class SupabaseSyncService {
+  /// How long one send of a free visit, job or stop may take before it is given up (and repeated by the
+  /// next sync). Without a limit a request that never answers made "Mark visit" wait for ever.
+  static const Duration _pushLimit = Duration(seconds: 30);
+
   final SupabaseClient _client;
   SupabaseSyncService(this._client);
 
@@ -262,13 +266,13 @@ class SupabaseSyncService {
       'user_id': r['user_id'],
       'user_name': r['user_name'],
       'user_role': r['user_role'],
-    });
+    }).timeout(_pushLimit);
   }
 
   /// The place name of a free visit, sent as its own update (the insert trigger
   /// clears location_name on a new row, so the name goes after the row exists).
   Future<void> pushFreeVisitPlace(String id, String name) async {
-    await _client.from('visits').update({'location_name': name}).eq('id', id);
+    await _client.from('visits').update({'location_name': name}).eq('id', id).timeout(_pushLimit);
   }
 
   Future<void> pushDelivery(DeliveriesData d) async {
@@ -287,7 +291,7 @@ class SupabaseSyncService {
       'notes': d.notes,
       'org_id': d.orgId,
       'job_type': d.jobType, // delivery | pickup | free (a driver's free route)
-    });
+    }).timeout(_pushLimit);
   }
 
   /// The start / end points of a job (deliveries.start_lat, start_lng, end_lat, end_lng).
@@ -295,7 +299,7 @@ class SupabaseSyncService {
   /// the delivery push; the caller ignores that failure.
   Future<void> pushDeliveryLocations(String id, Map<String, dynamic> columns) async {
     if (columns.isEmpty) return;
-    await _client.from('deliveries').update(columns).eq('id', id);
+    await _client.from('deliveries').update(columns).eq('id', id).timeout(_pushLimit);
   }
 
   Future<void> pushDeliveryStop(DeliveryStopsData s) async {
@@ -320,7 +324,7 @@ class SupabaseSyncService {
       'verification': s.verification,
       'photo_paths_json': s.photoPathsJson,
       'do_id': s.doId,
-    });
+    }).timeout(_pushLimit);
   }
 
   /// Push a locally-captured field order. Sends ONLY the columns the online

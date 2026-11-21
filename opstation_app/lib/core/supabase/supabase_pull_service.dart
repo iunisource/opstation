@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -127,9 +128,9 @@ class SupabasePullService {
       });
     } catch (_) {}
     // Which shops carry which product line (Lights, PVC...), so a surveyor sees only a shop's own SKUs.
-    try {
-      await ProductLinesStore.refresh(_db, orgId).timeout(const Duration(seconds: 25));
-    } catch (_) {}
+    // In the BACKGROUND: sign-in must not wait for it (it is several requests), and the survey screens
+    // refresh it again when they open.
+    unawaited(ProductLinesStore.refresh(_db, orgId).catchError((_) => false));
   }
 
   /// Background history pull: trips, stops, visits, deliveries + Intelligence.

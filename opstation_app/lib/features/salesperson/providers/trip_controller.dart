@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import '../../../core/utils/customer_locations.dart';
 import '../../../core/utils/receipt_books.dart';
@@ -509,9 +510,8 @@ class TripController extends AsyncNotifier<TripState> {
 
     // Send it now; offline or trip not on the server yet → the periodic sync
     // sends it later.
-    try {
-      await FreeVisits.pushPending(db, (r) => ref.read(supabaseSyncServiceProvider).pushFreeVisit(r, orgId: org));
-    } catch (_) {}
+    // (In the background: the visit is already saved on the phone, so the rep never waits for the network.)
+    unawaited(FreeVisits.pushPending(db, (r) => ref.read(supabaseSyncServiceProvider).pushFreeVisit(r, orgId: org)).catchError((_) => 0));
 
     // The place name, without making the rep wait for it.
     Future.microtask(() async {

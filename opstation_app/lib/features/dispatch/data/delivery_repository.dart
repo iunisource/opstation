@@ -480,7 +480,9 @@ class DeliveryRepository {
           photoPathsJson: Value(jsonEncode(photoRemotePath == null ? const <String>[] : [photoRemotePath])),
           syncStatus: const Value('pending'),
         ));
-    await _pushStopById(stopId);
+    // Saved on the phone: the driver is not made to wait for the network. The send is repeated by the
+    // periodic sync if it does not get through.
+    _inBackground(() => _pushStopById(stopId));
     return (await byId(deliveryId))!.stops.firstWhere((s) => s.id == stopId);
   }
 
@@ -491,7 +493,7 @@ class DeliveryRepository {
     await (_db.update(_db.deliveryStops)..where((t) => t.id.equals(stopId))).write(
       DeliveryStopsCompanion(customerName: Value(n), syncStatus: const Value('pending')),
     );
-    await _pushStopById(stopId);
+    _inBackground(() => _pushStopById(stopId));
   }
 
   /// Sends one stop; once the server has it, it is marked synced (otherwise the periodic
