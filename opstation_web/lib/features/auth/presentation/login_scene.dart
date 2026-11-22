@@ -118,7 +118,7 @@ class _LoginTrailsState extends State<LoginTrails> with SingleTickerProviderStat
 
 /// A truck-art truck driving along the road at the bottom of the login page, on and on. The truck itself stays
 /// put (with a slight sway) and the road slides under it, so it never leaves the picture or covers the sign-in
-/// form. Only on wide screens; it stands still when the device asks for less motion.
+/// form. The wheels turn. Only on wide screens; it stands still when the device asks for less motion.
 class LoginRoadTruck extends StatefulWidget {
   const LoginRoadTruck({super.key});
 
@@ -132,6 +132,13 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
 
   static const _imgW = 1100.0, _imgH = 742.0;
   static const _speed = 200.0; // pixels per second the road moves
+
+  // The two wheels you can see, in the truck picture's own pixels: centre, half-width and half-height of the
+  // rim as it appears (the truck is seen at an angle, so the rim is an ellipse), and the tyre's radius.
+  static const _wheels = [
+    (file: 'truck_rim_r.png', cx: 199.0, cy: 590.0, a: 20.0, b: 40.0, tire: 72.0),
+    (file: 'truck_rim_f.png', cx: 672.0, cy: 618.0, a: 34.0, b: 52.0, tire: 88.0),
+  ];
 
   @override
   void didChangeDependencies() {
@@ -159,6 +166,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
         final roadH = (h * 0.22).clamp(100.0, 170.0);
         final truckH = roadH * 1.1;
         final w = truckH * _imgW / _imgH;
+        final s = w / _imgW;
         final bottom = roadH * 0.5;
         return AnimatedBuilder(
           animation: _c,
@@ -184,7 +192,28 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
                 bottom: bottom + bob,
                 width: w,
                 height: truckH,
-                child: Image.network('truck_peacock.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: Image.network('truck_peacock.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                  ),
+                  // The rims turn at the speed of the road. Each is a round picture turned in its own plane, then
+                  // squeezed to the oval it shows on the truck.
+                  for (final wh in _wheels)
+                    Positioned(
+                      left: (wh.cx - wh.b) * s,
+                      top: (wh.cy - wh.b) * s,
+                      width: wh.b * 2 * s,
+                      height: wh.b * 2 * s,
+                      child: Transform(
+                        alignment: Alignment.center,
+                        transform: Matrix4.diagonal3Values(wh.a / wh.b, 1, 1),
+                        child: Transform.rotate(
+                          angle: sec * _speed / (wh.tire * s),
+                          child: Image.network(wh.file, fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                        ),
+                      ),
+                    ),
+                ]),
               ),
             ]);
           },

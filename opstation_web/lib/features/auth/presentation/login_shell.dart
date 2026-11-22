@@ -144,7 +144,7 @@ class LoginShell extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(48, 12, 72, 12),
               child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Expanded(child: Align(alignment: Alignment.centerLeft, child: SingleChildScrollView(child: headline))),
+                Expanded(child: Align(alignment: Alignment.centerLeft, child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.only(bottom: 90), child: headline)))),
                 const SizedBox(width: 32),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 460),
