@@ -606,7 +606,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                             }),
                           )),
                         const Expanded(flex: 1, child: Text('Code', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
-                        const Expanded(flex: 3, child: Text('Shop Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
+                        const Expanded(flex: 3, child: Text('Customer Name', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         const Expanded(flex: 2, child: Text('Contact', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         const Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
                         const Expanded(flex: 2, child: Text('Category', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.textSecondary))),
@@ -1095,7 +1095,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   Future<void> _logCustomerEdit(
       Map<String, dynamic> oldC, Map<String, dynamic> newC) async {
     const labels = {
-      'shop_name': 'shop name',
+      'shop_name': 'customer name',
       'code': 'code',
       'contact_person': 'contact',
       'phone': 'phone',
@@ -1188,7 +1188,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
   Widget _catGroupField({required String label, required String? value, required List<String> items, required ValueChanged<String?> onChanged, required VoidCallback onAdd}) {
     return Row(children: [
       Expanded(child: DropdownButtonFormField<String>(
-        value: value,
+        key: ValueKey('$label-${items.length}'),
+        value: items.contains(value) ? value : null,
+        isExpanded: true,
         decoration: InputDecoration(labelText: label),
         hint: Text('Select ${label.toLowerCase()}'),
         items: items.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
@@ -1198,7 +1200,37 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     ]);
   }
 
+  // The Category / Group dropdowns read these master lists. They are filled at the very end of the
+  // page load, so a dialog opened before then showed EMPTY dropdowns that never opened (until the
+  // dialog was closed and reopened). Make sure they are loaded before the dialog is built.
+  Future<void> _ensureMasterLists() async {
+    if (_categories.isNotEmpty && _groups.isNotEmpty) return;
+    final orgId = ref.read(currentUserProvider)?.orgId;
+    if (orgId == null) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('app_config').select('key, value').eq('org_id', orgId)
+          .inFilter('key', ['org.categories', 'org.groups']);
+      List<String> parse(String key) {
+        for (final r in rows as List) {
+          if (r['key'] == key && r['value'] != null) {
+            try { final d = jsonDecode(r['value'] as String); if (d is List) return List<String>.from(d); } catch (_) {}
+          }
+        }
+        return <String>[];
+      }
+      final cats = {...parse('org.categories'), for (final c in _customers) if (((c['category'] as String?)?.trim() ?? '').isNotEmpty) (c['category'] as String).trim()}.toList()..sort();
+      final grps = {...parse('org.groups'), for (final c in _customers) if (((c['group_name'] as String?)?.trim() ?? '').isNotEmpty) (c['group_name'] as String).trim()}.toList()..sort();
+      if (!mounted) return;
+      setState(() {
+        if (_categories.isEmpty) _categories = cats;
+        if (_groups.isEmpty) _groups = grps;
+      });
+    } catch (_) {/* the dropdowns just stay as they were */}
+  }
+
   void _showDialog(BuildContext context, Map<String, dynamic>? customer) async {
+    await _ensureMasterLists();
     final orgId = ref.read(currentUserProvider)?.orgId;
     final branchRows = orgId != null ? await Supabase.instance.client
         .from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name') : [];
@@ -1273,7 +1305,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   child: Text('Basic Info', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textSecondary))),
                 const SizedBox(height: 8),
                 Row(children: [
-                  Expanded(child: TextField(controller: shopCtrl, decoration: const InputDecoration(labelText: 'Shop Name *'))),
+                  Expanded(child: TextField(controller: shopCtrl, decoration: const InputDecoration(labelText: 'Customer Name *'))),
                   const SizedBox(width: 12),
                   Expanded(child: TextField(
                     controller: codeCtrl,
@@ -1469,7 +1501,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
               onPressed: () async {
                 if (shopCtrl.text.trim().isEmpty || codeCtrl.text.trim().isEmpty) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('Shop name and code are required')));
+                    const SnackBar(content: Text('Customer name and code are required')));
                   return;
                 }
                 final orgId = ref.read(currentUserProvider)?.orgId;

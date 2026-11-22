@@ -1122,7 +1122,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
       return sb.compareTo(sa);
     });
     return Column(children: [
-      _searchBox(_placeSearchCtrl, 'Search shop name or code...'),
+      _searchBox(_placeSearchCtrl, 'Search customer name or code...'),
       Expanded(
         child: rows.isEmpty
             ? const Center(
@@ -1278,7 +1278,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     final cids = _spot.keys.where((cid) => _matchesCustomer(cid, q)).toList()
       ..sort((a, b) => _custName(a).compareTo(_custName(b)));
     return Column(children: [
-      _searchBox(_spotSearchCtrl, 'Search shop name or code...'),
+      _searchBox(_spotSearchCtrl, 'Search customer name or code...'),
       Expanded(
         child: cids.isEmpty
             ? const Center(
@@ -1703,7 +1703,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     final days = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
     final tf = DateFormat(orgTime('HH:mm'));
     return Column(children: [
-      _rangeSearchBar('Search shop name or code...'),
+      _rangeSearchBar('Search customer name or code...'),
       Expanded(
         child: events.isEmpty
             ? const Center(
@@ -1803,7 +1803,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
     final byType = !isSurvey && _visitTypeFilter != 'all';
     return Column(children: [
       _rangeSearchBar(
-          isSurvey ? 'Search shop name or code...' : 'Search shop, code or route...'),
+          isSurvey ? 'Search customer name or code...' : 'Search shop, code or route...'),
       if (!isSurvey) _visitTypePills(inRange),
       Padding(
         padding: EdgeInsets.fromLTRB(

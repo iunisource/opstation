@@ -1519,7 +1519,7 @@ class _IntelligenceDashboardScreenState
               decoration: InputDecoration(
                 labelText: 'Shop',
                 hintText: _trendCustomerLabel.isEmpty
-                    ? 'Search shop name or code...'
+                    ? 'Search customer name or code...'
                     : _trendCustomerLabel,
                 isDense: true,
                 prefixIcon: const Icon(Icons.search, size: 16),

@@ -163,7 +163,7 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
                   controller: searchCtrl,
                   autofocus: true,
                   decoration: InputDecoration(
-                    hintText: 'Search by shop name or code',
+                    hintText: 'Search by customer name or code',
                     suffixIcon: IconButton(
                         icon: const Icon(Icons.search),
                         onPressed: () => run(setS)),

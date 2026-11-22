@@ -526,7 +526,7 @@ class _RetailersAdminScreenState extends ConsumerState<RetailersAdminScreen> {
             child: TextField(
               controller: _searchCtrl,
               decoration: InputDecoration(
-                hintText: 'Search a customer by shop name or code',
+                hintText: 'Search a customer by name or code',
                 filled: true,
                 fillColor: Colors.white,
                 prefixIcon: const Icon(Icons.search),
