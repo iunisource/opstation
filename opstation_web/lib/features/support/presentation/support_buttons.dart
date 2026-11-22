@@ -8,7 +8,7 @@ import '../../auth/auth_controller.dart';
 import 'request_callback_button.dart' show showRequestCallbackDialog;
 
 const kAndroidAppUrl =
-    'https://drive.google.com/drive/folders/1QczU7LCACXQwuq_RKts7uki1i-arYwbv?usp=sharing';
+    'https://play.google.com/store/apps/details?id=app.opstation.field';
 
 Future<void> openAndroidApp(BuildContext context) async {
   try {

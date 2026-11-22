@@ -13,7 +13,7 @@ class DownloadAppButton extends ConsumerWidget {
   const DownloadAppButton({super.key});
 
   static const _url =
-      'https://drive.google.com/drive/folders/1QczU7LCACXQwuq_RKts7uki1i-arYwbv?usp=sharing';
+      'https://play.google.com/store/apps/details?id=app.opstation.field';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
