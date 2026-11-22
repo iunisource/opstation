@@ -78,7 +78,7 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
       Image.network(
         'retailer_shop.jpg',
         fit: BoxFit.cover,
-        alignment: const Alignment(0.15, -0.2),
+        alignment: wide ? const Alignment(0.15, -0.2) : const Alignment(0.25, -0.7), // phones: keep the face in view
         errorBuilder: (_, __, ___) => const ColoredBox(color: _navy),
       ),
       // Darkens the bottom and the left so the headline reads over the shelves.
@@ -287,10 +287,10 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
             ),
           ]);
         }
-        // Phones: a short photo band under the status bar, then the form. The band shrinks on short screens so the
+        // Phones: a short photo band under the status bar, then the form. The band is taller on tall screens so the picture is not cropped; it shrinks on short screens so the
         // sign-in button stays in reach, and the page scrolls (and closes the keyboard on drag) when it still does not fit.
         final top = MediaQuery.of(context).padding.top;
-        final bandH = (c.maxHeight * 0.22).clamp(128.0, 210.0) + top;
+        final bandH = (c.maxHeight * 0.36).clamp(210.0, 340.0) + top;
         return SingleChildScrollView(
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
