@@ -43,6 +43,7 @@ const MAX_EMAIL_BYTES = 24 * 1024 * 1024; // Gmail-safe ceiling (~24 MB)
 type DriveRow = { org_id: string; refresh_token: string; folder_id: string | null; folder_name: string | null };
 
 class DriveAuthError extends Error {}
+let lastAuthAlert = 0;
 
 async function driveToken(refreshToken: string): Promise<string> {
   const r = await fetch("https://oauth2.googleapis.com/token", {
@@ -141,6 +142,40 @@ serve(async (req) => {
     let orgFilter: string | null = null; // null = all orgs
 
     if (!cronSecret || headerSecret !== cronSecret) {
+      // The nightly job reached us but with the wrong secret: nobody's backup
+      // can run. Tell every master admin (at most once an hour).
+      if (headerSecret && Date.now() - lastAuthAlert > 3600_000) {
+        lastAuthAlert = Date.now();
+        try {
+          const { data: en } = await admin.from("app_config").select("org_id, key, value")
+            .in("key", ["org.backup_enabled", "org.backup_alert_emails"]);
+          const on = new Set<string>(); const extra = new Set<string>();
+          for (const r of en ?? []) {
+            if (r.key === "org.backup_enabled" && `${r.value}`.toLowerCase() === "true") on.add(r.org_id as string);
+          }
+          for (const r of en ?? []) {
+            if (r.key === "org.backup_alert_emails" && on.has(r.org_id as string)) {
+              `${r.value ?? ""}`.split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean).forEach((x) => extra.add(x));
+            }
+          }
+          for (const o of on) {
+            const { data: ma } = await admin.from("users").select("email").eq("org_id", o).eq("role", "masterAdmin");
+            (ma ?? []).forEach((u: { email: string | null }) => { if (u.email) extra.add(`${u.email}`.trim().toLowerCase()); });
+          }
+          if (extra.size) {
+            const g = Deno.env.get("GMAIL_USER")!;
+            const m = new SMTPClient({ connection: { hostname: "smtp.gmail.com", port: 465, tls: true,
+              auth: { username: g, password: Deno.env.get("GMAIL_APP_PASSWORD")! } } });
+            await m.send({
+              from: `Opstation Backups <${g}>`, to: [...extra],
+              subject: `Opstation backup - tonight's backup did NOT run`,
+              content: `The nightly backup was refused because its security key does not match, so no company was backed up.\n` +
+                `Please tell Opstation support. Use "Back up now" in Admin Settings to take a backup in the meantime.`,
+            });
+            try { await m.close(); } catch (_) { /* ignore */ }
+          }
+        } catch (_) { /* best effort */ }
+      }
       const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
       if (!jwt) return json({ error: "unauthorized" }, 401);
       const authClient = createClient(url, anonKey, {
@@ -170,18 +205,19 @@ serve(async (req) => {
 
     // ---- Per-org backup config (app_config) --------------------------------
     let cfgQ = admin.from("app_config").select("org_id, key, value")
-      .in("key", ["org.backup_emails", "org.backup_enabled", "org.backup_targets", "org.backup_drive_keep_days"]);
+      .in("key", ["org.backup_emails", "org.backup_enabled", "org.backup_targets", "org.backup_drive_keep_days", "org.backup_alert_emails"]);
     if (orgFilter) cfgQ = cfgQ.eq("org_id", orgFilter);
     const { data: cfgRows, error: cfgErr } = await cfgQ;
     if (cfgErr) return json({ error: `config read failed: ${cfgErr.message}` }, 500);
 
-    type Conf = { emails: string; enabled: boolean; targets: string; keepDays: number };
+    type Conf = { emails: string; enabled: boolean; targets: string; keepDays: number; alertEmails: string };
     const byOrg: Record<string, Conf> = {};
-    const blank = (): Conf => ({ emails: "", enabled: true, targets: "email", keepDays: 30 });
+    const blank = (): Conf => ({ emails: "", enabled: true, targets: "email", keepDays: 30, alertEmails: "" });
     for (const r of cfgRows ?? []) {
       const o = r.org_id as string;
       byOrg[o] = byOrg[o] ?? blank();
       if (r.key === "org.backup_emails") byOrg[o].emails = (r.value as string) ?? "";
+      if (r.key === "org.backup_alert_emails") byOrg[o].alertEmails = (r.value as string) ?? "";
       if (r.key === "org.backup_enabled") byOrg[o].enabled = `${r.value}`.toLowerCase() !== "false";
       if (r.key === "org.backup_targets") byOrg[o].targets = `${r.value ?? ""}` || "email";
       if (r.key === "org.backup_drive_keep_days") {
@@ -207,6 +243,15 @@ serve(async (req) => {
       const { data } = await admin.from("users").select("email")
         .eq("org_id", orgId).eq("role", "masterAdmin");
       return (data ?? []).map((u: { email: string | null }) => `${u.email ?? ""}`.trim()).filter(Boolean);
+    }
+
+    // Everyone told when a backup has a problem: the org's master admins plus
+    // the fallback address(es) typed in Admin Settings.
+    async function alertRecipients(orgId: string, alertEmails: string): Promise<string[]> {
+      const extra = alertEmails.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+      let admins: string[] = [];
+      try { admins = await masterAdminEmails(orgId); } catch (_) { /* best effort */ }
+      return [...new Set([...admins, ...extra].map((e) => e.toLowerCase()))];
     }
 
     // org names (for filenames); ignore if table differs
@@ -255,11 +300,29 @@ serve(async (req) => {
     const results: Record<string, unknown>[] = [];
 
     for (const [orgId, conf] of Object.entries(byOrg)) {
+     try {
       const recipients = conf.emails.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
       const targets = new Set(conf.targets.split(",").map((s) => s.trim()));
       const wantEmail = targets.has("email") && recipients.length > 0;
       const drive = targets.has("drive") ? drives[orgId] : undefined;
       if (!conf.enabled || (!wantEmail && !drive)) {
+        // Backup is ON but there is nowhere to send it: say so instead of staying silent.
+        if (conf.enabled) {
+          try {
+            const to = await alertRecipients(orgId, conf.alertEmails);
+            if (to.length) {
+              const lbl = orgName[orgId] ? `${orgName[orgId]} (${orgId})` : orgId;
+              await smtp.send({
+                from: `Opstation Backups <${gmailUser}>`, to,
+                subject: `Opstation backup - ${lbl} - ${today} - NOT backed up`,
+                content: `Daily backup is ON for ${lbl} but there is nowhere to send it.\n` +
+                  `${targets.has("drive") && !drive ? "Google Drive is ticked but not connected. " : ""}` +
+                  `${targets.has("email") && recipients.length === 0 ? "Email is ticked but no recipient is set. " : ""}\n` +
+                  `Open Admin Settings > Daily data backup and fix it.`,
+              });
+            }
+          } catch (_) { /* best effort */ }
+        }
         results.push({ org: orgId, status: "skipped", recipients: recipients.length });
         continue;
       }
@@ -268,6 +331,7 @@ serve(async (req) => {
       const label = orgName[orgId] ? `${orgName[orgId]} (${orgId})` : orgId;
       const folder = zip.folder(`opstation-backup-${today}`)!;
       let tableCount = 0;
+      let tableErrors = 0;
 
       for (const t of tables) {
         try {
@@ -276,12 +340,26 @@ serve(async (req) => {
             { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, Accept: "text/csv" } },
           );
           const csv = await resp.text();
-          if (!resp.ok) { folder.file(`${t}.error.txt`, csv); continue; }
+          if (!resp.ok) { folder.file(`${t}.error.txt`, csv); tableErrors++; continue; }
           folder.file(`${t}.csv`, csv ?? "");
           tableCount++;
         } catch (e) {
-          folder.file(`${t}.error.txt`, String(e));
+          folder.file(`${t}.error.txt`, String(e)); tableErrors++;
         }
+      }
+
+      if (tableErrors > 0) {
+        try {
+          const to = await alertRecipients(orgId, conf.alertEmails);
+          if (to.length) {
+            await smtp.send({
+              from: `Opstation Backups <${gmailUser}>`, to,
+              subject: `Opstation backup - ${label} - ${today} - incomplete`,
+              content: `${tableErrors} table(s) could not be exported in today's backup for ${label}. ` +
+                `The rest was backed up. See the *.error.txt files inside the zip.`,
+            });
+          }
+        } catch (_) { /* best effort */ }
       }
 
       folder.file(
@@ -323,7 +401,7 @@ serve(async (req) => {
             updated_at: new Date().toISOString(),
           }).eq("org_id", orgId);
           try {
-            const to = await masterAdminEmails(orgId);
+            const to = await alertRecipients(orgId, conf.alertEmails);
             if (to.length) {
               await smtp.send({
                 from: `Opstation Backups <${gmailUser}>`,
@@ -382,6 +460,23 @@ serve(async (req) => {
         }],
       });
       results.push({ org: orgId, status: "sent", drive: driveStatus, recipients: recipients.length, tables: tableCount, mb: +(bytes.length / 1048576).toFixed(2) });
+     } catch (e) {
+      // Anything unexpected for this company: record it and tell the admins.
+      const why = String((e as Error)?.message ?? e).slice(0, 300);
+      results.push({ org: orgId, status: "error", error: why });
+      try {
+        const to = await alertRecipients(orgId, conf.alertEmails);
+        if (to.length) {
+          const lbl = orgName[orgId] ? `${orgName[orgId]} (${orgId})` : orgId;
+          await smtp.send({
+            from: `Opstation Backups <${gmailUser}>`, to,
+            subject: `Opstation backup - ${lbl} - ${today} - FAILED`,
+            content: `Today's backup for ${lbl} failed (${why}). It will be tried again tonight.\n` +
+              `You can also use "Back up now" in Admin Settings.`,
+          });
+        }
+      } catch (_) { /* best effort */ }
+     }
     }
 
     try { await smtp.close(); } catch (_) { /* nothing was sent / not connected */ }
