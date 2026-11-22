@@ -129,20 +129,20 @@ class LoginShell extends StatelessWidget {
           form(LoginFormFrame.bar),
           Expanded(
             child: Align(
-              alignment: Alignment.bottomLeft,
+              alignment: Alignment.centerLeft,
               child: Padding(
-                padding: const EdgeInsets.only(left: 96, right: 24, bottom: 8),
-                child: SingleChildScrollView(reverse: true, child: headline),
+                padding: const EdgeInsets.fromLTRB(48, 12, 24, 12),
+                child: SingleChildScrollView(child: headline),
               ),
             ),
           ),
           SizedBox(
-            height: 64,
+            height: 72,
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               Padding(padding: const EdgeInsets.only(left: 48), child: footer),
               const Spacer(),
-              Padding(padding: const EdgeInsets.only(right: 16), child: retailerButton(false)),
-              Padding(padding: const EdgeInsets.only(right: 32), child: LoginPauseButton(controller: controller)),
+              Padding(padding: const EdgeInsets.only(right: 12), child: retailerButton(false)),
+              Padding(padding: const EdgeInsets.only(right: 48), child: LoginPauseButton(controller: controller)),
             ]),
           ),
         ]),

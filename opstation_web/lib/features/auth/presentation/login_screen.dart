@@ -609,7 +609,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         );
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(32, 12, 32, 8),
+      padding: const EdgeInsets.fromLTRB(48, 14, 48, 10),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.28), blurRadius: 30, offset: const Offset(0, 8))],
@@ -619,11 +619,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _diagnosticBanner(),
           Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
-              BrandLogo(size: 38),
-              SizedBox(width: 10),
-              Text('Opstation', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: ink)),
-            ])),
+            SizedBox(
+              width: 170,
+              child: _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                BrandLogo(size: 38),
+                SizedBox(width: 10),
+                Text('Opstation', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: ink)),
+              ])),
+            ),
             const SizedBox(width: 28),
             Expanded(
               child: TextField(
@@ -677,8 +680,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             ),
           ]),
-          const SizedBox(height: 4),
-          Row(children: [
+          const SizedBox(height: 6),
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            const SizedBox(width: 198), // lines up under the email field
             InkWell(
               onTap: () => _setRemember(!_rememberMe),
               borderRadius: BorderRadius.circular(6),
