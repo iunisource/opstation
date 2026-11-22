@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 /// It is what shows on phones, slow connections, with reduced motion, while the video loads and if it
 /// cannot play, so the page always looks finished.
 class LoginScenePainter extends CustomPainter {
-  const LoginScenePainter({this.seed = 11, this.density = 34});
+  const LoginScenePainter({this.seed = 11, this.density = 34, this.t = 0});
 
+  /// Position in the slow loop, 0 to 1. 0 is the still picture.
+  final double t;
   final int seed;
   final int density;
 
@@ -40,7 +42,8 @@ class LoginScenePainter extends CustomPainter {
     const palette = [_blue, _blue, _blue, _blue, _blue, _blue, _blue, _blue, _blue, _lightBlue, _lightBlue, _lightBlue, _lightBlue, _lightBlue, _white, _white, _white, _amber, _amber, _amber];
     double between(double a, double b) => a + r.nextDouble() * (b - a);
     for (var i = 0; i < density; i++) {
-      final y0 = between(0.40 * h, 1.12 * h);
+      final ph = 2 * math.pi * (t + i * 0.37);
+      final y0 = between(0.40 * h, 1.12 * h) + math.sin(ph) * 0.025 * h;
       final rise = between(0.22 * h, 0.62 * h);
       const x0 = -120.0;
       final x1 = w + 120.0;
@@ -64,12 +67,51 @@ class LoginScenePainter extends CustomPainter {
             Offset(x0, y0),
             Offset(x1, y1),
             [color.withOpacity(0), color.withOpacity(opacity), color.withOpacity(0)],
-            const [0, 0.5, 1],
+            [0, 0.5 + 0.22 * math.sin(ph + 1.3), 1],
           ),
       );
     }
   }
 
   @override
-  bool shouldRepaint(covariant LoginScenePainter old) => old.seed != seed || old.density != density;
+  bool shouldRepaint(covariant LoginScenePainter old) => old.seed != seed || old.density != density || old.t != t;
+}
+
+/// The login background: the same trails, drifting slowly. One loop is a minute, so it is calm rather than busy.
+/// It stands still when the device asks for less motion.
+class LoginTrails extends StatefulWidget {
+  const LoginTrails({super.key});
+
+  @override
+  State<LoginTrails> createState() => _LoginTrailsState();
+}
+
+class _LoginTrailsState extends State<LoginTrails> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 60));
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.of(context).disableAnimations) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (_, __) => CustomPaint(painter: LoginScenePainter(t: _c.value)),
+      ),
+    );
+  }
 }

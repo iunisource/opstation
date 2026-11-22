@@ -11,7 +11,10 @@ enum LoginFormFrame { card, sheet, bar }
 /// The video (or, failing that, the still picture) behind the login page, under a dark layer that keeps the
 /// words readable.
 class LoginBackdrop extends StatelessWidget {
-  const LoginBackdrop({super.key, required this.controller, required this.src, required this.wide});
+  const LoginBackdrop({super.key, required this.controller, required this.src, required this.wide, this.useVideo = false});
+
+  /// Off by default: the drifting trails are the background. Turn on to play the video over them.
+  final bool useVideo;
 
   final LoginVideoController controller;
   final String src;
@@ -22,8 +25,8 @@ class LoginBackdrop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Stack(fit: StackFit.expand, children: [
-      const RepaintBoundary(child: CustomPaint(painter: LoginScenePainter())),
-      if (wide) LoginVideoLayer(controller: controller, src: src),
+      const LoginTrails(),
+      if (wide && useVideo) LoginVideoLayer(controller: controller, src: src),
       DecoratedBox(
         decoration: BoxDecoration(
           gradient: wide
@@ -102,6 +105,7 @@ class LoginShell extends StatelessWidget {
     required this.retailerButton,
     required this.form,
     this.videoSrc = 'login_bg_v5.mp4',
+    this.useVideo = false,
     this.wideAt = 900,
   });
 
@@ -113,6 +117,7 @@ class LoginShell extends StatelessWidget {
   final Widget Function(bool compact) retailerButton;
   final Widget Function(LoginFormFrame frame) form;
   final String videoSrc;
+  final bool useVideo;
   final double wideAt;
 
   @override
@@ -123,7 +128,7 @@ class LoginShell extends StatelessWidget {
   Widget _wide() {
     // Logo and the retailer button along the top, the headline on the left and a solid sign-in card mid-right.
     return Stack(children: [
-      Positioned.fill(child: LoginBackdrop(controller: controller, src: videoSrc, wide: true)),
+      Positioned.fill(child: LoginBackdrop(controller: controller, src: videoSrc, wide: true, useVideo: useVideo)),
       Positioned.fill(
         child: Column(children: [
           Padding(
@@ -152,7 +157,7 @@ class LoginShell extends StatelessWidget {
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               Padding(padding: const EdgeInsets.only(left: 48), child: footer),
               const Spacer(),
-              Padding(padding: const EdgeInsets.only(right: 48), child: LoginPauseButton(controller: controller)),
+              Padding(padding: const EdgeInsets.only(right: 48), child: useVideo ? LoginPauseButton(controller: controller) : const SizedBox.shrink()),
             ]),
           ),
         ]),
