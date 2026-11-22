@@ -43,29 +43,56 @@ class ErpLook {
     });
   }
 
-  /// The blue header band of an open voucher: kind, big number, one-line summary and the document flow.
+  /// The blue header band of an open voucher: kind, big number, one-line summary, the status pills and
+  /// action buttons ([bar], top right) and the document flow.
   static Widget hero({
     required String kind,
     required String number,
     required String subtitle,
     required List<ErpFlowStep> steps,
+    List<Widget> bar = const [],
   }) =>
       Builder(builder: (context) {
         final narrow = MediaQuery.of(context).size.width < 700;
+        final bars = bar.where((w) => w is! Spacer && !(w is SizedBox && w.child == null)).toList();
+        final capsule = bars.isEmpty
+            ? null
+            : Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(narrow ? 14 : 28)),
+                child: Wrap(
+                  spacing: 4,
+                  runSpacing: 2,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  alignment: narrow ? WrapAlignment.start : WrapAlignment.end,
+                  children: bars,
+                ),
+              );
+        final title = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(kind, style: const TextStyle(color: Color(0xFFB9C8F0), fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text(number, style: TextStyle(color: Colors.white, fontSize: narrow ? 22 : 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(subtitle, style: const TextStyle(color: Color(0xFFB9C8F0), fontSize: 13.5), maxLines: narrow ? 2 : 1, overflow: TextOverflow.ellipsis),
+          ],
+        ]);
         return Container(
           width: double.infinity,
-          padding: EdgeInsets.fromLTRB(narrow ? 16 : 28, narrow ? 14 : 18, narrow ? 16 : 28, narrow ? 14 : 20),
+          padding: EdgeInsets.fromLTRB(narrow ? 14 : 28, narrow ? 12 : 16, narrow ? 14 : 28, narrow ? 12 : 18),
           decoration: const BoxDecoration(
             gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF0F1F4D), Color(0xFF1D3F94)]),
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(kind, style: const TextStyle(color: Color(0xFFB9C8F0), fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(number, style: TextStyle(color: Colors.white, fontSize: narrow ? 24 : 30, fontWeight: FontWeight.w800, letterSpacing: -0.6)),
-            if (subtitle.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(subtitle, style: const TextStyle(color: Color(0xFFB9C8F0), fontSize: 13.5)),
-            ],
+            if (narrow || capsule == null)
+              title
+            else
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: title),
+                const SizedBox(width: 16),
+                Flexible(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: capsule)),
+              ]),
+            if (narrow && capsule != null) ...[const SizedBox(height: 10), capsule],
             if (steps.isNotEmpty && !narrow) ...[
               const SizedBox(height: 16),
               Row(children: [
@@ -75,21 +102,57 @@ class ErpLook {
                 ],
               ]),
             ],
+            if (steps.isNotEmpty && narrow) ...[
+              const SizedBox(height: 10),
+              Row(children: [
+                for (var i = 0; i < steps.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  Expanded(child: _miniStep(i, steps[i])),
+                ],
+              ]),
+            ],
           ]),
         );
       });
+
+  static Widget _miniStep(int i, ErpFlowStep s) {
+    final cur = s.state == ErpStepState.current;
+    final done = s.state == ErpStepState.done;
+    final tappable = s.onTap != null;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: s.onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        decoration: BoxDecoration(
+          color: cur ? Colors.white : const Color(0x17FFFFFF),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: cur ? Colors.white : (tappable ? const Color(0x80FFFFFF) : const Color(0x2EFFFFFF))),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          if (done) const Icon(Icons.check_circle, size: 13, color: Color(0xFF33C28F)) else Text('${i + 1}', style: TextStyle(color: cur ? AppTheme.primary : Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+          const SizedBox(width: 5),
+          Flexible(child: Text(s.label, style: TextStyle(color: cur ? const Color(0xFF101828) : Colors.white, fontSize: 11.5, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis, maxLines: 1)),
+        ]),
+      ),
+    );
+  }
 
   static Widget _flowStep(int i, ErpFlowStep s) {
     final cur = s.state == ErpStepState.current;
     final done = s.state == ErpStepState.done;
     final ink = cur ? const Color(0xFF101828) : Colors.white;
     final mute = cur ? const Color(0xFF667085) : const Color(0xFFB9C8F0);
-    return Container(
+    final tappable = s.onTap != null;
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: s.onTap,
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: cur ? Colors.white : const Color(0x17FFFFFF),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: cur ? Colors.white : const Color(0x2EFFFFFF)),
+        border: Border.all(color: cur ? Colors.white : (tappable ? const Color(0x80FFFFFF) : const Color(0x2EFFFFFF))),
       ),
       child: Row(children: [
         Container(
@@ -111,8 +174,9 @@ class ErpLook {
             if (s.sub.isNotEmpty) Text(s.sub, style: TextStyle(color: mute, fontSize: 11.5), overflow: TextOverflow.ellipsis),
           ]),
         ),
+        if (tappable && !cur) Icon(Icons.arrow_forward_rounded, size: 16, color: mute),
       ]),
-    );
+    ));
   }
 
   /// Heading text of a table column (modern: small, bold, spaced capitals).
@@ -333,7 +397,9 @@ enum ErpStepState { done, current, todo }
 
 /// One step of the Sales Order → Delivery Order → Sales Invoice strip in the header band.
 class ErpFlowStep {
-  const ErpFlowStep(this.label, this.sub, this.state);
+  const ErpFlowStep(this.label, this.sub, this.state, {this.onTap});
+  /// Opens that document when it exists (null = not clickable).
+  final VoidCallback? onTap;
   final String label;
   final String sub;
   final ErpStepState state;

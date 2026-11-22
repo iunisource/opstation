@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/audit_label.dart';
 import '../widgets/schemes_banner.dart';
 import '../widgets/erp_look.dart';
+import '../../../core/permissions/access_control.dart';
 import '../../../core/widgets/pulse_attention.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/layout/main_layout.dart';
@@ -324,6 +325,23 @@ Future<List<Map<String, dynamic>>?> showSchemeSelectionDialog({
   return chosen;
 }
 
+/// Opens a linked document, but only when the user's grants cover that screen.
+void _openDoc(BuildContext context, WidgetRef ref, String route, String label, String? id) {
+  if (id == null) return;
+  final r = ref.read(currentUserProvider)?.role;
+  var ok = r == WebUserRole.admin || r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+  if (!ok) {
+    final access = ref.read(accessSyncProvider);
+    final branchId = ref.read(selectedBranchProvider)?['id'] as String?;
+    ok = access != null && access.canAccessRouteAt(route, branchId);
+  }
+  if (!ok) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("You don't have access to $label.")));
+    return;
+  }
+  context.go('$route?focus=$id');
+}
+
 class ErpSalesScreen extends ConsumerStatefulWidget {
   const ErpSalesScreen({super.key, this.focusId});
   final String? focusId;
@@ -371,6 +389,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
   List<String> _doRefs = []; // DO voucher numbers against this SO (for messages)
   String? _linkedDoId; // most recent active DO id, for the jump-to-DO button
+  String? _linkedSoSiId; // live SI of that DO (read-only lookup, for the flow step)
 
   @override
   void initState() { super.initState(); _loadList(); _loadMeta(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
@@ -519,7 +538,16 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final hasDo = active.isNotEmpty;
       final String? linkedDoId = active.isNotEmpty ? active.first['id'] as String? : null;
       final appliedSchemes = List<Map<String, dynamic>>.from((await schF) as List);
+      String? linkedSiId;
+      if (linkedDoId != null) {
+        try {
+          final si = await Supabase.instance.client.from('sales_invoices').select('id, is_voided').eq('do_id', linkedDoId).order('created_at', ascending: false);
+          final live = (si as List).where((x) => x['is_voided'] != true).toList();
+          if (live.isNotEmpty) linkedSiId = live.first['id'] as String?;
+        } catch (_) {}
+      }
       setState(() {
+        _linkedSoSiId = linkedSiId;
         _detail = Map<String,dynamic>.from(order);
         _items = List<Map<String,dynamic>>.from(items);
         _meta = meta;
@@ -1349,6 +1377,17 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   },
                 ),
                 const SizedBox(height: 8),
+                if (ErpLook.modern)
+                SizedBox(
+                  height: 30,
+                  child: ListView(scrollDirection: Axis.horizontal, children: [
+                    for (final f in const [['all', 'All'], ['draft', 'Draft'], ['confirmed', 'Confirmed'], ['partially_delivered', 'Partial'], ['delivered', 'Delivered'], ['cancelled', 'Cancelled']]) ...[
+                      _soFilterChip(f[0], f[1]),
+                      const SizedBox(width: 6),
+                    ],
+                  ]),
+                )
+                else
                 SizedBox(width: double.infinity, child: DropdownButtonFormField<String>(
                   value: _statusFilter,
                   decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6)),
@@ -1422,6 +1461,27 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     );
   }
 
+  Widget _soFilterChip(String value, String label) {
+    final active = _statusFilter == value;
+    final count = value == 'all' ? _orders.length : _orders.where((o) => o['status'] == value).length;
+    return GestureDetector(
+      onTap: () => setState(() => _statusFilter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primary : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: active ? AppTheme.primary : AppTheme.border),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)),
+          const SizedBox(width: 5),
+          Text('$count', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: active ? Colors.white70 : AppTheme.textSecondary)),
+        ]),
+      ),
+    );
+  }
+
   Widget _buildDetail() => ErpLook.page(_buildDetailBody());
 
   Widget _buildDetailBody() {
@@ -1432,26 +1492,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
 
     String joinNn(List<String?> p) => p.where((s) => s != null && s.trim().isNotEmpty && s != '-').join(' · ');
     final soHeroDate = _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
-    final soHero = ErpLook.modern
-        ? ErpLook.hero(
-            kind: 'Sales Order',
-            number: voucherNum,
-            subtitle: joinNn([_detail['customers']?['shop_name'] as String?, soHeroDate, _detail['branches']?['name'] as String?]),
-            steps: [
-              ErpFlowStep('Sales Order', voucherNum, ErpStepState.current),
-              ErpFlowStep('Delivery Order', _linkedDoId != null ? 'Created' : 'Not created yet', _linkedDoId != null ? ErpStepState.done : ErpStepState.todo),
-              const ErpFlowStep('Sales Invoice', 'After delivery', ErpStepState.todo),
-            ],
-          )
-        : const SizedBox.shrink();
-
-    return Column(children: [
-      if (ErpLook.modern) soHero,
-      // ── Voucher AppBar ─────────────────────────────────────
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-        decoration: ErpLook.appBar(),
-        child: AdaptiveHeaderRow(children: [
+    final soBarKids = <Widget>[
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             ErpLook.classicOnly(Text(voucherNum, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
             ErpLook.classicOnly(const Text('Sales Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
@@ -1508,7 +1549,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
             IconButton(
               icon: const Icon(Icons.local_shipping_outlined, color: AppTheme.primary),
               tooltip: 'Go to Delivery Order',
-              onPressed: () => context.go('/erp/delivery-orders?focus=$_linkedDoId'),
+              onPressed: () => _openDoc(context, ref, '/erp/delivery-orders', 'Delivery Orders', _linkedDoId),
             ),
           if (_canEditDate)
             IconButton(
@@ -1527,7 +1568,30 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               tooltip: 'Delete',
               onPressed: _deleteSO,
             ),
-        ]),
+    ];
+    final soHero = ErpLook.modern
+        ? ErpLook.hero(
+            kind: 'Sales Order',
+            number: voucherNum,
+            subtitle: joinNn([_detail['customers']?['shop_name'] as String?, soHeroDate, _detail['branches']?['name'] as String?]),
+            steps: [
+              ErpFlowStep('Sales Order', voucherNum, ErpStepState.current),
+              ErpFlowStep('Delivery Order', _linkedDoId != null ? 'Created' : 'Not created yet', _linkedDoId != null ? ErpStepState.done : ErpStepState.todo,
+                  onTap: _linkedDoId == null ? null : () => _openDoc(context, ref, '/erp/delivery-orders', 'Delivery Orders', _linkedDoId)),
+              ErpFlowStep('Sales Invoice', _linkedSoSiId != null ? 'Created' : 'After delivery', _linkedSoSiId != null ? ErpStepState.done : ErpStepState.todo,
+                  onTap: _linkedSoSiId == null ? null : () => _openDoc(context, ref, '/erp/sales-invoices', 'Sales Invoices', _linkedSoSiId)),
+            ],
+            bar: soBarKids.skip(2).toList(),
+          )
+        : const SizedBox.shrink();
+
+    return Column(children: [
+      if (ErpLook.modern) soHero,
+      // ── Voucher AppBar ─────────────────────────────────────
+      if (!ErpLook.modern) Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        decoration: ErpLook.appBar(),
+        child: AdaptiveHeaderRow(children: soBarKids),
       ),
 
       Expanded(
@@ -1539,6 +1603,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               padding: const EdgeInsets.all(16),
               decoration: ErpLook.card(),
               child: Column(children: [
+                if (!ErpLook.modern) ...[
                 Row(children: [
                   Expanded(child: _InfoRow(label: 'Voucher No.', value: voucherNum)),
                   const SizedBox(width: 16),
@@ -1548,6 +1613,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                   Expanded(child: _InfoRow(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-')),
                 ]),
                 const SizedBox(height: 12),
+                ],
                 Row(children: [
                   Expanded(flex: 2, child: _canEditParty
                       ? _CustomerSelect(
@@ -3208,6 +3274,71 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
     }).toList();
 
     String joinNn(List<String?> p) => p.where((s) => s != null && s.trim().isNotEmpty && s != '-').join(' · ');
+    final statusChildren = <Widget>[
+      if (_deliveryFlow) ...[
+        _StatusChip(status: status == 'invoiced' ? 'Invoiced' : 'Invoice Pending', color: status == 'invoiced' ? AppTheme.success : Colors.orange),
+        if (_detail['delivered_at'] != null) const _StatusChip(status: 'Delivered', color: AppTheme.success),
+      ] else
+        _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
+      if (_isLocked) const _LockedBadge(),
+      if ((_detail['collect_amount'] as num?) != null)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+          child: Text('Collect: Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
+              style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
+        ),
+      if (isVoided)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+          child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
+        ),
+      if (_doSuperviseFlow && _canSupervise && !isVoided && _detail['supervised_at'] == null)
+        const _StatusChip(status: 'Supervision Pending', color: Colors.orange),
+    ];
+    final actionChildren = <Widget>[
+      if (_doSuperviseFlow && _canSupervise && !isVoided) ...[
+        if (_detail['supervised_at'] == null)
+          OutlinedButton.icon(
+            icon: _doSuperviseBusy
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+            label: const Text('Supervise'),
+            style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+            onPressed: _doSuperviseBusy ? null : _superviseDo)
+        else
+          TextButton.icon(
+            icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+            label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+            onPressed: _clearDoSupervision),
+      ],
+      if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
+        if (_deliveryFlow) _collectToggle(),
+        ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
+      ],
+      if (!isVoided && !isInvoiced && _items.isNotEmpty)
+        ElevatedButton(
+          onPressed: _createInvoice,
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+          child: const Text('Create Invoice'),
+        ),
+      if (_canEditDate)
+        IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
+      if (!isVoided && !isInvoiced)
+        IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+            tooltip: _isLocked ? 'Unlock' : 'Lock', onPressed: _toggleLock),
+      if (_linkedSiId != null)
+        IconButton(icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary), tooltip: 'Go to Sales Invoice',
+            onPressed: () => _openDoc(context, ref, '/erp/sales-invoices', 'Sales Invoices', _linkedSiId)),
+      if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
+        IconButton(icon: const Icon(Icons.check_circle_outline, color: AppTheme.success), tooltip: 'Mark Delivered (self-pickup / manual)', onPressed: _markDelivered),
+      IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _printDO),
+      if (_btOn && _items.isNotEmpty)
+        IconButton(icon: const Icon(Icons.qr_code_2_outlined, color: AppTheme.textSecondary), tooltip: 'Serial numbers', onPressed: _doSerials),
+      if (_canDelete && !isVoided)
+        IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _deleteDO),
+    ];
     final doHeroDate = _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final doHero = ErpLook.modern
         ? ErpLook.hero(
@@ -3215,17 +3346,20 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             number: _detail['voucher_number'] as String? ?? '-',
             subtitle: joinNn([_linkedSo['customers']?['shop_name'] as String?, doHeroDate, _detail['branches']?['name'] as String?]),
             steps: [
-              ErpFlowStep('Sales Order', _linkedSo['voucher_number'] as String? ?? '', ErpStepState.done),
+              ErpFlowStep('Sales Order', _linkedSo['voucher_number'] as String? ?? '', ErpStepState.done,
+                  onTap: _detail['so_id'] == null ? null : () => _openDoc(context, ref, '/erp/sales', 'Sales Orders', _detail['so_id'] as String?)),
               ErpFlowStep('Delivery Order', _detail['voucher_number'] as String? ?? '', ErpStepState.current),
-              ErpFlowStep('Sales Invoice', _linkedSiId != null ? 'Created' : 'Invoice pending', _linkedSiId != null ? ErpStepState.done : ErpStepState.todo),
+              ErpFlowStep('Sales Invoice', _linkedSiId != null ? 'Created' : 'Invoice pending', _linkedSiId != null ? ErpStepState.done : ErpStepState.todo,
+                  onTap: _linkedSiId == null ? null : () => _openDoc(context, ref, '/erp/sales-invoices', 'Sales Invoices', _linkedSiId)),
             ],
+            bar: [...statusChildren, ...actionChildren],
           )
         : const SizedBox.shrink();
 
     return Column(children: [
       if (ErpLook.modern) doHero,
       // AppBar
-      Container(
+      if (!ErpLook.modern) Container(
         padding: EdgeInsets.symmetric(horizontal: MediaQuery.of(context).size.width < 700 ? 14 : 24, vertical: 12),
         decoration: ErpLook.appBar(),
         child: Builder(builder: (context) {
@@ -3234,71 +3368,6 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
             ErpLook.classicOnly(Text(_detail['voucher_number'] as String? ?? '-', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
             ErpLook.classicOnly(const Text('Delivery Order', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ]);
-          final statusChildren = <Widget>[
-            if (_deliveryFlow) ...[
-              _StatusChip(status: status == 'invoiced' ? 'Invoiced' : 'Invoice Pending', color: status == 'invoiced' ? AppTheme.success : Colors.orange),
-              if (_detail['delivered_at'] != null) const _StatusChip(status: 'Delivered', color: AppTheme.success),
-            ] else
-              _StatusChip(status: status, color: status == 'invoiced' ? AppTheme.success : Colors.blue),
-            if (_isLocked) const _LockedBadge(),
-            if ((_detail['collect_amount'] as num?) != null)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                child: Text('Collect: Rs. ${(_detail['collect_amount'] as num).toStringAsFixed(0)}',
-                    style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
-              ),
-            if (isVoided)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w700)),
-              ),
-            if (_doSuperviseFlow && _canSupervise && !isVoided && _detail['supervised_at'] == null)
-              const _StatusChip(status: 'Supervision Pending', color: Colors.orange),
-          ];
-          final actionChildren = <Widget>[
-            if (_doSuperviseFlow && _canSupervise && !isVoided) ...[
-              if (_detail['supervised_at'] == null)
-                OutlinedButton.icon(
-                  icon: _doSuperviseBusy
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
-                  label: const Text('Supervise'),
-                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
-                  onPressed: _doSuperviseBusy ? null : _superviseDo)
-              else
-                TextButton.icon(
-                  icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
-                  label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
-                  onPressed: _clearDoSupervision),
-            ],
-            if (!isVoided && !_isLocked && _isSaved && pendingSoItems.isNotEmpty) ...[
-              if (_deliveryFlow) _collectToggle(),
-              ElevatedButton(onPressed: _saveDeliveryOrder, child: const Text('Approve Delivery Order')),
-            ],
-            if (!isVoided && !isInvoiced && _items.isNotEmpty)
-              ElevatedButton(
-                onPressed: _createInvoice,
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-                child: const Text('Create Invoice'),
-              ),
-            if (_canEditDate)
-              IconButton(icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary), tooltip: 'Edit date', onPressed: _pickDate),
-            if (!isVoided && !isInvoiced)
-              IconButton(icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-                  tooltip: _isLocked ? 'Unlock' : 'Lock', onPressed: _toggleLock),
-            if (_linkedSiId != null)
-              IconButton(icon: const Icon(Icons.receipt_long_outlined, color: AppTheme.primary), tooltip: 'Go to Sales Invoice',
-                  onPressed: () => context.go('/erp/sales-invoices?focus=$_linkedSiId')),
-            if (_deliveryFlow && !isVoided && _detail['delivered_at'] == null)
-              IconButton(icon: const Icon(Icons.check_circle_outline, color: AppTheme.success), tooltip: 'Mark Delivered (self-pickup / manual)', onPressed: _markDelivered),
-            IconButton(icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary), tooltip: 'Print / PDF', onPressed: _printDO),
-            if (_btOn && _items.isNotEmpty)
-              IconButton(icon: const Icon(Icons.qr_code_2_outlined, color: AppTheme.textSecondary), tooltip: 'Serial numbers', onPressed: _doSerials),
-            if (_canDelete && !isVoided)
-              IconButton(icon: const Icon(Icons.block, color: AppTheme.danger), tooltip: 'Void', onPressed: _deleteDO),
-          ];
           if (mobile) {
             return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               titleBlock,
@@ -4759,6 +4828,97 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           ]);
 
     String joinNn(List<String?> p) => p.where((s) => s != null && s.trim().isNotEmpty && s != '-').join(' · ');
+    final siBarKids = <Widget>[
+          if (_isLocked) const _LockedBadge(),
+          const Spacer(),
+          if (_schemesEnabled && !_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
+            OutlinedButton.icon(
+              onPressed: _schemeBusy ? null : _checkSchemes,
+              icon: _schemeBusy
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.local_offer_outlined, size: 16, color: AppTheme.primary),
+              label: const Text('Schemes'),
+              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (!_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
+            if (!_reviewFlow) ...[
+              ElevatedButton(onPressed: _saveDiscounts, child: const Text('Save')),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && !_isPendingReview) ...[
+              ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && _isPendingReview && _isAdmin) ...[
+              OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
+              const SizedBox(width: 8),
+            ],
+            if (_reviewFlow && _isPendingReview && !_isAdmin) ...[
+              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
+              const SizedBox(width: 8),
+            ],
+          ],
+          if (_canEditDate)
+            IconButton(
+              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
+              tooltip: 'Edit date',
+              onPressed: _pickDate,
+            ),
+          // Hide the manual lock toggle while an unlocked invoice is under the
+          // review flow — posting must go through Approve. Unlock stays available.
+          if (_isLocked || !_reviewFlow)
+            IconButton(
+              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
+              tooltip: _isLocked ? 'Unlock' : 'Lock',
+              onPressed: _toggleLock,
+            ),
+          if (_superviseFlow && _canSupervise && !(_detail['is_voided'] as bool? ?? false)) ...[
+            if (_detail['supervised_at'] == null)
+              OutlinedButton.icon(
+                icon: _superviseBusy
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
+                label: const Text('Supervise'),
+                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
+                onPressed: _superviseBusy ? null : _supervise)
+            else
+              TextButton.icon(
+                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
+                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
+                onPressed: _clearSupervision),
+            const SizedBox(width: 8),
+          ],
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
+            tooltip: 'Print preview',
+            onPressed: _printSI,
+          ),
+          IconButton(
+            icon: Icon(Icons.share_outlined, color: Colors.teal.shade700),
+            tooltip: 'Share PDF',
+            onPressed: () => _printSI(share: true),
+          ),
+          if (_canDelete && !(_detail['is_voided'] as bool? ?? false))
+            TextButton.icon(
+              icon: const Icon(Icons.block, size: 18, color: AppTheme.danger),
+              label: const Text('Cancel / Void', style: TextStyle(color: AppTheme.danger)),
+              onPressed: _cancelSI,
+            ),
+          if (_detail['is_voided'] as bool? ?? false)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+    ];
     final siHeroDate = _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : null;
     final siHero = ErpLook.modern
         ? ErpLook.hero(
@@ -4770,16 +4930,19 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               _detail['branches']?['name'] as String?,
             ]),
             steps: [
-              ErpFlowStep('Sales Order', _detail['sales_orders']?['voucher_number'] as String? ?? '', ErpStepState.done),
-              ErpFlowStep('Delivery Order', _detail['delivery_orders']?['voucher_number'] as String? ?? '', ErpStepState.done),
+              ErpFlowStep('Sales Order', _detail['sales_orders']?['voucher_number'] as String? ?? '', ErpStepState.done,
+                  onTap: _detail['so_id'] == null ? null : () => _openDoc(context, ref, '/erp/sales', 'Sales Orders', _detail['so_id'] as String?)),
+              ErpFlowStep('Delivery Order', _detail['delivery_orders']?['voucher_number'] as String? ?? '', ErpStepState.done,
+                  onTap: _detail['do_id'] == null ? null : () => _openDoc(context, ref, '/erp/delivery-orders', 'Delivery Orders', _detail['do_id'] as String?)),
               ErpFlowStep('Sales Invoice', _detail['voucher_number'] as String? ?? '', ErpStepState.current),
             ],
+            bar: siBarKids,
           )
         : const SizedBox.shrink();
 
     return Column(children: [
       if (ErpLook.modern) siHero,
-      Container(
+      if (!ErpLook.modern) Container(
         padding: EdgeInsets.symmetric(horizontal: narrow ? 12 : 24, vertical: 12),
         decoration: ErpLook.appBar(),
         child: narrow
@@ -4889,95 +5052,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
             ErpLook.classicOnly(const Text('Sales Invoice', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           ]),
           const SizedBox(width: 12),
-          if (_isLocked) const _LockedBadge(),
-          const Spacer(),
-          if (_schemesEnabled && !_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
-            OutlinedButton.icon(
-              onPressed: _schemeBusy ? null : _checkSchemes,
-              icon: _schemeBusy
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.local_offer_outlined, size: 16, color: AppTheme.primary),
-              label: const Text('Schemes'),
-              style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
-            ),
-            const SizedBox(width: 8),
-          ],
-          if (!_isLocked && !(_detail['is_voided'] as bool? ?? false)) ...[
-            if (!_reviewFlow) ...[
-              ElevatedButton(onPressed: _saveDiscounts, child: const Text('Save')),
-              const SizedBox(width: 8),
-            ],
-            if (_reviewFlow && !_isPendingReview) ...[
-              ElevatedButton.icon(icon: const Icon(Icons.send_outlined, size: 16), label: const Text('Send for Review'), onPressed: _sendForReview),
-              const SizedBox(width: 8),
-            ],
-            if (_reviewFlow && _isPendingReview && _isAdmin) ...[
-              OutlinedButton.icon(icon: const Icon(Icons.cancel_outlined, size: 16), label: const Text('Reject'),
-                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.danger, side: const BorderSide(color: AppTheme.danger)), onPressed: _reject),
-              const SizedBox(width: 8),
-              ElevatedButton.icon(icon: const Icon(Icons.verified_outlined, size: 16), label: const Text('Approve & Post'),
-                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success), onPressed: _approveAndPost),
-              const SizedBox(width: 8),
-            ],
-            if (_reviewFlow && _isPendingReview && !_isAdmin) ...[
-              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))),
-                child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.hourglass_top, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Pending review', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])),
-              const SizedBox(width: 8),
-            ],
-          ],
-          if (_canEditDate)
-            IconButton(
-              icon: const Icon(Icons.edit_calendar_outlined, color: AppTheme.textSecondary),
-              tooltip: 'Edit date',
-              onPressed: _pickDate,
-            ),
-          // Hide the manual lock toggle while an unlocked invoice is under the
-          // review flow — posting must go through Approve. Unlock stays available.
-          if (_isLocked || !_reviewFlow)
-            IconButton(
-              icon: Icon(_isLocked ? Icons.lock_open : Icons.lock_outline, color: _isLocked ? Colors.orange : AppTheme.textSecondary),
-              tooltip: _isLocked ? 'Unlock' : 'Lock',
-              onPressed: _toggleLock,
-            ),
-          if (_superviseFlow && _canSupervise && !(_detail['is_voided'] as bool? ?? false)) ...[
-            if (_detail['supervised_at'] == null)
-              OutlinedButton.icon(
-                icon: _superviseBusy
-                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.verified_user_outlined, size: 16, color: AppTheme.primary),
-                label: const Text('Supervise'),
-                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primary, side: const BorderSide(color: AppTheme.primary)),
-                onPressed: _superviseBusy ? null : _supervise)
-            else
-              TextButton.icon(
-                icon: const Icon(Icons.verified, size: 16, color: AppTheme.success),
-                label: const Text('Supervised', style: TextStyle(color: AppTheme.success)),
-                onPressed: _clearSupervision),
-            const SizedBox(width: 8),
-          ],
-          IconButton(
-            icon: const Icon(Icons.print_outlined, color: AppTheme.textSecondary),
-            tooltip: 'Print preview',
-            onPressed: _printSI,
-          ),
-          IconButton(
-            icon: Icon(Icons.share_outlined, color: Colors.teal.shade700),
-            tooltip: 'Share PDF',
-            onPressed: () => _printSI(share: true),
-          ),
-          if (_canDelete && !(_detail['is_voided'] as bool? ?? false))
-            TextButton.icon(
-              icon: const Icon(Icons.block, size: 18, color: AppTheme.danger),
-              label: const Text('Cancel / Void', style: TextStyle(color: AppTheme.danger)),
-              onPressed: _cancelSI,
-            ),
-          if (_detail['is_voided'] as bool? ?? false)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-              child: const Text('Voided', style: TextStyle(color: AppTheme.danger, fontSize: 12, fontWeight: FontWeight.w700)),
-            ),
+          ...siBarKids,
         ]),
       ),
 
@@ -4990,6 +5065,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
               padding: const EdgeInsets.all(16),
               decoration: ErpLook.card(),
               child: Column(children: [
+                if (!ErpLook.modern) ...[
                 infoRow([
                   _InfoRow(label: 'SI No.', value: _detail['voucher_number'] as String? ?? '-'),
                   _InfoRow(label: 'Date', value: _detail['voucher_date'] != null
@@ -4997,6 +5073,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
                   _InfoRow(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
                 ]),
                 const SizedBox(height: 10),
+                ],
                 infoRow([
                   _InfoRow(
                     label: 'Customer',
@@ -5369,6 +5446,17 @@ class _VoucherInfoStrip extends StatelessWidget {
         Wrap(spacing: 24, runSpacing: 8, children: tiles),
         if (preparedBy != null && preparedBy!.isNotEmpty) ...[
           const SizedBox(height: 10),
+          if (ErpLook.modern) ...[
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: _tile(Icons.draw_outlined, 'Prepared by', preparedBy!)),
+              if (createdAt != null) ...[
+                const SizedBox(width: 12),
+                Expanded(child: _tile(Icons.schedule_outlined, 'Prepared on', createdAt!)),
+              ],
+            ]),
+          ] else
           Row(children: [
             const Icon(Icons.draw_outlined, size: 14, color: AppTheme.textSecondary),
             const SizedBox(width: 6),
@@ -5507,10 +5595,20 @@ class _CustomerSelect extends StatelessWidget {
   }
 }
 
-class _AuditTrailList extends StatelessWidget {
+class _AuditTrailList extends StatefulWidget {
   final String voucherId;
   final String voucherType;
   const _AuditTrailList({required this.voucherId, required this.voucherType});
+  @override
+  State<_AuditTrailList> createState() => _AuditTrailListState();
+}
+
+class _AuditTrailListState extends State<_AuditTrailList> {
+  String get voucherId => widget.voucherId;
+  String get voucherType => widget.voucherType;
+  bool _open = false; // modern look: collapsed until asked for
+  Future<List<Map<String, dynamic>>>? _fut;
+  String? _futFor;
 
   Future<List<Map<String, dynamic>>> _load() async {
     try {
@@ -5561,8 +5659,9 @@ class _AuditTrailList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (_futFor != '$voucherType/$voucherId') { _futFor = '$voucherType/$voucherId'; _fut = _load(); }
     return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _load(),
+      future: _fut,
       builder: (_, snap) {
         final events = snap.data ?? [];
         if (snap.connectionState == ConnectionState.waiting) {
@@ -5573,13 +5672,18 @@ class _AuditTrailList extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
           decoration: ErpLook.card(),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Row(children: [
-              Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
-              SizedBox(width: 6),
-              Text('Audit Trail', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary)),
-            ]),
-            const SizedBox(height: 8),
-            ...events.map((e) {
+            InkWell(
+              onTap: ErpLook.modern ? () => setState(() => _open = !_open) : null,
+              child: Row(children: [
+                const Icon(Icons.history, size: 14, color: AppTheme.textSecondary),
+                const SizedBox(width: 6),
+                Text(ErpLook.modern ? 'Audit trail (${events.length})' : 'Audit Trail',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary)),
+                if (ErpLook.modern) ...[const Spacer(), Icon(_open ? Icons.expand_less : Icons.expand_more, size: 20, color: AppTheme.textSecondary)],
+              ]),
+            ),
+            if (!ErpLook.modern || _open) const SizedBox(height: 8),
+            if (!ErpLook.modern || _open) ...events.map((e) {
               final action = e['action'] as String? ?? '-';
               final user = e['_userName'] as String? ?? '-';
               final at = e['performed_at'] as String?;
