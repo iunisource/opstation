@@ -117,8 +117,8 @@ class _LoginTrailsState extends State<LoginTrails> with SingleTickerProviderStat
 }
 
 /// A truck-art truck driving along the road at the bottom of the login page, on and on. The truck itself stays
-/// put and the road slides under it, so it never leaves the picture or covers the sign-in form. The wheels
-/// turn at the speed of the road. Only on wide screens; it stands still when the device asks for less motion.
+/// put (with a slight sway) and the road slides under it, so it never leaves the picture or covers the sign-in
+/// form. Only on wide screens; it stands still when the device asks for less motion.
 class LoginRoadTruck extends StatefulWidget {
   const LoginRoadTruck({super.key});
 
@@ -130,9 +130,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
   // One hour per cycle; the time in seconds is read from the value, so nothing visibly restarts.
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(hours: 1));
 
-  static const _imgW = 621.0, _imgH = 356.0;
-  static const _hubR = 28.0, _tireR = 57.0;
-  static const _hubs = [Offset(140, 300), Offset(482, 300)];
+  static const _imgW = 1100.0, _imgH = 742.0;
   static const _speed = 200.0; // pixels per second the road moves
 
   @override
@@ -158,51 +156,34 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
         final h = c.maxHeight;
         if (h < 520 || c.maxWidth < 700) return const SizedBox.shrink();
         final roadH = (h * 0.185).clamp(90.0, 150.0);
-        final w = (h * 0.437).clamp(220.0, 354.0); // 15% smaller than the first mockup
-        final s = w / _imgW;
+        final w = (h * 0.5).clamp(280.0, 430.0);
+        final truckH = w * _imgH / _imgW;
         final bottom = roadH * 0.7;
         return AnimatedBuilder(
           animation: _c,
           builder: (_, __) {
             final sec = _c.value * 3600.0;
-            final dist = sec * _speed;
-            final angle = dist / (_tireR * s);
-            final bob = math.sin(sec * 9) * 0.7;
+            final bob = math.sin(sec * 7) * 0.9;
             return Stack(children: [
-              Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(dist))),
+              Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(sec * _speed))),
               Positioned(
-                left: 56,
-                bottom: bottom - 6,
-                width: w,
-                height: 14,
+                left: 40,
+                bottom: bottom + 2,
+                width: w * 0.9,
+                height: 6,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(40),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 14, spreadRadius: 1)],
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 12, spreadRadius: 0)],
                   ),
                 ),
               ),
               Positioned(
-                left: 56,
+                left: 40,
                 bottom: bottom + bob,
                 width: w,
-                height: w * _imgH / _imgW,
-                child: Stack(children: [
-                  Positioned.fill(
-                    child: Image.network('truck_art.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
-                  ),
-                  for (final o in _hubs)
-                    Positioned(
-                      left: (o.dx - _hubR) * s,
-                      top: (o.dy - _hubR) * s,
-                      width: _hubR * 2 * s,
-                      height: _hubR * 2 * s,
-                      child: Transform.rotate(
-                        angle: angle,
-                        child: Image.network('truck_hub.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
-                      ),
-                    ),
-                ]),
+                height: truckH,
+                child: Image.network('truck_art.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
               ),
             ]);
           },
