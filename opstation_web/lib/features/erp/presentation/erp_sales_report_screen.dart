@@ -72,6 +72,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   Map<String, List<Map<String, dynamic>>> _children = {};
   final Set<String> _expanded = {};
   double _grandAmount = 0;
+  double _retAmt = 0; // posted sales returns in the period (deducted for Net sales)
+  int _retDocs = 0;
+  bool _retSkipped = true; // returns not deducted (product filter / POS-only / lookup failed)
   double _grandQty = 0;
   int _docCount = 0;
   final _searchCtrl = TextEditingController();
@@ -518,6 +521,37 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         children[k] = m.values.toList()
           ..sort((a, b) => (b['amount'] as double).compareTo(a['amount'] as double));
       });
+      // Sales returns (posted, not voided) for the same period / branch / customer filters, so the
+      // totals can show Gross → Returns → Net sales. Returns belong to a customer, not a product, so
+      // they are not deducted while a product filter is active (or for POS-only).
+      double retAmt = 0;
+      int retDocs = 0;
+      bool retSkipped = _productFilterActive || _source == 'pos';
+      if (!retSkipped) {
+        try {
+          for (var from = 0; ; from += 1000) {
+            var rq = c
+                .from('sales_return_invoices')
+                .select('customer_id, branch_id, grand_total, is_voided')
+                .eq('org_id', _orgId!)
+                .eq('is_locked', true)
+                .gte('voucher_date', fromStr)
+                .lte('voucher_date', toStr);
+            if (_branch != 'all') rq = rq.eq('branch_id', _branch);
+            final page = await rq.range(from, from + 999);
+            for (final r in page) {
+              if (r['is_voided'] == true) continue;
+              if (!_custPassesFilter(r['customer_id'] as String?)) continue;
+              retAmt += _d(r['grand_total']);
+              retDocs++;
+            }
+            if (page.length < 1000) break;
+          }
+        } catch (_) {
+          retSkipped = true; // never block the report on the returns lookup
+        }
+      }
+
       final grandAmt = rows.fold<double>(0, (s, r) => s + (r['amount'] as double));
       final grandQty = rows.fold<double>(0, (s, r) => s + (r['qty'] as double));
 
@@ -527,6 +561,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         _children = children;
         _expanded.clear();
         _grandAmount = grandAmt;
+        _retAmt = retAmt;
+        _retDocs = retDocs;
+        _retSkipped = retSkipped;
         _grandQty = grandQty;
         _docCount = docs;
         _ran = true;
@@ -890,7 +927,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             _kv(productMode ? 'Products' : 'Customers', '${_rows.length}'),
             _kv('Documents', '$_docCount'),
             if (productMode) _kv('Total qty', _qtyFmt.format(_grandQty)),
-            _kv('Total sales', _money.format(_grandAmount)),
+            _kv(_retSkipped ? 'Total sales' : 'Gross sales', _money.format(_grandAmount)),
+            if (!_retSkipped) _kv('Returns ($_retDocs)', '− ${_money.format(_retAmt)}'),
+            if (!_retSkipped) _kv('Net sales', _money.format(_grandAmount - _retAmt)),
           ]),
         ),
         OutlinedButton.icon(
@@ -1123,6 +1162,8 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
 
   // ───────────────────────────────────────────────── PDF
   Future<void> _printPdf() async {
+    _snack('Preparing PDF…');
+    await Future<void>.delayed(const Duration(milliseconds: 60));
     final productMode = _breakdown == 'product';
     final rows = _visibleRows;
     final org = ref.read(currentUserProvider)?.orgName ?? '';
@@ -1191,9 +1232,47 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         ? ['', 'Total', _qtyFmt.format(totalQty), _money.format(totalAmt), '']
         : ['', 'Total', '', '', _money.format(totalAmt), ''];
 
+    // Built as a plain list of row widgets (not one giant table): the PDF library lays out thousands of
+    // table rows very slowly, and long date ranges froze the tab. Rows here lay out in linear time.
+    final spec = productMode
+        ? <List<Object>>[[28.0, false], [1, false], [56.0, true], [70.0, true], [40.0, true]]
+        : <List<Object>>[[28.0, false], [3, false], [2, false], [44.0, true], [70.0, true], [40.0, true]];
+    pw.Widget rowW(List<String> cells, {bool head = false, bool bold = false}) {
+      final kids = <pw.Widget>[];
+      for (var i = 0; i < cells.length; i++) {
+        final sp = spec[i];
+        final right = sp[1] as bool;
+        final txt = pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+          child: pw.Text(cells[i],
+              textAlign: right ? pw.TextAlign.right : pw.TextAlign.left,
+              style: pw.TextStyle(fontSize: 9, fontWeight: (head || bold) ? pw.FontWeight.bold : pw.FontWeight.normal)),
+        );
+        kids.add(sp[0] is double ? pw.SizedBox(width: sp[0] as double, child: txt) : pw.Expanded(flex: (sp[0] as num).toInt(), child: txt));
+      }
+      return pw.Container(
+        decoration: pw.BoxDecoration(
+          color: head ? PdfColors.grey200 : null,
+          border: const pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
+        ),
+        child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: kids),
+      );
+    }
+
+    final bodyRows = <pw.Widget>[for (final r in data) rowW(r)];
+    final netLines = <String>[
+      if (_retSkipped) 'Total sales: ${_money.format(totalAmt)}' else ...[
+        'Gross sales: ${_money.format(totalAmt)}',
+        'Returns ($_retDocs): - ${_money.format(_retAmt)}',
+        'Net sales: ${_money.format(totalAmt - _retAmt)}',
+      ],
+    ];
+
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(28),
+      maxPages: 5000,
+      header: (ctx) => ctx.pageNumber > 1 ? rowW(headers, head: true) : pw.SizedBox(),
       build: (ctx) => [
         if (org.isNotEmpty)
           pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
@@ -1204,21 +1283,12 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             '${DateFormat('d MMM y').format(_from)} to ${DateFormat('d MMM y').format(_to)}     |     ${filterBits.join('     |     ')}',
             style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
-        pw.TableHelper.fromTextArray(
-          headers: headers,
-          data: [...data, totalRow],
-          headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
-          cellStyle: const pw.TextStyle(fontSize: 9),
-          headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-          cellAlignments: productMode
-              ? {0: pw.Alignment.centerLeft, 2: pw.Alignment.centerRight, 3: pw.Alignment.centerRight, 4: pw.Alignment.centerRight}
-              : {0: pw.Alignment.centerLeft, 3: pw.Alignment.centerRight, 4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight},
-          rowDecoration: const pw.BoxDecoration(
-              border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
-        ),
+        rowW(headers, head: true),
+        ...bodyRows,
+        rowW(totalRow, bold: true),
         pw.SizedBox(height: 8),
-        pw.Text('Total sales: ${_money.format(totalAmt)}',
-            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        for (final l in netLines)
+          pw.Text(l, style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
       ],
     ));
 

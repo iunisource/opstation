@@ -312,11 +312,11 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
 
   // ── Visible rows (search + sort) ─────────────────────────────────────
   static const _sCols = [
-    'Sr #', 'Salesman', 'Market', 'Sale', 'Recovery', 'Recovery/Sale %',
+    'Sr #', 'Salesman', 'Market', 'Net Sale', 'Recovery', 'Recovery/Sale %',
     'Journal Entries', 'Opening Balance', 'Closing Balance', 'Recovery/Receivable %',
   ];
   static const _dCols = [
-    'Sr #', 'Salesman', 'Market', 'Customer', 'Sale', 'Recovery', 'Recovery/Sale %',
+    'Sr #', 'Salesman', 'Market', 'Customer', 'Net Sale', 'Recovery', 'Recovery/Sale %',
     'Journal Entries', 'Opening Balance', 'Closing Balance', 'Recovery/Receivable %',
   ];
   List<String> get _cols => _ranDetailed ? _dCols : _sCols;
@@ -523,7 +523,7 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
       String k(String l, String v) => '<div class="kpi"><div class="l">$l</div><div class="v">$v</div></div>';
       b.write('<div class="kpis">'
           '${k('Opening balance', money(_total['opening']))}'
-          '${k('Sale', money(_total['sale']))}'
+          '${k('Net Sale', money(_total['sale']))}'
           '${k('Recovery', money(_total['recovery']))}'
           '${k('Recovery / Sale', _p(_rsPct(_total)))}'
           '${k('Closing balance', money(_total['closing']))}'
@@ -554,8 +554,8 @@ class _ErpSaleVsRecoveryScreenState extends ConsumerState<ErpSaleVsRecoveryScree
     }
     b.write('</tbody></table>');
     b.write('<div class="sign"><div>Prepared by${_userLabel.isEmpty ? '' : ' — ${_esc(_userLabel)}'}</div><div>Checked by</div><div>Approved by</div></div>');
-    b.write('<div class="foot"><span>Total counts each customer once (a customer on two markets appears in both rows).'
-        ' Recovery/Receivable % = Recovery ÷ (Opening + Sale).</span>'
+    b.write('<div class="foot"><span>Net Sale = sales invoices minus sales returns. Total counts each customer once (a customer on two markets appears in both rows).'
+        ' Recovery/Receivable % = Recovery ÷ (Opening + Net Sale).</span>'
         '<span>Printed ${DateFormat(orgTime('d MMM yyyy, h:mm a')).format(DateTime.now())}</span></div>');
     b.write('</body></html>');
     final doc = b.toString();
