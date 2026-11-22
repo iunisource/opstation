@@ -286,7 +286,7 @@ class _PriceCheckPanelState extends ConsumerState<PriceCheckPanel> {
     Color? chgCol;
     if (prev != null && prev.rate != 0) {
       final pct = (avg - prev.rate) / prev.rate * 100;
-      chg = '${last.rate >= prev.rate ? '▲' : '▼'} ${_money((last.rate - prev.rate).abs())} vs previous (${_money(prev.rate)})';
+      chg = last.rate == prev.rate ? 'Same as previous' : '${last.rate > prev.rate ? '▲' : '▼'} ${_money((last.rate - prev.rate).abs())} vs previous (${_money(prev.rate)})';
       chgCol = last.rate > prev.rate ? Colors.red.shade700 : (last.rate < prev.rate ? Colors.green.shade700 : null);
       if (pct.isNaN) chg = null;
     }
@@ -300,7 +300,7 @@ class _PriceCheckPanelState extends ConsumerState<PriceCheckPanel> {
     return Padding(
       padding: const EdgeInsets.only(top: 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           kpi(_sale ? 'Last rate' : 'Last purchase rate', 'Rs ${_money(last.rate)}',
               '${last.date == null ? '' : _d.format(last.date!)} · qty ${_money(last.qty)} · ${last.voucher}', big: true),
           const SizedBox(width: 10),
@@ -308,7 +308,7 @@ class _PriceCheckPanelState extends ConsumerState<PriceCheckPanel> {
               prev == null ? '—' : 'Rs ${_money(_sale ? avg : prev.rate)}', chg, subColor: chgCol),
           const SizedBox(width: 10),
           k3,
-        ]),
+        ])),
         const SizedBox(height: 14),
         Container(
           decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(12)),
