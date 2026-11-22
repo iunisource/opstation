@@ -21,6 +21,7 @@ import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../widgets/price_check_dialog.dart';
 import '../../../core/format/time_format.dart';
 
 class ErpCustomerLedgerScreen extends ConsumerStatefulWidget {
@@ -916,6 +917,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
             if (_selectedCustomer != null && _entries.isNotEmpty && _mobileTools) ...[
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
+                  PriceCheckButton(mode: PriceCheckMode.sale, partyId: _selectedCustomer!['id'] as String, partyName: '${_selectedCustomer!['name'] ?? ''}'),
                   OutlinedButton.icon(
                     icon: _loading
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
@@ -973,6 +975,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
               ]);
               final actions = (_selectedCustomer != null && _entries.isNotEmpty)
                 ? Wrap(spacing: 8, runSpacing: 8, children: [
+                  PriceCheckButton(mode: PriceCheckMode.sale, partyId: _selectedCustomer!['id'] as String, partyName: '${_selectedCustomer!['name'] ?? ''}'),
                   OutlinedButton.icon(
                     icon: _loading
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
