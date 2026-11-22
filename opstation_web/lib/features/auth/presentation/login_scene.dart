@@ -184,7 +184,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
                 bottom: bottom + bob,
                 width: w,
                 height: truckH,
-                child: Image.network('truck_art.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                child: Image.network('truck_peacock.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
               ),
             ]);
           },
