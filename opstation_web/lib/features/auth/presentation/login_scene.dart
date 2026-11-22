@@ -155,10 +155,11 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
       child: LayoutBuilder(builder: (context, c) {
         final h = c.maxHeight;
         if (h < 520 || c.maxWidth < 700) return const SizedBox.shrink();
-        final roadH = (h * 0.185).clamp(90.0, 150.0);
-        final w = (h * 0.5).clamp(280.0, 430.0);
-        final truckH = w * _imgH / _imgW;
-        final bottom = roadH * 0.7;
+        // The truck lives mostly inside the road band so it never climbs into the headline or the feature chips.
+        final roadH = (h * 0.22).clamp(100.0, 170.0);
+        final truckH = roadH * 1.1;
+        final w = truckH * _imgW / _imgH;
+        final bottom = roadH * 0.5;
         return AnimatedBuilder(
           animation: _c,
           builder: (_, __) {
@@ -168,7 +169,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
               Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(sec * _speed))),
               Positioned(
                 left: 40,
-                bottom: bottom + 2,
+                bottom: bottom - 2,
                 width: w * 0.9,
                 height: 6,
                 child: DecoratedBox(
