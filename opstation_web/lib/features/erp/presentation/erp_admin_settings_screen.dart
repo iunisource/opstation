@@ -3171,8 +3171,9 @@ class _DriveBackupPanelState extends State<_DriveBackupPanel> {
     if (widget.orgId.isEmpty) return;
     final c = Supabase.instance.client;
     try {
-      final cfg = await c.from('app_config').select('key, value').eq('org_id', widget.orgId)
-          .inFilter('key', ['org.backup_targets', 'org.backup_drive_keep_days']).isFilter('branch_id', null);
+      final cfg = await c.from('app_config').select('key, value, branch_id').eq('org_id', widget.orgId)
+          .inFilter('key', ['org.backup_targets', 'org.backup_drive_keep_days'])
+          .or('branch_id.is.null,branch_id.eq.');
       Map<String, dynamic>? drive;
       try {
         final st = await c.rpc('backup_drive_status', params: {'p_org': widget.orgId});
@@ -3613,7 +3614,7 @@ class _RouteGuideItemsState extends State<_RouteGuideItems> {
   Future<void> _load() async {
     try {
       final r = await Supabase.instance.client.from('app_config').select('value')
-          .eq('org_id', widget.orgId).eq('key', 'org.route_guide_items').isFilter('branch_id', null).maybeSingle();
+          .eq('org_id', widget.orgId).eq('key', 'org.route_guide_items').or('branch_id.is.null,branch_id.eq.').limit(1).maybeSingle();
       final v = '${r?['value'] ?? ''}'.trim();
       if (v.isNotEmpty && mounted) setState(() => _on = v.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet());
     } catch (_) {}
