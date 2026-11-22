@@ -120,7 +120,6 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
       v.onPlaying.listen((_) {
         v.style.opacity = '1';
         _status(LoginVideoStatus.playing);
-        _tryUnmute();
       });
       _video = v;
       Future.microtask(() async {
@@ -135,10 +134,6 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
     });
     widget.controller.bind(_toggle, _toggleMute);
     _status(LoginVideoStatus.loading);
-    // Sound needs a touch from the person first: on the first click, tap or key press, switch it on.
-    _g1 = html.document.onMouseDown.listen((_) => _tryUnmute());
-    _g2 = html.document.onKeyDown.listen((_) => _tryUnmute());
-    _g3 = html.document.onTouchStart.listen((_) => _tryUnmute());
   }
 
   void _setMuted(bool m) {

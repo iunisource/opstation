@@ -27,8 +27,8 @@ class LoginBackdrop extends StatelessWidget {
       DecoratedBox(
         decoration: BoxDecoration(
           gradient: wide
-              ? const LinearGradient(colors: [Color(0xE60B1220), Color(0x9E0B1220), Color(0x5C0B1220)], stops: [0, 0.52, 1])
-              : const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x800B1220), Color(0xD10B1220)]),
+              ? const LinearGradient(colors: [Color(0xCC0B1220), Color(0x850B1220), Color(0x420B1220)], stops: [0, 0.52, 1])
+              : const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x660B1220), Color(0xB30B1220)]),
         ),
       ),
     ]);
