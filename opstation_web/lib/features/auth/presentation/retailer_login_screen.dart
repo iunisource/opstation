@@ -66,7 +66,14 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
   void _back() => context.go('/login');
 
   // ------------------------------ left: the shop ------------------------------
-  Widget _photo({required bool wide}) {
+  Widget _photo({required bool wide, double topInset = 0}) {
+    return LayoutBuilder(builder: (context, box) => _photoBody(wide: wide, topInset: topInset, boxH: box.maxHeight, boxW: box.maxWidth));
+  }
+
+  Widget _photoBody({required bool wide, required double topInset, required double boxH, required double boxW}) {
+    // A short window (a phone turned sideways) keeps the headline but drops the extras that would not fit.
+    final tall = boxH >= 600;
+    final tiny = boxW < 340; // very narrow phones: logo and name only
     return Stack(fit: StackFit.expand, children: [
       Image.network(
         'retailer_shop.jpg',
@@ -96,23 +103,30 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
         ),
       ),
       Padding(
-        padding: EdgeInsets.fromLTRB(wide ? 48 : 20, wide ? 36 : 16, wide ? 48 : 20, wide ? 40 : 16),
+        padding: EdgeInsets.fromLTRB(wide ? 48 : 20, (wide ? 36 : 14) + topInset, wide ? 48 : 20, wide ? 40 : 14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const BrandLogo(size: 40),
+            BrandLogo(size: wide ? 40 : 34),
             const SizedBox(width: 10),
             const Text('Opstation',
                 style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w800)),
-            const SizedBox(width: 10),
-            Text('· Retailer Portal',
-                style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 14, fontWeight: FontWeight.w500)),
+            if (!tiny) ...[
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text('· Retailer Portal',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 14, fontWeight: FontWeight.w500)),
+              ),
+            ],
           ]),
           const Spacer(),
           if (wide) ...[
-            const Text('Your orders and',
-                style: TextStyle(color: Colors.white, fontSize: 44, fontWeight: FontWeight.w800, height: 1.08, letterSpacing: -1.2)),
-            const Text('statement, anytime.',
-                style: TextStyle(color: Color(0xFF6E9BFF), fontSize: 44, fontWeight: FontWeight.w800, height: 1.08, letterSpacing: -1.2)),
+            Text('Your orders and',
+                style: TextStyle(color: Colors.white, fontSize: tall ? 44 : 34, fontWeight: FontWeight.w800, height: 1.08, letterSpacing: -1.2)),
+            Text('statement, anytime.',
+                style: TextStyle(color: const Color(0xFF6E9BFF), fontSize: tall ? 44 : 34, fontWeight: FontWeight.w800, height: 1.08, letterSpacing: -1.2)),
+            if (tall) ...[
             const SizedBox(height: 14),
             Text('See deliveries, download invoices and check what is due.',
                 style: TextStyle(color: Colors.white.withOpacity(0.88), fontSize: 17, height: 1.4)),
@@ -123,38 +137,45 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
               _Chip(Icons.receipt_long_outlined, 'Invoices'),
             ]),
             const SizedBox(height: 22),
+            ],
             Row(children: [
               Icon(Icons.lock_outline, size: 14, color: Colors.white.withOpacity(0.65)),
               const SizedBox(width: 6),
-              Text('Secured & encrypted · © 2026 Opstation',
-                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12.5)),
+              Flexible(
+                child: Text('Secured & encrypted · © 2026 Opstation',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12.5)),
+              ),
             ]),
           ] else
-            const Text('Your orders and statement, anytime.',
-                style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800, height: 1.15)),
+            Text('Your orders and statement, anytime.',
+                style: TextStyle(color: Colors.white, fontSize: boxW < 360 ? 19 : 22, fontWeight: FontWeight.w800, height: 1.15)),
         ]),
       ),
     ]);
   }
 
   // ------------------------------ right: the form ------------------------------
-  Widget _form(bool isLoading) {
+  Widget _form(bool isLoading, {bool compact = false}) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Sign in',
-            style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: _ink, letterSpacing: -0.5)),
-        const SizedBox(height: 8),
+        Text('Sign in',
+            style: TextStyle(fontSize: compact ? 26 : 30, fontWeight: FontWeight.w800, color: _ink, letterSpacing: -0.5)),
+        const SizedBox(height: 6),
         const Text('Use the code and password you were given.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
-        const SizedBox(height: 26),
+        SizedBox(height: compact ? 18 : 26),
         const Text('Code', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
         const SizedBox(height: 6),
         TextField(
           controller: _codeCtrl,
           focusNode: _codeFocus,
           textInputAction: TextInputAction.next,
+          autofillHints: const [AutofillHints.username],
+          autocorrect: false,
           onSubmitted: (_) => _passFocus.requestFocus(),
           style: const TextStyle(fontSize: 14, color: _ink),
           decoration: InputDecoration(
@@ -168,13 +189,14 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
             focusedBorder: _border(AppTheme.primary).copyWith(borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
           ),
         ),
-        const SizedBox(height: 18),
+        SizedBox(height: compact ? 14 : 18),
         const Text('Password', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _ink)),
         const SizedBox(height: 6),
         TextField(
           controller: _passCtrl,
           focusNode: _passFocus,
           obscureText: _obscure,
+          autofillHints: const [AutofillHints.password],
           onSubmitted: (_) => _submit(),
           style: const TextStyle(fontSize: 14, color: _ink),
           decoration: InputDecoration(
@@ -192,7 +214,7 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
             focusedBorder: _border(AppTheme.primary).copyWith(borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
           ),
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: compact ? 20 : 24),
         SizedBox(
           width: double.infinity,
           height: 50,
@@ -214,9 +236,10 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
                   ]),
           ),
         ),
-        const SizedBox(height: 22),
+        SizedBox(height: compact ? 14 : 22),
         Center(
-          child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+          child: Wrap(
+            alignment: WrapAlignment.center,crossAxisAlignment: WrapCrossAlignment.center, children: [
             const Text('Not a retailer? ', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
             TextButton(
               onPressed: _back,
@@ -264,16 +287,28 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
             ),
           ]);
         }
+        // Phones: a short photo band under the status bar, then the form. The band shrinks on short screens so the
+        // sign-in button stays in reach, and the page scrolls (and closes the keyboard on drag) when it still does not fit.
+        final top = MediaQuery.of(context).padding.top;
+        final bandH = (c.maxHeight * 0.22).clamp(128.0, 210.0) + top;
         return SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            SizedBox(height: 210, child: _photo(wide: false)),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _backLink(),
-                const SizedBox(height: 8),
-                _form(isLoading),
-              ]),
+            SizedBox(height: bandH, child: _photo(wide: false, topInset: top)),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 440),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      _backLink(),
+                      _form(isLoading, compact: true),
+                    ]),
+                  ),
+                ),
+              ),
             ),
           ]),
         );
