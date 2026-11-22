@@ -18,14 +18,28 @@ enum LoginVideoStatus {
 class LoginVideoController {
   final ValueNotifier<LoginVideoStatus> status = ValueNotifier(LoginVideoStatus.off);
   VoidCallback? _toggle;
+  VoidCallback? _toggleMute;
+
+  /// True while the sound is off. It starts true: browsers only let a page make sound by itself after the
+  /// person has touched it, so the sound comes on at the first click or key press (unless they muted it).
+  final ValueNotifier<bool> muted = ValueNotifier(true);
 
   /// The web video hands over how to pause / resume it.
-  void bind(VoidCallback? toggle) => _toggle = toggle;
+  void bind(VoidCallback? toggle, [VoidCallback? toggleMute]) {
+    _toggle = toggle;
+    _toggleMute = toggleMute;
+  }
+
+  /// Sound on / off.
+  void mute() => _toggleMute?.call();
 
   /// Pause when it plays, play when it is paused.
   void toggle() => _toggle?.call();
 
-  void dispose() => status.dispose();
+  void dispose() {
+    status.dispose();
+    muted.dispose();
+  }
 }
 
 /// Whether the login page should play its background video. It does not on a narrow screen (a phone: the

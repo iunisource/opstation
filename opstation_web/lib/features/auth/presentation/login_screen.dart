@@ -583,7 +583,143 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
 
   // ───────────────────────────── form panel (right) ─────────────────────────
+  /// The sign-in as one white strip along the top of a wide screen: logo, email, password, Sign in; and a
+  /// thin second line with remember-me, forgot password, sign up and the privacy link.
+  Widget _barPanel(bool isLoading) {
+    const ink = _ink;
+    const sec = AppTheme.textSecondary;
+    const link = AppTheme.primary;
+    InputDecoration dec(String hint, IconData icon, {Widget? suffix}) => InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(color: sec, fontSize: 14),
+          prefixIcon: Icon(icon, size: 18, color: sec),
+          suffixIcon: suffix,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+          filled: true,
+          fillColor: const Color(0xFFFAFBFC),
+          border: _border(),
+          enabledBorder: _border(),
+          focusedBorder: _border(AppTheme.primary).copyWith(borderSide: const BorderSide(color: AppTheme.primary, width: 1.5)),
+        );
+    TextButton small(String t, VoidCallback? f, {bool bold = false}) => TextButton(
+          onPressed: f,
+          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          child: Text(t, style: TextStyle(fontSize: 12.5, color: link, fontWeight: bold ? FontWeight.w700 : FontWeight.w600)),
+        );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(32, 12, 32, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.28), blurRadius: 30, offset: const Offset(0, 8))],
+      ),
+      child: AutofillGroup(
+        onDisposeAction: AutofillContextAction.cancel, // see the note in _formPanel
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _diagnosticBanner(),
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            _HomeLink(child: Row(mainAxisSize: MainAxisSize.min, children: const [
+              BrandLogo(size: 38),
+              SizedBox(width: 10),
+              Text('Opstation', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: ink)),
+            ])),
+            const SizedBox(width: 28),
+            Expanded(
+              child: TextField(
+                controller: _emailCtrl,
+                focusNode: _emailFocus,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                textInputAction: TextInputAction.next,
+                onSubmitted: (_) => _passFocus.requestFocus(),
+                style: const TextStyle(fontSize: 14, color: ink),
+                decoration: dec('Email  (name@company.com)', Icons.email_outlined),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: _passCtrl,
+                focusNode: _passFocus,
+                obscureText: _obscure,
+                autofillHints: const [AutofillHints.password],
+                onSubmitted: (_) => _submit(),
+                style: const TextStyle(fontSize: 14, color: ink),
+                decoration: dec('Password', Icons.lock_outline,
+                    suffix: IconButton(
+                      icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined, size: 18, color: sec),
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                      tooltip: _obscure ? 'Show password' : 'Hide password',
+                    )),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              height: 48,
+              width: 130,
+              child: ElevatedButton(
+                onPressed: isLoading ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  disabledBackgroundColor: AppTheme.primary.withOpacity(0.5),
+                ),
+                child: isLoading
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Text('Sign in', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                        SizedBox(width: 6),
+                        Icon(Icons.arrow_forward, size: 18),
+                      ]),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          Row(children: [
+            InkWell(
+              onTap: () => _setRemember(!_rememberMe),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: Checkbox(
+                      value: _rememberMe,
+                      onChanged: (v) => _setRemember(v ?? true),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      side: const BorderSide(color: sec, width: 1.5),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text('Keep me signed in', style: TextStyle(fontSize: 12.5, color: sec)),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 12),
+            small('Forgot password?', isLoading ? null : _forgotPassword),
+            const Spacer(),
+            const Text('New to Opstation?', style: TextStyle(fontSize: 12.5, color: sec)),
+            small('Sign up', _openSignup, bold: true),
+            const SizedBox(width: 10),
+            const Icon(Icons.lock_outline, size: 13, color: sec),
+            const SizedBox(width: 4),
+            const Text('Secured', style: TextStyle(fontSize: 12, color: sec)),
+            small('Privacy policy', () => html.window.open('https://opstationerp.com/privacy', '_blank')),
+          ]),
+        ]),
+      ),
+    );
+  }
+
   Widget _formPanel(bool isLoading, {required bool showLogo, LoginFormFrame frame = LoginFormFrame.card}) {
+    if (frame == LoginFormFrame.bar) return _barPanel(isLoading);
     final sheet = frame == LoginFormFrame.sheet;
     // On a wide screen the card is see-through (the video shows behind it); on a phone it stays a solid sheet.
     final glass = !sheet;

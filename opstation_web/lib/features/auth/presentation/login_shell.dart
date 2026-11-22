@@ -6,7 +6,7 @@ import 'login_video_api.dart';
 
 /// How the sign-in form is framed: a floating card beside the headline (wide screens), or a sheet rising
 /// from the bottom of the screen (phones).
-enum LoginFormFrame { card, sheet }
+enum LoginFormFrame { card, sheet, bar }
 
 /// The video (or, failing that, the still picture) behind the login page, under a dark layer that keeps the
 /// words readable.
@@ -49,7 +49,15 @@ class LoginPauseButton extends StatelessWidget {
       builder: (context, s, _) {
         if (s == LoginVideoStatus.off || s == LoginVideoStatus.loading) return const SizedBox.shrink();
         final paused = s == LoginVideoStatus.paused;
-        return OutlinedButton.icon(
+        final style = OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          backgroundColor: const Color(0x8C0B1220),
+          side: const BorderSide(color: Color(0x4DFFFFFF)),
+          shape: const StadiumBorder(),
+          minimumSize: const Size(44, 44),
+          padding: EdgeInsets.zero,
+        );
+        final playBtn = OutlinedButton.icon(
           onPressed: controller.toggle,
           icon: Icon(paused ? Icons.play_arrow_rounded : Icons.pause_rounded, size: 18),
           label: Text(paused ? 'Play background' : 'Pause background'),
@@ -63,6 +71,18 @@ class LoginPauseButton extends StatelessWidget {
             textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
           ),
         );
+        final muteBtn = ValueListenableBuilder<bool>(
+          valueListenable: controller.muted,
+          builder: (context, m, _) => Tooltip(
+            message: m ? 'Sound on' : 'Mute',
+            child: OutlinedButton(
+              onPressed: controller.mute,
+              style: style,
+              child: Icon(m ? Icons.volume_off_rounded : Icons.volume_up_rounded, size: 20),
+            ),
+          ),
+        );
+        return Row(mainAxisSize: MainAxisSize.min, children: [playBtn, const SizedBox(width: 8), muteBtn]);
       },
     );
   }
@@ -81,7 +101,7 @@ class LoginShell extends StatelessWidget {
     required this.footer,
     required this.retailerButton,
     required this.form,
-    this.videoSrc = 'login_bg_v4.mp4',
+    this.videoSrc = 'login_bg_v5.mp4',
     this.wideAt = 900,
   });
 
@@ -101,43 +121,27 @@ class LoginShell extends StatelessWidget {
   }
 
   Widget _wide() {
+    // The sign-in is a solid white strip along the top, so the video needs no tint behind it.
     return Stack(children: [
       Positioned.fill(child: LoginBackdrop(controller: controller, src: videoSrc, wide: true)),
       Positioned.fill(
         child: Column(children: [
-          SizedBox(
-            height: 74,
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Padding(padding: const EdgeInsets.only(left: 48), child: logo),
-              const Spacer(),
-              Padding(padding: const EdgeInsets.only(right: 32), child: retailerButton(false)),
-            ]),
-          ),
+          form(LoginFormFrame.bar),
           Expanded(
-            child: Row(children: [
-              Expanded(
-                flex: 11,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 96, right: 24),
-                  child: Align(alignment: Alignment.centerLeft, child: SingleChildScrollView(child: headline)),
-                ),
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 96, right: 24, bottom: 8),
+                child: SingleChildScrollView(reverse: true, child: headline),
               ),
-              Expanded(
-                flex: 9,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                    child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 480), child: form(LoginFormFrame.card)),
-                  ),
-                ),
-              ),
-            ]),
+            ),
           ),
           SizedBox(
             height: 64,
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               Padding(padding: const EdgeInsets.only(left: 48), child: footer),
               const Spacer(),
+              Padding(padding: const EdgeInsets.only(right: 16), child: retailerButton(false)),
               Padding(padding: const EdgeInsets.only(right: 32), child: LoginPauseButton(controller: controller)),
             ]),
           ),

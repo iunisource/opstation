@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 
 import 'login_video_api.dart';
 
-/// The login page's background video, drawn by the browser behind the Flutter widgets: silent, looping,
+/// The login page's background video, drawn by the browser behind the Flutter widgets: looping, silent until the person's first touch (browsers require it), then at half volume;
 /// starting by itself. It fades in over the still background once it is really playing, and if anything
 /// goes wrong (no file, blocked, an error) it simply stays hidden, so signing in never depends on it.
 class LoginVideoLayer extends StatefulWidget {
@@ -28,6 +28,9 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
   html.VideoElement? _video;
   bool _enabled = false;
   bool _gone = false;
+  bool _userMuted = false; // the person pressed the mute button: never switch the sound on again by ourselves
+  static const double _volume = 0.5;
+  StreamSubscription<dynamic>? _g1, _g2, _g3;
 
   static bool _reducedMotion() {
     try {
@@ -117,6 +120,7 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
       v.onPlaying.listen((_) {
         v.style.opacity = '1';
         _status(LoginVideoStatus.playing);
+        _tryUnmute();
       });
       _video = v;
       Future.microtask(() async {
@@ -129,8 +133,52 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
       });
       return v;
     });
-    widget.controller.bind(_toggle);
+    widget.controller.bind(_toggle, _toggleMute);
     _status(LoginVideoStatus.loading);
+    // Sound needs a touch from the person first: on the first click, tap or key press, switch it on.
+    _g1 = html.document.onMouseDown.listen((_) => _tryUnmute());
+    _g2 = html.document.onKeyDown.listen((_) => _tryUnmute());
+    _g3 = html.document.onTouchStart.listen((_) => _tryUnmute());
+  }
+
+  void _setMuted(bool m) {
+    final v = _video;
+    if (v == null) return;
+    v.muted = m;
+    v.volume = _volume; // half volume
+    try {
+      widget.controller.muted.value = m;
+    } catch (_) {}
+  }
+
+  /// Sound on at half volume, if the browser allows it; otherwise the video carries on silently.
+  void _tryUnmute() {
+    final v = _video;
+    if (v == null || _gone || _userMuted || !v.muted || v.paused) return;
+    _setMuted(false);
+    // A browser that refuses sound pauses the video: put it back to silent playing.
+    Future.delayed(const Duration(milliseconds: 250), () {
+      if (_gone) return;
+      if (v.paused && !_userPaused) {
+        _setMuted(true);
+        v.play().catchError((_) {});
+      }
+    });
+  }
+
+  bool _userPaused = false;
+
+  void _toggleMute() {
+    final v = _video;
+    if (v == null) return;
+    if (v.muted) {
+      _userMuted = false;
+      _setMuted(false);
+      if (v.paused && !_userPaused) v.play().catchError((_) {});
+    } else {
+      _userMuted = true;
+      _setMuted(true);
+    }
   }
 
   void _fail() {
@@ -142,9 +190,11 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
     final v = _video;
     if (v == null) return;
     if (v.paused) {
+      _userPaused = false;
       v.play().catchError((_) {});
       _status(LoginVideoStatus.playing);
     } else {
+      _userPaused = true;
       v.pause();
       _status(LoginVideoStatus.paused);
     }
@@ -154,6 +204,9 @@ class _LoginVideoLayerState extends State<LoginVideoLayer> {
   void dispose() {
     _gone = true;
     widget.controller.bind(null);
+    _g1?.cancel();
+    _g2?.cancel();
+    _g3?.cancel();
     final v = _video;
     if (v != null) {
       v.pause();
