@@ -552,6 +552,24 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                       } catch (_) { /* non-fatal: can be set later via Edit before any transactions */ }
                     }
                   }
+                  // A brand-new organization starts with one branch, "Branch 1", so the admin can
+                  // work straight away instead of hunting for where branches are created. Skipped when
+                  // the org already has a branch; failure is non-fatal (it can be added in Branches).
+                  if (!isEdit && newOrgId != null) {
+                    try {
+                      final c = Supabase.instance.client;
+                      final have = await c.from('branches').select('id').eq('org_id', newOrgId).limit(1);
+                      if ((have as List).isEmpty) {
+                        await c.from('branches').insert({
+                          'id': 'wh_${DateTime.now().millisecondsSinceEpoch}',
+                          'org_id': newOrgId,
+                          'name': 'Branch 1',
+                          'is_active': true,
+                          'is_virtual': false,
+                        });
+                      }
+                    } catch (_) {/* non-fatal */}
+                  }
                   if (dCtx.mounted) {
                     ScaffoldMessenger.of(dCtx)
                       ..clearSnackBars()
