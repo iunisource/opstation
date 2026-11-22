@@ -72,9 +72,6 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
   Map<String, List<Map<String, dynamic>>> _children = {};
   final Set<String> _expanded = {};
   double _grandAmount = 0;
-  double _retAmt = 0; // posted sales returns in the period (deducted for Net sales)
-  int _retDocs = 0;
-  bool _retSkipped = true; // returns not deducted (product filter / POS-only / lookup failed)
   double _grandQty = 0;
   int _docCount = 0;
   final _searchCtrl = TextEditingController();
@@ -521,37 +518,6 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         children[k] = m.values.toList()
           ..sort((a, b) => (b['amount'] as double).compareTo(a['amount'] as double));
       });
-      // Sales returns (posted, not voided) for the same period / branch / customer filters, so the
-      // totals can show Gross → Returns → Net sales. Returns belong to a customer, not a product, so
-      // they are not deducted while a product filter is active (or for POS-only).
-      double retAmt = 0;
-      int retDocs = 0;
-      bool retSkipped = _productFilterActive || _source == 'pos';
-      if (!retSkipped) {
-        try {
-          for (var from = 0; ; from += 1000) {
-            var rq = c
-                .from('sales_return_invoices')
-                .select('customer_id, branch_id, grand_total, is_voided')
-                .eq('org_id', _orgId!)
-                .eq('is_locked', true)
-                .gte('voucher_date', fromStr)
-                .lte('voucher_date', toStr);
-            if (_branch != 'all') rq = rq.eq('branch_id', _branch);
-            final page = await rq.range(from, from + 999);
-            for (final r in page) {
-              if (r['is_voided'] == true) continue;
-              if (!_custPassesFilter(r['customer_id'] as String?)) continue;
-              retAmt += _d(r['grand_total']);
-              retDocs++;
-            }
-            if (page.length < 1000) break;
-          }
-        } catch (_) {
-          retSkipped = true; // never block the report on the returns lookup
-        }
-      }
-
       final grandAmt = rows.fold<double>(0, (s, r) => s + (r['amount'] as double));
       final grandQty = rows.fold<double>(0, (s, r) => s + (r['qty'] as double));
 
@@ -561,9 +527,6 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         _children = children;
         _expanded.clear();
         _grandAmount = grandAmt;
-        _retAmt = retAmt;
-        _retDocs = retDocs;
-        _retSkipped = retSkipped;
         _grandQty = grandQty;
         _docCount = docs;
         _ran = true;
@@ -927,9 +890,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             _kv(productMode ? 'Products' : 'Customers', '${_rows.length}'),
             _kv('Documents', '$_docCount'),
             if (productMode) _kv('Total qty', _qtyFmt.format(_grandQty)),
-            _kv(_retSkipped ? 'Total sales' : 'Gross sales', _money.format(_grandAmount)),
-            if (!_retSkipped) _kv('Returns ($_retDocs)', '− ${_money.format(_retAmt)}'),
-            if (!_retSkipped) _kv('Net sales', _money.format(_grandAmount - _retAmt)),
+            _kv('Total sales', _money.format(_grandAmount)),
           ]),
         ),
         OutlinedButton.icon(
@@ -1261,11 +1222,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
 
     final bodyRows = <pw.Widget>[for (final r in data) rowW(r)];
     final netLines = <String>[
-      if (_retSkipped) 'Total sales: ${_money.format(totalAmt)}' else ...[
-        'Gross sales: ${_money.format(totalAmt)}',
-        'Returns ($_retDocs): - ${_money.format(_retAmt)}',
-        'Net sales: ${_money.format(totalAmt - _retAmt)}',
-      ],
+      'Total sales: ${_money.format(totalAmt)}',
     ];
 
     doc.addPage(pw.MultiPage(
