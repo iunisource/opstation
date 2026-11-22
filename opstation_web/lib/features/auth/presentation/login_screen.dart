@@ -725,8 +725,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget _formPanel(bool isLoading, {required bool showLogo, LoginFormFrame frame = LoginFormFrame.card}) {
     if (frame == LoginFormFrame.bar) return _barPanel(isLoading);
     final sheet = frame == LoginFormFrame.sheet;
-    // On a wide screen the card is see-through (the video shows behind it); on a phone it stays a solid sheet.
-    final glass = !sheet;
+    // Solid white on a wide screen (mid-right card) and as a bottom sheet on a phone.
+    const glass = false; // the card is solid white on every screen size
     final ink = glass ? Colors.white : _ink;
     final sec = glass ? const Color(0xC7FFFFFF) : AppTheme.textSecondary;
     final link = glass ? const Color(0xFF8FB4FF) : AppTheme.primary;

@@ -121,19 +121,30 @@ class LoginShell extends StatelessWidget {
   }
 
   Widget _wide() {
-    // The sign-in is a solid white strip along the top, so the video needs no tint behind it.
+    // Logo and the retailer button along the top, the headline on the left and a solid sign-in card mid-right.
     return Stack(children: [
       Positioned.fill(child: LoginBackdrop(controller: controller, src: videoSrc, wide: true)),
       Positioned.fill(
         child: Column(children: [
-          form(LoginFormFrame.bar),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(48, 28, 48, 0),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              logo,
+              const Spacer(),
+              retailerButton(false),
+            ]),
+          ),
           Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(48, 12, 24, 12),
-                child: SingleChildScrollView(child: headline),
-              ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(48, 12, 72, 12),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Expanded(child: Align(alignment: Alignment.centerLeft, child: SingleChildScrollView(child: headline))),
+                const SizedBox(width: 32),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  child: Center(child: SingleChildScrollView(child: form(LoginFormFrame.card))),
+                ),
+              ]),
             ),
           ),
           SizedBox(
@@ -141,7 +152,6 @@ class LoginShell extends StatelessWidget {
             child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               Padding(padding: const EdgeInsets.only(left: 48), child: footer),
               const Spacer(),
-              Padding(padding: const EdgeInsets.only(right: 12), child: retailerButton(false)),
               Padding(padding: const EdgeInsets.only(right: 48), child: LoginPauseButton(controller: controller)),
             ]),
           ),
