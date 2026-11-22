@@ -77,7 +77,7 @@ class LoginScenePainter extends CustomPainter {
   bool shouldRepaint(covariant LoginScenePainter old) => old.seed != seed || old.density != density || old.t != t;
 }
 
-/// The login background: the same trails, drifting slowly. One loop is a minute, so it is calm rather than busy.
+/// The login background: the same trails, drifting slowly. One loop is 40 seconds.
 /// It stands still when the device asks for less motion.
 class LoginTrails extends StatefulWidget {
   const LoginTrails({super.key});
@@ -87,7 +87,7 @@ class LoginTrails extends StatefulWidget {
 }
 
 class _LoginTrailsState extends State<LoginTrails> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 60));
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 40));
 
   @override
   void didChangeDependencies() {
@@ -114,4 +114,125 @@ class _LoginTrailsState extends State<LoginTrails> with SingleTickerProviderStat
       ),
     );
   }
+}
+
+/// A truck-art truck driving along the road at the bottom of the login page, on and on. The truck itself stays
+/// put and the road slides under it, so it never leaves the picture or covers the sign-in form. The wheels
+/// turn at the speed of the road. Only on wide screens; it stands still when the device asks for less motion.
+class LoginRoadTruck extends StatefulWidget {
+  const LoginRoadTruck({super.key});
+
+  @override
+  State<LoginRoadTruck> createState() => _LoginRoadTruckState();
+}
+
+class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProviderStateMixin {
+  // One hour per cycle; the time in seconds is read from the value, so nothing visibly restarts.
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(hours: 1));
+
+  static const _imgW = 621.0, _imgH = 356.0;
+  static const _hubR = 28.0, _tireR = 57.0;
+  static const _hubs = [Offset(140, 300), Offset(482, 300)];
+  static const _speed = 200.0; // pixels per second the road moves
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.of(context).disableAnimations) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: LayoutBuilder(builder: (context, c) {
+        final h = c.maxHeight;
+        if (h < 520 || c.maxWidth < 700) return const SizedBox.shrink();
+        final roadH = (h * 0.185).clamp(90.0, 150.0);
+        final w = (h * 0.437).clamp(220.0, 354.0); // 15% smaller than the first mockup
+        final s = w / _imgW;
+        final bottom = roadH * 0.7;
+        return AnimatedBuilder(
+          animation: _c,
+          builder: (_, __) {
+            final sec = _c.value * 3600.0;
+            final dist = sec * _speed;
+            final angle = dist / (_tireR * s);
+            final bob = math.sin(sec * 9) * 0.7;
+            return Stack(children: [
+              Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(dist))),
+              Positioned(
+                left: 56,
+                bottom: bottom - 6,
+                width: w,
+                height: 14,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(40),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 14, spreadRadius: 1)],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 56,
+                bottom: bottom + bob,
+                width: w,
+                height: w * _imgH / _imgW,
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: Image.network('truck_art.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                  ),
+                  for (final o in _hubs)
+                    Positioned(
+                      left: (o.dx - _hubR) * s,
+                      top: (o.dy - _hubR) * s,
+                      width: _hubR * 2 * s,
+                      height: _hubR * 2 * s,
+                      child: Transform.rotate(
+                        angle: angle,
+                        child: Image.network('truck_hub.png', fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                      ),
+                    ),
+                ]),
+              ),
+            ]);
+          },
+        );
+      }),
+    );
+  }
+}
+
+class _RoadPainter extends CustomPainter {
+  const _RoadPainter(this.dist);
+  final double dist;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    canvas.drawRect(
+      rect,
+      Paint()..shader = ui.Gradient.linear(Offset.zero, Offset(0, size.height), const [Color(0xFF18223C), Color(0xFF0C1324)]),
+    );
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, 3), Paint()..color = const Color(0xFF2A3A63));
+    const period = 240.0, dashW = 90.0;
+    final dashPaint = Paint()..color = const Color(0xFFE8C46A).withOpacity(0.7);
+    final y = size.height * 0.62;
+    final shift = dist % period;
+    for (var x = -period - shift + period; x < size.width + period; x += period) {
+      canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, y, dashW, 5), const Radius.circular(3)), dashPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoadPainter old) => old.dist != dist;
 }

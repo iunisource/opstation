@@ -34,6 +34,7 @@ class LoginBackdrop extends StatelessWidget {
               : const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x660B1220), Color(0xB30B1220)]),
         ),
       ),
+      if (wide) const LoginRoadTruck(),
     ]);
   }
 }
