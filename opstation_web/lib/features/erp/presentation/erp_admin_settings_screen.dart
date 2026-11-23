@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
+import 'restore_backup_dialog.dart';
 import '../../../core/notifications/alert_chime.dart';
 import '../../../core/notifications/floating_alert_preview.dart';
 import '../../../core/notifications/floating_alerts_model.dart';
@@ -1217,6 +1218,7 @@ class _ErpAdminSettingsScreenState
         _textCtrls[t.text!.key] = TextEditingController();
       }
     }
+    _textCtrls['org.backup_alert_emails'] = TextEditingController();
     // Start with every section collapsed — a clean overview the admin can
     // expand into, instead of one long wall of switches.
     _collapsedGroups.addAll([for (final g in _toggleGroupsOrder) g.title]);
@@ -1348,6 +1350,7 @@ class _ErpAdminSettingsScreenState
                     .toSet();
           }
         }
+        _textCtrls['org.backup_alert_emails']!.text = cfg['org.backup_alert_emails'] ?? '';
         _loading = false;
       });
     } catch (_) {
@@ -2115,17 +2118,33 @@ class _ErpAdminSettingsScreenState
                     return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
                   })(),
                 ),
+                const SizedBox(height: 8),
+                _textRow(const _TextSetting('org.backup_alert_emails', 'Fallback email for backup alerts',
+                    hint: 'If a backup fails, master admins and this address are emailed')),
                 const SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerRight,
-                  child: ElevatedButton.icon(
-                    onPressed: _backupRunning ? null : _backupNow,
-                    icon: _backupRunning
-                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.backup_outlined, size: 18),
-                    label: Text(_backupRunning ? 'Backing up…' : 'Back up now'),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
-                  ),
+                  child: Wrap(spacing: 10, runSpacing: 8, alignment: WrapAlignment.end, children: [
+                    if ((() {
+                      final r = ref.read(currentUserProvider)?.role;
+                      return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
+                    })())
+                      OutlinedButton.icon(
+                        onPressed: _backupRunning
+                            ? null
+                            : () => showRestoreBackupDialog(context, orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                        icon: const Icon(Icons.settings_backup_restore, size: 18),
+                        label: const Text('Restore from backup'),
+                      ),
+                    ElevatedButton.icon(
+                      onPressed: _backupRunning ? null : _backupNow,
+                      icon: _backupRunning
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.backup_outlined, size: 18),
+                      label: Text(_backupRunning ? 'Backing up…' : 'Back up now'),
+                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+                    ),
+                  ]),
                 ),
               ]),
             ),
