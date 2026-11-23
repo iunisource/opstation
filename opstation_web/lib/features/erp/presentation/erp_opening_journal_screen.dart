@@ -47,6 +47,8 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
   List<Map<String,dynamic>> _customerList = [];
   List<Map<String,dynamic>> _allAccounts = [];
   List<Map<String,dynamic>> _auditTrail = [];
+  List<Map<String,dynamic>> _lineHistory = []; // old lines, one row per replaced line
+  List<Map<String,dynamic>> _curLines = [];     // the lines as saved now
   bool _loadingMaster = true, _saving = false;
   String? _pendingFocusId;
   int _auditSeq = 0;
@@ -194,7 +196,7 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
   void _newVoucher() {
     for (final l in _lines) l.dispose();
     setState(() { _current = null; _status = 'draft'; _lines = [_JvLine(), _JvLine()];
-      _auditTrail = []; _date = DateTime.now(); _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date); _narCtrl.clear(); });
+      _auditTrail = []; _lineHistory = []; _curLines = []; _date = DateTime.now(); _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date); _narCtrl.clear(); });
   }
 
   Future<void> _loadVoucher(Map<String,dynamic> v) async {
@@ -385,6 +387,17 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
       final rows = await Supabase.instance.client.from('jv_audit_trail').select().eq('entry_id', entryId).order('performed_at');
       if (mounted) setState(() => _auditTrail = List<Map<String,dynamic>>.from(rows));
     } catch (_) {}
+    // What was actually changed: the lines each save replaced, and the lines now.
+    try {
+      final h = await Supabase.instance.client.rpc('jv_line_history', params: {'p_entry': entryId});
+      final cur = await Supabase.instance.client.from('journal_lines')
+          .select('account_id, account_name, party_id, description, debit, credit, line_order')
+          .eq('entry_id', entryId).order('line_order');
+      if (mounted) setState(() {
+        _lineHistory = [for (final r in (h as List? ?? [])) Map<String,dynamic>.from(r as Map)];
+        _curLines = List<Map<String,dynamic>>.from(cur as List);
+      });
+    } catch (_) {}
   }
 
   Future<void> _logAudit(String action, {String? notes}) async {
@@ -405,28 +418,114 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
     } catch (_) { /* the history note is best-effort; never interrupt the user */ }
   }
 
+  static double _n(dynamic v) => (v is num) ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+  static String _amt(Map r) {
+    final d = _n(r['debit']), c = _n(r['credit']);
+    return d > 0 ? 'Dr ${money(d)}' : (c > 0 ? 'Cr ${money(c)}' : '0');
+  }
+
+  /// Plain-words list of what differs between two sets of lines.
+  List<String> _diffLines(List<Map> before, List<Map> after) {
+    int ord(Map r) => _n(r['line_order']).toInt();
+    final bs = [...before]..sort((x, y) => ord(x).compareTo(ord(y)));
+    final as_ = [...after]..sort((x, y) => ord(x).compareTo(ord(y)));
+    Map<String, Map> keyed(List<Map> rows) {
+      final seen = <String, int>{}; final m = <String, Map>{};
+      for (final r in rows) {
+        final base = '${r['party_id'] ?? r['account_id'] ?? ''}';
+        final n = seen[base] = (seen[base] ?? 0) + 1;
+        m['$base#$n'] = r;
+      }
+      return m;
+    }
+    final b = keyed(bs), a = keyed(as_);
+    String name(Map r) {
+      final n = '${r['account_name'] ?? ''}'.trim();
+      return n.isEmpty ? '${r['party_id'] ?? r['account_id'] ?? 'Line'}' : n;
+    }
+    final out = <String>[];
+    final tb = bs.fold<double>(0, (t, r) => t + _n(r['debit']));
+    final ta = as_.fold<double>(0, (t, r) => t + _n(r['debit']));
+    out.add((tb - ta).abs() < 0.005 ? 'Total Dr unchanged: ${money(ta)}' : 'Total Dr: ${money(tb)} → ${money(ta)}  (${ta > tb ? '+' : '-'}${money((ta - tb).abs())})');
+    for (final k in a.keys) {
+      final n = a[k]!; final o = b[k];
+      if (o == null) { out.add('Added: ${name(n)}  ${_amt(n)}'); continue; }
+      final parts = <String>[];
+      if (_amt(o) != _amt(n)) parts.add('${_amt(o)} → ${_amt(n)}');
+      if ('${o['description'] ?? ''}'.trim() != '${n['description'] ?? ''}'.trim()) {
+        parts.add('note "${'${o['description'] ?? ''}'.trim()}" → "${'${n['description'] ?? ''}'.trim()}"');
+      }
+      if ('${o['account_id'] ?? ''}' != '${n['account_id'] ?? ''}') parts.add('posting account changed');
+      if (parts.isNotEmpty) out.add('Changed: ${name(n)}  ${parts.join('; ')}');
+    }
+    for (final k in b.keys) {
+      if (!a.containsKey(k)) out.add('Removed: ${name(b[k]!)}  ${_amt(b[k]!)}');
+    }
+    return out;
+  }
+
+  String _stamp(DateTime? t) => t == null ? '' : t.toUtc().toIso8601String().substring(0, 16).replaceAll('T', ' ');
+
   void _showAuditTrail() {
+    // One timeline: the audit notes plus "lines changed" blocks built from history.
+    final items = <Map<String, dynamic>>[];
+    for (final e in _auditTrail) {
+      items.add({'t': DateTime.tryParse('${e['performed_at'] ?? ''}')?.toUtc(), 'audit': e});
+    }
+    final batches = <String, List<Map<String, dynamic>>>{};
+    final byWho = <String, String>{};
+    for (final h in _lineHistory) {
+      final k = '${h['removed_at']}';
+      (batches[k] ??= []).add(Map<String, dynamic>.from((h['line'] as Map?) ?? {}));
+      if ('${h['by'] ?? ''}'.isNotEmpty) byWho[k] = '${h['by']}';
+    }
+    final keys = batches.keys.toList()..sort();
+    for (var i = 0; i < keys.length; i++) {
+      final before = batches[keys[i]]!;
+      final after = i + 1 < keys.length ? batches[keys[i + 1]]! : _curLines;
+      final diff = _diffLines(before, after);
+      items.add({'t': DateTime.tryParse(keys[i])?.toUtc(), 'changes': diff, 'by': byWho[keys[i]]});
+    }
+    items.sort((x, y) {
+      final a = x['t'] as DateTime?, b = y['t'] as DateTime?;
+      if (a == null || b == null) return 0;
+      return b.compareTo(a); // newest first
+    });
     showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text('Audit Trail'),
-      content: SizedBox(width: 420, child: _auditTrail.isEmpty
+      content: SizedBox(width: 560, height: 460, child: items.isEmpty
           ? const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('No audit records yet.', style: TextStyle(color: AppTheme.textSecondary)))
           : ListView.separated(
-              shrinkWrap: true,
-              itemCount: _auditTrail.length,
+              itemCount: items.length,
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final e = _auditTrail[i];
-                final raw = e['performed_at'] as String? ?? '';
-                final at = raw.length >= 16 ? raw.substring(0, 16).replaceAll('T', ' ') : raw;
+                final it = items[i];
+                final at = _stamp(it['t'] as DateTime?);
+                if (it['changes'] != null) {
+                  final lines = it['changes'] as List<String>;
+                  final by = it['by'] as String?;
+                  return Padding(padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Padding(padding: EdgeInsets.only(right: 12, top: 2), child: Icon(Icons.edit_note, size: 20, color: Colors.indigo)),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('LINES CHANGED', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                      Text('${by != null ? '$by  •  ' : ''}$at', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                      const SizedBox(height: 4),
+                      for (final l in lines) Padding(padding: const EdgeInsets.only(bottom: 2), child: SelectableText(l, style: const TextStyle(fontSize: 11.5))),
+                    ])),
+                  ]));
+                }
+                final e = it['audit'] as Map<String, dynamic>;
+                final act = e['action'] as String? ?? '';
                 final who = e['performed_by_name'] as String? ?? 'Unknown';
                 final notes = e['notes'] as String? ?? '';
-                return ListTile(
-                  dense: true,
-                  leading: Icon(_auditIcon(e['action'] as String? ?? ''), size: 18, color: _auditColor(e['action'] as String? ?? '')),
-                  title: Text((e['action'] as String? ?? '').toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                  subtitle: Text('$who  •  $at${notes.isNotEmpty ? '\n$notes' : ''}', style: const TextStyle(fontSize: 11)),
-                  isThreeLine: notes.isNotEmpty,
-                );
+                return Padding(padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Padding(padding: const EdgeInsets.only(right: 12, top: 2), child: Icon(_auditIcon(act), size: 20, color: _auditColor(act))),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(act.toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                    Text('$who  •  $at', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    if (notes.isNotEmpty) Text(notes, style: const TextStyle(fontSize: 11.5)),
+                  ])),
+                ]));
               },
             )),
       actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
