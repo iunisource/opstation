@@ -287,6 +287,8 @@
     .ctl i { color: var(--marigold); flex-shrink: 0; }
 
     /* LOCAL */
+    .erp-pill { display: inline-block; margin-left: 9px; padding: 2px 8px; border-radius: 20px; font-family: var(--body); font-size: .68rem; font-weight: 800; letter-spacing: .09em; line-height: 1.5; background: rgba(47,111,237,.08); border: 1px solid rgba(47,111,237,.25); color: var(--blue-dk); vertical-align: middle; }
+    footer .erp-pill, .dark .erp-pill { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.18); color: #9DBBFA; }
     .local { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 36px; }
     @media (min-width: 900px) { .local { grid-template-columns: repeat(4, 1fr); gap: 16px; } }
     .local li { border: 1px solid var(--line); border-radius: 16px; padding: 18px 16px; background: #fff; transition: transform .2s ease, border-color .2s ease; }
@@ -379,7 +381,7 @@
 <body>
   <header class="nav">
     <div class="wrap">
-      <a href="#top" class="brand"><img src="/logo.png?v=2" alt="" width="32" height="32" />Opstation ERP</a>
+      <a href="#top" class="brand"><img src="/logo.png?v=2" alt="" width="32" height="32" />Opstation<span class="erp-pill">ERP</span></a>
       <nav class="nav-links" aria-label="Sections">
         <a href="#answers">What it solves</a>
         
@@ -860,7 +862,7 @@
 
   <footer class="foot">
     <div class="wrap">
-      <a href="#top" class="brand"><img src="/logo.png?v=2" alt="" width="32" height="32" />Opstation ERP</a>
+      <a href="#top" class="brand"><img src="/logo.png?v=2" alt="" width="32" height="32" />Opstation<span class="erp-pill">ERP</span></a>
       <nav aria-label="Footer">
         <a href="#answers">What it solves</a><a href="#flow">How it works</a><a href="#field">Field app</a><a href="#contact">Contact us</a><a href="https://opstation-f06c7.web.app">Sign in</a><a href="/privacy">Privacy policy</a>
       </nav>
