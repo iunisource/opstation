@@ -558,6 +558,7 @@ class ReportPdfBuilder {
         _sectionTitle('Visit Details'),
         pw.SizedBox(height: 6),
         _visitDetailsTable(ctx),
+        ..._freeVisitSection(ctx),
         pw.SizedBox(height: 10),
         _receiptsFooter(ctx),
         _receiptGapsNote(ctx),
@@ -566,6 +567,70 @@ class ReportPdfBuilder {
       ],
     ));
     return doc.save();
+  }
+
+  /// "Other Visits": the places marked without a customer (Free Route, or a stop away from the
+  /// customers). They have no visit status, so each is shown as verified. Each line carries the
+  /// place name, the GPS point (a Google Maps link), the date and time, and the picture.
+  static List<pw.Widget> _freeVisitSection(TripReportContext ctx) {
+    final free = [for (final v in ctx.visits) if (visitIsFree(v)) v]
+      ..sort((a, b) => '${a['timestamp']}'.compareTo('${b['timestamp']}'));
+    if (free.isEmpty) return const [];
+    final hdr = pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: _muted, letterSpacing: 0.3);
+    pw.Widget cell(pw.Widget w, [pw.Alignment a = pw.Alignment.centerLeft]) =>
+        pw.Container(alignment: a, padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4), child: w);
+    pw.Widget head(String t, [pw.Alignment a = pw.Alignment.centerLeft]) => cell(pw.Text(t, style: hdr), a);
+
+    final rows = <pw.TableRow>[
+      pw.TableRow(decoration: const pw.BoxDecoration(color: _bg), children: [
+        head('#', pw.Alignment.center), head('PLACE / LOCATION'), head('DATE & TIME'), head('STATUS'), head('PICTURE'),
+      ]),
+    ];
+    for (var i = 0; i < free.length; i++) {
+      final v = free[i];
+      final lat = (v['captured_lat'] as num?)?.toDouble();
+      final lng = (v['captured_lng'] as num?)?.toDouble();
+      final name = ctx.freePlaceNames['${v['id']}'];
+      final hasName = name != null && name.isNotEmpty;
+      final when = DateTime.tryParse('${v['timestamp'] ?? ''}')?.toLocal();
+      final photo = ctx.freePhotos['${v['id']}'];
+      rows.add(pw.TableRow(children: [
+        cell(pw.Text('${i + 1}', style: const pw.TextStyle(fontSize: 8, color: _ink)), pw.Alignment.center),
+        cell(pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          pw.Text(hasName ? _pdfSafe(name) : '(place name not available)',
+              style: pw.TextStyle(fontSize: 8.5, fontWeight: hasName ? pw.FontWeight.bold : pw.FontWeight.normal, color: hasName ? _ink : _muted)),
+          if (lat != null && lng != null)
+            pw.UrlLink(
+              destination: mapsLink(lat, lng),
+              child: pw.Text('${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}',
+                  style: pw.TextStyle(fontSize: 7.5, color: PdfColors.blue, decoration: pw.TextDecoration.underline)),
+            ),
+        ])),
+        cell(pw.Text(when == null ? '-' : DateFormat(orgTime('d MMM yyyy, hh:mm a')).format(when), style: const pw.TextStyle(fontSize: 8, color: _ink))),
+        cell(pw.Text('VERIFIED', style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.green700))),
+        cell(photo == null ? pw.Text('-', style: const pw.TextStyle(fontSize: 8, color: _muted)) : _photoThumb(photo)),
+      ]));
+    }
+    return [
+      pw.SizedBox(height: 14),
+      _sectionTitle('Other Visits (no customer)'),
+      pw.SizedBox(height: 2),
+      pw.Text('Places marked without a customer: location from the phone\'s GPS, verified by default.',
+          style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+      pw.SizedBox(height: 6),
+      pw.Table(
+        columnWidths: const {
+          0: pw.FixedColumnWidth(22),
+          1: pw.FlexColumnWidth(5),
+          2: pw.FixedColumnWidth(92),
+          3: pw.FixedColumnWidth(50),
+          4: pw.FixedColumnWidth(68),
+        },
+        border: pw.TableBorder.all(color: _ruleSoft, width: 0.3),
+        children: rows,
+      ),
+      _photoNote(ctx),
+    ];
   }
 
   // ========= Trip Summary ================================================

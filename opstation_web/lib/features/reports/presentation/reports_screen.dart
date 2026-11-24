@@ -262,6 +262,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         customersById: _customersById,
         placesOf: tripPlaceNames, // start / end area names, fetched together with the road distances
         withPlannedStops: true,
+        withPhotos: true, // thumbnails of the pictures taken at non-customer visits
       );
       final orgName =
           ref.read(currentUserProvider)?.orgName ?? 'Opstation';

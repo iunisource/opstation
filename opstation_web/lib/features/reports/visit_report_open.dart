@@ -37,6 +37,7 @@ Future<void> _openVisitReportForTripRun(BuildContext context, String tripId, {re
       customersById: custs,
       placesOf: tripPlaceNames, // start / end area names, fetched together with the road distances
       withPlannedStops: true,
+      withPhotos: true, // thumbnails of the pictures taken at non-customer visits
     );
     final bytes = await ReportPdfBuilder.buildVisitReport(ctx: ctx, orgName: orgName);
     await outputPdf(bytes, 'Visit Report', date: DateTime.tryParse('${t['started_at'] ?? ''}')?.toLocal());
