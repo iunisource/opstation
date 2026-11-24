@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
+import 'package:opstation_web/core/widgets/erp_pill.dart';
 import '../retailer_auth_controller.dart';
 import '../../../core/theme/app_theme.dart';
 
@@ -119,6 +120,7 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
                     const SizedBox(width: 10),
                     const Text('Opstation',
                         style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w800)),
+                    if (!tiny) ...[const SizedBox(width: 10), const ErpPill()],
                   ]),
                 ),
               ),

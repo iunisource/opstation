@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
 import 'login_scene.dart';
+import 'package:opstation_web/core/widgets/erp_pill.dart';
 
 /// Full-screen, self-guiding organisation sign-up.
 ///
@@ -283,6 +284,8 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
                               const BrandLogo(size: 42, ring: true),
                               const SizedBox(width: 12),
                               const Text('Opstation', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+                              const SizedBox(width: 10),
+                              const ErpPill(),
                             ]),
                           ),
                         ),
@@ -363,6 +366,8 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
                 const BrandLogo(size: 34),
                 const SizedBox(width: 10),
                 const Text('Opstation', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _ink)),
+                const SizedBox(width: 8),
+                const ErpPill(dark: false),
               ]),
             ),
           ),
