@@ -13,6 +13,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/format/money.dart';
 import 'retailer_web_order_flow.dart';
 import '../../../core/format/time_format.dart';
+import '../../../core/widgets/brand_logo.dart';
+import '../../../core/widgets/erp_pill.dart';
 
 /// Badge counters shared between the tabs (which load the data) and the shell
 /// (which paints the badges). Set by the tabs on load / mutation.
@@ -50,7 +52,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
   List<({IconData icon, String label})> get _tabs => [
         ..._baseTabs,
         if (_ledgerEnabled)
-          (icon: Icons.account_balance_wallet_outlined, label: 'Ledger'),
+          (icon: Icons.account_balance_wallet_outlined, label: 'Statement'),
       ];
 
   @override
@@ -201,17 +203,193 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
     );
   }
 
+  void _onAccountMenu(String v) {
+    if (v == 'profile') _showProfile();
+    if (v == 'password') _showChangePassword();
+    if (v == 'signout') {
+      ref.read(retailerAuthControllerProvider.notifier).signOut();
+    }
+  }
+
+  int _badgeFor(String label) => label == 'Updates'
+      ? ref.watch(_unreadUpdatesProvider)
+      : label == 'Complaints'
+          ? ref.watch(_openComplaintsProvider)
+          : 0;
+
+  Widget _content() => IndexedStack(
+        index: _tab.clamp(0, _tabs.length - 1),
+        children: [
+          _HomeTab(
+              onPlaceOrder: _openOrderFlow,
+              onOpenTab: (label) {
+                final i = _tabs.indexWhere((t) => t.label == label);
+                if (i >= 0) setState(() => _tab = i);
+              }),
+          const _NotificationsTab(),
+          const _FilesTab(),
+          const _OrdersTab(),
+          const _ComplaintsTab(),
+          const _LocationTab(),
+          if (_ledgerEnabled) const _LedgerTab(),
+        ],
+      );
+
   @override
   Widget build(BuildContext context) {
     final retailer = ref.watch(currentRetailerProvider);
     final name = retailer?.name ?? 'Retailer';
 
+    return LayoutBuilder(builder: (context, c) {
+      if (c.maxWidth >= 900) return _wide(name);
+      return _narrow(name);
+    });
+  }
+
+  // ── Wide (desktop web): navy sidebar + content ──
+  Widget _wide(String name) {
+    final initials = name.trim().isEmpty
+        ? 'R'
+        : name
+            .trim()
+            .split(RegExp(r'\s+'))
+            .take(2)
+            .map((w) => w.characters.first.toUpperCase())
+            .join();
+    return Scaffold(
+      backgroundColor: AppTheme.background,
+      body: Row(children: [
+        Container(
+          width: 236,
+          color: _navy,
+          padding: const EdgeInsets.fromLTRB(16, 22, 16, 16),
+          child: SafeArea(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 22),
+                child: Row(children: [
+                  const BrandLogo(size: 30, ring: true),
+                  const SizedBox(width: 10),
+                  const Text('Opstation',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18)),
+                  const SizedBox(width: 8),
+                  const ErpPill(),
+                ]),
+              ),
+              Expanded(
+                child: ListView(padding: EdgeInsets.zero, children: [
+                  for (var i = 0; i < _tabs.length; i++)
+                    _SideItem(
+                      icon: _tabs[i].icon,
+                      label: _tabs[i].label,
+                      selected: _tab == i,
+                      badge: _badgeFor(_tabs[i].label),
+                      onTap: () => setState(() => _tab = i),
+                    ),
+                ]),
+              ),
+              if (_orgName != null)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('Your supplier',
+                        style: TextStyle(
+                            color: Color(0xFFB9C6E4), fontSize: 12)),
+                    const SizedBox(height: 2),
+                    Text(_orgName!,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14)),
+                  ]),
+                ),
+            ]),
+          ),
+        ),
+        Expanded(
+          child: SafeArea(
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 22, 24, 12),
+                child: Row(children: [
+                  Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 24,
+                                  color: _navy)),
+                          const SizedBox(height: 2),
+                          Text(_tabs[_tab.clamp(0, _tabs.length - 1)].label == 'Home'
+                              ? 'Here is where your account stands today'
+                              : _tabs[_tab.clamp(0, _tabs.length - 1)].label,
+                              style: const TextStyle(
+                                  fontSize: 13, color: AppTheme.textSecondary)),
+                        ]),
+                  ),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.add_shopping_cart, size: 18),
+                    label: const Text('Place order',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    onPressed: _openOrderFlow,
+                  ),
+                  const SizedBox(width: 12),
+                  PopupMenuButton<String>(
+                    tooltip: 'Account',
+                    onSelected: _onAccountMenu,
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'profile', child: Text('Profile')),
+                      PopupMenuItem(
+                          value: 'password', child: Text('Change password')),
+                      PopupMenuItem(value: 'signout', child: Text('Sign out')),
+                    ],
+                    child: CircleAvatar(
+                      radius: 20,
+                      backgroundColor: AppTheme.primary.withOpacity(0.10),
+                      child: Text(initials,
+                          style: const TextStyle(
+                              color: AppTheme.primary,
+                              fontWeight: FontWeight.w800)),
+                    ),
+                  ),
+                ]),
+              ),
+              Expanded(child: _content()),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── Narrow (phone): the original top bar + tab strip ──
+  Widget _narrow(String name) {
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: SafeArea(
         child: Column(
           children: [
-            // top bar
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               decoration: BoxDecoration(
@@ -227,8 +405,8 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                     color: AppTheme.primary,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child:
-                      const Icon(Icons.storefront_outlined, color: Colors.white, size: 20),
+                  child: const Icon(Icons.storefront_outlined,
+                      color: Colors.white, size: 20),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -261,15 +439,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                 ),
                 PopupMenuButton<String>(
                   icon: const Icon(Icons.account_circle_outlined),
-                  onSelected: (v) {
-                    if (v == 'profile') _showProfile();
-                    if (v == 'password') _showChangePassword();
-                    if (v == 'signout') {
-                      ref
-                          .read(retailerAuthControllerProvider.notifier)
-                          .signOut();
-                    }
-                  },
+                  onSelected: _onAccountMenu,
                   itemBuilder: (_) => const [
                     PopupMenuItem(value: 'profile', child: Text('Profile')),
                     PopupMenuItem(
@@ -279,7 +449,6 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                 ),
               ]),
             ),
-            // tab selector
             Container(
               color: Colors.white,
               child: SingleChildScrollView(
@@ -292,11 +461,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                         icon: _tabs[i].icon,
                         label: _tabs[i].label,
                         selected: _tab == i,
-                        badge: _tabs[i].label == 'Updates'
-                            ? ref.watch(_unreadUpdatesProvider)
-                            : _tabs[i].label == 'Complaints'
-                                ? ref.watch(_openComplaintsProvider)
-                                : 0,
+                        badge: _badgeFor(_tabs[i].label),
                         onTap: () => setState(() => _tab = i),
                       ),
                   ],
@@ -304,21 +469,68 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
               ),
             ),
             const Divider(height: 1),
-            Expanded(
-              child: IndexedStack(
-                index: _tab.clamp(0, _tabs.length - 1),
-                children: [
-                  _HomeTab(onPlaceOrder: _openOrderFlow),
-                  const _NotificationsTab(),
-                  const _FilesTab(),
-                  const _OrdersTab(),
-                  const _ComplaintsTab(),
-                  const _LocationTab(),
-                  if (_ledgerEnabled) const _LedgerTab(),
-                ],
-              ),
-            ),
+            Expanded(child: _content()),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+const Color _navy = Color(0xFF0B1B3A);
+
+class _SideItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final int badge;
+  final VoidCallback onTap;
+  const _SideItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.badge = 0,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = selected ? Colors.white : const Color(0xFFB9C6E4);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Material(
+        color: selected ? Colors.white.withOpacity(0.10) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            child: Row(children: [
+              Icon(icon, size: 19, color: c),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(label,
+                    style: TextStyle(
+                        color: c,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600)),
+              ),
+              if (badge > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFB400),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('$badge',
+                      style: const TextStyle(
+                          color: _navy,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800)),
+                ),
+            ]),
+          ),
         ),
       ),
     );
@@ -1652,14 +1864,14 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
 // ════════════════════════════════════════════════════════════════════
 class _HomeTab extends ConsumerStatefulWidget {
   final VoidCallback onPlaceOrder;
-  const _HomeTab({required this.onPlaceOrder});
+  final void Function(String label)? onOpenTab;
+  const _HomeTab({required this.onPlaceOrder, this.onOpenTab});
   @override
   ConsumerState<_HomeTab> createState() => _HomeTabState();
 }
 
 class _HomeTabState extends ConsumerState<_HomeTab> {
   bool _loading = true;
-  bool _showAging = false;
   Map<String, dynamic>? _a;
 
   @override
@@ -1699,6 +1911,158 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
     }
   }
 
+  Widget _card({required Widget child, EdgeInsets? pad}) => Container(
+        width: double.infinity,
+        padding: pad ?? const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: child,
+      );
+
+  Widget _hero(double total, double limit, bool overLimit, double usage) {
+    const mute = Color(0xFF9FB3DD);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+            colors: [Color(0xFF0B1B3A), Color(0xFF17336B)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('OUTSTANDING BALANCE',
+              style: TextStyle(
+                  fontSize: 12,
+                  letterSpacing: 0.6,
+                  fontWeight: FontWeight.w600,
+                  color: mute)),
+          if (overLimit) ...[
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                  color: AppTheme.danger,
+                  borderRadius: BorderRadius.circular(20)),
+              child: const Text('Over Limit',
+                  style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white)),
+            ),
+          ],
+        ]),
+        const SizedBox(height: 8),
+        Text('Rs ${money(total)}',
+            style: const TextStyle(
+                fontSize: 40, fontWeight: FontWeight.w800, color: Colors.white)),
+        if (limit > 0) ...[
+          const SizedBox(height: 16),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: usage,
+              minHeight: 8,
+              backgroundColor: Colors.white.withOpacity(0.15),
+              color: overLimit ? AppTheme.danger : const Color(0xFFFFB400),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('${(usage * 100).round()}% of credit limit used',
+                style: const TextStyle(fontSize: 12, color: mute)),
+            Text('Credit limit: Rs ${money(limit)}',
+                style: const TextStyle(fontSize: 12, color: mute)),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _aging(List<(String, double, int)> buckets, double total) {
+    return _card(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('How old is your balance',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 10),
+        for (final b in buckets)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: AppTheme.border))),
+            child: Row(children: [
+              Container(
+                  height: 10,
+                  width: 10,
+                  decoration: BoxDecoration(
+                      color: _agingColor(b.$3), shape: BoxShape.circle)),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(b.$1, style: const TextStyle(fontSize: 13.5))),
+              Text('Rs ${money(b.$2)}',
+                  style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: b.$2 > 0 ? FontWeight.w800 : FontWeight.w400,
+                      color: b.$2 > 0 ? null : AppTheme.textSecondary)),
+            ]),
+          ),
+        if (total > 0) ...[
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: SizedBox(
+              height: 10,
+              child: Row(children: [
+                for (final b in buckets)
+                  if (b.$2 > 0)
+                    Expanded(
+                        flex: ((b.$2 / total) * 1000).round().clamp(1, 1000),
+                        child: Container(color: _agingColor(b.$3))),
+              ]),
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _quick(IconData icon, String label, String tab) => Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: widget.onOpenTab == null ? null : () => widget.onOpenTab!(tab),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Icon(icon, size: 18, color: AppTheme.primary),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(label,
+                      style: const TextStyle(
+                          fontSize: 13.5, fontWeight: FontWeight.w700))),
+              const Icon(Icons.chevron_right,
+                  size: 18, color: AppTheme.textSecondary),
+            ]),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -1714,179 +2078,92 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
       ('Over 120 days', _d(_a?['b4']), 4),
     ];
 
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              // Outstanding balance
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: overLimit
-                      ? AppTheme.danger.withOpacity(0.06)
-                      : AppTheme.primary.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                      color: overLimit
-                          ? AppTheme.danger.withOpacity(0.35)
-                          : Colors.transparent),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      const Text('Outstanding balance',
-                          style: TextStyle(
-                              fontSize: 13, color: AppTheme.textSecondary)),
-                      if (overLimit) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppTheme.danger,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: const [
-                            Icon(Icons.error_outline, size: 12, color: Colors.white),
-                            SizedBox(width: 3),
-                            Text('Over Limit',
-                                style: TextStyle(
-                                    fontSize: 10.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white)),
-                          ]),
-                        ),
-                      ],
-                    ]),
-                    const SizedBox(height: 4),
-                    Text('Rs ${money(total)}',
-                        style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.w800,
-                            color: total <= 0
-                                ? Colors.teal
-                                : overLimit
-                                    ? AppTheme.danger
-                                    : AppTheme.primary)),
-                    if (limit > 0) ...[
-                      const SizedBox(height: 14),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: LinearProgressIndicator(
-                          value: usage,
-                          minHeight: 7,
-                          backgroundColor: Colors.black12,
-                          color: overLimit ? AppTheme.danger : AppTheme.primary,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text('Credit limit: Rs ${money(limit)}',
-                          style: const TextStyle(
-                              fontSize: 12, color: AppTheme.textSecondary)),
-                    ],
-                    if (total > 0) ...[
-                      const SizedBox(height: 4),
-                      TextButton.icon(
-                        style: TextButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            visualDensity: VisualDensity.compact),
-                        icon: Icon(
-                            _showAging ? Icons.expand_less : Icons.expand_more,
-                            size: 18),
-                        label: Text(_showAging ? 'Hide aging' : 'Show aging'),
-                        onPressed: () => setState(() => _showAging = !_showAging),
-                      ),
-                    ],
-                  ],
-                ),
+    final warn = overLimit
+        ? Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.amber.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.amber.withOpacity(0.5)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: Colors.amber.shade900, size: 20),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                    'Your account is over its credit limit. New orders may not be approved until payment is received.',
+                    style: TextStyle(fontSize: 12.5, height: 1.35)),
               ),
+            ]),
+          )
+        : null;
 
-              if (_showAging && total > 0) ...[
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.black12),
-                  ),
-                  child: Column(children: [
-                    for (final b in buckets)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 9),
-                        child: Row(children: [
-                          Container(
-                              height: 9,
-                              width: 9,
-                              decoration: BoxDecoration(
-                                  color: _agingColor(b.$3),
-                                  shape: BoxShape.circle)),
-                          const SizedBox(width: 10),
-                          Expanded(
-                              child: Text(b.$1,
-                                  style: const TextStyle(fontSize: 13.5))),
-                          Text('Rs ${money(b.$2)}',
-                              style: TextStyle(
-                                  fontSize: 13.5,
-                                  fontWeight: b.$2 > 0
-                                      ? FontWeight.w700
-                                      : FontWeight.w400,
-                                  color: b.$2 > 0
-                                      ? _agingColor(b.$3)
-                                      : AppTheme.textSecondary)),
-                        ]),
-                      ),
-                  ]),
-                ),
-              ],
-
-              if (overLimit) ...[
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.amber.withOpacity(0.5)),
-                  ),
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Icon(Icons.warning_amber_rounded,
-                        color: Colors.amber.shade900, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                          'Your account is over its credit limit. New orders may not be approved until payment is received.',
-                          style: const TextStyle(fontSize: 12.5, height: 1.35)),
-                    ),
-                  ]),
-                ),
-              ],
-
-              const SizedBox(height: 24),
-              SizedBox(
-                height: 54,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primary,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
-                  ),
-                  icon: const Icon(Icons.add_shopping_cart),
-                  label: const Text('Place Order',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                  onPressed: widget.onPlaceOrder,
-                ),
-              ),
-            ],
+    return LayoutBuilder(builder: (context, c) {
+      final wide = c.maxWidth >= 820;
+      final hero = _hero(total, limit, overLimit, usage);
+      final aging = _aging(buckets, total);
+      final quick = Row(children: [
+        _quick(Icons.receipt_long_outlined, 'Invoices', 'Invoices'),
+        const SizedBox(width: 12),
+        _quick(Icons.notifications_outlined, 'Updates', 'Updates'),
+        const SizedBox(width: 12),
+        _quick(Icons.report_problem_outlined, 'Complaints', 'Complaints'),
+      ]);
+      final orderBtn = SizedBox(
+        height: 54,
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.primary,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           ),
+          icon: const Icon(Icons.add_shopping_cart),
+          label: const Text('Place Order',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          onPressed: widget.onPlaceOrder,
         ),
-      ),
-    );
+      );
+
+      final body = wide
+          ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(flex: 6, child: hero),
+                const SizedBox(width: 18),
+                Expanded(flex: 5, child: aging),
+              ]),
+              if (warn != null) ...[const SizedBox(height: 16), warn],
+              const SizedBox(height: 18),
+              quick,
+            ])
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              hero,
+              if (warn != null) ...[const SizedBox(height: 14), warn],
+              const SizedBox(height: 14),
+              aging,
+              const SizedBox(height: 20),
+              orderBtn,
+            ]);
+
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: EdgeInsets.fromLTRB(wide ? 32 : 20, 8, wide ? 32 : 20, 24),
+          children: [
+            Align(
+              alignment: Alignment.topLeft,
+              child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1100),
+                  child: body),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
 

@@ -16,6 +16,10 @@ Future<bool?> showRetailerOrderFlow(BuildContext context) {
   );
 }
 
+const String _kOrderDisclaimer =
+    'Placing an order sends a request to your supplier. Acceptance of your order, '
+    'or any decision related to it, rests with your supplier.';
+
 class _RetailerOrderFlow extends ConsumerStatefulWidget {
   const _RetailerOrderFlow();
   @override
@@ -27,6 +31,8 @@ class _RetailerOrderFlowState extends ConsumerState<_RetailerOrderFlow> {
   bool _placing = false;
   bool _loadingOffers = false;
   String _q = '';
+  double? _balance; // current outstanding
+  double? _limit; // credit limit (0/null = none)
   List<Map<String, dynamic>> _products = [];
   final Map<String, Map<String, dynamic>> _cart = {}; // productId -> {product, qty}
 
@@ -37,6 +43,13 @@ class _RetailerOrderFlowState extends ConsumerState<_RetailerOrderFlow> {
   }
 
   Future<void> _load() async {
+    try {
+      final ag = await Supabase.instance.client.rpc('retailer_my_aging');
+      if (ag is Map) {
+        _balance = (ag['total'] as num?)?.toDouble();
+        _limit = (ag['credit_limit'] as num?)?.toDouble();
+      }
+    } catch (_) {}
     try {
       final res = await Supabase.instance.client.rpc('retailer_my_products');
       final list = (res as List?) ?? [];
@@ -144,82 +157,323 @@ class _RetailerOrderFlowState extends ConsumerState<_RetailerOrderFlow> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : Column(children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: TextField(
-                  onChanged: (v) => setState(() => _q = v),
-                  decoration: InputDecoration(
-                    hintText: 'Search products…',
-                    prefixIcon: const Icon(Icons.search),
-                    isDense: true,
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
+          : LayoutBuilder(
+              builder: (context, c) =>
+                  c.maxWidth >= 900 ? _wide(visible) : _narrow(visible)),
+    );
+  }
+
+  Widget _searchBox() => TextField(
+        onChanged: (v) => setState(() => _q = v),
+        decoration: InputDecoration(
+          hintText: 'Search products by name or code…',
+          prefixIcon: const Icon(Icons.search),
+          isDense: true,
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+
+  // ── Wide: product grid + sticky order panel ──
+  Widget _wide(List<Map<String, dynamic>> visible) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1280),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(32, 20, 32, 20),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Choose your items',
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0B1B3A))),
+                const SizedBox(height: 14),
+                _searchBox(),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: _products.isEmpty
+                      ? const Center(
+                          child: Text('No products available to you yet.',
+                              style: TextStyle(color: AppTheme.textSecondary)))
+                      : visible.isEmpty
+                          ? const Center(
+                              child: Text('No products match your search.',
+                                  style:
+                                      TextStyle(color: AppTheme.textSecondary)))
+                          : GridView.builder(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                maxCrossAxisExtent: 260,
+                                mainAxisExtent: 172,
+                                crossAxisSpacing: 14,
+                                mainAxisSpacing: 14,
+                              ),
+                              itemCount: visible.length,
+                              itemBuilder: (_, i) => _productCard(visible[i]),
+                            ),
+                ),
+              ]),
+            ),
+            const SizedBox(width: 24),
+            SizedBox(width: 360, child: _summaryPanel()),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _productCard(Map<String, dynamic> p) {
+    final id = p['id'] as String;
+    final qty = (_cart[id]?['qty'] as double?) ?? 0;
+    final sel = qty > 0;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: sel ? AppTheme.primary : AppTheme.border,
+            width: sel ? 1.6 : 1),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${p['name'] ?? ''}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        if ('${p['sku'] ?? ''}'.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text('${p['sku']}',
+                style: const TextStyle(
+                    fontSize: 11.5, color: AppTheme.textSecondary)),
+          ),
+        const Spacer(),
+        Text('Rs ${money(_price(p))}',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: _Stepper(
+            qty: qty,
+            onAdd: () => _setQty(p, qty + 1),
+            onSub: () => _setQty(p, qty - 1),
+            onType: () => _askQty(p, qty),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _disclaimer() => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.amber.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.amber.withOpacity(0.45)),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline, size: 16, color: Colors.amber.shade900),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(_kOrderDisclaimer,
+                style: TextStyle(fontSize: 11.5, height: 1.35)),
+          ),
+        ]),
+      );
+
+  Widget _summaryPanel() {
+    final lines = _cart.values.toList();
+    final after = _balance == null ? null : _balance! + _total;
+    final lim = _limit ?? 0;
+    final over = after != null && lim > 0 && after > lim;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Your order',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            if (lines.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 22),
+                child: Center(
+                    child: Text('Add items to start your order.',
+                        style: TextStyle(color: AppTheme.textSecondary))),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: ListView(shrinkWrap: true, children: [
+                  for (final l in lines)
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                          border: Border(
+                              bottom: BorderSide(color: AppTheme.border))),
+                      child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('${(l['product'] as Map)['name'] ?? ''}',
+                                        style: const TextStyle(fontSize: 13)),
+                                    Text(
+                                        '${(l['qty'] as double).toStringAsFixed(0)} × Rs ${money(_price(l['product'] as Map))}',
+                                        style: const TextStyle(
+                                            fontSize: 11.5,
+                                            color: AppTheme.textSecondary)),
+                                  ]),
+                            ),
+                            Text(
+                                'Rs ${money(_price(l['product'] as Map) * (l['qty'] as double))}',
+                                style: const TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w800)),
+                          ]),
+                    ),
+                ]),
+              ),
+            const SizedBox(height: 14),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('Total ($_count item${_count == 1 ? '' : 's'})',
+                  style: const TextStyle(fontSize: 14)),
+              Text('Rs ${money(_total)}',
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w800)),
+            ]),
+            if (after != null && lines.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                  over
+                      ? 'Balance after this order: Rs ${money(after)} — above your credit limit of Rs ${money(lim)}'
+                      : lim > 0
+                          ? 'Balance after this order: Rs ${money(after)} · within your limit of Rs ${money(lim)}'
+                          : 'Balance after this order: Rs ${money(after)}',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: over ? AppTheme.danger : AppTheme.textSecondary)),
+            ],
+            const SizedBox(height: 14),
+            _disclaimer(),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: _loadingOffers ? null : _showOffers,
+              icon: _loadingOffers
+                  ? const SizedBox(
+                      width: 15,
+                      height: 15,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.local_offer_outlined, size: 18),
+              label: const Text('Available offers'),
+              style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44)),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 52,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: (_cart.isEmpty || _placing) ? null : _placeOrder,
+                child: _placing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('Place order',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w800)),
+              ),
+            ),
+          ]),
+    );
+  }
+
+  // ── Narrow: original list + bottom bar (plus the disclaimer) ──
+  Widget _narrow(List<Map<String, dynamic>> visible) {
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: _searchBox(),
+      ),
+      Expanded(
+        child: _products.isEmpty
+            ? const Center(
+                child: Text('No products available to you yet.',
+                    style: TextStyle(color: AppTheme.textSecondary)))
+            : Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 900),
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                    itemCount: visible.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final p = visible[i];
+                      final id = p['id'] as String;
+                      final qty = (_cart[id]?['qty'] as double?) ?? 0;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${p['name'] ?? ''}',
+                                    style: const TextStyle(
+                                        fontSize: 14.5,
+                                        fontWeight: FontWeight.w600)),
+                                if ('${p['sku'] ?? ''}'.isNotEmpty)
+                                  Text('${p['sku']}',
+                                      style: const TextStyle(
+                                          fontSize: 11.5,
+                                          color: AppTheme.textSecondary)),
+                                Text('Rs ${money(_price(p))}',
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppTheme.primary)),
+                              ],
+                            ),
+                          ),
+                          _Stepper(
+                            qty: qty,
+                            onAdd: () => _setQty(p, qty + 1),
+                            onSub: () => _setQty(p, qty - 1),
+                            onType: () => _askQty(p, qty),
+                          ),
+                        ]),
+                      );
+                    },
                   ),
                 ),
               ),
-              Expanded(
-                child: _products.isEmpty
-                    ? const Center(
-                        child: Text('No products available to you yet.',
-                            style: TextStyle(color: AppTheme.textSecondary)))
-                    : Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 900),
-                          child: ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                            itemCount: visible.length,
-                            separatorBuilder: (_, __) =>
-                                const Divider(height: 1),
-                            itemBuilder: (_, i) {
-                              final p = visible[i];
-                              final id = p['id'] as String;
-                              final qty =
-                                  (_cart[id]?['qty'] as double?) ?? 0;
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                child: Row(children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text('${p['name'] ?? ''}',
-                                            style: const TextStyle(
-                                                fontSize: 14.5,
-                                                fontWeight: FontWeight.w600)),
-                                        if ('${p['sku'] ?? ''}'.isNotEmpty)
-                                          Text('${p['sku']}',
-                                              style: const TextStyle(
-                                                  fontSize: 11.5,
-                                                  color:
-                                                      AppTheme.textSecondary)),
-                                        Text('Rs ${money(_price(p))}',
-                                            style: const TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w700,
-                                                color: AppTheme.primary)),
-                                      ],
-                                    ),
-                                  ),
-                                  _Stepper(
-                                    qty: qty,
-                                    onAdd: () => _setQty(p, qty + 1),
-                                    onSub: () => _setQty(p, qty - 1),
-                                    onType: () => _askQty(p, qty),
-                                  ),
-                                ]),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-              ),
-              _bottomBar(),
-            ]),
-    );
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: _disclaimer(),
+      ),
+      _bottomBar(),
+    ]);
   }
 
   Future<void> _askQty(Map<String, dynamic> p, double current) async {
