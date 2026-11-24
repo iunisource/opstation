@@ -256,8 +256,10 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
     // Same look as the sign-in page: the drifting light trails, and the godown with the truck, pickup and bike on the road.
     return LayoutBuilder(builder: (context, c) {
       final reserve = LoginFleetScene.reserve(c.maxHeight, c.maxWidth);
-      return Stack(children: [
-        const Positioned.fill(child: LoginTrails()),
+      // Clipped to the panel: the road's dashes would otherwise run on into the white sign-up form.
+      return ClipRect(child: Stack(children: [
+        // Still background (no moving light trails on this page).
+        const Positioned.fill(child: RepaintBoundary(child: CustomPaint(painter: LoginScenePainter(density: 0)))),
         Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(color: const Color(0xFF0B1220).withOpacity(0.28)))),
         const Positioned.fill(child: LoginFleetScene()),
         SafeArea(
@@ -318,7 +320,7 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
                 shadows: const [Shadow(color: Color(0xCC000000), blurRadius: 6)],
               )),
         ),
-      ]);
+      ]));
     });
   }
 

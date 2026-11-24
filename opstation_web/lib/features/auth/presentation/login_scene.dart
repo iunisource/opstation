@@ -344,7 +344,7 @@ class _LoginFleetSceneState extends State<LoginFleetScene> with SingleTickerProv
         final total = 386 * u;
         final x0 = (w - total) / 2;
         final ground = roadH * 0.5;
-        return AnimatedBuilder(
+        return ClipRect(child: AnimatedBuilder(
           animation: _c,
           builder: (_, __) {
             final sec = _c.value * 3600.0;
@@ -377,7 +377,7 @@ class _LoginFleetSceneState extends State<LoginFleetScene> with SingleTickerProv
                   ]),
             ]);
           },
-        );
+        ));
       }),
     );
   }
