@@ -369,6 +369,19 @@ List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
           ),
       ]),
     ),
+    if (day.unvisited.isNotEmpty) ...[
+      pw.SizedBox(height: 8),
+      title('Planned stops not marked (${day.unvisited.length})'),
+      pw.Container(
+        decoration: box,
+        padding: const pw.EdgeInsets.all(6),
+        child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+          for (var i = 0; i < day.unvisited.length; i++)
+            pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 1),
+                child: pw.Text('${i + 1}. ${day.unvisited[i]}', style: const pw.TextStyle(fontSize: 8))),
+        ]),
+      ),
+    ],
     pw.SizedBox(height: 10),
     title('The day, in order'),
     pw.Container(height: 0.5, color: _line),
