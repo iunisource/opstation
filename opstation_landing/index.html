@@ -216,6 +216,10 @@
     .points { margin-top: 26px; display: grid; gap: 14px; }
     .points li { display: flex; gap: 14px; align-items: center; font-weight: 600; font-size: 1.05rem; }
     .points i { width: 44px; height: 44px; flex-shrink: 0; border-radius: 12px; background: #E8EFFE; color: var(--blue-dk); display: grid; place-items: center; }
+    .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .role-tabs { display: inline-flex; padding: 4px; gap: 4px; border-radius: 999px; background: #E8EFFE; }
+    .role-tabs button { border: 0; background: transparent; color: var(--blue-dk); font-weight: 700; font-size: .92rem; padding: 9px 22px; border-radius: 999px; cursor: pointer; min-height: 40px; }
+    .role-tabs button[aria-selected="true"] { background: var(--blue); color: #fff; box-shadow: 0 6px 16px -6px rgba(47,111,237,.6); }
     .phone { width: 300px; max-width: 100%; margin: 0 auto; border-radius: 38px; background: #081226; padding: 12px; box-shadow: 0 50px 90px -40px rgba(11,27,58,.55); position: relative; }
     .phone-notch { position: absolute; top: 18px; left: 50%; width: 84px; height: 22px; margin-left: -42px; background: #081226; border-radius: 999px; z-index: 2; }
     .phone-head { background: var(--navy); border-radius: 28px 28px 0 0; padding: 48px 18px 18px; color: #fff; }
@@ -379,7 +383,7 @@
         <a href="#answers">What it solves</a>
         
         <a href="#flow">How it works</a>
-        <a href="#field">Salesman app</a>
+        <a href="#field">Field app</a>
         <a href="#local">Made for Pakistan</a>
         <a href="#faq">Questions</a>
       </nav>
@@ -642,7 +646,12 @@
     <!-- APP -->
     <section id="field" class="sec">
       <div class="wrap split">
-        <div class="phone" aria-hidden="true">
+        <div class="phone-wrap">
+          <div class="role-tabs" role="tablist" aria-label="Choose the view">
+            <button type="button" role="tab" aria-selected="true" data-role="sales">Salesman</button>
+            <button type="button" role="tab" aria-selected="false" data-role="driver">Driver</button>
+          </div>
+          <div class="phone" id="ph-sales" aria-hidden="true">
           <div class="phone-notch"></div>
           <div class="phone-head"><small>Today’s route</small><div>Shah Alam Market<span>11 of 18 done</span></div><div class="phone-bar"><span></span></div></div>
           <div class="phone-list">
@@ -655,8 +664,22 @@
           <div class="phone-cta"><span class="cyc cyc-btn"><b>Mark visit</b><b>Book order</b><b>Record collection</b></span></div>
           <div class="ptoast cyc"><span><i style="background:#0A8F5B">✓</i>Shop visited, City Mart</span><span><i style="background:#2F6FED">●</i>Order booked, Rs 18,200</span><span><i style="background:#0A8F5B">Rs</i>Cash collected, Rs 25,000</span></div>
         </div>
+        <div class="phone" id="ph-driver" aria-hidden="true" hidden>
+          <div class="phone-notch"></div>
+          <div class="phone-head"><small>Today’s delivery run</small><div>Shah Alam run<span>6 of 14 done</span></div><div class="phone-bar"><span style="width:43%"></span></div></div>
+          <div class="phone-list">
+            <div class="shop"><span class="s-dot ok">✓</span><div><div class="s-name">Al-Madina Store</div><div class="s-sub">Delivered, 40 cartons</div></div><span class="s-tag ok">Delivered</span></div>
+            <div class="shop"><span class="s-dot ok">✓</span><div><div class="s-name">Bismillah Traders</div><div class="s-sub">Cash received Rs 48,500</div></div><span class="s-tag ok">Cash</span></div>
+            <div class="shop"><span class="s-dot warn">!</span><div><div class="s-name">Rehman General Store</div><div class="s-sub">Confirmed 600 m away</div></div><span class="s-tag warn">Outside</span></div>
+            <div class="shop active"><span class="s-dot now">●</span><div><div class="s-name">City Mart</div><div class="cyc s-sub"><span>Arrived at the shop</span><span>Handed over, 25 cartons</span><span>Cash received, Rs 25,000</span></div></div><div class="cyc cyc-tag"><span class="s-tag now">Arrived</span><span class="s-tag ok">Delivered</span><span class="s-tag ok">Cash</span></div></div>
+            <div class="shop"><span class="s-dot"></span><div><div class="s-name">Khan Brothers</div><div class="s-sub">Next drop</div></div></div>
+          </div>
+          <div class="phone-cta"><span class="cyc cyc-btn"><b>Mark arrived</b><b>Confirm delivery</b><b>Collect cash</b></span></div>
+          <div class="ptoast cyc"><span><i style="background:#2F6FED">●</i>Arrived, City Mart</span><span><i style="background:#0A8F5B">✓</i>Delivered, 25 cartons</span><span><i style="background:#0A8F5B">Rs</i>Cash received, Rs 25,000</span></div>
+        </div>
+        </div>
         <div>
-          <h2>Your salesmen, on one app.</h2>
+          <h2>Your entire team, on one app.</h2>
           <p class="sub">For salesmen, order bookers and drivers. On the phones they already carry.</p>
           <ul class="points">
             <li><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-5.6-7-11a7 7 0 1114 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></i>Visits matched to the shop’s location</li>
@@ -674,7 +697,7 @@
         <div class="own-grid" data-watch>
           <div class="own-text">
             <h2>Your whole business on one screen.</h2>
-            <p class="sub">From the office, from home, or from your phone. Sale, recovery, udhaar and stock are always in front of you.</p>
+            <p class="sub">From the office, from home, or from your phone. Sale, recovery, purchases and stock are always in front of you.</p>
           </div>
           <figure class="own-photo">
             <img src="accountant.webp" width="1200" height="800" alt="An accountant at his desk in a distributor's office, smiling, with the Opstation dashboard open on his screen" loading="lazy" decoding="async" />
@@ -838,7 +861,7 @@
     <div class="wrap">
       <a href="#top" class="brand"><img src="/logo.png?v=2" alt="" width="32" height="32" />Opstation</a>
       <nav aria-label="Footer">
-        <a href="#answers">What it solves</a><a href="#flow">How it works</a><a href="#field">Salesman app</a><a href="#contact">Contact us</a><a href="https://opstation-f06c7.web.app">Sign in</a><a href="/privacy">Privacy policy</a>
+        <a href="#answers">What it solves</a><a href="#flow">How it works</a><a href="#field">Field app</a><a href="#contact">Contact us</a><a href="https://opstation-f06c7.web.app">Sign in</a><a href="/privacy">Privacy policy</a>
       </nav>
       <div>© 2026 Opstation. Made in Pakistan. Names and figures on this page are examples.</div>
     </div>
@@ -849,6 +872,20 @@
     
   </div>
 
+  <script>
+    (function () {
+      var tabs = document.querySelectorAll('.role-tabs button');
+      var sales = document.getElementById('ph-sales'), driver = document.getElementById('ph-driver');
+      if (!tabs.length || !sales || !driver) return;
+      tabs.forEach(function (t) {
+        t.addEventListener('click', function () {
+          var d = t.getAttribute('data-role') === 'driver';
+          sales.hidden = d; driver.hidden = !d;
+          tabs.forEach(function (x) { x.setAttribute('aria-selected', x === t ? 'true' : 'false'); });
+        });
+      });
+    })();
+  </script>
   <script>
     // Set your WhatsApp Business number here in international format, digits only
     // (e.g. '923001234567'). Leave empty to keep the WhatsApp buttons hidden.
