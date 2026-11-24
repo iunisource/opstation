@@ -253,6 +253,12 @@
     @keyframes toast { 0% { opacity: 0; transform: translateY(-10px) scale(.97); } 4%, 22% { opacity: 1; transform: none; } 27%, 100% { opacity: 0; transform: translateY(-8px); } }
 
     /* OWNER BOARD */
+    .own-grid { display: grid; gap: 28px; align-items: center; }
+    .own-photo { margin: 0; border-radius: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,.12); box-shadow: 0 24px 60px rgba(0,0,0,.35); background: #081226; }
+    .own-photo img { width: 100%; height: auto; display: block; }
+    .own-text .sub { max-width: 38ch; }
+    @media (min-width: 900px) { .own-grid { grid-template-columns: 5fr 7fr; gap: 56px; } }
+    .ctl { margin-top: 36px; }
     .board { margin-top: 36px; border-radius: 18px; border: 1px solid rgba(255,255,255,.12); background: #081226; padding: 14px; display: grid; gap: 12px; }
     .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .board-two { display: grid; gap: 12px; }
@@ -665,26 +671,14 @@
     <!-- OWNER BOARD -->
     <section id="control" class="sec dark">
       <div class="wrap">
-        <h2>Your whole business on one screen.</h2>
-        <p class="sub">From the office, from home, or from your phone.</p>
-        <div class="board" data-watch>
-          <div class="eg">Raza Traders, all branches<span>Example</span></div>
-          <div class="kpis">
-            <div class="kpi"><div class="kpi-l">Sale today</div><div class="kpi-v num">Rs <span data-count="3240000">3,240,000</span></div><div class="kpi-d">12% more than last week</div></div>
-            <div class="kpi"><div class="kpi-l">Recovery today</div><div class="kpi-v num">Rs <span data-count="1860000">1,860,000</span></div><div class="kpi-d">214 receipts</div></div>
-            <div class="kpi"><div class="kpi-l">Udhaar (credit) outstanding</div><div class="kpi-v num">Rs <span data-count="18700000">18,700,000</span></div><div class="kpi-d bad">32 customers over 30 days</div></div>
-            <div class="kpi"><div class="kpi-l">Stock value</div><div class="kpi-v num">Rs <span data-count="41200000">41,200,000</span></div><div class="kpi-d flat">3 branches</div></div>
+        <div class="own-grid" data-watch>
+          <div class="own-text">
+            <h2>Your whole business on one screen.</h2>
+            <p class="sub">From the office, from home, or from your phone. Sale, recovery, udhaar and stock are always in front of you.</p>
           </div>
-          <div class="board-two">
-            <div class="kpi"><div class="kpi-l">Sale, last 7 days</div>
-              <div class="spark" aria-hidden="true"><i style="--h:46%"></i><i style="--h:58%"></i><i style="--h:52%"></i><i style="--h:70%"></i><i style="--h:64%"></i><i style="--h:82%"></i><i style="--h:100%"></i></div>
-            </div>
-            <div class="kpi"><div class="kpi-l">Recovery against sale, by salesman</div>
-              <div class="who"><span>Imran</span><div><i style="--w:92%"></i></div><b class="num">92%</b></div>
-              <div class="who"><span>Bilal</span><div><i style="--w:81%"></i></div><b class="num">81%</b></div>
-              <div class="who"><span>Asif</span><div><i style="--w:54%;background:#FFB400"></i></div><b class="num" style="color:#FFC533">54%</b></div>
-            </div>
-          </div>
+          <figure class="own-photo">
+            <img src="accountant.webp" width="1200" height="800" alt="An accountant at his desk in a distributor's office, smiling, with the Opstation dashboard open on his screen" loading="lazy" decoding="async" />
+          </figure>
         </div>
         <ul class="ctl">
           <li><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></i>Access by role and branch</li>

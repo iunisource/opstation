@@ -226,6 +226,192 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
   }
 }
 
+/// The sign-up page's scene: the godown in the background and the three vehicles of the distribution chain
+/// (the painted truck, the pickup, the salesman on his bike) side by side on the road. The vehicles stay put (with a
+/// slight sway), the road slides under them and all the wheels turn. It stands still when the device asks for less motion.
+class LoginFleetScene extends StatefulWidget {
+  const LoginFleetScene({super.key, this.minWidth = 400});
+
+  final double minWidth;
+
+  /// Height the scene needs at the bottom of a panel [h] high, so the words above it can stay clear.
+  static double reserve(double h, double w) {
+    if (h < 520 || w < 400) return 0;
+    final roadH = (h * 0.22).clamp(100.0, 170.0);
+    final whH = _whHeight(h, roadH);
+    final u = _unit(w, roadH);
+    final vehicles = roadH * 0.5 + 107 * u + 10;
+    final godown = whH > 0 ? roadH * 0.62 + whH + 16 : 0.0;
+    return math.max(vehicles, godown);
+  }
+
+  static double _whHeight(double h, double roadH) => h >= 880 ? roadH * 1.9 : (h >= 700 ? roadH * 1.15 : 0);
+  static double _unit(double w, double roadH) => math.min((w - 96) / 386.0, roadH * 1.15 / 107.0);
+
+  @override
+  State<LoginFleetScene> createState() => _LoginFleetSceneState();
+}
+
+class _LoginFleetSceneState extends State<LoginFleetScene> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(hours: 1));
+  static const _speed = 200.0; // pixels per second the road moves
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.of(context).disableAnimations) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  Widget _img(String f) => Image.network(f, fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink());
+
+  /// A vehicle [wUnits] wide (the unit [u] is the same for all three), whose picture is [srcW] x [srcH] pixels.
+  Widget _vehicle(double u, double left, double ground, double wUnits, double srcW, double srcH, String file,
+      {List<Widget> Function(double s)? behind, List<Widget> Function(double s)? over, double bob = 0}) {
+    final w = wUnits * u;
+    final s = w / srcW;
+    final h = srcH * s;
+    return Stack(clipBehavior: Clip.none, children: [
+      Positioned(
+        left: left,
+        bottom: ground - 2,
+        width: w,
+        height: 7,
+        child: DecoratedBox(
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(40), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 10)]),
+        ),
+      ),
+      Positioned(
+        left: left,
+        bottom: ground - 6 * u + bob,
+        width: w,
+        height: h,
+        child: Stack(clipBehavior: Clip.none, children: [
+          if (behind != null) ...behind(s),
+          Positioned.fill(child: _img(file)),
+          if (over != null) ...over(s),
+        ]),
+      ),
+    ]);
+  }
+
+  Widget _rim(String file, double cx, double cy, double a, double b, double tire, double s, double dist) => Positioned(
+        left: (cx - b) * s,
+        top: (cy - b) * s,
+        width: b * 2 * s,
+        height: b * 2 * s,
+        child: Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.diagonal3Values(a / b, 1, 1),
+          child: Transform.rotate(angle: dist / (tire * s), child: _img(file)),
+        ),
+      );
+
+  Widget _disc(String file, double cx, double cy, double r, double tire, double s, double dist) => Positioned(
+        left: (cx - r) * s,
+        top: (cy - r) * s,
+        width: r * 2 * s,
+        height: r * 2 * s,
+        child: Transform.rotate(angle: dist / (tire * s), child: _img(file)),
+      );
+
+  Widget _spokes(double cx, double cy, double a, double b, double tire, double s, double dist) => Positioned(
+        left: (cx - a) * s,
+        top: (cy - b) * s,
+        width: a * 2 * s,
+        height: b * 2 * s,
+        child: CustomPaint(painter: _SpokePainter(dist / (tire * s))),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: LayoutBuilder(builder: (context, c) {
+        final h = c.maxHeight, w = c.maxWidth;
+        if (h < 520 || w < widget.minWidth) return const SizedBox.shrink();
+        final roadH = (h * 0.22).clamp(100.0, 170.0);
+        final whH = LoginFleetScene._whHeight(h, roadH);
+        final u = LoginFleetScene._unit(w, roadH);
+        final total = 386 * u;
+        final x0 = (w - total) / 2;
+        final ground = roadH * 0.5;
+        return AnimatedBuilder(
+          animation: _c,
+          builder: (_, __) {
+            final sec = _c.value * 3600.0;
+            final dist = sec * _speed;
+            double bob(double ph) => math.sin(sec * 7 + ph) * 0.8;
+            return Stack(clipBehavior: Clip.none, children: [
+              if (whH > 0)
+                Positioned(
+                  left: (w - whH * 722 / 513) / 2,
+                  bottom: roadH * 0.62,
+                  height: whH,
+                  width: whH * 722 / 513,
+                  child: Opacity(opacity: 0.94, child: _img('fleet_warehouse.png')),
+                ),
+              Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(dist))),
+              // The painted truck (picture cut to 1023 x 698 px).
+              _vehicle(u, x0, ground, 128, 1023, 698, 'fleet_truck.webp', bob: bob(0), over: (s) => [
+                    _rim('fleet_rim_r.webp', 141, 579, 20, 40, 72, s, dist),
+                    _rim('fleet_rim_f.webp', 614, 607, 34, 52, 88, s, dist),
+                  ]),
+              // The pickup (1169 x 800 px): the rim of each wheel turns.
+              _vehicle(u, x0 + (128 + 14) * u, ground, 132, 1169, 800, 'fleet_pickup.webp', bob: bob(1.7), over: (s) => [
+                    _disc('fleet_pw_r.webp', 253, 587, 57, 98, s, dist),
+                    _disc('fleet_pw_f.webp', 897, 585, 57, 98, s, dist),
+                  ]),
+              // The salesman's bike (723 x 788 px): its spokes turn behind the frame.
+              _vehicle(u, x0 + (128 + 14 + 132 + 14) * u, ground, 98, 723, 788, 'fleet_bike.webp', bob: bob(3.1), behind: (s) => [
+                    _spokes(161, 604, 67, 90, 100, s, dist),
+                    _spokes(613, 640, 82, 82, 114, s, dist),
+                  ]),
+            ]);
+          },
+        );
+      }),
+    );
+  }
+}
+
+class _SpokePainter extends CustomPainter {
+  const _SpokePainter(this.angle);
+  final double angle;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = size.height / 2 * 0.94;
+    final r0 = r * 0.28;
+    canvas.save();
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.scale(size.width / size.height, 1);
+    canvas.rotate(angle);
+    final p = Paint()
+      ..color = const Color(0xD9E4E8EF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(0.7, size.height * 0.012);
+    const n = 36;
+    for (var i = 0; i < n; i++) {
+      final th = 2 * math.pi * i / n;
+      final dl = 0.62 * (i.isOdd ? 1 : -1);
+      canvas.drawLine(Offset(r0 * math.cos(th), r0 * math.sin(th)), Offset(r * math.cos(th + dl), r * math.sin(th + dl)), p);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _SpokePainter old) => old.angle != angle;
+}
+
 class _RoadPainter extends CustomPainter {
   const _RoadPainter(this.dist);
   final double dist;
