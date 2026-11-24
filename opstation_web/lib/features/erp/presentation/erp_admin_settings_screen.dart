@@ -9,7 +9,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
-import 'restore_backup_dialog.dart';
 import '../../../core/notifications/alert_chime.dart';
 import '../../../core/notifications/floating_alert_preview.dart';
 import '../../../core/notifications/floating_alerts_model.dart';
@@ -18,6 +17,7 @@ import '../../auth/auth_controller.dart';
 import '../widgets/signature_stamp_settings.dart';
 import '../widgets/erp_look.dart';
 import '../widgets/company_logo_settings.dart';
+import '../widgets/org_beneficiaries_panel.dart';
 import 'notification_rules_screen.dart';
 import '../../../core/utils/friendly_error.dart';
 
@@ -1218,7 +1218,6 @@ class _ErpAdminSettingsScreenState
         _textCtrls[t.text!.key] = TextEditingController();
       }
     }
-    _textCtrls['org.backup_alert_emails'] = TextEditingController();
     // Start with every section collapsed — a clean overview the admin can
     // expand into, instead of one long wall of switches.
     _collapsedGroups.addAll([for (final g in _toggleGroupsOrder) g.title]);
@@ -1350,7 +1349,6 @@ class _ErpAdminSettingsScreenState
                     .toSet();
           }
         }
-        _textCtrls['org.backup_alert_emails']!.text = cfg['org.backup_alert_emails'] ?? '';
         _loading = false;
       });
     } catch (_) {
@@ -2118,33 +2116,17 @@ class _ErpAdminSettingsScreenState
                     return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
                   })(),
                 ),
-                const SizedBox(height: 8),
-                _textRow(const _TextSetting('org.backup_alert_emails', 'Fallback email for backup alerts',
-                    hint: 'If a backup fails, master admins and this address are emailed')),
                 const SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerRight,
-                  child: Wrap(spacing: 10, runSpacing: 8, alignment: WrapAlignment.end, children: [
-                    if ((() {
-                      final r = ref.read(currentUserProvider)?.role;
-                      return r == WebUserRole.masterAdmin || r == WebUserRole.superAdmin;
-                    })())
-                      OutlinedButton.icon(
-                        onPressed: _backupRunning
-                            ? null
-                            : () => showRestoreBackupDialog(context, orgId: ref.read(currentUserProvider)?.orgId ?? ''),
-                        icon: const Icon(Icons.settings_backup_restore, size: 18),
-                        label: const Text('Restore from backup'),
-                      ),
-                    ElevatedButton.icon(
-                      onPressed: _backupRunning ? null : _backupNow,
-                      icon: _backupRunning
-                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.backup_outlined, size: 18),
-                      label: Text(_backupRunning ? 'Backing up…' : 'Back up now'),
-                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
-                    ),
-                  ]),
+                  child: ElevatedButton.icon(
+                    onPressed: _backupRunning ? null : _backupNow,
+                    icon: _backupRunning
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.backup_outlined, size: 18),
+                    label: Text(_backupRunning ? 'Backing up…' : 'Back up now'),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.white),
+                  ),
                 ),
               ]),
             ),
@@ -2582,6 +2564,9 @@ class _ErpAdminSettingsScreenState
                       orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   const SizedBox(height: 16),
                   _LedgerMessagesPanel(
+                      orgId: ref.read(currentUserProvider)?.orgId ?? ''),
+                  const SizedBox(height: 16),
+                  OrgBeneficiariesPanel(
                       orgId: ref.read(currentUserProvider)?.orgId ?? ''),
                   const SizedBox(height: 16),
                   _PayrollNotesPanel(
@@ -3190,9 +3175,8 @@ class _DriveBackupPanelState extends State<_DriveBackupPanel> {
     if (widget.orgId.isEmpty) return;
     final c = Supabase.instance.client;
     try {
-      final cfg = await c.from('app_config').select('key, value, branch_id').eq('org_id', widget.orgId)
-          .inFilter('key', ['org.backup_targets', 'org.backup_drive_keep_days'])
-          .or('branch_id.is.null,branch_id.eq.');
+      final cfg = await c.from('app_config').select('key, value').eq('org_id', widget.orgId)
+          .inFilter('key', ['org.backup_targets', 'org.backup_drive_keep_days']).isFilter('branch_id', null);
       Map<String, dynamic>? drive;
       try {
         final st = await c.rpc('backup_drive_status', params: {'p_org': widget.orgId});
@@ -3633,7 +3617,7 @@ class _RouteGuideItemsState extends State<_RouteGuideItems> {
   Future<void> _load() async {
     try {
       final r = await Supabase.instance.client.from('app_config').select('value')
-          .eq('org_id', widget.orgId).eq('key', 'org.route_guide_items').or('branch_id.is.null,branch_id.eq.').limit(1).maybeSingle();
+          .eq('org_id', widget.orgId).eq('key', 'org.route_guide_items').isFilter('branch_id', null).maybeSingle();
       final v = '${r?['value'] ?? ''}'.trim();
       if (v.isNotEmpty && mounted) setState(() => _on = v.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet());
     } catch (_) {}

@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
@@ -42,6 +43,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
 
   static const _baseTabs = [
     (icon: Icons.home_outlined, label: 'Home'),
+    (icon: Icons.shopping_bag_outlined, label: 'My orders'),
     (icon: Icons.notifications_outlined, label: 'Updates'),
     (icon: Icons.folder_outlined, label: 'Files'),
     (icon: Icons.receipt_long_outlined, label: 'Invoices'),
@@ -206,6 +208,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
   void _onAccountMenu(String v) {
     if (v == 'profile') _showProfile();
     if (v == 'password') _showChangePassword();
+    if (v == 'pay') _showPayDetails(context);
     if (v == 'signout') {
       ref.read(retailerAuthControllerProvider.notifier).signOut();
     }
@@ -226,6 +229,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                 final i = _tabs.indexWhere((t) => t.label == label);
                 if (i >= 0) setState(() => _tab = i);
               }),
+          const _MyOrdersTab(),
           const _NotificationsTab(),
           const _FilesTab(),
           const _OrdersTab(),
@@ -294,6 +298,7 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
               if (_orgName != null)
                 Container(
                   width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.07),
@@ -311,6 +316,31 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                             fontSize: 14)),
                   ]),
                 ),
+              PopupMenuButton<String>(
+                tooltip: 'Settings',
+                onSelected: _onAccountMenu,
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'profile', child: Text('Profile')),
+                  PopupMenuItem(
+                      value: 'password', child: Text('Change password')),
+                  PopupMenuItem(value: 'pay', child: Text('Payment details')),
+                  PopupMenuItem(value: 'signout', child: Text('Sign out')),
+                ],
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(children: const [
+                    Icon(Icons.settings_outlined,
+                        size: 19, color: Color(0xFFB9C6E4)),
+                    SizedBox(width: 12),
+                    Text('Settings',
+                        style: TextStyle(
+                            color: Color(0xFFB9C6E4),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              ),
             ]),
           ),
         ),
@@ -362,6 +392,8 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                       PopupMenuItem(value: 'profile', child: Text('Profile')),
                       PopupMenuItem(
                           value: 'password', child: Text('Change password')),
+                      PopupMenuItem(
+                          value: 'pay', child: Text('Payment details')),
                       PopupMenuItem(value: 'signout', child: Text('Sign out')),
                     ],
                     child: CircleAvatar(
@@ -444,6 +476,8 @@ class _RetailerPortalScreenState extends ConsumerState<RetailerPortalScreen> {
                     PopupMenuItem(value: 'profile', child: Text('Profile')),
                     PopupMenuItem(
                         value: 'password', child: Text('Change password')),
+                    PopupMenuItem(
+                        value: 'pay', child: Text('Payment details')),
                     PopupMenuItem(value: 'signout', child: Text('Sign out')),
                   ],
                 ),
@@ -1026,6 +1060,8 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
         subtotal: (header['subtotal'] as num?)?.toDouble(),
         discountTotal: (header['discount_total'] as num?)?.toDouble(),
         grandTotal: (header['grand_total'] as num?)?.toDouble(),
+        preparedBy: header['prepared_by'] as String?,
+        createdAt: _stampLabel(header['created_at']),
       );
     } catch (e) {
       if (mounted) _snack(context, 'Could not open invoice');
@@ -1484,6 +1520,8 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
         subtotal: (header['subtotal'] as num?)?.toDouble(),
         discountTotal: (header['discount_total'] as num?)?.toDouble(),
         grandTotal: (header['grand_total'] as num?)?.toDouble(),
+        preparedBy: header['prepared_by'] as String?,
+        createdAt: _stampLabel(header['created_at']),
       );
     } catch (_) {
       if (mounted) _snack(context, 'Could not open the document');
@@ -1873,6 +1911,7 @@ class _HomeTab extends ConsumerStatefulWidget {
 class _HomeTabState extends ConsumerState<_HomeTab> {
   bool _loading = true;
   Map<String, dynamic>? _a;
+  List<Map<String, dynamic>> _recent = [];
 
   @override
   void initState() {
@@ -1892,6 +1931,10 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+    try {
+      final l = await _fetchMyOrders();
+      if (mounted) setState(() => _recent = l.take(4).toList());
+    } catch (_) {}
   }
 
   double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
@@ -1956,6 +1999,21 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
                       color: Colors.white)),
             ),
           ],
+          const Spacer(),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFB400),
+              foregroundColor: const Color(0xFF0B1B3A),
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.account_balance_outlined, size: 18),
+            label: const Text('Pay',
+                style: TextStyle(fontWeight: FontWeight.w800)),
+            onPressed: () => _showPayDetails(context),
+          ),
         ]),
         const SizedBox(height: 8),
         Text('Rs ${money(total)}',
@@ -2104,6 +2162,28 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
       final wide = c.maxWidth >= 820;
       final hero = _hero(total, limit, overLimit, usage);
       final aging = _aging(buckets, total);
+      final recent = _recent.isEmpty
+          ? null
+          : _card(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Expanded(
+                      child: Text('Recent orders',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w800))),
+                  TextButton(
+                      onPressed: widget.onOpenTab == null
+                          ? null
+                          : () => widget.onOpenTab!('My orders'),
+                      child: const Text('See all')),
+                ]),
+                const SizedBox(height: 6),
+                for (final o in _recent)
+                  Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _OrderCard(o: o, expandable: false)),
+              ]),
+            );
       final quick = Row(children: [
         _quick(Icons.receipt_long_outlined, 'Invoices', 'Invoices'),
         const SizedBox(width: 12),
@@ -2137,6 +2217,7 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
                 Expanded(flex: 5, child: aging),
               ]),
               if (warn != null) ...[const SizedBox(height: 16), warn],
+              if (recent != null) ...[const SizedBox(height: 18), recent],
               const SizedBox(height: 18),
               quick,
             ])
@@ -2145,6 +2226,7 @@ class _HomeTabState extends ConsumerState<_HomeTab> {
               if (warn != null) ...[const SizedBox(height: 14), warn],
               const SizedBox(height: 14),
               aging,
+              if (recent != null) ...[const SizedBox(height: 14), recent],
               const SizedBox(height: 20),
               orderBtn,
             ]);
@@ -2472,6 +2554,343 @@ class _ComplaintCardWebState extends State<_ComplaintCardWeb> {
           ),
         ),
       ]),
+    );
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// Helpers: PDF timestamp, order status
+// ════════════════════════════════════════════════════════════════════
+String? _stampLabel(dynamic v) {
+  if (v == null) return null;
+  try {
+    return DateFormat(orgTime('d MMM yyyy HH:mm'))
+        .format(DateTime.parse('$v').toLocal());
+  } catch (_) {
+    return null;
+  }
+}
+
+({String label, Color color}) _orderStatus(Map<String, dynamic> o) {
+  final st = '${o['status'] ?? ''}'.toLowerCase();
+  switch (st) {
+    case 'submitted':
+    case 'pending':
+      return (label: 'Awaiting supplier', color: Colors.amber.shade800);
+    case 'approved':
+    case 'confirmed':
+      return (label: 'Accepted', color: AppTheme.success);
+    case 'rejected':
+    case 'declined':
+      return (label: 'Declined', color: AppTheme.danger);
+    default:
+      return (
+        label: st.isEmpty ? '—' : st[0].toUpperCase() + st.substring(1),
+        color: AppTheme.textSecondary
+      );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _StatusChip(this.label, this.color);
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(20)),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 11.5, fontWeight: FontWeight.w700, color: color)),
+      );
+}
+
+Future<List<Map<String, dynamic>>> _fetchMyOrders() async {
+  final res = await Supabase.instance.client.rpc('retailer_my_orders');
+  return [
+    for (final e in (res as List? ?? const []))
+      Map<String, dynamic>.from(e as Map)
+  ];
+}
+
+class _OrderCard extends StatelessWidget {
+  final Map<String, dynamic> o;
+  final bool expandable;
+  const _OrderCard({required this.o, this.expandable = true});
+
+  @override
+  Widget build(BuildContext context) {
+    final st = _orderStatus(o);
+    final num? total = o['total'] as num?;
+    final when = o['submitted_at'] == null
+        ? ''
+        : DateFormat('d MMM yyyy, h:mm a')
+            .format(DateTime.parse('${o['submitted_at']}').toLocal());
+    final number = (o['order_number'] as String?)?.trim();
+    final items = ((o['items'] as List?) ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final reason = (o['reject_reason'] as String?)?.trim() ?? '';
+    final header = Row(children: [
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(number != null && number.isNotEmpty ? number : 'Order request',
+              style:
+                  const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+          const SizedBox(height: 2),
+          Text('$when  •  ${items.length} item${items.length == 1 ? '' : 's'}',
+              style: const TextStyle(
+                  fontSize: 12, color: AppTheme.textSecondary)),
+        ]),
+      ),
+      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        if (total != null)
+          Text('Rs ${money(total)}',
+              style:
+                  const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+        const SizedBox(height: 4),
+        _StatusChip(st.label, st.color),
+      ]),
+    ]);
+    final detail = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (reason.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text('Reason: $reason',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.danger)),
+        ),
+      for (final it in items)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(children: [
+            Expanded(
+                child: Text('${it['product']}',
+                    style: const TextStyle(fontSize: 13))),
+            Text(
+                '${((it['qty'] as num?) ?? 0).toStringAsFixed(0)} × Rs ${money((it['price'] as num?) ?? 0)}',
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary)),
+          ]),
+        ),
+    ]);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: expandable
+          ? Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                title: header,
+                children: [detail],
+              ),
+            )
+          : Padding(padding: const EdgeInsets.all(16), child: header),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// My orders tab
+// ════════════════════════════════════════════════════════════════════
+class _MyOrdersTab extends ConsumerStatefulWidget {
+  const _MyOrdersTab();
+  @override
+  ConsumerState<_MyOrdersTab> createState() => _MyOrdersTabState();
+}
+
+class _MyOrdersTabState extends ConsumerState<_MyOrdersTab> {
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _orders = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final l = await _fetchMyOrders();
+      if (!mounted) return;
+      setState(() {
+        _orders = l;
+        _loading = false;
+        _error = null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Could not load your orders';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return _empty(_error!, Icons.error_outline);
+    if (_orders.isEmpty) {
+      return _empty('No orders yet.', Icons.shopping_bag_outlined);
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.separated(
+        padding: const EdgeInsets.all(20),
+        itemCount: _orders.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (_, i) => Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900),
+              child: _OrderCard(o: _orders[i])),
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Pay: the supplier's beneficiary accounts
+// ════════════════════════════════════════════════════════════════════
+Future<void> _showPayDetails(BuildContext context) async {
+  await showDialog(
+      context: context, builder: (_) => const _PayDetailsDialog());
+}
+
+class _PayDetailsDialog extends StatefulWidget {
+  const _PayDetailsDialog();
+  @override
+  State<_PayDetailsDialog> createState() => _PayDetailsDialogState();
+}
+
+class _PayDetailsDialogState extends State<_PayDetailsDialog> {
+  bool _loading = true;
+  List<Map<String, dynamic>> _rows = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r =
+          await Supabase.instance.client.rpc('retailer_org_beneficiaries');
+      if (!mounted) return;
+      setState(() {
+        _rows = [
+          for (final e in (r as List? ?? const []))
+            Map<String, dynamic>.from(e as Map)
+        ];
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Widget _line(BuildContext context, String label, String? value) {
+    if (value == null || value.trim().isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(children: [
+        SizedBox(
+            width: 92,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary))),
+        Expanded(
+            child: SelectableText(value,
+                style: const TextStyle(
+                    fontSize: 13.5, fontWeight: FontWeight.w600))),
+        IconButton(
+          tooltip: 'Copy',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.copy_outlined, size: 16),
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: value));
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('Copied'),
+                duration: Duration(seconds: 1),
+                behavior: SnackBarBehavior.floating));
+          },
+        ),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Payment details'),
+      content: SizedBox(
+        width: 440,
+        child: _loading
+            ? const SizedBox(
+                height: 120, child: Center(child: CircularProgressIndicator()))
+            : _rows.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                        'Your supplier has not added payment details yet.',
+                        style: TextStyle(color: AppTheme.textSecondary)))
+                : SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      for (final r in _rows)
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppTheme.border)),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${r['bank_name']}',
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 15)),
+                                const SizedBox(height: 6),
+                                _line(context, 'Account title',
+                                    r['account_title'] as String?),
+                                _line(context, 'Account no.',
+                                    r['account_number'] as String?),
+                                _line(context, 'IBAN', r['iban'] as String?),
+                                _line(context, 'Branch', r['branch'] as String?),
+                                if ((r['note'] as String?)?.trim().isNotEmpty ==
+                                    true)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text('${r['note']}',
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textSecondary)),
+                                  ),
+                              ]),
+                        ),
+                    ]),
+                  ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close')),
+      ],
     );
   }
 }
