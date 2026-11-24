@@ -5,9 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/skeleton_loader.dart';
-import '../../../core/widgets/searchable_dropdown.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
+import '../../intelligence/widgets/searchable_dropdown.dart';
 
 class ErpStockBalanceReportScreen extends ConsumerStatefulWidget {
   const ErpStockBalanceReportScreen({super.key});
@@ -167,16 +167,15 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
 
   Widget _filterDropdown(String label, String type, String? value, void Function(String?) onChanged) {
     final items = _taxonomies[type] ?? [];
-    return SearchableDropdown<String>(
-      width: 180,
+    return SizedBox(width: 190, child: SearchableDropdown(
       label: label,
       value: value,
-      options: <(String?, String)>[
-        (null, 'All'),
-        for (final t in items) (t['name'] as String, t['name'] as String),
+      allLabel: 'All',
+      options: [
+        for (final t in items) MapEntry(t['name'] as String?, t['name'] as String),
       ],
       onChanged: onChanged,
-    );
+    ));
   }
 
   String get _branchName => _branchId == null
@@ -267,16 +266,15 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
             style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          SearchableDropdown<String>(
-            width: 220,
+          SizedBox(width: 220, child: SearchableDropdown(
             label: 'Branch',
             value: _branchId,
-            options: <(String?, String)>[
-              (null, 'All Branches'),
-              for (final b in _branches) (b['id'] as String, b['name'] as String? ?? '-'),
+            allLabel: 'All Branches',
+            options: [
+              for (final b in _branches) MapEntry(b['id'] as String?, b['name'] as String? ?? '-'),
             ],
             onChanged: (v) { setState(() => _branchId = v); _load(); },
-          ),
+          )),
           OutlinedButton.icon(
             onPressed: _pickDate,
             icon: const Icon(Icons.calendar_today_outlined, size: 16),
