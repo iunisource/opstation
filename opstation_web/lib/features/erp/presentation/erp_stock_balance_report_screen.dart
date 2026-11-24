@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/skeleton_loader.dart';
+import '../../../core/widgets/searchable_dropdown.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 
@@ -166,16 +167,16 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
 
   Widget _filterDropdown(String label, String type, String? value, void Function(String?) onChanged) {
     final items = _taxonomies[type] ?? [];
-    return SizedBox(width: 180, child: DropdownButtonFormField<String?>(
+    return SearchableDropdown<String>(
+      width: 180,
+      label: label,
       value: value,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: label, isDense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-      items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('All')),
-        ...items.map((t) => DropdownMenuItem<String?>(value: t['name'] as String, child: Text(t['name'] as String, overflow: TextOverflow.ellipsis))),
+      options: <(String?, String)>[
+        (null, 'All'),
+        for (final t in items) (t['name'] as String, t['name'] as String),
       ],
       onChanged: onChanged,
-    ));
+    );
   }
 
   String get _branchName => _branchId == null
@@ -266,16 +267,16 @@ class _ErpStockBalanceReportScreenState extends ConsumerState<ErpStockBalanceRep
             style: const TextStyle(color: AppTheme.textSecondary)),
         const SizedBox(height: 16),
         Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          SizedBox(width: 220, child: DropdownButtonFormField<String?>(
+          SearchableDropdown<String>(
+            width: 220,
+            label: 'Branch',
             value: _branchId,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Branch', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
-            items: [
-              const DropdownMenuItem<String?>(value: null, child: Text('All Branches')),
-              ..._branches.map((b) => DropdownMenuItem<String?>(value: b['id'] as String, child: Text(b['name'] as String? ?? '-', overflow: TextOverflow.ellipsis))),
+            options: <(String?, String)>[
+              (null, 'All Branches'),
+              for (final b in _branches) (b['id'] as String, b['name'] as String? ?? '-'),
             ],
             onChanged: (v) { setState(() => _branchId = v); _load(); },
-          )),
+          ),
           OutlinedButton.icon(
             onPressed: _pickDate,
             icon: const Icon(Icons.calendar_today_outlined, size: 16),
