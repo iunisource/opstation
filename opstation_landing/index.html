@@ -291,7 +291,8 @@
     @media (min-width: 900px) { .local { grid-template-columns: repeat(4, 1fr); gap: 16px; } }
     .local li { border: 1px solid var(--line); border-radius: 16px; padding: 18px 16px; background: #fff; transition: transform .2s ease, border-color .2s ease; }
     .local li:hover { transform: translateY(-4px); border-color: var(--blue); }
-    .local i { width: 48px; height: 48px; border-radius: 14px; background: var(--navy); color: var(--marigold); display: grid; place-items: center; font-style: normal; }
+    .local i { width: 48px; height: 48px; border-radius: 14px; background: #E8EFFE; color: var(--blue-dk); display: grid; place-items: center; font-style: normal; transition: background .2s ease, color .2s ease; }
+    .local li:hover i { background: var(--blue); color: #fff; }
     .local i.ur { font-size: 1rem; line-height: 1; padding-bottom: 8px; }
     .local h3 { font-size: 1.05rem; font-weight: 700; margin-top: 14px; }
     .local p { font-size: .88rem; color: var(--muted); margin-top: 4px; }
