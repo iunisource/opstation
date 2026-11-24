@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_theme.dart';
 import 'package:opstation_web/core/widgets/brand_logo.dart';
+import 'login_scene.dart';
 
 /// Full-screen, self-guiding organisation sign-up.
 ///
@@ -252,49 +253,54 @@ class _SignupWizardScreenState extends State<SignupWizardScreen> {
 
   // ── branded left rail (wide screens) ──────────────────────────────────────
   Widget _brandRail() {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft, end: Alignment.bottomRight,
-          colors: [Color(0xFF244C97), Color(0xFF142C58), Color(0xFF0B1220)],
-        ),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(48),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _goHome,
-                child: Tooltip(
-                  message: 'Back to sign in',
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const BrandLogo(size: 42, ring: true),
-                    const SizedBox(width: 12),
-                    const Text('Opstation', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
-                  ]),
+    // Same look as the sign-in page: the drifting light trails, and the painted truck driving along the road.
+    return LayoutBuilder(builder: (context, c) {
+      final showRoad = c.maxHeight >= 520;
+      final roadH = showRoad ? (c.maxHeight * 0.22).clamp(100.0, 170.0) : 0.0;
+      return Stack(children: [
+        const Positioned.fill(child: LoginTrails()),
+        Positioned.fill(child: DecoratedBox(decoration: BoxDecoration(color: const Color(0xFF0B1220).withOpacity(0.28)))),
+        if (showRoad) const LoginRoadTruck(minWidth: 400),
+        SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(48, 48, 48, 40 + roadH),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _goHome,
+                  child: Tooltip(
+                    message: 'Back to sign in',
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const BrandLogo(size: 42, ring: true),
+                      const SizedBox(width: 12),
+                      const Text('Opstation', style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+                    ]),
+                  ),
                 ),
               ),
-            ),
-            const Spacer(),
-            const Text('Create your\nOpstation workspace.',
-                style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w800, height: 1.15, letterSpacing: -0.5)),
-            const SizedBox(height: 14),
-            Text('Tell us about your business and your workspace is created instantly — we email your login details right away. Free for 14 days.',
-                style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 15, height: 1.5)),
-            const SizedBox(height: 32),
-            _railPoint('Instant setup — your workspace is ready in seconds'),
-            _railPoint('A dedicated workspace for your whole operation'),
-            _railPoint('14-day free trial · no credit card required'),
-            const Spacer(),
-            Text('© 2026 Opstation · All rights reserved',
-                style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12)),
-          ]),
+              const Spacer(),
+              Text('START YOUR FREE TRIAL',
+                  style: TextStyle(color: const Color(0xFF9DBBFA), fontSize: 12.5, fontWeight: FontWeight.w800, letterSpacing: 1.6)),
+              const SizedBox(height: 10),
+              const Text('Set up your\ndistribution workspace.',
+                  style: TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w800, height: 1.12, letterSpacing: -0.6)),
+              const SizedBox(height: 14),
+              Text('Tell us about your business and your workspace is ready in seconds. Your login details reach your inbox right away. Free for 14 days.',
+                  style: TextStyle(color: Colors.white.withOpacity(0.84), fontSize: 15, height: 1.5)),
+              const SizedBox(height: 26),
+              _railPoint('Purchase, godown stock, salesmen, delivery, recovery and accounts together'),
+              _railPoint('Your own private workspace for your whole team and branches'),
+              _railPoint('14-day free trial · no credit card needed'),
+              const Spacer(),
+              Text('© 2026 Opstation · All rights reserved',
+                  style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 12)),
+            ]),
+          ),
         ),
-      ),
-    );
+      ]);
+    });
   }
 
   Widget _railPoint(String t) => Padding(

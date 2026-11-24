@@ -120,7 +120,10 @@ class _LoginTrailsState extends State<LoginTrails> with SingleTickerProviderStat
 /// put (with a slight sway) and the road slides under it, so it never leaves the picture or covers the sign-in
 /// form. The wheels turn. Only on wide screens; it stands still when the device asks for less motion.
 class LoginRoadTruck extends StatefulWidget {
-  const LoginRoadTruck({super.key});
+  const LoginRoadTruck({super.key, this.minWidth = 700});
+
+  /// The truck is left out when the space is narrower than this (the sign-in page needs 700; the narrower sign-up panel uses less).
+  final double minWidth;
 
   @override
   State<LoginRoadTruck> createState() => _LoginRoadTruckState();
@@ -161,7 +164,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
     return IgnorePointer(
       child: LayoutBuilder(builder: (context, c) {
         final h = c.maxHeight;
-        if (h < 520 || c.maxWidth < 700) return const SizedBox.shrink();
+        if (h < 520 || c.maxWidth < widget.minWidth) return const SizedBox.shrink();
         // The truck lives mostly inside the road band so it never climbs into the headline or the feature chips.
         final roadH = (h * 0.22).clamp(100.0, 170.0);
         final truckH = roadH * 1.1;

@@ -106,10 +106,23 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
         padding: EdgeInsets.fromLTRB(wide ? 48 : 20, (wide ? 36 : 14) + topInset, wide ? 48 : 20, wide ? 40 : 14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            BrandLogo(size: wide ? 40 : 34),
-            const SizedBox(width: 10),
-            const Text('Opstation',
-                style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w800)),
+            // The logo and name take you back to the main sign-in.
+            MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _back,
+                child: Tooltip(
+                  message: 'Back to sign in',
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    BrandLogo(size: wide ? 40 : 34),
+                    const SizedBox(width: 10),
+                    const Text('Opstation',
+                        style: TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w800)),
+                  ]),
+                ),
+              ),
+            ),
             if (!tiny) ...[
               const SizedBox(width: 10),
               Flexible(
