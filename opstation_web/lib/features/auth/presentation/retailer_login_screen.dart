@@ -173,7 +173,9 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
 
   // ------------------------------ right: the form ------------------------------
   Widget _form(bool isLoading, {bool compact = false}) {
-    return Column(
+    // The code and password are one sign-in group for the browser's autofill and password manager, the same as on the
+    // main sign-in page. Without the group, autofill could take the focus away from the password field.
+    return AutofillGroup(child: Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -191,6 +193,9 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
           textInputAction: TextInputAction.next,
           autofillHints: const [AutofillHints.username],
           autocorrect: false,
+          onTap: () {
+            if (!_codeFocus.hasFocus) _codeFocus.requestFocus();
+          },
           onSubmitted: (_) => _passFocus.requestFocus(),
           style: const TextStyle(fontSize: 14, color: _ink),
           decoration: InputDecoration(
@@ -211,7 +216,13 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
           controller: _passCtrl,
           focusNode: _passFocus,
           obscureText: _obscure,
+          autocorrect: false,
+          enableSuggestions: false,
           autofillHints: const [AutofillHints.password],
+          // A tap always puts the cursor in the field (it sometimes took several tries).
+          onTap: () {
+            if (!_passFocus.hasFocus) _passFocus.requestFocus();
+          },
           onSubmitted: (_) => _submit(),
           style: const TextStyle(fontSize: 14, color: _ink),
           decoration: InputDecoration(
@@ -264,7 +275,7 @@ class _RetailerLoginScreenState extends ConsumerState<RetailerLoginScreen> {
           ]),
         ),
       ],
-    );
+    ));
   }
 
   Widget _backLink() => TextButton.icon(
