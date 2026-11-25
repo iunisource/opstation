@@ -108,6 +108,7 @@ import '../../features/erp/presentation/erp_pi_screen.dart' deferred as _s092;
 import '../../features/erp/presentation/erp_sales_screen.dart' deferred as _s093;
 import '../../features/erp/presentation/erp_field_orders_screen.dart' deferred as _s094;
 import '../../features/erp/presentation/erp_retailer_orders_screen.dart' deferred as _s095;
+import '../../features/erp/presentation/erp_npl_screen.dart' deferred as _sNpl;
 import '../../features/erp/presentation/erp_sales_report_screen.dart' deferred as _s096;
 import '../../features/erp/presentation/erp_sales_return_report_screen.dart' deferred as _s097;
 import '../../features/erp/presentation/erp_flow_dashboard_screen.dart' deferred as _s098;
@@ -615,6 +616,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/erp/sales',     builder: (_, state) => _deferred('_s093', _s093.loadLibrary, () => _s093.ErpSalesScreen(focusId: state.uri.queryParameters['focus']))),
           GoRoute(path: '/erp/dispatch-summary', builder: (_, __) => _deferred('_s125', _s125.loadLibrary, () => _s125.ErpDispatchSummaryScreen())),
           GoRoute(path: '/erp/schemes',   builder: (_, __) => _deferred('_s124', _s124.loadLibrary, () => _s124.ErpSchemesScreen())),
+          GoRoute(path: '/erp/npl', builder: (_, __) => _deferred('_sNpl', _sNpl.loadLibrary, () => _sNpl.ErpNplScreen())),
           GoRoute(path: '/erp/schemes-report', builder: (_, __) => _deferred('_s126', _s126.loadLibrary, () => _s126.ErpSchemesReportScreen())),
           GoRoute(path: '/erp/scheme-vouchers-report', builder: (_, __) => _deferred('_s990', _s990.loadLibrary, () => _s990.ErpSchemeVouchersReportScreen())),
           GoRoute(path: '/erp/field-orders', builder: (_, state) => _deferred('_s094', _s094.loadLibrary, () => _s094.ErpFieldOrdersScreen(focusId: state.uri.queryParameters['focus']))),
@@ -936,6 +938,7 @@ final Map<String, Future<void> Function()> _allScreens = {
   '_s093': _s093.loadLibrary,
   '_s094': _s094.loadLibrary,
   '_s095': _s095.loadLibrary,
+  '_sNpl': _sNpl.loadLibrary,
   '_s096': _s096.loadLibrary,
   '_s097': _s097.loadLibrary,
   '_s098': _s098.loadLibrary,

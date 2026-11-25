@@ -348,6 +348,17 @@ const List<_AdminToggle> _toggles = [
   ),
 
   _AdminToggle(
+    'org.npl_enabled',
+    'New Product Launch (NPL)',
+    'When ON, Sales gets a "New Product Launch" screen to track a focused '
+        'launch of one product: pick the product, dates and target outlets '
+        '(customer groups, routes or all customers), then watch outlets '
+        'covered, quantity and value sold, and repeat orders, taken from sales '
+        'invoices. Who can open it is set under Permissions. When OFF, the '
+        'screen is hidden.',
+  ),
+
+  _AdminToggle(
     'org.customer_targets_enabled',
     'Customer sales targets',
     'When ON, each customer carries a monthly sales target. The target and '
@@ -1040,6 +1051,7 @@ const List<_ToggleGroup> _toggleGroupsOrder = [
     'org.delivery_flow_enabled',
     'org.foc_enabled',
     'org.customer_targets_enabled',
+    'org.npl_enabled',
     'org.srn_date_editable',
     'org.sri_date_editable',
     'org.doc_review_flow_si',

@@ -219,6 +219,23 @@ final supplierPendingCountProvider = FutureProvider<int>((ref) async {
 // Whether the customer sales-targets feature is enabled for this org. Gates the
 // Intelligence → Performance menu item (and target widgets elsewhere). Mirrors
 // the org.customer_targets_enabled flag read by the targets screens.
+// Admin Settings -> New Product Launch (org.npl_enabled). Gates the Sales menu item.
+final nplEnabledProvider = FutureProvider<bool>((ref) async {
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return false;
+  try {
+    final res = await Supabase.instance.client
+        .from('app_config')
+        .select('value')
+        .eq('org_id', user.orgId!)
+        .eq('key', 'org.npl_enabled')
+        .maybeSingle();
+    return (res?['value'] as String?) == 'true';
+  } catch (_) {
+    return false;
+  }
+});
+
 final customerTargetsEnabledProvider = FutureProvider<bool>((ref) async {
   final user = await ref.watch(authControllerProvider.future);
   if (user == null || user.orgId == null) return false;
@@ -1502,6 +1519,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
       if (show('/erp/delivery-orders')) _menuItem(context, 'Delivery Orders',       Icons.local_shipping_outlined,    '/erp/delivery-orders',       location, badge: doRemarkPending + doSupervisePending),
       if (show('/erp/sales-invoices')) _menuItem(context, 'Sales Invoices',        Icons.receipt_outlined,           '/erp/sales-invoices',        location, badge: siReviewPending + siSupervisePending + siRemarkPending),
       if (show('/erp/schemes')) _menuItem(context, 'Schemes & Offers',      Icons.local_offer_outlined,       '/erp/schemes',               location),
+      if (show('/erp/npl') && (ref.watch(nplEnabledProvider).valueOrNull ?? false)) _menuItem(context, 'New Product Launch',  Icons.rocket_launch_outlined,     '/erp/npl',                   location),
     ];
     final salesReturns = <Widget>[
       if (show('/erp/field-returns')) _menuItem(context, 'Field Returns',         Icons.assignment_return_outlined, '/erp/field-returns',         location, badge: fieldReturnsPending),
@@ -1691,7 +1709,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(purchaseItems), badge: poPending + piReviewPending + priReviewPending + grnSupervisePending + grnPendingInvoice + piSupervisePending + piRemarkPending),
       if (_hasItems(salesItems))
         _navMenu(context, 'Sales', Icons.receipt_long_outlined, location,
-          ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/fulfillment', '/erp/delivery-orders', '/erp/sales-invoices', '/erp/schemes',
+          ['/customers', '/erp/quotation', '/erp/sales', '/erp/field-orders', '/erp/retailer-orders', '/erp/fulfillment', '/erp/delivery-orders', '/erp/sales-invoices', '/erp/schemes', '/erp/npl',
            '/erp/field-returns', '/erp/sales-returns', '/erp/sales-return-invoices', '/erp/sales-report', '/erp/sales-return-report', '/erp/dispatch-summary', '/erp/schemes-report', '/erp/scheme-vouchers-report',
            '/erp/customer-ledger', '/erp/customer-aging', '/erp/customer-balance-report', '/erp/sale-vs-recovery'],
           _trimDividers(salesItems), badge: fieldOrdersPending + fieldReturnsPending + retailerOrdersPending + shopNewOrders + siReviewPending + customerSupervisePending + doRemarkPending + doSupervisePending + siSupervisePending + sriSupervisePending + siRemarkPending),
