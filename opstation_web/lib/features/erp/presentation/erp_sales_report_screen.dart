@@ -382,12 +382,14 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
       if (_source == 'both' || _source == 'pos') {
         final txAll = await c
             .from('pos_transactions')
-            .select('id, customer_id, pos_customer_id, total, transacted_at, transaction_type, session_id')
+            .select('id, customer_id, pos_customer_id, total, discount, transacted_at, transaction_type, session_id')
             .eq('org_id', _orgId!)
             .gte('transacted_at', fromStr)
             .lt('transacted_at', toExclusive);
         final docCust = <String, Map<String, String>>{};
         final keptIds = <String>[];
+        final hdrDisc = <String, double>{}; // bill discount saved on the transaction header
+        final lineDisc = <String, double>{}; // sum of the line discounts of that transaction
         for (final tx in txAll) {
           if ('${tx['transaction_type']}'.toLowerCase() == 'return') continue;
           if (_branch != 'all') {
@@ -398,6 +400,7 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
           final ci = custInfo(tx['customer_id'] as String?,
               posCustId: tx['pos_customer_id'] as String?, pos: true);
           docCust[tx['id'] as String] = ci;
+          hdrDisc[tx['id'] as String] = _d(tx['discount']);
           keptIds.add(tx['id'] as String);
           orderSets.putIfAbsent(ci['k']!, () => {}).add(tx['id'] as String);
         }
@@ -412,6 +415,14 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             final ci = docCust[it['transaction_id']];
             if (ci == null) continue;
             final pid = it['product_id'] as String?;
+            {
+              final g0 = _d(it['quantity']) * _d(it['unit_price']);
+              final d0 = '${it['discount_type']}'.toLowerCase() == 'percent'
+                  ? g0 * _d(it['discount']) / 100.0
+                  : _d(it['discount']);
+              final tk = '${it['transaction_id']}';
+              lineDisc[tk] = (lineDisc[tk] ?? 0) + d0;
+            }
             if (!_prodPassesFilter(pid)) continue;
             liveDocs.add('${it['transaction_id']}');
             liveOrderSets.putIfAbsent(ci['k']!, () => {}).add('${it['transaction_id']}');
@@ -430,6 +441,26 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
               'qty': qty,
               'amount': gross - disc,
             });
+          }
+          // Bill-level discount: the cashier's extra discount on the whole bill is saved on the
+          // transaction header only, not on any line. Show it as its own row so product rows
+          // (gross - line discounts) plus this row add up to what the customer was charged.
+          if (!_productFilterActive) {
+            for (final tid in part) {
+              final ci = docCust[tid];
+              if (ci == null) continue;
+              final extra = (hdrDisc[tid] ?? 0) - (lineDisc[tid] ?? 0);
+              if (extra > 0.005) {
+                liveOrderSets.putIfAbsent(ci['k']!, () => {}).add(tid);
+                cells.add({
+                  'ck': ci['k'], 'cn': ci['n'], 'cs': ci['s'],
+                  'pk': 'bill_discount',
+                  'pn': '(Bill discount)',
+                  'qty': 0.0,
+                  'amount': -extra,
+                });
+              }
+            }
           }
         }
       }
@@ -1123,8 +1154,6 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
 
   // ───────────────────────────────────────────────── PDF
   Future<void> _printPdf() async {
-    _snack('Preparing PDF…');
-    await Future<void>.delayed(const Duration(milliseconds: 60));
     final productMode = _breakdown == 'product';
     final rows = _visibleRows;
     final org = ref.read(currentUserProvider)?.orgName ?? '';
@@ -1193,43 +1222,9 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
         ? ['', 'Total', _qtyFmt.format(totalQty), _money.format(totalAmt), '']
         : ['', 'Total', '', '', _money.format(totalAmt), ''];
 
-    // Built as a plain list of row widgets (not one giant table): the PDF library lays out thousands of
-    // table rows very slowly, and long date ranges froze the tab. Rows here lay out in linear time.
-    final spec = productMode
-        ? <List<Object>>[[28.0, false], [1, false], [56.0, true], [70.0, true], [40.0, true]]
-        : <List<Object>>[[28.0, false], [3, false], [2, false], [44.0, true], [70.0, true], [40.0, true]];
-    pw.Widget rowW(List<String> cells, {bool head = false, bool bold = false}) {
-      final kids = <pw.Widget>[];
-      for (var i = 0; i < cells.length; i++) {
-        final sp = spec[i];
-        final right = sp[1] as bool;
-        final txt = pw.Padding(
-          padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-          child: pw.Text(cells[i],
-              textAlign: right ? pw.TextAlign.right : pw.TextAlign.left,
-              style: pw.TextStyle(fontSize: 9, fontWeight: (head || bold) ? pw.FontWeight.bold : pw.FontWeight.normal)),
-        );
-        kids.add(sp[0] is double ? pw.SizedBox(width: sp[0] as double, child: txt) : pw.Expanded(flex: (sp[0] as num).toInt(), child: txt));
-      }
-      return pw.Container(
-        decoration: pw.BoxDecoration(
-          color: head ? PdfColors.grey200 : null,
-          border: const pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
-        ),
-        child: pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.start, children: kids),
-      );
-    }
-
-    final bodyRows = <pw.Widget>[for (final r in data) rowW(r)];
-    final netLines = <String>[
-      'Total sales: ${_money.format(totalAmt)}',
-    ];
-
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(28),
-      maxPages: 5000,
-      header: (ctx) => ctx.pageNumber > 1 ? rowW(headers, head: true) : pw.SizedBox(),
       build: (ctx) => [
         if (org.isNotEmpty)
           pw.Text(org, style: pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
@@ -1240,12 +1235,21 @@ class _ErpSalesReportScreenState extends ConsumerState<ErpSalesReportScreen> {
             '${DateFormat('d MMM y').format(_from)} to ${DateFormat('d MMM y').format(_to)}     |     ${filterBits.join('     |     ')}',
             style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
         pw.SizedBox(height: 12),
-        rowW(headers, head: true),
-        ...bodyRows,
-        rowW(totalRow, bold: true),
+        pw.TableHelper.fromTextArray(
+          headers: headers,
+          data: [...data, totalRow],
+          headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
+          cellStyle: const pw.TextStyle(fontSize: 9),
+          headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          cellAlignments: productMode
+              ? {0: pw.Alignment.centerLeft, 2: pw.Alignment.centerRight, 3: pw.Alignment.centerRight, 4: pw.Alignment.centerRight}
+              : {0: pw.Alignment.centerLeft, 3: pw.Alignment.centerRight, 4: pw.Alignment.centerRight, 5: pw.Alignment.centerRight},
+          rowDecoration: const pw.BoxDecoration(
+              border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5))),
+        ),
         pw.SizedBox(height: 8),
-        for (final l in netLines)
-          pw.Text(l, style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+        pw.Text('Total sales: ${_money.format(totalAmt)}',
+            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
       ],
     ));
 
