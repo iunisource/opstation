@@ -30,6 +30,7 @@ import 'widgets/empty_route_notice.dart';
 import 'widgets/free_visits_list.dart';
 import '../services/free_visit_photo_service.dart';
 import 'widgets/route_guide_widgets.dart';
+import 'widgets/npl_widgets.dart';
 import '../services/route_guide.dart';
 
 /// The in-progress route screen: counters at top, filterable stop list,
@@ -879,6 +880,7 @@ class _StopCardState extends State<_StopCard> {
           Text(visitOutcomeOf(status, amount).label,
               style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: tone)),
         const SizedBox(width: 2),
+        NplRocket(customerId: customer.id),
         GuideIcon(customer: customer, size: 22),
         const SizedBox(width: 4),
         const Icon(Icons.expand_more, size: 17, color: AppColors.textSecondaryLight),
@@ -1046,6 +1048,7 @@ class _StopCardState extends State<_StopCard> {
                     collections.isEmpty ? null : collections.last),
             ],
           ),
+          NplStopStrip(customerId: customer.id),
           if (collections.isNotEmpty) ...[
             const SizedBox(height: 10),
             for (final v in collections) ...[

@@ -53,6 +53,13 @@ class FieldOrderRepository {
     return filtered;
   }
 
+  /// One catalog product by id (the launch product), from the local copy.
+  Future<CatalogProductRow?> productById(String id) async {
+    final q = _db.select(_db.catalogProducts)..where((p) => p.id.equals(id));
+    final rows = await q.get();
+    return rows.isEmpty ? null : rows.first;
+  }
+
   /// Distinct brand names (product_sub_group) from active catalog products.
   Future<List<String>> searchBrands(String query) async {
     final q = _db.select(_db.catalogProducts)

@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../shared/widgets/app_version_label.dart';
 import '../../auth/providers/auth_controller.dart';
+import '../services/npl_providers.dart';
+import 'npl_launch_screen.dart';
 import 'my_orders_screen.dart';
 import 'my_returns_screen.dart';
 import 'notifications_inbox_screen.dart';
@@ -47,6 +49,7 @@ class SalespersonDrawer extends ConsumerWidget {
     final targetsOn =
         ref.watch(salespersonTargetsEnabledProvider).valueOrNull ?? false;
     final unread = ref.watch(unreadInboxCountProvider).valueOrNull ?? 0;
+    final nplLaunches = ref.watch(nplMyLaunchesProvider).valueOrNull ?? const [];
 
     return Drawer(
       child: SafeArea(
@@ -96,6 +99,17 @@ class SalespersonDrawer extends ConsumerWidget {
             onTap: () => _go(context, const NotificationsInboxScreen()),
           ),
           const Divider(height: 1),
+          if (nplLaunches.isNotEmpty)
+            _tile(
+              context,
+              icon: Icons.rocket_launch_outlined,
+              label: 'Product launch',
+              subtitle: nplLaunches.length == 1
+                  ? '${nplLaunches.first['product_name'] ?? nplLaunches.first['name']}'
+                  : '${nplLaunches.length} active launches',
+              badge: nplLaunches.length,
+              onTap: () => _go(context, const NplLaunchesScreen()),
+            ),
           if (targetsOn)
             _tile(
               context,

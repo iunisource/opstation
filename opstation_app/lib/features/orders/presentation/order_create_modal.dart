@@ -45,6 +45,10 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
   String _cartSig = '';
   final _notesCtrl = TextEditingController();
   bool _submitting = false;
+  // New Product Launch: launches aimed at this customer + org offers (for the "add N more" nudge).
+  List<Map<String, dynamic>> _launches = [];
+  List<Map<String, dynamic>> _launchOffers = [];
+  String? _launchesFor;
 
   @override
   void initState() {
@@ -55,7 +59,130 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
         'shop_name': widget.presetCustomerName ?? '—',
         'code': widget.presetCustomerCode,
       };
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadLaunches());
     }
+  }
+
+  /// Active launches aimed at the chosen customer. Silent on any failure (offline,
+  /// NPL off, SQL not run): the order screen then looks exactly as before.
+  Future<void> _loadLaunches() async {
+    final cid = _customer?['id'] as String?;
+    if (cid == null || _launchesFor == cid) return;
+    _launchesFor = cid;
+    try {
+      final r = await Supabase.instance.client.rpc('npl_customer_launches', params: {'p_customer': cid});
+      final list = [for (final e in (r as List? ?? const [])) Map<String, dynamic>.from(e as Map)];
+      var offers = <Map<String, dynamic>>[];
+      final orgId = _orgId;
+      if (list.isNotEmpty && orgId != null) {
+        try {
+          final o = await Supabase.instance.client.rpc('org_active_offers', params: {'p_org': orgId});
+          if (o is List) offers = [for (final s in o) Map<String, dynamic>.from(s as Map)];
+        } catch (_) {}
+      }
+      if (!mounted || _launchesFor != cid) return;
+      setState(() { _launches = list; _launchOffers = offers; });
+    } catch (_) {
+      if (mounted && _launchesFor == cid) setState(() => _launches = []);
+    }
+  }
+
+  bool _isLaunchProduct(String? pid) => pid != null && _launches.any((l) => l['product_id'] == pid);
+
+  Future<void> _addLaunchProduct(Map<String, dynamic> l) async {
+    final pid = l['product_id'] as String?;
+    if (pid == null) return;
+    if (_lines.any((x) => x['product_id'] == pid)) return;
+    final p = await ref.read(fieldOrderRepositoryProvider).productById(pid);
+    if (p == null) { _snack('Launch product is not on your phone yet. Sync and try again.'); return; }
+    setState(() => _lines.add({
+      'product_id': p.id, 'name': p.name, 'price': p.sellingPrice, 'uom_id': p.baseUomId, 'qty': 1.0,
+    }));
+  }
+
+  Widget _launchCard(Map<String, dynamic> l) {
+    final pid = l['product_id'] as String?;
+    final inCart = _lines.where((x) => x['product_id'] == pid).fold<double>(0, (s, x) => s + (x['qty'] as num).toDouble());
+    final orders = ((l['orders'] as num?) ?? 0).toInt();
+    final outcome = l['outcome'] as String?;
+    final reason = (l['reason'] as String?)?.trim() ?? '';
+    final schemes = [for (final s in (l['schemes'] as List? ?? const [])) '$s'];
+    String qs(num n) { final d = n.toDouble(); return d % 1 == 0 ? d.toStringAsFixed(0) : d.toStringAsFixed(2); }
+    // "Add N more" nudge from the org's own offers that trigger on this product.
+    String? nudge; bool unlocked = false;
+    for (final o in _launchOffers) {
+      final tq = (o['trigger_qty'] as num?)?.toDouble() ?? 0;
+      if (o['trigger_product_id'] != pid || tq <= 0) continue;
+      final what = ((o['benefit'] as String?)?.trim().isNotEmpty == true ? o['benefit'] : o['name']) as String? ?? 'the offer';
+      if (inCart >= tq) { nudge = 'Offer unlocked: $what'; unlocked = true; }
+      else { nudge = 'Add ${qs(tq - inCart)} more to get: $what'; }
+      break;
+    }
+    final status = orders > 0
+        ? 'Ordered $orders time${orders == 1 ? '' : 's'} before'
+        : outcome == 'declined'
+            ? (reason.isEmpty ? 'Declined earlier' : 'Declined earlier: $reason')
+            : outcome == 'later'
+                ? (reason.isEmpty ? 'Said they will order later' : 'Will order later: $reason')
+                : 'Not ordered yet';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary, width: 1.5),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.rocket_launch, size: 14, color: AppColors.primary),
+          const SizedBox(width: 6),
+          Text('LAUNCH PRODUCT', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6, color: AppColors.primary)),
+        ]),
+        const SizedBox(height: 4),
+        Text('${l['product_name'] ?? l['name']}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+        Text(status, style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
+        if (schemes.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 4, children: [
+            for (final s in schemes)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: const Color(0xFFFFE08A), borderRadius: BorderRadius.circular(6)),
+                child: Text(s, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: Color(0xFF5A3E00))),
+              ),
+          ]),
+        ],
+        if (nudge != null) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: (unlocked ? const Color(0xFF10B981) : const Color(0xFFF59E0B)).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(nudge, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: unlocked ? const Color(0xFF047857) : const Color(0xFF92400E))),
+          ),
+        ],
+        const SizedBox(height: 8),
+        inCart > 0
+            ? Row(children: [
+                const Icon(Icons.check_circle, size: 16, color: Color(0xFF059669)),
+                const SizedBox(width: 6),
+                Text('In this order: ${qs(inCart)}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF047857))),
+              ])
+            : SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add to order'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
+                  onPressed: () => _addLaunchProduct(l),
+                ),
+              ),
+      ]),
+    );
   }
 
   @override
@@ -87,7 +214,10 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
         subtitleOf: (r) => (r['code'] as String?) ?? '',
       ),
     );
-    if (chosen != null) setState(() => _customer = chosen);
+    if (chosen != null) {
+      setState(() { _customer = chosen; _launches = []; _launchOffers = []; _launchesFor = null; });
+      _loadLaunches();
+    }
   }
 
   Future<void> _addProduct() async {
@@ -354,6 +484,7 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
               ]),
           ])),
         const SizedBox(height: 8),
+        for (final l in _launches) _launchCard(l),
         Expanded(child: _lines.isEmpty
           ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.add_shopping_cart_outlined, size: 40, color: AppColors.textTertiaryLight),
@@ -368,12 +499,23 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
                 final l = _lines[i];
                 final qty = l['qty'] as double;
                 final price = l['price'] as double;
+                final isLaunch = _isLaunchProduct(l['product_id'] as String?);
                 return Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.borderLight)),
+                  decoration: BoxDecoration(color: isLaunch ? AppColors.primary.withValues(alpha: 0.06) : Colors.white, borderRadius: BorderRadius.circular(10), border: Border.all(color: isLaunch ? AppColors.primary : AppColors.borderLight, width: isLaunch ? 1.5 : 1)),
                   child: Row(children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(l['name'] as String, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      Row(children: [
+                        Flexible(child: Text(l['name'] as String, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600))),
+                        if (isLaunch) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(5)),
+                            child: const Text('LAUNCH', style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                          ),
+                        ],
+                      ]),
                       Text('Rs. ${price.toStringAsFixed(2)} each', style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight)),
                     ])),
                     IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: qty <= 1 ? null : () => setState(() => l['qty'] = qty - 1)),
@@ -398,6 +540,18 @@ class _OrderCreatePageState extends ConsumerState<_OrderCreatePage> {
             TextField(controller: _notesCtrl, decoration: const InputDecoration(hintText: 'Notes (optional)', isDense: true), maxLines: 1),
             const SizedBox(height: 10),
             if (_cartOffers.isNotEmpty) _cartOffersBanner(),
+            if (_lines.any((x) => _isLaunchProduct(x['product_id'] as String?)))
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.primary.withValues(alpha: 0.35))),
+                child: Row(children: [
+                  Icon(Icons.rocket_launch, size: 16, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  const Expanded(child: Text('Launch product in this order. The outlet is ticked in Product launch once the order is invoiced.', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+                ]),
+              ),
             if (_customer != null) ...[
               SizedBox(
                 width: double.infinity,
