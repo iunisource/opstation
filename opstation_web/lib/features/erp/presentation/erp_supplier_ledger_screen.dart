@@ -20,7 +20,6 @@ import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
-import '../widgets/price_check_dialog.dart';
 import '../../../core/format/time_format.dart';
 import '../../../core/widgets/adaptive_header_row.dart';
 
@@ -308,6 +307,8 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             .eq('org_id', orgId).eq('supplier_id', supplierId);
         final rows = await q;
         for (final sr in rows) {
+          // A voided return is reversed in the books (nets to zero): keep it off the ledger.
+          if (sr['is_voided'] == true) continue;
           final total = ((sr['total'] ?? sr['total_amount'] ?? sr['grand_total'] ?? sr['amount'] ?? sr['net_amount'] ?? sr['return_total'] ?? sr['refund_amount'] ?? sr['value'] ?? sr['subtotal']) as num?)?.toDouble() ?? 0;
           final vno = ((sr['invoice_number'] ?? sr['return_number'] ?? sr['srn_number'] ?? sr['sri_number'] ?? sr['voucher_number'] ?? sr['return_no'] ?? '') as String);
           final date = extractDate(sr as Map, const ['return_date', 'invoice_date', 'voucher_date', 'sri_date', 'srn_date', 'date', 'posted_at', 'created_at']);
@@ -615,7 +616,6 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
             if (_selectedSupplier != null && _entries.isNotEmpty) ...[
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
-                  PriceCheckButton(mode: PriceCheckMode.purchase, partyId: _selectedSupplier!['id'] as String, partyName: '${_selectedSupplier!['name'] ?? ''}'),
                   OutlinedButton.icon(
                     icon: _loading
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
@@ -655,7 +655,6 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
               ]);
               final actions = (_selectedSupplier != null && _entries.isNotEmpty)
                 ? Wrap(spacing: 8, runSpacing: 8, children: [
-                  PriceCheckButton(mode: PriceCheckMode.purchase, partyId: _selectedSupplier!['id'] as String, partyName: '${_selectedSupplier!['name'] ?? ''}'),
                   OutlinedButton.icon(
                     icon: _loading
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
