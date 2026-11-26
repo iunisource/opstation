@@ -166,23 +166,27 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
         final h = c.maxHeight;
         if (h < 520 || c.maxWidth < widget.minWidth) return const SizedBox.shrink();
         // The truck lives mostly inside the road band so it never climbs into the headline or the feature chips.
-        final roadH = (h * 0.22).clamp(100.0, 170.0);
+        // Laptop screens (up to 1440 px wide) keep the size they have always had; wider screens grow the
+        // whole scene in proportion (truck, road, dashes, speed), up to 1.8 times.
+        final k = (c.maxWidth / 1440.0).clamp(1.0, 1.8);
+        final roadH = (h * 0.22).clamp(100.0, 170.0) * k;
         final truckH = roadH * 1.1;
         final w = truckH * _imgW / _imgH;
         final s = w / _imgW;
         final bottom = roadH * 0.5;
+        final speed = _speed * k;
         return AnimatedBuilder(
           animation: _c,
           builder: (_, __) {
             final sec = _c.value * 3600.0;
-            final bob = math.sin(sec * 7) * 0.9;
+            final bob = math.sin(sec * 7) * 0.9 * k;
             return Stack(children: [
-              Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(sec * _speed))),
+              Positioned(left: 0, right: 0, bottom: 0, height: roadH, child: CustomPaint(painter: _RoadPainter(sec * speed, scale: k))),
               Positioned(
-                left: 40,
-                bottom: bottom - 2,
+                left: 40 * k,
+                bottom: bottom - 2 * k,
                 width: w * 0.9,
-                height: 6,
+                height: 6 * k,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(40),
@@ -191,7 +195,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
                 ),
               ),
               Positioned(
-                left: 40,
+                left: 40 * k,
                 bottom: bottom + bob,
                 width: w,
                 height: truckH,
@@ -211,7 +215,7 @@ class _LoginRoadTruckState extends State<LoginRoadTruck> with SingleTickerProvid
                         alignment: Alignment.center,
                         transform: Matrix4.diagonal3Values(wh.a / wh.b, 1, 1),
                         child: Transform.rotate(
-                          angle: sec * _speed / (wh.tire * s),
+                          angle: sec * speed / (wh.tire * s),
                           child: Image.network(wh.file, fit: BoxFit.fill, filterQuality: FilterQuality.medium, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
                         ),
                       ),
@@ -413,8 +417,9 @@ class _SpokePainter extends CustomPainter {
 }
 
 class _RoadPainter extends CustomPainter {
-  const _RoadPainter(this.dist);
+  const _RoadPainter(this.dist, {this.scale = 1.0});
   final double dist;
+  final double scale;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -423,16 +428,16 @@ class _RoadPainter extends CustomPainter {
       rect,
       Paint()..shader = ui.Gradient.linear(Offset.zero, Offset(0, size.height), const [Color(0xFF18223C), Color(0xFF0C1324)]),
     );
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, 3), Paint()..color = const Color(0xFF2A3A63));
-    const period = 240.0, dashW = 90.0;
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, 3 * scale), Paint()..color = const Color(0xFF2A3A63));
+    final period = 240.0 * scale, dashW = 90.0 * scale;
     final dashPaint = Paint()..color = const Color(0xFFE8C46A).withOpacity(0.7);
     final y = size.height * 0.62;
     final shift = dist % period;
     for (var x = -period - shift + period; x < size.width + period; x += period) {
-      canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, y, dashW, 5), const Radius.circular(3)), dashPaint);
+      canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(x, y, dashW, 5 * scale), Radius.circular(3 * scale)), dashPaint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _RoadPainter old) => old.dist != dist;
+  bool shouldRepaint(covariant _RoadPainter old) => old.dist != dist || old.scale != scale;
 }
