@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
@@ -95,6 +96,13 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   bool _copyRemarks = false;
   final _addQtyFocus = FocusNode();
   final Map<String, TextEditingController> _lineQtyCtrls = {};
+  // Live line edits: the total follows every keystroke, the save is debounced and also runs on Done / tap-out.
+  // _persistedQty / _persistedRate hold what is actually saved, so a no-op is skipped and the audit "from" is right.
+  final Map<String, double> _persistedQty = {};
+  final Map<String, double> _persistedRate = {};
+  final Map<String, Timer> _lineTimers = {};
+  final Set<String> _lineSaving = {};
+  final Set<String> _lineRerun = {};
   final Map<String, TextEditingController> _lineRateCtrls = {};
   final Map<String, TextEditingController> _lineDescCtrls = {}; // free-text item descriptions
 
@@ -157,6 +165,7 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
   }
   @override
   void dispose() {
+    for (final t in _lineTimers.values) { t.cancel(); }
     for (final c in _lineQtyCtrls.values) { c.dispose(); }
     for (final c in _lineRateCtrls.values) { c.dispose(); }
     for (final c in _lineDescCtrls.values) { c.dispose(); }
@@ -492,6 +501,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
         }
       } catch (_) {}
       _canAckReject = canAck;
+      _persistedQty.clear(); _persistedRate.clear();
+      for (final t in _lineTimers.values) { t.cancel(); }
+      _lineTimers.clear();
       setState(() { _detail = Map<String, dynamic>.from(po); _items = itemList; _meta = meta;
         _approvalRequired = approvalReq; _showStockConsumption = showSC; _showFgStock = showFg;
         _lineMetrics = metrics; _datesEditable = datesEd;
@@ -566,22 +578,58 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     } catch (e) { _showSnack(friendlyError('Failed to save description', e)); }
   }
 
+  // Called on every keystroke of a qty / rate box: update the line (and so the totals) at once, save shortly after.
+  void _liveEditLine(String itemId, {double? qty, double? rate}) {
+    if (!_canEditLines) return;
+    final idx = _items.indexWhere((i) => i['id'] == itemId);
+    if (idx < 0) return;
+    if (qty != null && qty > 0) {
+      _persistedQty.putIfAbsent(itemId, () => (_items[idx]['quantity_ordered'] as num?)?.toDouble() ?? 0);
+      setState(() => _items[idx]['quantity_ordered'] = qty);
+    }
+    if (rate != null && rate >= 0) {
+      _persistedRate.putIfAbsent(itemId, () => (_items[idx]['unit_cost'] as num?)?.toDouble() ?? 0);
+      setState(() => _items[idx]['unit_cost'] = rate);
+    }
+    final key = qty != null ? 'q$itemId' : 'r$itemId';
+    _lineTimers[key]?.cancel();
+    _lineTimers[key] = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+      if (qty != null) { _updateLineQty(itemId); } else { _updateLineRate(itemId); }
+    });
+  }
+
   // Inline edit of a line's rate (unit_cost). Allowed while lines are editable.
   Future<void> _updateLineRate(String itemId) async {
     if (!_canEditLines) return;
     final c = _lineRateCtrls[itemId];
     final rate = double.tryParse(c?.text.trim() ?? '') ?? -1;
     if (rate < 0) { _showSnack('Rate must be 0 or more'); return; }
-    final cur = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['unit_cost'] as num?)?.toDouble() ?? 0;
-    if (cur == rate) return;
+    _lineTimers.remove('r$itemId')?.cancel();
+    final cur = _persistedRate[itemId] ?? (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['unit_cost'] as num?)?.toDouble() ?? 0;
+    if (cur == rate) { _persistedRate.remove(itemId); return; }
+    if (_lineSaving.contains('r$itemId')) { _lineRerun.add('r$itemId'); return; }
+    _lineSaving.add('r$itemId');
     try {
       await Supabase.instance.client.from('purchase_order_items')
           .update({'unit_cost': rate}).eq('id', itemId);
-      setState(() {
+      _persistedRate[itemId] = rate;
+      if (mounted) setState(() {
         final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['unit_cost'] = rate;
       });
-    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    } catch (e) {
+      // Not saved: put the line (and the total) back to what is saved.
+      final idx = _items.indexWhere((i) => i['id'] == itemId);
+      if (idx >= 0 && _persistedRate.containsKey(itemId)) {
+        if (mounted) setState(() => _items[idx]['unit_cost'] = _persistedRate[itemId]);
+        _lineRateCtrls[itemId]?.text = (_persistedRate[itemId]! == 0) ? '' : _persistedRate[itemId]!.toStringAsFixed(2);
+      }
+      _showSnack(friendlyError('That did not save', e));
+    } finally {
+      _lineSaving.remove('r$itemId');
+      if (_lineRerun.remove('r$itemId') && mounted) { _updateLineRate(itemId); }
+    }
   }
 
   Future<void> _toggleRates(bool v) async {
@@ -600,25 +648,44 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
     if (!_canEditLines) return;
     final c = _lineQtyCtrls[itemId];
     final qty = double.tryParse(c?.text.trim() ?? '') ?? -1;
-    final cur = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['quantity_ordered'] as num?)?.toDouble();
+    _lineTimers.remove('q$itemId')?.cancel();
+    final cur = _persistedQty[itemId] ?? (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['quantity_ordered'] as num?)?.toDouble();
     if (qty <= 0) {
       _showSnack('Qty must be > 0');
-      if (cur != null) c?.text = cur.toStringAsFixed(cur % 1 == 0 ? 0 : 2);
+      if (cur != null) {
+        c?.text = cur.toStringAsFixed(cur % 1 == 0 ? 0 : 2);
+        final i0 = _items.indexWhere((i) => i['id'] == itemId);
+        if (i0 >= 0 && mounted) setState(() => _items[i0]['quantity_ordered'] = cur);
+      }
       return;
     }
-    if (cur != null && cur == qty) return; // unchanged — no write, no approval reset
+    if (cur != null && cur == qty) { _persistedQty.remove(itemId); return; } // unchanged — no write, no approval reset
+    if (_lineSaving.contains('q$itemId')) { _lineRerun.add('q$itemId'); return; }
+    _lineSaving.add('q$itemId');
     final lineName = (_items.firstWhere((i) => i['id'] == itemId, orElse: () => <String, dynamic>{})['products']?['name'] as String?) ?? 'Line';
     String q0(double? v) => v == null ? '—' : v.toStringAsFixed(v % 1 == 0 ? 0 : 2);
     try {
       await Supabase.instance.client.from('purchase_order_items')
           .update({'quantity_ordered': qty}).eq('id', itemId);
-      setState(() {
+      _persistedQty[itemId] = qty;
+      if (mounted) setState(() {
         final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['quantity_ordered'] = qty;
       });
       await _logAudit(_detail['id'] as String, 'line_edited', '$lineName: qty ${q0(cur)} → ${q0(qty)}');
       await _resetApprovalIfNeeded(why: 'qty of $lineName changed ${q0(cur)} → ${q0(qty)}');
-    } catch (e) { _showSnack(friendlyError('That did not save', e)); }
+    } catch (e) {
+      // Not saved: put the line (and the total) back to what is saved.
+      final idx = _items.indexWhere((i) => i['id'] == itemId);
+      if (idx >= 0 && cur != null) {
+        if (mounted) setState(() => _items[idx]['quantity_ordered'] = cur);
+        c?.text = cur.toStringAsFixed(cur % 1 == 0 ? 0 : 2);
+      }
+      _showSnack(friendlyError('That did not save', e));
+    } finally {
+      _lineSaving.remove('q$itemId');
+      if (_lineRerun.remove('q$itemId') && mounted) { _updateLineQty(itemId); }
+    }
   }
 
   /// voucher id -> has it been saved (confirmed) at least once? Until then it is a draft being typed and its
@@ -1593,7 +1660,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                         textInputAction: TextInputAction.done,
+                        onChanged: (v) => _liveEditLine(it['id'] as String, qty: double.tryParse(v.trim())),
                         onSubmitted: (_) => _updateLineQty(it['id'] as String),
+                        onEditingComplete: () { FocusScope.of(context).unfocus(); _updateLineQty(it['id'] as String); },
                         onTapOutside: (_) => _updateLineQty(it['id'] as String),
                       ))
                     : Text(qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w600))),
@@ -1606,7 +1675,9 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
                           style: const TextStyle(fontSize: 13),
                           decoration: const InputDecoration(isDense: true, prefixText: 'Rs ', contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                           textInputAction: TextInputAction.done,
+                          onChanged: (v) => _liveEditLine(it['id'] as String, rate: double.tryParse(v.trim())),
                           onSubmitted: (_) => _updateLineRate(it['id'] as String),
+                          onEditingComplete: () { FocusScope.of(context).unfocus(); _updateLineRate(it['id'] as String); },
                           onTapOutside: (_) => _updateLineRate(it['id'] as String),
                         )))
                       : Text(_effRate(it).toStringAsFixed(2), textAlign: TextAlign.right, style: const TextStyle(fontSize: 13))),

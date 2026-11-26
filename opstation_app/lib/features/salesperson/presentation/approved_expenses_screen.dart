@@ -1,7 +1,12 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:printing/printing.dart';
+
 import '../../../core/theme/app_colors.dart';
+import '../pdf/approved_expense_pdf_builder.dart';
 import '../services/approved_expenses_provider.dart';
 
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -34,6 +39,21 @@ String _range(Map<String, dynamic> c) {
   if (a.isEmpty) return '—';
   if (b.isEmpty || fromYear == b) return fromYear;
   return '$a – $b';
+}
+
+Future<void> _sharePdf(BuildContext context, Map<String, dynamic> c) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final bytes = await ApprovedExpensePdfBuilder.build(claim: c, orgName: '${c['org_name'] ?? ''}');
+    final who = '${c['claimant_name'] ?? 'expense'}'.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    final day = DateTime.tryParse('${c['date_from'] ?? c['decided_at'] ?? ''}');
+    final stamp = day == null
+        ? 'approved'
+        : '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+    await Printing.sharePdf(bytes: Uint8List.fromList(bytes), filename: 'Reimbursement_${who}_$stamp.pdf');
+  } catch (e) {
+    messenger.showSnackBar(const SnackBar(content: Text('Could not create the PDF. Please try again.')));
+  }
 }
 
 /// Drawer -> Approved Expenses: every reimbursement of mine that was approved
@@ -140,6 +160,17 @@ class ApprovedExpensesScreen extends ConsumerWidget {
                         fontWeight: FontWeight.w700,
                         color: paid ? AppColors.successDark : AppColors.primaryDark)),
               ),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 34,
+                height: 30,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  tooltip: 'Share PDF',
+                  icon: Icon(Icons.picture_as_pdf_outlined, size: 21, color: AppColors.primaryDark),
+                  onPressed: () => _sharePdf(context, c),
+                ),
+              ),
             ]),
             const SizedBox(height: 8),
             Row(children: [
@@ -198,6 +229,12 @@ class ApprovedExpensesScreen extends ConsumerWidget {
           if (paid) kv('Reference', '${c['paid_ref'] ?? ''}'),
           kv('Payment advice', '${c['advice_number'] ?? ''}'),
           kv('Note', '${c['adjust_note'] ?? c['note'] ?? ''}'),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: () => _sharePdf(context, c),
+            icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+            label: const Text('Share approved copy (PDF)'),
+          ),
           if (lines.isNotEmpty) ...[
             const SizedBox(height: 14),
             const Text('Days', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800)),
