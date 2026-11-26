@@ -4,6 +4,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 
 import '../database/app_database.dart';
 import '../database/app_database_provider.dart';
@@ -202,6 +204,80 @@ class NotificationService {
           ),
         ),
       );
+    } catch (_) {}
+  }
+
+  // ── Idle-route nudges, scheduled with the phone's own alarm clock ─────────
+  // A timer inside the app stops the moment the app is minimised or closed, so
+  // the reminders are handed to Android/iOS to fire on their own, whether or
+  // not the app is running. They are re-planned (cancel + schedule) every time
+  // the route's last activity changes, and cancelled when the route ends.
+  static const int _idleBaseId = 90001;
+  static const int _idleSlots = 8; // first nudge at +60 min, then every 30 min
+  static bool _tzReady = false;
+
+  static String _idleLabel(int minutes) {
+    if (minutes < 120) return '$minutes minutes';
+    final h = minutes ~/ 60, m = minutes % 60;
+    return m == 0 ? '$h hours' : '$h hr $m min';
+  }
+
+  /// Plans the nudges for a route whose last activity (route start or last
+  /// visit) was at [lastActivity]: 60 minutes after it, then every 30 minutes,
+  /// up to the 23:00 route cut-off. Replaces any plan made earlier.
+  Future<void> scheduleIdleNudges(DateTime lastActivity) async {
+    try {
+      if (!_localInitialized) {
+        await _local.initialize(
+          const InitializationSettings(
+            android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          ),
+        );
+        _localInitialized = true;
+      }
+      if (!_tzReady) {
+        tzdata.initializeTimeZones();
+        _tzReady = true;
+      }
+      await cancelIdleNudges();
+      final now = DateTime.now();
+      var cutoff = DateTime(lastActivity.year, lastActivity.month, lastActivity.day, 23);
+      if (!cutoff.isAfter(lastActivity)) cutoff = cutoff.add(const Duration(days: 1));
+      for (var k = 0; k < _idleSlots; k++) {
+        final minutes = 60 + 30 * k;
+        final at = lastActivity.add(Duration(minutes: minutes));
+        if (!at.isAfter(now.add(const Duration(seconds: 5)))) continue; // already past
+        if (!at.isBefore(cutoff)) break;
+        await _local.zonedSchedule(
+          _idleBaseId + k,
+          'No visit marked in ${_idleLabel(minutes)}',
+          "If you've finished your route, please close it. Thanks.",
+          tz.TZDateTime.from(at, tz.UTC),
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              _channel.id,
+              _channel.name,
+              channelDescription: _channel.description,
+              icon: '@mipmap/ic_launcher',
+              importance: Importance.high,
+              priority: Priority.high,
+              enableVibration: true,
+            ),
+          ),
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+        );
+      }
+    } catch (_) {}
+  }
+
+  /// Drops every planned idle nudge (route closed, signed out).
+  Future<void> cancelIdleNudges() async {
+    try {
+      for (var k = 0; k < _idleSlots; k++) {
+        await _local.cancel(_idleBaseId + k);
+      }
     } catch (_) {}
   }
 

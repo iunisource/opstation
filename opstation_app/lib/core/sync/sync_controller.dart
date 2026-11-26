@@ -59,9 +59,10 @@ class SyncController extends Notifier<SyncStatus> {
   AppDatabase get _db => ref.read(appDatabaseProvider);
   SupabaseSyncService get _supabase => ref.read(supabaseSyncServiceProvider);
 
-  /// When the last nudge fired, so we repeat every 30 min rather than every
-  /// timer tick. Reset when no route is open.
-  DateTime? _lastIdleNudgeAt;
+  /// What the phone's idle-nudge alarms were last planned for (route + last
+  /// activity), so they are only re-planned when that changes. 'none' = cancelled.
+  String? _idleSig;
+  final List<StreamSubscription<dynamic>> _idleSubs = [];
 
   /// Nudges a rep whose route has been open but untouched for an hour.
   ///
@@ -71,13 +72,25 @@ class SyncController extends Notifier<SyncStatus> {
   /// notification (device-generated, so it works offline) after 60 minutes
   /// with no visit marked, then every 30 minutes until they act.
   ///
+  /// The nudges are planned with the phone's alarm clock (see
+  /// NotificationService.scheduleIdleNudges), so they fire even when the app
+  /// is in the background or closed. This method only keeps that plan in step
+  /// with the route: it runs on the sync tick and whenever a trip or visit is
+  /// written.
+  ///
   /// Scoped to the signed-in user's own trip: an admin device holds other
   /// reps' trips too, and nudging an admin about someone else's route would
   /// be noise.
   Future<void> _checkIdleRoute() async {
     try {
       final userId = ref.read(authControllerProvider).valueOrNull?.id;
-      if (userId == null || userId.isEmpty) return;
+      if (userId == null || userId.isEmpty) {
+        if (_idleSig != 'none') {
+          _idleSig = 'none';
+          await ref.read(notificationServiceProvider).cancelIdleNudges();
+        }
+        return;
+      }
 
       final active = await (_db.select(_db.trips)
             ..where((t) => t.userId.equals(userId) & t.endedAt.isNull())
@@ -85,7 +98,10 @@ class SyncController extends Notifier<SyncStatus> {
             ..limit(1))
           .getSingleOrNull();
       if (active == null) {
-        _lastIdleNudgeAt = null;
+        if (_idleSig != 'none') {
+          _idleSig = 'none';
+          await ref.read(notificationServiceProvider).cancelIdleNudges();
+        }
         return;
       }
 
@@ -97,19 +113,10 @@ class SyncController extends Notifier<SyncStatus> {
         if (v.timestamp.isAfter(lastActivity)) lastActivity = v.timestamp;
       }
 
-      final now = DateTime.now();
-      if (now.difference(lastActivity) < const Duration(minutes: 60)) return;
-      if (_lastIdleNudgeAt != null &&
-          now.difference(_lastIdleNudgeAt!) < const Duration(minutes: 30)) {
-        return;
-      }
-      _lastIdleNudgeAt = now;
-
-      await ref.read(notificationServiceProvider).showLocalAlert(
-            id: 90001,
-            title: 'No visit marked in 60 minutes',
-            body: "If you've finished your route, please close it. Thanks.",
-          );
+      final sig = '${active.id}|${lastActivity.millisecondsSinceEpoch}';
+      if (sig == _idleSig) return;
+      _idleSig = sig;
+      await ref.read(notificationServiceProvider).scheduleIdleNudges(lastActivity);
     } catch (_) {
       // Never let a reminder break the sync tick.
     }
@@ -281,7 +288,17 @@ class SyncController extends Notifier<SyncStatus> {
       _checkIdleRoute();
     });
 
+    // Re-plan the idle alarms the moment a trip or visit is written, not only
+    // on the next tick: a rep can mark a visit and close the app straight away.
+    _idleSubs.add(_db.tableUpdates(TableUpdateQuery.onTable(_db.visits)).listen((_) => _checkIdleRoute()));
+    _idleSubs.add(_db.tableUpdates(TableUpdateQuery.onTable(_db.trips)).listen((_) => _checkIdleRoute()));
+    Future.microtask(_checkIdleRoute);
+
     ref.onDispose(() {
+      for (final s in _idleSubs) {
+        s.cancel();
+      }
+      _idleSubs.clear();
       _retryTimer?.cancel();
       _onlineSub?.cancel();
     });

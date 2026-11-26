@@ -8,6 +8,7 @@ environment:
   flutter: ">=3.19.0"
 
 dependencies:
+  timezone: any
   flutter:
     sdk: flutter
   flutter_riverpod: ^2.5.1

@@ -61,7 +61,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   String _q = '';
   bool _onlyCombined = false; // the "Combined summary" pill
   bool _openedLink = false;
-  bool _hideNothing = false; // hide pending claims whose every day is already approved ("Nothing to claim")
+  bool _showNothing = false; // pending claims whose every day is already approved ("Nothing to claim") are hidden unless this is on
 
   String? get _org => ref.read(currentUserProvider)?.orgId;
 
@@ -223,7 +223,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
 
   List<Map<String, dynamic>> get _shown {
     final l = claimsShown(claims: _claims, tab: _tab, query: _q, onlyCombined: _onlyCombined);
-    return _hideNothing ? l.where((c) => !_nothingToClaim(c)).toList() : l;
+    return _showNothing ? l : l.where((c) => !_nothingToClaim(c)).toList();
   }
 
   /// Shares an approved claim: a message with its details and the public check link, on WhatsApp, or just
@@ -316,12 +316,12 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
             onChanged: (v) => setState(() => _q = v.trim()),
           ),
         ),
-        // Hides the pending lines that say "Nothing to claim" (all their days were approved elsewhere).
+        // Pending lines that say "Nothing to claim" (all their days were approved elsewhere).
         FilterChip(
-          avatar: Icon(_hideNothing ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 16),
-          label: Text('Hide "Nothing to claim" (${_claims.where(_nothingToClaim).length})'),
-          selected: _hideNothing,
-          onSelected: (v) => setState(() => _hideNothing = v),
+          avatar: Icon(_showNothing ? Icons.visibility_outlined : Icons.visibility_off_outlined, size: 16),
+          label: Text('Show "Nothing to claim" (${_claims.where(_nothingToClaim).length})'),
+          selected: _showNothing,
+          onSelected: (v) => setState(() => _showNothing = v),
         ),
         ]),
         const SizedBox(height: 10),

@@ -8,6 +8,7 @@ import '../../../shared/widgets/app_version_label.dart';
 import '../../auth/providers/auth_controller.dart';
 import '../services/npl_providers.dart';
 import 'npl_launch_screen.dart';
+import 'approved_expenses_screen.dart';
 import 'my_orders_screen.dart';
 import 'my_returns_screen.dart';
 import 'notifications_inbox_screen.dart';
@@ -110,6 +111,13 @@ class SalespersonDrawer extends ConsumerWidget {
               badge: nplLaunches.length,
               onTap: () => _go(context, const NplLaunchesScreen()),
             ),
+          _tile(
+            context,
+            icon: Icons.receipt_long_outlined,
+            label: 'Approved Expenses',
+            subtitle: 'Your approved reimbursements',
+            onTap: () => _go(context, const ApprovedExpensesScreen()),
+          ),
           if (targetsOn)
             _tile(
               context,
