@@ -575,7 +575,7 @@ final webRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/manufacturing/production-waste-report', builder: (_, __) => _deferred('_s015', _s015.loadLibrary, () => _s015.ErpProductionWasteReportScreen())),
       GoRoute(path: '/manufacturing/production-report', builder: (_, __) => _deferred('_s149', _s149.loadLibrary, () => _s149.ErpProductionReportScreen())),
       GoRoute(path: '/manufacturing/overheads-summary', builder: (_, __) => _deferred('_s016', _s016.loadLibrary, () => _s016.ErpOverheadsSummaryScreen())),
-      GoRoute(path: '/hr/employees', builder: (_, state) => _deferred('_s030', _s030.loadLibrary, () => _s030.HrEmployeesScreen(focusId: state.uri.queryParameters['focus']))),
+      GoRoute(path: '/hr/employees', builder: (_, state) => _deferred('_s030', _s030.loadLibrary, () => _s030.HrEmployeesScreen(focusId: state.uri.queryParameters['focus'], initialFilter: state.uri.queryParameters['filter']))),
       GoRoute(path: '/hr/setup', builder: (_, state) => _deferred('_s150', _s150.loadLibrary, () => _s150.HrSetupScreen(initialTab: state.uri.queryParameters['tab']))),
       GoRoute(path: '/hr/employee-attendance', builder: (_, state) => _deferred('_s031', _s031.loadLibrary, () => _s031.HrEmployeeAttendanceScreen(empId: state.uri.queryParameters['emp'] ?? ''))),
       GoRoute(path: '/hr/attendance', builder: (_, __) => _deferred('_s036', _s036.loadLibrary, () => _s036.HrAttendanceScreen())),

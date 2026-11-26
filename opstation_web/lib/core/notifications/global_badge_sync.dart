@@ -61,6 +61,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     'products', // productSupervisePendingProvider
     'voucher_remarks', // DO / GRN / PI / SI remark pendency
     'hr_leave_requests', // leavePendingCountProvider
+    'hr_employees', // employeePendingCountProvider
     'payment_advices', // paPendingApprovalCountProvider
     'journal_entries', // jvPendingCountProvider (JV approval / supervision)
     'bom_headers', // bomSupervisePendingProvider
@@ -268,6 +269,7 @@ class _GlobalBadgeSyncState extends ConsumerState<GlobalBadgeSync> {
     ref.invalidate(piRemarkPendingProvider);
     ref.invalidate(siRemarkPendingProvider);
     ref.invalidate(leavePendingCountProvider);
+    ref.invalidate(employeePendingCountProvider);
     ref.invalidate(paPendingApprovalCountProvider);
     ref.invalidate(jvPendingCountProvider);
     ref.invalidate(bomSupervisePendingProvider);

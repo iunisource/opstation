@@ -15,6 +15,7 @@ import '../../../core/widgets/account_picker.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
+import '../../../core/layout/main_layout.dart' show employeePendingCountProvider;
 import 'employee_history_section.dart';
 import '../../../core/widgets/camera_capture.dart';
 import '../../../core/permissions/access_control.dart';
@@ -27,7 +28,9 @@ import 'package:opstation_web/core/pdf/pdf_output.dart';
 import '../../../core/format/time_format.dart';
 
 class HrEmployeesScreen extends ConsumerStatefulWidget {
-  const HrEmployeesScreen({super.key, this.focusId});
+  const HrEmployeesScreen({super.key, this.focusId, this.initialFilter});
+  // all | pending | active | inactive | left | voided (e.g. from the bell notification).
+  final String? initialFilter;
   // When set (e.g. opened from the Attendance Board), auto-select this employee
   // once the list has loaded.
   final String? focusId;
@@ -110,6 +113,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   bool get _voided => _current != null && _current!['is_voided'] == true;
   bool get _left => _current != null && _current!['status'] == 'left';
   bool _showLeft = false; // directory list: show employees who have left
+  String _statusFilter = 'all'; // all | pending | active | inactive | left | voided
   int? _min(String? hhmm) { if (hhmm == null || hhmm.isEmpty) return null; final p = hhmm.split(':'); if (p.length != 2) return null; final h = int.tryParse(p[0]), m = int.tryParse(p[1]); if (h == null || m == null) return null; return h * 60 + m; }
 
   static const _genders = [
@@ -124,6 +128,8 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   @override
   void initState() {
     super.initState();
+    const _ok = {'all', 'pending', 'active', 'inactive', 'left', 'voided'};
+    if (widget.initialFilter != null && _ok.contains(widget.initialFilter)) _statusFilter = widget.initialFilter!;
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadAll());
   }
 
@@ -159,6 +165,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_employees').select().eq('org_id', orgId).order('full_name');
     if (mounted) setState(() => _employees = List<Map<String, dynamic>>.from(rows));
+    if (mounted) ref.invalidate(employeePendingCountProvider); // keep the menu badge in step
     try {
       final docs = await Supabase.instance.client.from('hr_employee_documents').select('employee_id').eq('org_id', orgId);
       final m = <String, int>{};
@@ -1429,8 +1436,29 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       final g = (e['blood_group'] as String?)?.trim() ?? '';
       if (g.isEmpty) { bgNone++; } else { bgCount[g] = (bgCount[g] ?? 0) + 1; }
     }
+    bool isV(Map e) => e['is_voided'] == true;
+    bool isPend(Map e) => !isV(e) && (e['approval_status'] as String? ?? 'approved') == 'pending';
+    bool isLeft(Map e) => !isV(e) && e['status'] == 'left';
+    bool isAct(Map e) => !isV(e) && !isPend(e) && e['status'] == 'active';
+    bool isInact(Map e) => !isV(e) && !isPend(e) && !isLeft(e) && e['status'] != 'active';
+    final stCount = <String, int>{
+      'all': _employees.length,
+      'pending': _employees.where(isPend).length,
+      'active': _employees.where(isAct).length,
+      'inactive': _employees.where(isInact).length,
+      'left': _employees.where(isLeft).length,
+      'voided': _employees.where(isV).length,
+    };
     final filtered = _employees.where((e) {
-      if (!_showLeft && e['status'] == 'left' && _current?['id'] != e['id']) return false;
+      switch (_statusFilter) {
+        case 'pending': if (!isPend(e)) return false; break;
+        case 'active': if (!isAct(e)) return false; break;
+        case 'inactive': if (!isInact(e)) return false; break;
+        case 'left': if (!isLeft(e)) return false; break;
+        case 'voided': if (!isV(e)) return false; break;
+        default:
+          if (!_showLeft && e['status'] == 'left' && _current?['id'] != e['id']) return false;
+      }
       if (_bloodFilter != 'all') {
         final g = (e['blood_group'] as String?)?.trim() ?? '';
         if (_bloodFilter == 'none' ? g.isNotEmpty : g != _bloodFilter) return false;
@@ -1457,6 +1485,31 @@ class _State extends ConsumerState<HrEmployeesScreen> {
               const SizedBox(height: 8),
               TextField(decoration: const InputDecoration(hintText: 'Search name, code, phone, CNIC...', prefixIcon: Icon(Icons.search, size: 15), isDense: true, border: OutlineInputBorder()), onChanged: (v) => setState(() => _listSearch = v)),
               const SizedBox(height: 6),
+              Wrap(spacing: 5, runSpacing: 5, children: [
+                for (final c in const [
+                  ['pending', 'Review pending'], ['all', 'All'], ['active', 'Active'],
+                  ['inactive', 'Inactive'], ['left', 'Left'], ['voided', 'Voided'],
+                ])
+                  if (c[0] == 'all' || c[0] == _statusFilter || (stCount[c[0]] ?? 0) > 0)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => setState(() => _statusFilter = c[0]),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: _statusFilter == c[0]
+                              ? (c[0] == 'pending' ? Colors.orange.shade600 : AppTheme.primary)
+                              : (c[0] == 'pending' && (stCount['pending'] ?? 0) > 0 ? Colors.orange.withOpacity(0.12) : Colors.grey.withOpacity(0.10)),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text('${c[1]}  \u00b7  ${stCount[c[0]] ?? 0}',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                                color: _statusFilter == c[0] ? Colors.white
+                                    : (c[0] == 'pending' && (stCount['pending'] ?? 0) > 0 ? Colors.orange.shade800 : AppTheme.textSecondary))),
+                      ),
+                    ),
+              ]),
+              const SizedBox(height: 6),
               DropdownButtonFormField<String>(
                 value: _bloodFilter, isDense: true, isExpanded: true,
                 decoration: const InputDecoration(prefixIcon: Icon(Icons.bloodtype_outlined, size: 15), isDense: true,
@@ -1470,7 +1523,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 ],
                 onChanged: (v) => setState(() => _bloodFilter = v ?? 'all'),
               ),
-              if (leftCount > 0)
+              if (leftCount > 0 && _statusFilter == 'all')
                 InkWell(
                   onTap: () => setState(() => _showLeft = !_showLeft),
                   child: Padding(padding: const EdgeInsets.only(top: 6), child: Row(children: [
@@ -1481,7 +1534,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 ),
             ])),
           Expanded(child: _loading ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            : filtered.isEmpty ? const Center(child: Text('No employees', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
+            : filtered.isEmpty ? Center(child: Text(_statusFilter == 'pending' ? 'Nothing waiting for approval' : 'No employees', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)))
             : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) {
                 final e = filtered[i]; final sel = _current?['id'] == e['id'];
                 final active = (e['status'] as String? ?? 'active') == 'active';

@@ -76,6 +76,24 @@ final leavePendingCountProvider = FutureProvider<int>((ref) async {
   }
 });
 
+/// Employees waiting for approval (HR → Employee Directory badge + HR menu badge).
+final employeePendingCountProvider = FutureProvider<int>((ref) async {
+  await ref.watch(badgeGateProvider.future);
+  final user = await ref.watch(authControllerProvider.future);
+  if (user == null || user.orgId == null) return 0;
+  try {
+    final res = await Supabase.instance.client
+        .from('hr_employees')
+        .select('id')
+        .eq('org_id', user.orgId!)
+        .eq('approval_status', 'pending')
+        .eq('is_voided', false);
+    return (res as List).length;
+  } catch (_) {
+    return 0;
+  }
+});
+
 final orgModulesProvider = FutureProvider<Set<String>>((ref) async {
   // Await full auth resolution so the restored session's JWT is attached before
   // querying; otherwise a cold-start refresh races and returns empty modules,
@@ -1436,6 +1454,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
   final attReviewPending = gate('/hr/attendance-review', ref.watch(attendanceReviewPendingCountProvider).valueOrNull ?? 0);
   final fleetDue = gate('/fleet', ref.watch(fleetDueCountProvider).valueOrNull ?? 0);
   final leavePending = gate('/hr/leave', ref.watch(leavePendingCountProvider).valueOrNull ?? 0);
+  final empPending = gate('/hr/employees', ref.watch(employeePendingCountProvider).valueOrNull ?? 0);
   final targetsOn = ref.watch(customerTargetsEnabledProvider).valueOrNull ?? false;
   final batchTrackingOn = ref.watch(batchTrackingEnabledProvider).valueOrNull ?? false;
 
@@ -1619,7 +1638,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
     ];
 
     final hrDirectory = <Widget>[
-      if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location),
+      if (show('/hr/employees')) _menuItem(context, 'Employee Directory', Icons.groups_outlined, '/hr/employees', location, badge: empPending),
       if (show('/hr/setup')) _menuItem(context, 'HR Setup', Icons.tune_outlined, '/hr/setup', location),
     ];
     final hrAttendance = <Widget>[
@@ -1732,7 +1751,7 @@ List<Widget> _buildNavItems(BuildContext context, WidgetRef ref, WebUser? user, 
           _trimDividers(financialItems), badge: paPending + jvPending + dupRefPending),
       if (_hasItems(hrItems))
         _navMenu(context, 'HR', Icons.badge_outlined, location,
-          ['/hr/employees', '/hr/setup', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending + leavePending),
+          ['/hr/employees', '/hr/setup', '/hr/attendance', '/hr/attendance-review', '/hr/attendance-kiosk', '/hr/attendance-board', '/hr/leave', '/hr/payroll'], _trimDividers(hrItems), badge: attReviewPending + leavePending + empPending),
       // Logistics — Deliveries (incl. supplier pickups) + Dispatch Orders.
       // Permission-scoped via the registry, so any user granted either item
       // sees this menu — not only admin-tier or the dispatch-manager role.

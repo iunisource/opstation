@@ -156,7 +156,12 @@ class _NotificationBellState extends ConsumerState<NotificationBell> {
   void _open(Map<String, dynamic> n) {
     _markRead(n);
     _removeOverlay();
-    final link = (n['link_url'] as String?) ?? '';
+    var link = (n['link_url'] as String?) ?? '';
+    // "Employee waiting for approval" → open the directory on the Review pending filter.
+    if (link == '/hr/employees' &&
+        '${n['title'] ?? ''} ${n['body'] ?? ''}'.toLowerCase().contains('approval')) {
+      link = '/hr/employees?filter=pending';
+    }
     // Trigger links are internal app routes (e.g. /erp/purchase). External http
     // links are left alone (the push itself handles those).
     if (link.isNotEmpty && !link.startsWith('http')) {
