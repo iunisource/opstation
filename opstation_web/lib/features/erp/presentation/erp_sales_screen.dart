@@ -386,6 +386,11 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   List<Map<String, dynamic>> _appliedSchemes = []; // scheme_redemptions on this SO
   // inline edit
   final Map<String, TextEditingController> _qtyControllers = {};
+  // SO line qty: the total follows every keystroke; the save is debounced and also runs on Done / tap-out.
+  final Map<String, double> _soPersistedQty = {};
+  final Map<String, Timer> _soQtyTimers = {};
+  final Set<String> _soQtySaving = {};
+  final Set<String> _soQtyRerun = {};
   bool _hasDo = false; // true if any Delivery Order exists against this SO (cascade lock)
   List<String> _doRefs = []; // DO voucher numbers against this SO (for messages)
   String? _linkedDoId; // most recent active DO id, for the jump-to-DO button
@@ -398,6 +403,7 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
   void dispose() {
     _schemeHintTimer?.cancel();
     _searchDebounce?.cancel();
+    for (final t in _soQtyTimers.values) { t.cancel(); }
     _addQtyCtrl.dispose();
     _addQtyFocus.dispose();
     _focQtyCtrl.dispose();
@@ -522,6 +528,8 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       final core = await Future.wait<dynamic>([orderF, itemsF]);
       final order = core[0] as Map<String, dynamic>;
       final items = core[1] as List;
+      for (final t in _soQtyTimers.values) { t.cancel(); }
+      _soQtyTimers.clear(); _soPersistedQty.clear();
       _qtyControllers.clear();
       for (final item in items) {
         _qtyControllers[item['id'] as String] = TextEditingController(text: _plain4((item['quantity'] as num?) ?? 1));
@@ -714,6 +722,57 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
       return _savedCache[id] = (r as List).isNotEmpty;
     } catch (_) {
       return true; // cannot tell: record as before
+    }
+  }
+
+  // Keystroke on an SO line's qty: update the line (and the total) at once, save shortly after.
+  void _soLiveQty(String itemId, String text) {
+    final q = double.tryParse(text.trim());
+    if (q == null || q <= 0) return;
+    final idx = _items.indexWhere((i) => i['id'] == itemId);
+    if (idx < 0) return;
+    _soPersistedQty.putIfAbsent(itemId, () => (_items[idx]['quantity'] as num?)?.toDouble() ?? 0);
+    setState(() => _items[idx]['quantity'] = q);
+    _soQtyTimers[itemId]?.cancel();
+    _soQtyTimers[itemId] = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) _soSaveQty(itemId, reload: false);
+    });
+  }
+
+  Future<void> _soSaveQty(String itemId, {required bool reload}) async {
+    _soQtyTimers.remove(itemId)?.cancel();
+    final idx = _items.indexWhere((i) => i['id'] == itemId);
+    if (idx < 0) return;
+    final c = _qtyControllers[itemId];
+    final newQty = double.tryParse(c?.text.trim() ?? '');
+    final saved = _soPersistedQty[itemId] ?? (_items[idx]['quantity'] as num?)?.toDouble() ?? 0;
+    if (newQty == null || newQty <= 0) {
+      // Not a usable qty: put the box and the total back to what is saved.
+      c?.text = _plain4(saved);
+      if (mounted) setState(() => _items[idx]['quantity'] = saved);
+      return;
+    }
+    if (newQty == saved) {
+      _soPersistedQty.remove(itemId);
+      if (reload && _detail['id'] != null) _loadDetail(_detail['id'] as String);
+      return;
+    }
+    if (_soQtySaving.contains(itemId)) { _soQtyRerun.add(itemId); return; }
+    _soQtySaving.add(itemId);
+    try {
+      await Supabase.instance.client.from('sales_order_items').update({'quantity': newQty}).eq('id', itemId);
+      _soPersistedQty[itemId] = newQty;
+      await _logAudit(_detail['id'] as String, 'SO', 'line_edited',
+          '${_items[idx]['products']?['name'] ?? 'Line'}: qty ${_n4(saved)} → ${_n4(newQty)}');
+      if (reload && mounted) _loadDetail(_detail['id'] as String);
+    } catch (e) {
+      // Not saved: put the line (and the total) back to what is saved.
+      c?.text = _plain4(saved);
+      if (mounted) setState(() => _items[idx]['quantity'] = saved);
+      _showSnack(friendlyError('That did not save', e));
+    } finally {
+      _soQtySaving.remove(itemId);
+      if (_soQtyRerun.remove(itemId) && mounted) { _soSaveQty(itemId, reload: reload); }
     }
   }
 
@@ -1692,15 +1751,10 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
                                 controller: _qtyControllers[item['id'] as String],
                                 decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6), border: OutlineInputBorder()),
                                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                onSubmitted: (v) async {
-                                  final newQty = double.tryParse(v) ?? qty;
-                                  await Supabase.instance.client.from('sales_order_items').update({'quantity': newQty}).eq('id', item['id']);
-                                  if (newQty != qty) {
-                                    await _logAudit(_detail['id'] as String, 'SO', 'line_edited',
-                                        '${item['products']?['name'] ?? 'Line'}: qty ${_n4(qty)} → ${_n4(newQty)}');
-                                  }
-                                  _loadDetail(_detail['id'] as String);
-                                },
+                                onChanged: (v) => _soLiveQty(item['id'] as String, v),
+                                onSubmitted: (_) => _soSaveQty(item['id'] as String, reload: true),
+                                onEditingComplete: () { FocusScope.of(context).unfocus(); _soSaveQty(item['id'] as String, reload: true); },
+                                onTapOutside: (_) => _soSaveQty(item['id'] as String, reload: false),
                               ))
                             : Text(_n4(qty), style: const TextStyle(fontWeight: FontWeight.w600))),
                         if (_canEditLines) SizedBox(width: 40, child: IconButton(
