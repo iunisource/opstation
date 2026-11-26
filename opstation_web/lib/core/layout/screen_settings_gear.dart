@@ -51,6 +51,7 @@ const Map<String, _ScreenSettings> _screenSettings = {
     'org.si_price_editable', 'org.doc_review_flow_si', 'org.si_supervise_flow',
     'org.schemes_enabled', ..._salesPrint,
   ], ['footer.org.footer_note_si', 'footer.org.voucher_footer_note']),
+  '/erp/npl': _ScreenSettings('New Product Launch', ['org.npl_enabled']),
   '/erp/schemes': _ScreenSettings('Schemes & Offers', ['org.schemes_enabled']),
   '/erp/sales-returns': _ScreenSettings('Sales Return Note', ['org.srn_date_editable']),
   '/erp/sales-return-invoices': _ScreenSettings('Sales Return Invoice', [
