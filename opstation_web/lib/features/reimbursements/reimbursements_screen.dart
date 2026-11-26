@@ -61,6 +61,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   String _q = '';
   bool _onlyCombined = false; // the "Combined summary" pill
   bool _openedLink = false;
+  bool _hideNothing = false; // hide pending claims whose every day is already approved ("Nothing to claim")
 
   String? get _org => ref.read(currentUserProvider)?.orgId;
 
@@ -217,7 +218,13 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
         _ => '',
       };
 
-  List<Map<String, dynamic>> get _shown => claimsShown(claims: _claims, tab: _tab, query: _q, onlyCombined: _onlyCombined);
+  /// A pending claim whose every day is already approved on another claim — the pill says "Nothing to claim".
+  bool _nothingToClaim(Map c) => c['status'] == 'pending' && _paidElsewhere(c).isNotEmpty && _unpaidKm(c) <= 0.0001;
+
+  List<Map<String, dynamic>> get _shown {
+    final l = claimsShown(claims: _claims, tab: _tab, query: _q, onlyCombined: _onlyCombined);
+    return _hideNothing ? l.where((c) => !_nothingToClaim(c)).toList() : l;
+  }
 
   /// Shares an approved claim: a message with its details and the public check link, on WhatsApp, or just
   /// the link copied.
@@ -301,6 +308,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
           ]),
         ),
         const SizedBox(height: 10),
+        Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
         SizedBox(
           width: 260,
           child: TextField(
@@ -308,6 +316,14 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
             onChanged: (v) => setState(() => _q = v.trim()),
           ),
         ),
+        // Hides the pending lines that say "Nothing to claim" (all their days were approved elsewhere).
+        FilterChip(
+          avatar: Icon(_hideNothing ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 16),
+          label: Text('Hide "Nothing to claim" (${_claims.where(_nothingToClaim).length})'),
+          selected: _hideNothing,
+          onSelected: (v) => setState(() => _hideNothing = v),
+        ),
+        ]),
         const SizedBox(height: 10),
         Expanded(
           child: _loading
