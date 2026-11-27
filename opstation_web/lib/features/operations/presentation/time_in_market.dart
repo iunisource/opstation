@@ -94,7 +94,7 @@ class TimSettings {
 class TimEvent {
   final DateTime at;
   final String place;
-  final String kind; // visited | outside | not_verified | skipped | delivered | failed
+  final String kind; // visited | outside | no_location | no_gps | not_completed | delivered | failed
   final int amount;
   final double? distance; // metres from the shop when marked (outside geofence)
   final bool adhoc; // entered with "Ad-hoc collection"
@@ -133,8 +133,6 @@ class TimDay {
   final bool open;
   final List<TimEvent> events;
   final int totalStops; // planned shops / drops (0 = unknown)
-  /// Planned shops of the day's routes with no visit marked (names).
-  final List<String> unvisited;
   // Where the route started / ended (GPS of the first trip's start and the
   // last trip's end) — null when not recorded (e.g. deliveries).
   final (double, double)? startAt;
@@ -147,7 +145,7 @@ class TimDay {
   double? km;
   TimDay(this.userId, this.name, this.role, this.date, this.routes, this.start, this.end, this.open,
       this.events, this.totalStops,
-      {this.startAt, this.endAt, this.trips = const [], this.visitsByTrip = const {}, this.unvisited = const []});
+      {this.startAt, this.endAt, this.trips = const [], this.visitsByTrip = const {}});
 
   late final List<TimEvent> sorted = [...events]..sort((a, b) => a.at.compareTo(b.at));
   DateTime? get first => sorted.isEmpty ? null : sorted.first.at;
@@ -263,7 +261,6 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
   }
 
   final visitsByTrip = <String, List<Map<String, dynamic>>>{};
-  final custsByRouteAll = <String, List<String>>{};
   // Salespeople: trips + visits.
   final sales = [for (final u in users) if (u['role'] == 'salesperson') '${u['id']}'];
   if (sales.isNotEmpty) {
@@ -285,13 +282,11 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
           .inFilter('trip_id', chunk).range(f, t)));
     }
     final stopsByRoute = <String, int>{};
-    final custsByRoute = custsByRouteAll;
     final routeIds = {for (final t in trips) if (t['route_id'] != null && t['route_id'] != 'offroute') '${t['route_id']}'}.toList();
     for (var k = 0; k < routeIds.length; k += 150) {
       final chunk = routeIds.sublist(k, (k + 150).clamp(0, routeIds.length));
-      for (final r in await _paged((f, t) => c.from('route_stops').select('route_id, customer_id').inFilter('route_id', chunk).range(f, t))) {
+      for (final r in await _paged((f, t) => c.from('route_stops').select('route_id').inFilter('route_id', chunk).range(f, t))) {
         stopsByRoute['${r['route_id']}'] = (stopsByRoute['${r['route_id']}'] ?? 0) + 1;
-        if (r['customer_id'] != null) (custsByRoute['${r['route_id']}'] ??= []).add('${r['customer_id']}');
       }
     }
     for (final t in trips) {
@@ -320,7 +315,7 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
             a.endAt = pt('end_lat', 'end_lng') ?? a.endAt;
           }
         }
-        if (a.routeIds.add('${t['route_id']}')) a.stops += stopsByRoute['${t['route_id']}'] ?? 0;
+        a.stops += stopsByRoute['${t['route_id']}'] ?? 0;
       }
     }
     for (final v in visits) {
@@ -332,17 +327,18 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
       final at = local(v['timestamp']);
       final uid = '${t['user_id']}';
       if (!byUser.containsKey(uid)) continue;
-      if (v['customer_id'] != null) acc(uid, dayOf(at)).visitedCust.add('${v['customer_id']}');
       final status = '${v['status'] ?? ''}';
       final amt = (v['amount'] as num?)?.toInt() ?? 0;
       final noLoc = status == 'noLocation' || status == 'no_location';
+      // The label follows what the phone recorded, not whether money was collected (the amount is shown beside it).
+      // Anything that is not verified / outside / no-location (a stop left pending, or an old "skipped") is Not completed.
       final kind = status == 'verified'
           ? 'visited'
-          : status == 'skipped'
-              ? 'skipped'
-              : (amt > 0
-                  ? (noLoc ? (v['captured_lat'] == null ? 'no_gps' : 'no_location') : 'outside')
-                  : 'not_verified');
+          : status == 'outside'
+              ? 'outside'
+              : noLoc
+                  ? (v['captured_lat'] == null ? 'no_gps' : 'no_location')
+                  : 'not_completed';
       acc(uid, dayOf(at)).events.add(TimEvent(at, '${(v['customers'] as Map?)?['shop_name'] ?? 'Shop'}', kind, amt,
           (v['distance_meters'] as num?)?.toDouble(), visitIsAdhoc(v), (v['accuracy_meters'] as num?)?.toDouble()));
     }
@@ -405,39 +401,12 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
     }
   }
 
-  // Planned shops with no visit marked, per day.
-  final unvisitedBy = <_Acc, List<String>>{};
-  final needIds = <String>{};
-  final pending = <_Acc, List<String>>{};
-  if (sales.isNotEmpty) {
-    for (final a in days.values) {
-      if (a.role != 'salesperson') continue;
-      final ids = <String>{};
-      for (final rid in a.routeIds) {
-        ids.addAll(custsByRouteAll[rid] ?? const []);
-      }
-      ids.removeAll(a.visitedCust);
-      if (ids.isNotEmpty) { pending[a] = ids.toList(); needIds.addAll(ids); }
-    }
-  }
-  final custName = <String, String>{};
-  final needList = needIds.toList();
-  for (var k = 0; k < needList.length; k += 150) {
-    final chunk = needList.sublist(k, (k + 150).clamp(0, needList.length));
-    for (final r in await _paged((f, t) => c.from('customers').select('id, shop_name').inFilter('id', chunk).range(f, t))) {
-      custName['${r['id']}'] = '${r['shop_name'] ?? 'Shop'}';
-    }
-  }
-  pending.forEach((a, ids) {
-    unvisitedBy[a] = [for (final i in ids) custName[i] ?? 'Shop']..sort((x, y) => x.toLowerCase().compareTo(y.toLowerCase()));
-  });
-
   final out = [
     for (final a in days.values)
       TimDay(a.uid, a.name, a.role, a.date, a.routes.toSet().toList(), a.start, a.end,
           a.open && DateUtils.isSameDay(a.date, DateTime.now()), a.events, a.stops,
           startAt: a.startAt, endAt: a.endAt,
-          trips: a.trips, visitsByTrip: visitsByTrip, unvisited: unvisitedBy[a] ?? const []),
+          trips: a.trips, visitsByTrip: visitsByTrip),
   ]..sort((x, y) {
       final d = y.date.compareTo(x.date);
       return d != 0 ? d : x.name.toLowerCase().compareTo(y.name.toLowerCase());
@@ -453,8 +422,6 @@ class _Acc {
   (double, double)? startAt, endAt;
   bool open = false;
   int stops = 0;
-  final Set<String> routeIds = {};
-  final Set<String> visitedCust = {};
   final List<TimEvent> events = [];
   final List<Map<String, dynamic>> trips = [];
   _Acc(this.uid, this.name, this.role, this.date);
@@ -475,11 +442,10 @@ String timKindLabel(String k) => switch (k) {
       'visited' => 'Visited',
       'delivered' => 'Delivered',
       'outside' => 'Outside geofence',
-      'no_location' => 'No Location',
-      'no_gps' => 'No GPS',
+      'no_location' => 'Shop has no location',
+      'no_gps' => 'No GPS captured',
       'failed' => 'Failed',
-      'skipped' => 'Skipped',
-      _ => 'Not verified',
+      _ => 'Not completed',
     };
 
 /// Flags shown next to a day.
@@ -580,7 +546,6 @@ class TimDayDetail extends StatefulWidget {
 
 class _TimDayDetailState extends State<TimDayDetail> {
   // Where the route started / ended — GPS at once, the area name when found.
-  bool _showUnvisited = false;
   late (String?, String?) _at = (timGps(widget.day.startAt), timGps(widget.day.endAt));
 
   @override
@@ -640,7 +605,7 @@ class _TimDayDetailState extends State<TimDayDetail> {
       ('Time in gaps over ${s.gapMin} min', timDur(day.lostToGaps(s)), gaps.isEmpty ? null : AppTheme.danger),
       ('Stops · per hour in market', '${day.visits} · ${day.perHour.toStringAsFixed(1)}', null),
       ('Average time per stop (incl. travel from last stop)', timDur(day.avgPerStop(s)), null),
-      if (day.totalStops > 0) ('Planned stops not marked', '${day.unvisited.isNotEmpty ? day.unvisited.length : (day.totalStops - day.visits).clamp(0, 100000)} of ${day.totalStops}', null),
+      if (day.totalStops > 0) ('Planned stops not marked', '${(day.totalStops - day.visits).clamp(0, 100000)} of ${day.totalStops}', null),
       if (day.collected > 0) ('Collected', 'Rs ${money(day.collected)}', null),
     ];
     final wide = MediaQuery.of(context).size.width >= 900;
@@ -659,39 +624,6 @@ class _TimDayDetailState extends State<TimDayDetail> {
         decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(10)),
         child: Column(children: [
           for (final (l, v, c) in summary)
-            if (l == 'Planned stops not marked' && day.unvisited.isNotEmpty)
-              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                InkWell(
-                  onTap: () => setState(() => _showUnvisited = !_showUnvisited),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
-                    child: Row(children: [
-                      Expanded(child: Text(l, style: const TextStyle(fontSize: 12.5))),
-                      Text(v, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800)),
-                      const SizedBox(width: 4),
-                      Icon(_showUnvisited ? Icons.expand_less : Icons.expand_more, size: 18, color: AppTheme.textSecondary),
-                    ]),
-                  ),
-                ),
-                if (_showUnvisited)
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-                    decoration: BoxDecoration(color: AppTheme.danger.withOpacity(0.04),
-                        border: const Border(bottom: BorderSide(color: AppTheme.border))),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      for (var i = 0; i < day.unvisited.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2),
-                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            SizedBox(width: 26, child: Text('${i + 1}.', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
-                            Expanded(child: Text(day.unvisited[i], style: const TextStyle(fontSize: 12.5))),
-                          ]),
-                        ),
-                    ]),
-                  ),
-              ])
-            else
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.border))),
@@ -707,7 +639,7 @@ class _TimDayDetailState extends State<TimDayDetail> {
       Wrap(spacing: 14, runSpacing: 4, children: [
         for (final k in day.role == 'driver'
             ? const ['delivered', 'outside', 'failed']
-            : const ['visited', 'outside', 'no_gps', 'no_location', 'not_verified'])
+            : const ['visited', 'outside', 'no_gps', 'no_location', 'not_completed'])
           Row(mainAxisSize: MainAxisSize.min, children: [
             Container(width: 10, height: 10, decoration: BoxDecoration(color: timKindColor(k), shape: BoxShape.circle)),
             const SizedBox(width: 4),

@@ -148,7 +148,7 @@ pw.Widget _dot(PdfColor c, {double size = 7}) =>
 
 pw.Widget _legend(TimSettings s, bool drivers, bool sales) {
   final kinds = <String>{
-    if (sales) ...['visited', 'outside', 'no_gps', 'no_location', 'not_verified'],
+    if (sales) ...['visited', 'outside', 'no_gps', 'no_location', 'not_completed'],
     if (drivers) ...['delivered', 'outside', 'failed'],
   };
   pw.Widget item(pw.Widget mark, String t) => pw.Padding(
@@ -369,19 +369,6 @@ List<pw.Widget> _detail(TimDay day, TimSettings s, (String?, String?)? at) {
           ),
       ]),
     ),
-    if (day.unvisited.isNotEmpty) ...[
-      pw.SizedBox(height: 8),
-      title('Planned stops not marked (${day.unvisited.length})'),
-      pw.Container(
-        decoration: box,
-        padding: const pw.EdgeInsets.all(6),
-        child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
-          for (var i = 0; i < day.unvisited.length; i++)
-            pw.Padding(padding: const pw.EdgeInsets.symmetric(vertical: 1),
-                child: pw.Text('${i + 1}. ${day.unvisited[i]}', style: const pw.TextStyle(fontSize: 8))),
-        ]),
-      ),
-    ],
     pw.SizedBox(height: 10),
     title('The day, in order'),
     pw.Container(height: 0.5, color: _line),
