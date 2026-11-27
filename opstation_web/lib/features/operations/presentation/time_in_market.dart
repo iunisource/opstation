@@ -234,6 +234,20 @@ Future<List<Map<String, dynamic>>> _paged(dynamic Function(int f, int t) q) asyn
   return out;
 }
 
+/// Runs [q] over [ids] in chunks, a few at a time (instead of one after another) and joins the rows.
+Future<List<Map<String, dynamic>>> _parallel(
+    List<String> ids, int size, Future<List<Map<String, dynamic>>> Function(List<String> chunk) q) async {
+  final chunks = [for (var k = 0; k < ids.length; k += size) ids.sublist(k, (k + size).clamp(0, ids.length))];
+  final out = <Map<String, dynamic>>[];
+  for (var i = 0; i < chunks.length; i += 4) {
+    final part = chunks.sublist(i, (i + 4).clamp(0, chunks.length));
+    for (final rows in await Future.wait([for (final c in part) q(c)])) {
+      out.addAll(rows);
+    }
+  }
+  return out;
+}
+
 /// Days for salespeople (routes + visits) and drivers (deliveries + drops)
 /// between [from] and [to] (local dates, inclusive). [userId] limits to one.
 Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {String? userId}) async {
@@ -263,31 +277,25 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
   final visitsByTrip = <String, List<Map<String, dynamic>>>{};
   // Salespeople: trips + visits.
   final sales = [for (final u in users) if (u['role'] == 'salesperson') '${u['id']}'];
-  if (sales.isNotEmpty) {
-    final trips = <Map<String, dynamic>>[];
-    for (var k = 0; k < sales.length; k += 100) {
-      final chunk = sales.sublist(k, (k + 100).clamp(0, sales.length));
-      trips.addAll(await _paged((f, t) => c.from('trips')
-          .select('id, org_id, user_id, route_id, route_name, started_at, ended_at, start_lat, start_lng, end_lat, end_lng')
-          .eq('org_id', orgId).inFilter('user_id', chunk)
-          .gte('started_at', s).lt('started_at', e).range(f, t)));
-    }
+  // Salespeople and drivers load side by side; chunks of ids load a few at a time.
+  Future<void> salesPart() async {
+    if (sales.isEmpty) return;
+    final trips = await _parallel(sales, 100, (chunk) => _paged((f, t) => c.from('trips')
+        .select('id, org_id, user_id, route_id, route_name, started_at, ended_at, start_lat, start_lng, end_lat, end_lng')
+        .eq('org_id', orgId).inFilter('user_id', chunk)
+        .gte('started_at', s).lt('started_at', e).range(f, t)));
     final tripById = {for (final t in trips) '${t['id']}': t};
     final ids = tripById.keys.toList();
-    final visits = <Map<String, dynamic>>[];
-    for (var k = 0; k < ids.length; k += 150) {
-      final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
-      visits.addAll(await _paged((f, t) => c.from('visits')
-          .select('trip_id, timestamp, status, amount, customer_id, distance_meters, captured_lat, captured_lng, accuracy_meters, skip_reason, customers(shop_name)')
-          .inFilter('trip_id', chunk).range(f, t)));
-    }
-    final stopsByRoute = <String, int>{};
+    // Stop counts per route load at the same time as the visits.
     final routeIds = {for (final t in trips) if (t['route_id'] != null && t['route_id'] != 'offroute') '${t['route_id']}'}.toList();
-    for (var k = 0; k < routeIds.length; k += 150) {
-      final chunk = routeIds.sublist(k, (k + 150).clamp(0, routeIds.length));
-      for (final r in await _paged((f, t) => c.from('route_stops').select('route_id').inFilter('route_id', chunk).range(f, t))) {
-        stopsByRoute['${r['route_id']}'] = (stopsByRoute['${r['route_id']}'] ?? 0) + 1;
-      }
+    final stopRowsFuture = _parallel(routeIds, 150,
+        (chunk) => _paged((f, t) => c.from('route_stops').select('route_id').inFilter('route_id', chunk).range(f, t)));
+    final visits = await _parallel(ids, 150, (chunk) => _paged((f, t) => c.from('visits')
+        .select('trip_id, timestamp, status, amount, customer_id, distance_meters, captured_lat, captured_lng, accuracy_meters, customers(shop_name)')
+        .inFilter('trip_id', chunk).range(f, t)));
+    final stopsByRoute = <String, int>{};
+    for (final r in await stopRowsFuture) {
+      stopsByRoute['${r['route_id']}'] = (stopsByRoute['${r['route_id']}'] ?? 0) + 1;
     }
     for (final t in trips) {
       final uid = '${t['user_id']}';
@@ -346,25 +354,18 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
 
   // Drivers: deliveries + drops.
   final drivers = [for (final u in users) if (u['role'] == 'driver') '${u['id']}'];
-  if (drivers.isNotEmpty) {
-    final dels = <Map<String, dynamic>>[];
+  Future<void> driversPart() async {
+    if (drivers.isEmpty) return;
     final since = start.subtract(const Duration(days: 7)).toUtc().toIso8601String();
-    for (var k = 0; k < drivers.length; k += 100) {
-      final chunk = drivers.sublist(k, (k + 100).clamp(0, drivers.length));
-      dels.addAll(await _paged((f, t) => c.from('deliveries')
-          .select('id, driver_id, started_at, completed_at, status, created_at')
-          .eq('org_id', orgId).inFilter('driver_id', chunk)
-          .gte('created_at', since).lt('created_at', e).range(f, t)));
-    }
+    final dels = await _parallel(drivers, 100, (chunk) => _paged((f, t) => c.from('deliveries')
+        .select('id, driver_id, started_at, completed_at, status, created_at')
+        .eq('org_id', orgId).inFilter('driver_id', chunk)
+        .gte('created_at', since).lt('created_at', e).range(f, t)));
     final delById = {for (final d in dels) '${d['id']}': d};
     final ids = delById.keys.toList();
-    final stops = <Map<String, dynamic>>[];
-    for (var k = 0; k < ids.length; k += 150) {
-      final chunk = ids.sublist(k, (k + 150).clamp(0, ids.length));
-      stops.addAll(await _paged((f, t) => c.from('delivery_stops')
-          .select('delivery_id, customer_name, status, delivered_at, verification, amount, cash_received, distance_meters')
-          .inFilter('delivery_id', chunk).range(f, t)));
-    }
+    final stops = await _parallel(ids, 150, (chunk) => _paged((f, t) => c.from('delivery_stops')
+        .select('delivery_id, customer_name, status, delivered_at, verification, amount, cash_received, distance_meters')
+        .inFilter('delivery_id', chunk).range(f, t)));
     final stopCount = <String, int>{};
     for (final st in stops) {
       stopCount['${st['delivery_id']}'] = (stopCount['${st['delivery_id']}'] ?? 0) + 1;
@@ -400,6 +401,8 @@ Future<List<TimDay>> loadTimDays(String orgId, DateTime from, DateTime to, {Stri
           (st['distance_meters'] as num?)?.toDouble()));
     }
   }
+
+  await Future.wait([salesPart(), driversPart()]);
 
   final out = [
     for (final a in days.values)

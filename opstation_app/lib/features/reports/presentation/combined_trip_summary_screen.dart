@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,7 +33,7 @@ class CombinedTripSummaryScreen extends ConsumerStatefulWidget {
 
 enum _Period { week, month, custom }
 
-enum _Action { preview, share }
+enum _Action { preview, generate, share }
 
 class _CombinedTripSummaryScreenState
     extends ConsumerState<CombinedTripSummaryScreen> {
@@ -40,6 +42,12 @@ class _CombinedTripSummaryScreenState
   String? _userId;
   String? _routeId;
   bool _busy = false;
+
+  // Generate / Share (a claim is recorded once, by Generate; Share only sends the copy).
+  String? _statusKey; // what the status below was checked for
+  bool? _generated; // null = still checking
+  DateTime? _generatedAt; // known only when generated in this session
+  Uint8List? _bytes; // the generated copy, kept so Share/View send exactly it
 
   bool get _isScoped => widget.scopedUserId != null;
 
@@ -98,69 +106,130 @@ class _CombinedTripSummaryScreenState
     return _LoadResult(trips: filtered, userNames: userNames);
   }
 
-  Future<void> _run(_Action action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
+  String? _issueKey() {
+    final range = _currentRange();
+    final start = DateTime(range.start.year, range.start.month, range.start.day);
+    final end = DateTime(range.end.year, range.end.month, range.end.day);
+    final effectiveUserId = widget.scopedUserId ?? _userId;
+    return '${effectiveUserId ?? 'all'}|${_ymd(start)}|${_ymd(end)}';
+  }
+
+  /// Re-check "already generated?" whenever the dates / person / route change. Read-only.
+  void _syncStatus() {
+    final key = '${_issueKey()}|${_routeId ?? ''}';
+    if (_statusKey == key) return;
+    _statusKey = key;
+    _generated = null;
+    _generatedAt = null;
+    _bytes = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkStatus(key));
+  }
+
+  Future<void> _checkStatus(String statusKey) async {
+    final actor = ref.read(authControllerProvider).valueOrNull;
+    final issued = await ref.read(reportServiceProvider).registerReportIssue(
+          type: 'combined_summary',
+          key: _issueKey()!,
+          orgId: actor?.organizationId,
+          by: actor?.id,
+          claim: false,
+        );
+    if (!mounted || _statusKey != statusKey) return;
+    setState(() => _generated = issued);
+  }
+
+  /// Builds the PDF. [claim] = Generate (records the claim once); otherwise it only reads.
+  Future<Uint8List?> _build({required bool claim}) async {
     final range = _currentRange();
     final start = DateTime(range.start.year, range.start.month, range.start.day);
     final end = DateTime(range.end.year, range.end.month, range.end.day);
     final actor = ref.read(authControllerProvider).valueOrNull;
-    try {
-      final loaded = await _loadTrips(start, end);
-      if (loaded.trips.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No trips in the selected period.')),
-          );
-        }
-        return;
+    final loaded = await _loadTrips(start, end);
+    if (loaded.trips.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No trips in the selected period.')),
+        );
       }
-      final effectiveUserId = widget.scopedUserId ?? _userId;
-      final showSalesperson = effectiveUserId == null;
-      final salespersonLabel = effectiveUserId == null
-          ? 'All salespersons'
-          : (loaded.userNames[effectiveUserId] ?? 'Salesperson');
+      return null;
+    }
+    final effectiveUserId = widget.scopedUserId ?? _userId;
+    final showSalesperson = effectiveUserId == null;
+    final salespersonLabel = effectiveUserId == null
+        ? 'All salespersons'
+        : (loaded.userNames[effectiveUserId] ?? 'Salesperson');
 
-      final svc = ref.read(reportServiceProvider);
-      // Reimbursement doc: Share claims the issue (re-issues get a DUPLICATE
-      // watermark); Preview only checks, so it never spends the original.
-      final key =
-          '${effectiveUserId ?? 'all'}|${_ymd(start)}|${_ymd(end)}';
-      final duplicate = await svc.registerReportIssue(
-        type: 'combined_summary',
-        key: key,
-        orgId: actor?.organizationId,
-        by: actor?.id,
-        claim: action == _Action.share,
-      );
-      // Same days one week earlier, for the "Last week" column.
-      final lastWeek = await _loadTrips(
-          start.subtract(const Duration(days: 7)), end.subtract(const Duration(days: 7)));
-      final bytes = await svc.buildCombinedSummaryBytes(
-        trips: loaded.trips,
-        lastWeekTrips: lastWeek.trips,
-        userNames: loaded.userNames,
-        showSalesperson: showSalesperson,
-        periodLabel: _periodLabel(range),
-        salespersonLabel: salespersonLabel,
-        actor: actor,
-        duplicate: false, // replaced by the "already generated" note (SQL 470)
-        reimbKey: key,
-        claimantId: effectiveUserId,
-        reimbRecord: action == _Action.share,
-        trail: (action == _Action.share || svc.isAdminActor)
-            ? await svc.logReportIssue(type: 'combined_summary', key: key, orgId: actor?.organizationId)
-            : const [],
-      );
-      final fname = 'combined_summary_${_ymd(start)}_${_ymd(end)}.pdf';
-      if (action == _Action.preview) {
-        await Printing.layoutPdf(onLayout: (_) async => bytes, name: fname);
-      } else {
-        try {
-          await Printing.sharePdf(bytes: bytes, filename: fname);
-        } on PlatformException {
-          // Platform without a share sheet (e.g. emulator) — ignore.
-        }
+    final svc = ref.read(reportServiceProvider);
+    final key = _issueKey()!;
+    await svc.registerReportIssue(
+      type: 'combined_summary',
+      key: key,
+      orgId: actor?.organizationId,
+      by: actor?.id,
+      claim: claim,
+    );
+    // Same days one week earlier, for the "Last week" column.
+    final lastWeek = await _loadTrips(
+        start.subtract(const Duration(days: 7)), end.subtract(const Duration(days: 7)));
+    return svc.buildCombinedSummaryBytes(
+      trips: loaded.trips,
+      lastWeekTrips: lastWeek.trips,
+      userNames: loaded.userNames,
+      showSalesperson: showSalesperson,
+      periodLabel: _periodLabel(range),
+      salespersonLabel: salespersonLabel,
+      actor: actor,
+      duplicate: false, // replaced by the "already generated" note (SQL 470)
+      reimbKey: key,
+      claimantId: effectiveUserId,
+      reimbRecord: claim,
+      trail: (claim || svc.isAdminActor)
+          ? await svc.logReportIssue(type: 'combined_summary', key: key, orgId: actor?.organizationId)
+          : const [],
+    );
+  }
+
+  String get _fname {
+    final range = _currentRange();
+    return 'combined_summary_${_ymd(range.start)}_${_ymd(range.end)}.pdf';
+  }
+
+  Future<void> _run(_Action action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final statusKey = _statusKey;
+    try {
+      switch (action) {
+        case _Action.generate:
+          final bytes = await _build(claim: true);
+          if (bytes == null) return;
+          if (mounted && _statusKey == statusKey) {
+            setState(() {
+              _bytes = bytes;
+              _generated = true;
+              _generatedAt = DateTime.now();
+            });
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Generated and sent for approval. You can share it now.')),
+            );
+          }
+          break;
+        case _Action.preview:
+          final bytes = _bytes ?? await _build(claim: false);
+          if (bytes == null) return;
+          await Printing.layoutPdf(onLayout: (_) async => bytes, name: _fname);
+          break;
+        case _Action.share:
+          final bytes = _bytes ?? await _build(claim: false);
+          if (bytes == null) return;
+          try {
+            await Printing.sharePdf(bytes: bytes, filename: _fname);
+          } on PlatformException {
+            // Platform without a share sheet (e.g. emulator) — ignore.
+          }
+          break;
       }
     } catch (e) {
       if (mounted) {
@@ -178,6 +247,7 @@ class _CombinedTripSummaryScreenState
   @override
   Widget build(BuildContext context) {
     final range = _currentRange();
+    _syncStatus();
     return Scaffold(
       appBar: AppBar(
         leading: const BackButton(),
@@ -242,41 +312,91 @@ class _CombinedTripSummaryScreenState
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _busy ? null : () => _run(_Action.preview),
-                      icon: const Icon(Icons.preview_outlined, size: 18),
-                      label: const Text('Preview PDF'),
-                      style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 48)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton.icon(
-                      onPressed: _busy ? null : () => _run(_Action.share),
-                      icon: _busy
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Icon(Icons.ios_share, size: 18),
-                      label: const Text('Share'),
-                      style: ElevatedButton.styleFrom(
-                          minimumSize: const Size(0, 48)),
-                    ),
-                  ),
-                ],
-              ),
+              child: _actionBar(),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _spinner() => const SizedBox(
+      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white));
+
+  Widget _actionBar() {
+    final isAdmin = ref.read(reportServiceProvider).isAdminActor;
+    final generated = _generated == true;
+    final canShare = generated || isAdmin;
+    final status = _generated == null
+        ? ('Checking…', Colors.grey.shade700, const Color(0xFFF3F4F6), Icons.hourglass_empty)
+        : generated
+            ? (
+                _generatedAt == null
+                    ? 'Generated · sent for approval'
+                    : 'Generated ${DateFormat('d MMM, h:mm a').format(_generatedAt!)} · sent for approval',
+                const Color(0xFF047857),
+                const Color(0xFFECFDF5),
+                Icons.check_circle_outline
+              )
+            : ('Not generated yet', Colors.grey.shade700, const Color(0xFFF3F4F6), Icons.radio_button_unchecked);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!isAdmin)
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(color: status.$3, borderRadius: BorderRadius.circular(8)),
+            child: Row(children: [
+              Icon(status.$4, size: 16, color: status.$2),
+              const SizedBox(width: 8),
+              Expanded(child: Text(status.$1, style: TextStyle(fontSize: 12.5, color: status.$2))),
+            ]),
+          ),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _busy ? null : () => _run(_Action.preview),
+              icon: const Icon(Icons.preview_outlined, size: 18),
+              label: Text(generated ? 'View PDF' : 'Preview PDF'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+            ),
+          ),
+          if (!isAdmin) ...[
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 2,
+              child: generated
+                  ? OutlinedButton.icon(
+                      onPressed: null,
+                      icon: const Icon(Icons.check, size: 18),
+                      label: const Text('Generated'),
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+                    )
+                  : ElevatedButton.icon(
+                      onPressed: _busy || _generated == null ? null : () => _run(_Action.generate),
+                      icon: _busy ? _spinner() : const Icon(Icons.bolt, size: 18),
+                      label: const Text('Generate'),
+                      style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
+                    ),
+            ),
+          ],
+        ]),
+        const SizedBox(height: 10),
+        ElevatedButton.icon(
+          onPressed: _busy || !canShare ? null : () => _run(_Action.share),
+          icon: _busy && isAdmin ? _spinner() : const Icon(Icons.ios_share, size: 18),
+          label: const Text('Share'),
+          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 48)),
+        ),
+        if (!isAdmin && !generated && _generated != null)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text('Generate records this claim for approval, once.',
+                textAlign: TextAlign.center, style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+          ),
+      ],
     );
   }
 

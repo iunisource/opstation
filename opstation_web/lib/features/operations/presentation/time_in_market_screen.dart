@@ -43,8 +43,9 @@ class _State extends ConsumerState<TimeInMarketScreen> {
     if (org == null) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final s = await TimSettings.load(org);
+      final settingsFuture = TimSettings.load(org); // loads while the days load
       final days = await loadTimDays(org, _from, _to);
+      final s = await settingsFuture;
       if (!mounted) return;
       setState(() { _s = s; _days = days; _loading = false; });
     } catch (e) {

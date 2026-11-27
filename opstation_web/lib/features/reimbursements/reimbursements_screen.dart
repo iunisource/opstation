@@ -259,7 +259,8 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.of(context).size.width >= 900;
-    int n(String s) => _claims.where((c) => c['status'] == s).length;
+    // Counts match the sidebar badge: a pending claim with "Nothing to claim" is not a pendency.
+    int n(String s) => _claims.where((c) => c['status'] == s && !(s == 'pending' && _nothingToClaim(c))).length;
     final now = DateTime.now();
     final paidMonth = _claims
         .where((c) {
