@@ -81,6 +81,33 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
       default: return s ?? 'Draft';
     }
   }
+  /// What is behind a GRN's status, from its lines: open (nothing received, stays open on the PO),
+  /// short (received less than ordered) and excess (received more than ordered).
+  ({int open, int short, int excess}) _lineCounts(Iterable<dynamic>? items) {
+    var open = 0, short = 0, excess = 0;
+    for (final it in items ?? const []) {
+      final ord = ((it['qty_ordered'] as num?)?.toDouble()) ?? 0;
+      final rcv = ((it['qty_received'] as num?)?.toDouble()) ?? 0;
+      if (ord <= 0) { if (rcv > 0) excess++; continue; }
+      if (rcv <= 0) { open++; } else if (rcv < ord) { short++; } else if (rcv > ord) { excess++; }
+    }
+    return (open: open, short: short, excess: excess);
+  }
+
+  /// "Partial · 1 line open", "Partial · short", "Received · excess" … (null = nothing more to say).
+  String? _statusDetail(String status, Iterable<dynamic>? items) {
+    if (items == null) return null;
+    final c = _lineCounts(items);
+    final parts = <String>[
+      if (c.open > 0) '${c.open} line${c.open == 1 ? '' : 's'} open',
+      if (c.short > 0) 'short',
+      if (c.excess > 0) 'excess',
+    ];
+    if (status == 'partially_received') return parts.isEmpty ? null : 'Partial · ${parts.join(' · ')}';
+    if (status == 'received' && c.excess > 0) return 'Received · excess';
+    return null;
+  }
+
   @override
   void dispose() {
     for (final t in _qtySaveDebounce.values) t.cancel();
@@ -156,7 +183,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
     try { final c = await Supabase.instance.client.from('app_config').select('value').eq('org_id', orgId).eq('key', 'org.grn_supervise_flow').maybeSingle(); _superviseEnabled = (c?['value'] as String?) == 'true'; } catch (_) {}
     try {
       var q = Supabase.instance.client.from('purchase_grns')
-          .select('id,voucher_number,voucher_date,status,is_locked,is_voided,supplier_id,po_id,supervised_at,suppliers(name),purchase_orders(voucher_number)')
+          .select('id,voucher_number,voucher_date,status,is_locked,is_voided,supplier_id,po_id,supervised_at,suppliers(name),purchase_orders(voucher_number),purchase_grn_items(qty_ordered,qty_received)')
           .eq('org_id', orgId);
       if (branchId != null) q = q.eq('branch_id', branchId);
       final r = await q.order('voucher_date', ascending: false).order('voucher_number', ascending: false).limit(2000);
@@ -861,7 +888,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                       const _GrnSupListBadge(),
                       const SizedBox(width: 4),
                     ],
-                    if (r['is_voided'] == true) const VoidedPill() else _GrnBadge(status: status, locked: locked),
+                    if (r['is_voided'] == true) const VoidedPill() else _GrnBadge(status: status, locked: locked, detail: _statusDetail(status == 'saved' ? 'received' : status, r['purchase_grn_items'] as List?)),
                   ]),
                   subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
                     Text(r['suppliers']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 11)),
@@ -939,7 +966,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
           _GrnChip(label: 'Date', value: _detail['voucher_date'] != null ? DateFormat('d MMM yyyy').format(DateTime.parse(_detail['voucher_date'] as String)) : '-'),
           _GrnChip(label: 'Branch', value: _detail['branches']?['name'] as String? ?? '-'),
           if (poVoucher != null) _GrnChip(label: 'PO #', value: poVoucher),
-          _GrnChip(label: 'Status', value: _prettyStatus(_detail['status'] as String?)),
+          _GrnChip(label: 'Status', value: _statusDetail(_grnStatus, _items) ?? _prettyStatus(_detail['status'] as String?)),
           // Clickable invoice chip(s): jump straight to the PI raised on this GRN.
           for (final pi in _linkedPis)
             InkWell(
@@ -1011,17 +1038,27 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                 Expanded(flex: 2, child: Text('Received', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.textSecondary), textAlign: TextAlign.right)),
               ])),
             const Divider(height: 1),
-            if (_visibleItems.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('No items', style: TextStyle(color: AppTheme.textSecondary))),
-            ..._visibleItems.map((it) {
+            if (_items.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text('No items', style: TextStyle(color: AppTheme.textSecondary))),
+            ..._items.map((it) {
               final id = it['id'] as String;
               final ordered = (it['qty_ordered'] as num?)?.toDouble() ?? 0;
               final received = (it['qty_received'] as num?)?.toDouble() ?? 0;
-              return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              final editing = _isDraft || _adjustMode;
+              final shown = editing ? (double.tryParse(_receivedCtrl[id]?.text ?? '') ?? received) : received;
+              String q(double v) => v.toStringAsFixed(v % 1 == 0 ? 0 : 2);
+              // Why this line counts toward Partial (or excess).
+              final String? note = ordered <= 0 ? null
+                  : shown <= 0 ? (editing ? null : 'Not received · stays open on the PO')
+                  : shown < ordered ? 'Short by ${q(ordered - shown)}'
+                  : shown > ordered ? '+${q(shown - ordered)} excess' : null;
+              final noteColor = shown > ordered ? Colors.blue.shade700 : (shown <= 0 ? AppTheme.textSecondary : AppTheme.warning);
+              return Opacity(opacity: (!editing && shown <= 0) ? 0.55 : 1, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
                   Expanded(flex: 4, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(it['products']?['name'] as String? ?? '-', style: const TextStyle(fontSize: 13)),
                     if (it['products']?['sku'] != null) Text(it['products']!['sku'] as String, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
                     if (_btProducts.containsKey(it['product_id'])) _batchLine(it),
+                    if (note != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(note, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: noteColor))),
                   ])),
                   Expanded(flex: 1, child: Text(it['uoms']?['abbreviation'] as String? ?? '-', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
                   Expanded(flex: 2, child: Text(ordered.toStringAsFixed(ordered % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(color: AppTheme.textSecondary))),
@@ -1039,7 +1076,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
                           } : null,
                           onSubmitted: _isDraft ? (_) => _saveReceivedQty(id) : null)
                       : Text(received.toStringAsFixed(received % 1 == 0 ? 0 : 2), textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.primary))),
-                ]));
+                ])));
             }),
           ])),
         if (_superviseEnabled) ...[
@@ -1106,7 +1143,7 @@ class _GrnChip extends StatelessWidget { final String label, value; const _GrnCh
 class _GrnLockedChip extends StatelessWidget { const _GrnLockedChip(); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.orange.withOpacity(0.4))), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.lock_outline, size: 12, color: Colors.orange), SizedBox(width: 4), Text('Locked', style: TextStyle(fontSize: 11, color: Colors.orange, fontWeight: FontWeight.w600))])); }
 class _GrnSupListBadge extends StatelessWidget { const _GrnSupListBadge(); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.12), borderRadius: BorderRadius.circular(4)), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.verified, size: 10, color: AppTheme.success), SizedBox(width: 2), Text('Supervised', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppTheme.success))])); }
 class _GrnSupervisedChip extends StatelessWidget { final String date; const _GrnSupervisedChip({required this.date}); @override Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: AppTheme.success.withOpacity(0.4))), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.verified, size: 12, color: AppTheme.success), const SizedBox(width: 4), Text('Supervised · $date', style: const TextStyle(fontSize: 11, color: AppTheme.success, fontWeight: FontWeight.w600))])); }
-class _GrnBadge extends StatelessWidget { final String status; final bool locked; const _GrnBadge({required this.status, required this.locked}); @override Widget build(BuildContext context) { Color bg; Color fg; String label; switch (status) { case 'received': case 'saved': bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; label = 'Received'; break; case 'partially_received': bg = AppTheme.warning.withOpacity(0.14); fg = AppTheme.warning; label = 'Partial'; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; label = 'Invoiced'; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; label = 'Draft'; } return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)), child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg))); } }
+class _GrnBadge extends StatelessWidget { final String status; final bool locked; final String? detail; const _GrnBadge({required this.status, required this.locked, this.detail}); @override Widget build(BuildContext context) { Color bg; Color fg; String label; switch (status) { case 'received': case 'saved': bg = AppTheme.success.withOpacity(0.12); fg = AppTheme.success; label = 'Received'; if (detail != null) { bg = Colors.blue.withOpacity(0.12); fg = Colors.blue.shade700; label = detail!; } break; case 'partially_received': bg = AppTheme.warning.withOpacity(0.14); fg = AppTheme.warning; label = detail ?? 'Partial'; break; case 'invoiced': bg = Colors.purple.withOpacity(0.12); fg = Colors.purple; label = 'Invoiced'; break; default: bg = Colors.orange.withOpacity(0.12); fg = Colors.orange; label = 'Draft'; } return Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)), child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg))); } }
 class _GrnFilterTab extends StatelessWidget { final String label, value, current; final int count; final ValueChanged<String> onTap; const _GrnFilterTab({required this.label, required this.value, required this.current, required this.onTap, this.count = 0}); @override Widget build(BuildContext context) { final active = value == current; return GestureDetector(onTap: () => onTap(value), child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: active ? AppTheme.primary : AppTheme.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: active ? AppTheme.primary : AppTheme.border)), child: Row(mainAxisSize: MainAxisSize.min, children: [Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? Colors.white : AppTheme.textSecondary)), if (count > 0) ...[const SizedBox(width: 5), Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1), constraints: const BoxConstraints(minWidth: 15), decoration: BoxDecoration(color: active ? Colors.white.withOpacity(0.25) : AppTheme.warning, borderRadius: BorderRadius.circular(8)), child: Text('$count', textAlign: TextAlign.center, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Colors.white, height: 1.3)))]]))); } }
 
 class _GrnAuditTrail extends StatelessWidget {
