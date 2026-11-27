@@ -15,6 +15,7 @@ import '../../salesperson/models/trip.dart';
 import '../../team/data/team_repository.dart';
 import '../../team/models/team_user.dart';
 import '../providers/report_service.dart';
+import '../services/report_context_builder.dart';
 import '../../../core/database/app_database_provider.dart';
 import '../../../core/utils/free_visits.dart';
 
@@ -77,11 +78,14 @@ class _CombinedTripSummaryScreenState
   String _periodLabel(DateTimeRange r) =>
       '${DateFormat('d MMM y').format(r.start)} - ${DateFormat('d MMM y').format(r.end)}';
 
+  Map<String, String> _lastNames = const {};
+
   Future<_LoadResult> _loadTrips(DateTime start, DateTime end) async {
     final teamRepo = ref.read(scopedTeamRepositoryProvider);
     final salesRepo = ref.read(salespersonRepositoryProvider);
     final users = await teamRepo.all(includeInactive: true);
     final userNames = {for (final u in users) u.id: u.name};
+    _lastNames = userNames;
 
     final targetIds = <String>[];
     final effectiveUserId = widget.scopedUserId ?? _userId;
@@ -306,6 +310,7 @@ class _CombinedTripSummaryScreenState
               start: DateTime(range.start.year, range.start.month, range.start.day),
               end: DateTime(range.end.year, range.end.month, range.end.day),
               load: _loadTrips,
+              onOpenDay: _openDay,
             ),
           ),
           SafeArea(
@@ -511,6 +516,15 @@ class _CombinedTripSummaryScreenState
     );
   }
 
+  void _openDay(_DayGroup g) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _DaySheet(group: g, userNames: _lastNames),
+    );
+  }
+
   Future<void> _pickRange() async {
     final now = DateTime.now();
     final picked = await showDateRangePicker(
@@ -541,9 +555,13 @@ class _DaysPreview extends StatelessWidget {
   final DateTime start;
   final DateTime end;
   final Future<_LoadResult> Function(DateTime, DateTime) load;
+  final void Function(_DayGroup) onOpenDay;
 
   const _DaysPreview(
-      {required this.start, required this.end, required this.load});
+      {required this.start,
+      required this.end,
+      required this.load,
+      required this.onOpenDay});
 
   @override
   Widget build(BuildContext context) {
@@ -577,6 +595,7 @@ class _DaysPreview extends StatelessWidget {
             () => _DayGroup(date: d, salesperson: names[t.userId] ?? t.userName),
           );
           g.trips += 1;
+          g.tripList.add(t);
           if (t.routeName.trim().isNotEmpty) g.routes.add(t.routeName.trim());
         }
         final list = groups.values.toList()
@@ -588,13 +607,16 @@ class _DaysPreview extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           children: [
             Text(
-              '${list.length} day${list.length == 1 ? '' : 's'} · ${trips.length} trip${trips.length == 1 ? '' : 's'} — distances are calculated in the PDF.',
+              '${list.length} day${list.length == 1 ? '' : 's'} · ${trips.length} trip${trips.length == 1 ? '' : 's'} — tap a day for its breakdown.',
               style: const TextStyle(
                   fontSize: 12, color: AppColors.textSecondaryLight),
             ),
             const SizedBox(height: 10),
             for (final g in list)
-              Container(
+              InkWell(
+                onTap: () => onOpenDay(g),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -602,7 +624,8 @@ class _DaysPreview extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: AppColors.borderLight),
                 ),
-                child: Column(
+                child: Row(children: [
+                  Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
@@ -627,7 +650,10 @@ class _DaysPreview extends StatelessWidget {
                           fontSize: 11, color: AppColors.textSecondaryLight),
                     ),
                   ],
-                ),
+                )),
+                  const Icon(Icons.chevron_right, size: 20, color: Colors.grey),
+                ]),
+              ),
               ),
           ],
         );
@@ -640,6 +666,240 @@ class _DayGroup {
   final DateTime date;
   final String salesperson;
   final Set<String> routes = {};
+  final List<Trip> tripList = [];
   int trips = 0;
   _DayGroup({required this.date, required this.salesperson});
+}
+
+
+/// Bottom sheet for one day: per-trip distance and a plain "day summary" PDF.
+/// Generate builds the PDF (no claim is recorded, no approval marks); Share
+/// stays locked until it has been generated.
+class _DaySheet extends ConsumerStatefulWidget {
+  final _DayGroup group;
+  final Map<String, String> userNames;
+  const _DaySheet({required this.group, required this.userNames});
+
+  @override
+  ConsumerState<_DaySheet> createState() => _DaySheetState();
+}
+
+class _DaySheetState extends ConsumerState<_DaySheet> {
+  Map<String, double>? _km; // trip id -> km (null while loading)
+  Object? _error;
+  Map<String, Uint8List>? _pdfs; // trip id -> that trip's Trip Summary PDF
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadKm();
+  }
+
+  Future<void> _loadKm() async {
+    try {
+      final builder = ref.read(reportContextBuilderProvider);
+      final trips = widget.group.tripList;
+      final ctxs = await Future.wait(trips.map((t) => builder.build(t)));
+      if (!mounted) return;
+      setState(() => _km = {
+            for (var i = 0; i < trips.length; i++) trips[i].id: ctxs[i].totalDistanceKm
+          });
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    }
+  }
+
+  String _fname(Trip t) =>
+      'trip_summary_${DateFormat('yyyyMMdd').format(t.startedAt.toLocal())}_${t.id.length > 6 ? t.id.substring(t.id.length - 6) : t.id}.pdf';
+
+  /// Generate = build the regular single-trip Trip Summary for each trip of the
+  /// day. Read-only: it records no claim (that stays with the trip's own Export).
+  Future<void> _generate() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final actor = ref.read(authControllerProvider).valueOrNull;
+      final svc = ref.read(reportServiceProvider);
+      final out = <String, Uint8List>{};
+      for (final t in widget.group.tripList) {
+        out[t.id] = await svc.buildBytes(kind: ReportKind.summary, trip: t, actor: actor);
+      }
+      if (mounted) setState(() => _pdfs = out);
+    } catch (e) {
+      _toast('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _view(Trip t) async {
+    final b = _pdfs?[t.id];
+    if (b == null) return;
+    await Printing.layoutPdf(onLayout: (_) async => b, name: _fname(t));
+  }
+
+  Future<void> _share(Trip t) async {
+    final b = _pdfs?[t.id];
+    if (b == null) return;
+    try {
+      await Printing.sharePdf(bytes: b, filename: _fname(t));
+    } on PlatformException {
+      // No share sheet on this platform.
+    }
+  }
+
+  void _toast(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.group;
+    final km = _km;
+    final total = km == null ? null : km.values.fold<double>(0, (a, b) => a + b);
+    final generated = _pdfs != null;
+    final single = g.tripList.length == 1;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(DateFormat('EEE, d MMM y').format(g.date),
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(
+              '${g.salesperson} · ${g.trips} trip${g.trips == 1 ? '' : 's'}'
+              '${total == null ? '' : ' · ${total.toStringAsFixed(1)} km'}',
+              style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondaryLight),
+            ),
+            const SizedBox(height: 12),
+            if (_error != null)
+              Text('Could not calculate distances: $_error',
+                  style: const TextStyle(fontSize: 12.5, color: Colors.red))
+            else if (km == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.borderLight),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(children: [
+                  for (var i = 0; i < g.tripList.length; i++)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        border: i == 0
+                            ? null
+                            : const Border(top: BorderSide(color: AppColors.borderLight)),
+                      ),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(
+                                g.tripList[i].routeName.trim().isEmpty
+                                    ? 'Free route'
+                                    : g.tripList[i].routeName.trim(),
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                            Text(
+                                DateFormat('h:mm a').format(g.tripList[i].startedAt.toLocal()) +
+                                    (g.tripList[i].endedAt == null
+                                        ? ' · in progress'
+                                        : ' – ${DateFormat('h:mm a').format(g.tripList[i].endedAt!.toLocal())}'),
+                                style: const TextStyle(
+                                    fontSize: 11.5, color: AppColors.textSecondaryLight)),
+                          ]),
+                        ),
+                        Text('${(km[g.tripList[i].id] ?? 0).toStringAsFixed(1)} km',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        if (generated && !single) ...[
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'View',
+                            icon: const Icon(Icons.preview_outlined, size: 20),
+                            onPressed: () => _view(g.tripList[i]),
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'Share',
+                            icon: const Icon(Icons.ios_share, size: 20),
+                            onPressed: () => _share(g.tripList[i]),
+                          ),
+                        ],
+                      ]),
+                    ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: const BoxDecoration(
+                      border: Border(top: BorderSide(color: AppColors.borderLight)),
+                    ),
+                    child: Row(children: [
+                      const Expanded(
+                          child: Text('Day total',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                      Text('${total!.toStringAsFixed(1)} km',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    ]),
+                  ),
+                ]),
+              ),
+            const SizedBox(height: 14),
+            if (generated && !single)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 4),
+                child: Text('Generated. Use the icons on each trip to view or share its summary.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+              )
+            else
+            Row(children: [
+              Expanded(
+                child: generated
+                    ? OutlinedButton.icon(
+                        onPressed: () => _view(g.tripList.first),
+                        icon: const Icon(Icons.preview_outlined, size: 18),
+                        label: const Text('View PDF'),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(0, 46)),
+                      )
+                    : ElevatedButton.icon(
+                        onPressed: _busy || km == null ? null : _generate,
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                        label: Text(single ? 'Generate PDF' : 'Generate ${g.tripList.length} PDFs'),
+                        style: ElevatedButton.styleFrom(minimumSize: const Size(0, 46)),
+                      ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: generated ? () => _share(g.tripList.first) : null,
+                  icon: const Icon(Icons.ios_share, size: 18),
+                  label: const Text('Share'),
+                  style: ElevatedButton.styleFrom(minimumSize: const Size(0, 46)),
+                ),
+              ),
+            ]),
+            if (!generated)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Trip Summary for this day. Share unlocks after it is generated.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }

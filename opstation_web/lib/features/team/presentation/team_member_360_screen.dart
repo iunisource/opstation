@@ -10,7 +10,6 @@ import '../../operations/presentation/time_in_market.dart';
 import '../../operations/presentation/app_versions_screen.dart' show AppVersionInfo, appStatusPill;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../product_lines/product_lines_repo.dart';
 
@@ -18,7 +17,6 @@ import '../services/team_report_pdf.dart';
 
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'salesperson_history_screen.dart';
 import '../services/trip_sessions.dart';

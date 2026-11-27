@@ -73,7 +73,7 @@ class SurveyReportsPdf {
       ]);
 
   static pw.Widget _table(List<String> head, List<List<String>> rows, Map<int, pw.TableColumnWidth> widths) {
-    const h = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold);
+    final h = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold);
     const c = pw.TextStyle(fontSize: 7.5);
     return pw.Table(
       border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
