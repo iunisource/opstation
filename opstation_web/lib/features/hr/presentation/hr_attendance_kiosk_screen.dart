@@ -10,7 +10,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/time_format.dart';
 

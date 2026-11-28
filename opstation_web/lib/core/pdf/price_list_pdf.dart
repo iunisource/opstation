@@ -1,5 +1,4 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;

@@ -278,7 +278,9 @@ class _GlobalPoRejectAlertState extends ConsumerState<GlobalPoRejectAlert> {
     final pcm = samples.buffer.asUint8List();
     final header = ByteData(44);
     void s4(int off, String s) {
-      for (var i = 0; i < 4; i++) header.setUint8(off + i, s.codeUnitAt(i));
+      for (var i = 0; i < 4; i++) {
+        header.setUint8(off + i, s.codeUnitAt(i));
+      }
     }
     s4(0, 'RIFF');
     header.setUint32(4, 36 + pcm.length, Endian.little);

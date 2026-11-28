@@ -93,9 +93,15 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   @override
   void dispose() {
     _outputQtyCtrl.dispose(); _nameCtrl.dispose(); _specsCtrl.dispose();
-    for (final l in _components) l.dispose();
-    for (final l in _waste) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
+    for (final l in _waste) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     super.dispose();
   }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
@@ -172,10 +178,12 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       final user = ref.read(currentUserProvider);
       // Only the supervisors picked in Admin Settings — admins are NOT included by default.
       final supervisors = (m['org.bom_supervisor_users'] ?? '').split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _superviseFlow = m['org.bom_supervise_flow'] == 'true';
         _canSupervise = user != null && supervisors.contains(user.id);
       });
+      }
     } catch (_) {}
   }
 
@@ -293,9 +301,15 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
   }
 
   void _newBom() {
-    for (final l in _components) l.dispose();
-    for (final l in _waste) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
+    for (final l in _waste) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _fgId = null; _fgLabel = ''; _status = 'active';
       _outputQtyCtrl.text = '1'; _nameCtrl.clear(); _specsCtrl.clear();
@@ -332,9 +346,15 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
       final comps = await client.from('bom_components').select().eq('bom_id', b['id'] as String).order('line_order');
       final wastes = await client.from('bom_waste').select().eq('bom_id', b['id'] as String).order('line_order');
       final ohs = await client.from('bom_overheads').select().eq('bom_id', b['id'] as String).order('line_order');
-      for (final l in _components) l.dispose();
-      for (final l in _waste) l.dispose();
-      for (final l in _overheads) l.dispose();
+      for (final l in _components) {
+        l.dispose();
+      }
+      for (final l in _waste) {
+        l.dispose();
+      }
+      for (final l in _overheads) {
+        l.dispose();
+      }
       List<_BomLine> mk(List rows) => rows.map((r) {
         final l = _BomLine();
         l.productId = r['product_id'] as String?;
@@ -351,7 +371,8 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         l.qtyCtrl.text = _trim(q == 0 ? 1 : q);
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = b;
         _fgId = b['product_id'] as String?;
         _fgLabel = _prodLabel[_fgId] ?? (_fgId ?? '');
@@ -363,6 +384,7 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
         _waste = newWaste;
         _overheads = newOh;
       });
+      }
     } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
@@ -538,9 +560,11 @@ class _State extends ConsumerState<ErpProductAssemblyScreen> {
           'supervised_at': null, 'supervised_by': null, 'supervised_by_name': null,
         },
       }).eq('id', cur['id'] as String);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = {...cur, 'specs_updated_at': now, if (resetSup) 'supervised_at': null};
       });
+      }
       ref.invalidate(bomSupervisePendingProvider);
     } catch (_) {}
   }
@@ -1340,8 +1364,12 @@ class _ManageRatesDialogState extends State<_ManageRatesDialog> {
 
   @override
   void dispose() {
-    for (final r in _labor) r.dispose();
-    for (final r in _overhead) r.dispose();
+    for (final r in _labor) {
+      r.dispose();
+    }
+    for (final r in _overhead) {
+      r.dispose();
+    }
     super.dispose();
   }
 

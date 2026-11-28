@@ -338,7 +338,11 @@ window.__qcbt = window.__qcbt || {
       int seq = 1;
       try {
         final s = await client.rpc('qc_next_seq', params: {'p_job': jobId, 'p_checkpoint': cpId});
-        if (s is int) seq = s; else seq = int.tryParse(s.toString()) ?? 1;
+        if (s is int) {
+          seq = s;
+        } else {
+          seq = int.tryParse(s.toString()) ?? 1;
+        }
       } catch (_) {}
 
       final now = DateTime.now();
@@ -434,8 +438,10 @@ window.__qcbt = window.__qcbt || {
   }
 
   void _snack(String m) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(m), behavior: SnackBarBehavior.floating));
+    }
   }
 
   // ── UI ──────────────────────────────────────────────────────────────────────

@@ -301,7 +301,7 @@ class _State extends ConsumerState<ErpBatchTrackingScreen> with SingleTickerProv
                 ? () => context.go('/erp/delivery-orders?focus=${s['sold_doc_id']}') : null),
       ],
       if (s['broken_number'] != null) _kv('Taken apart in', '${s['broken_number']}', color: AppTheme.danger),
-      if (carton != null) _kv('Carton', '$carton', onTap: () => _trace('$carton')),
+      if (carton != null) _kv('Carton', carton, onTap: () => _trace('$carton')),
       _kv('Warranty', months <= 0 ? 'None' : until != null
           ? '$months months · till ${BatchTracking.date(until.toIso8601String())}'
           : '$months months · starts when sold', color: until != null ? _warrantyColor(until.toIso8601String()) : null),

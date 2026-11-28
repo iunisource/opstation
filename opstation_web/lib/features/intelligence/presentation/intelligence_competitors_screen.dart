@@ -4,9 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
-import 'package:printing/printing.dart';
 import '../services/intelligence_pdf_service.dart';
 import '../services/intelligence_excel_service.dart';
 import '../services/intel_delete_access.dart';
@@ -708,8 +706,11 @@ class _IntelligenceCompetitorsScreenState extends ConsumerState<IntelligenceComp
                         DataCell(SizedBox(width: 40, child: Checkbox(
                           value: _selectedIds.contains(cid),
                           onChanged: (v) => setState(() {
-                            if (v == true) _selectedIds.add(cid);
-                            else _selectedIds.remove(cid);
+                            if (v == true) {
+                              _selectedIds.add(cid);
+                            } else {
+                              _selectedIds.remove(cid);
+                            }
                           }),
                         ))),
                         DataCell(SizedBox(

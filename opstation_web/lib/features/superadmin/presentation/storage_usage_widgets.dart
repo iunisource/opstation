@@ -474,7 +474,9 @@ class _KioskSectionState extends State<_KioskSection> {
     final n = _d?['due_files'] ?? 0;
     if (!await _confirm(context, 'Delete old kiosk photos now?',
         '$n photo(s) older than ${_d?['retention_days']} days will be permanently deleted. '
-        'Attendance times stay; only the photo is removed.', 'Delete now')) return;
+        'Attendance times stay; only the photo is removed.', 'Delete now')) {
+      return;
+    }
     setState(() => _busy = true);
     try {
       final res = await Supabase.instance.client.functions
@@ -617,7 +619,9 @@ class _AuditSectionState extends State<_AuditSection> {
                 'tables into compressed files you can download here. They will no longer show on screens '
                 'such as a voucher\'s history.',
             'Confirm',
-            danger: false)) return;
+            danger: false)) {
+      return;
+    }
     setState(() => _busy = true);
     try {
       await Supabase.instance.client

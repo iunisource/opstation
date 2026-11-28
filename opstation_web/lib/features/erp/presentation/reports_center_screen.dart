@@ -507,12 +507,14 @@ class _SavedReportViewerState extends ConsumerState<_SavedReportViewer> {
           if (!seen.contains(key)) { ordered.add(key); seen.add(key); }
         }
       }
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _result = list;
         _columns = ordered.where((c) => list.isEmpty || list.first.containsKey(c)).toList();
         _labels = labels;
         _running = false;
       });
+      }
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _running = false; });
     }

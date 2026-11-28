@@ -14,7 +14,6 @@ import 'package:barcode/barcode.dart' as bc;
 import '../../../core/format/money.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
@@ -232,8 +231,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final ch = _channel;
     if (ch != null) Supabase.instance.client.removeChannel(ch);
     _plannedQtyCtrl.dispose(); _priorityCtrl.dispose(); _wcCtrl.dispose(); _notesCtrl.dispose();
-    for (final l in _materials) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _materials) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -258,7 +261,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         from += page; if (from > 100000) break;
       }
       final items = all.map((p) => {'id': p['id'], 'label': "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} — ' : ''}${p['name'] ?? ''}"}).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _products = items;
         _prodLabel = {for (final p in items) p['id'] as String: p['label'] as String};
         _prodCost = {for (final p in all) p['id'] as String: (p['cost_price'] as num? ?? 0).toDouble()};
@@ -268,6 +272,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _prodUom = {for (final p in all) p['id'] as String: ((p['uoms']?['abbreviation'] as String?)?.trim().isNotEmpty == true ? p['uoms']['abbreviation'] as String : (p['uoms']?['name'] as String? ?? ''))};
         _loadingProducts = false;
       });
+      }
       _loadStock();
     } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
@@ -326,13 +331,15 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     try {
       final rows = await Supabase.instance.client.from('customers').select('id, shop_name, code').eq('org_id', orgId).order('shop_name').limit(5000);
       final list = List<Map<String, dynamic>>.from(rows);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _customers = list;
         _custLabel = {for (final c in list) c['id'] as String:
           "${(c['code'] != null && (c['code'] as String).isNotEmpty) ? '${c['code']} — ' : ''}${c['shop_name'] ?? ''}"};
         // keep an open job's loaded customer label in sync once labels arrive
         if (_customerId != null && _customerLabel.isEmpty) _customerLabel = _custLabel[_customerId] ?? '';
       });
+      }
     } catch (_) {}
   }
 
@@ -474,8 +481,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
 
   // ---------- form ----------
   void _newJob() {
-    for (final l in _materials) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _materials) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _runs = []; _status = 'queued';
       _date = DateTime.now();
@@ -517,8 +528,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       final mats = await client.from('job_card_materials').select().eq('job_card_id', j['id'] as String).order('line_order');
       final ohs = await client.from('job_card_overheads').select().eq('job_card_id', j['id'] as String).order('line_order');
       final runs = await client.from('job_card_runs').select().eq('job_card_id', j['id'] as String).order('run_no');
-      for (final l in _materials) l.dispose();
-      for (final l in _overheads) l.dispose();
+      for (final l in _materials) {
+        l.dispose();
+      }
+      for (final l in _overheads) {
+        l.dispose();
+      }
       _origMatSig = (mats as List).where((r) => r['product_id'] != null)
           .map((r) => '${r['product_id']}:${_trim((r['planned_qty'] as num? ?? r['issued_qty'] as num? ?? 0).toDouble())}').join(';');
       _origOhSig = (ohs as List)
@@ -538,7 +553,8 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         if (a != 0) l.amountCtrl.text = _trim(a);
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = j;
         _runs = List<Map<String, dynamic>>.from(runs as List);
         _status = j['status'] as String? ?? 'queued';
@@ -559,6 +575,7 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         _notesCtrl.text = j['notes'] as String? ?? '';
         _materials = newMats; _overheads = newOh;
       });
+      }
       _loadSpecs();
       if (promptAck && mounted) _maybeShowAckDialog(j);
     } catch (e) { _snack(friendlyError('Could not load', e)); }
@@ -640,8 +657,12 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final scale = _openEnded
         ? (_bomBaseQty > 0 ? 1 / _bomBaseQty : 1)
         : (_bomBaseQty > 0 ? (_plannedQty / _bomBaseQty) : 1);
-    for (final l in _materials) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _materials) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     final nm = _baseComps.map((b) {
       final l = _JobMat();
       l.productId = b['product_id'] as String?;
@@ -1252,7 +1273,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     final dataLen = pcm.length;
     final header = ByteData(44);
     void s4(int off, String s) {
-      for (var i = 0; i < 4; i++) header.setUint8(off + i, s.codeUnitAt(i));
+      for (var i = 0; i < 4; i++) {
+        header.setUint8(off + i, s.codeUnitAt(i));
+      }
     }
     s4(0, 'RIFF');
     header.setUint32(4, 36 + dataLen, Endian.little);
@@ -1582,8 +1605,9 @@ class _State extends ConsumerState<ErpJobCardScreen> {
     if (oldW != _assignedWorkerId) ch.add('Assigned to ${_workerName(oldW)} → ${_workerName(_assignedWorkerId)}');
     final oldCust = old['customer_id'] as String?;
     if (oldCust != _customerId) {
-      if (_customerId == null) ch.add('Customer cleared');
-      else if (oldCust == null) ch.add('Customer set to ${_custLabel[_customerId] ?? _customerId}');
+      if (_customerId == null) {
+        ch.add('Customer cleared');
+      } else if (oldCust == null) ch.add('Customer set to ${_custLabel[_customerId] ?? _customerId}');
       else ch.add('Customer ${_custLabel[oldCust] ?? oldCust} → ${_custLabel[_customerId] ?? _customerId}');
     }
     final oldBom = old['bom_id'] as String?;
@@ -1628,12 +1652,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       await Supabase.instance.client.from('job_cards')
           .update(upd)
           .eq('id', id);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current!['is_running'] = next;
         if (firstStart) _current!['started_at'] = nowIso;
         final idx = _jobs.indexWhere((j) => j['id'] == id);
         if (idx >= 0) _jobs[idx]['is_running'] = next;
       });
+      }
       await _logJobAudit(next ? 'started' : 'paused');
     } catch (e) { _snack(friendlyError('Could not update status', e)); }
     if (mounted) setState(() => _busy = false);
@@ -1655,13 +1681,15 @@ class _State extends ConsumerState<ErpJobCardScreen> {
         if (_status == 'queued') upd['status'] = 'in_progress';
       }
       await Supabase.instance.client.from('job_cards').update(upd).eq('id', id);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current!['on_floor'] = on;
         if (on && _current!['on_floor_at'] == null) _current!['on_floor_at'] = nowIso;
         if (on) { _current!['floor_finished_at'] = null; if (_status == 'queued') { _status = 'in_progress'; _current!['status'] = 'in_progress'; } }
         final idx = _jobs.indexWhere((j) => j['id'] == id);
         if (idx >= 0) { _jobs[idx]['on_floor'] = on; if (on) _jobs[idx]['status'] = _current!['status']; }
       });
+      }
       await _logJobAudit(on ? 'floor_started' : 'floor_removed',
           notes: on ? 'Put on the floor' : 'Taken off the floor');
     } catch (e) { _snack(friendlyError('Could not update', e)); }
@@ -1678,12 +1706,14 @@ class _State extends ConsumerState<ErpJobCardScreen> {
       await Supabase.instance.client.from('job_cards')
           .update({'status': 'queued', 'updated_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', id).eq('status', 'draft');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _status = 'queued';
         _current!['status'] = 'queued';
         final idx = _jobs.indexWhere((j) => j['id'] == id);
         if (idx >= 0) _jobs[idx]['status'] = 'queued';
       });
+      }
       await _logJobAudit('released', notes: 'Draft released to production');
       _snack('Released — the job is now queued');
     } catch (e) { _snack(friendlyError('Could not release', e)); }
@@ -2022,7 +2052,9 @@ $runSection
           ? 'No customer'
           : ((_custLabel[k] ?? '').isNotEmpty ? _custLabel[k]! : 'Customer');
       out.add(_custGroupHeader(name, list.length, queued, inprog));
-      for (final j in list) out.add(_jobTile(j));
+      for (final j in list) {
+        out.add(_jobTile(j));
+      }
     }
     return out;
   }

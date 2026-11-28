@@ -217,10 +217,12 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
         if (k == 'org.quotation_custom_company') allowed = v == 'true';
         if (k == 'org.quotation_custom_company_name') name = v ?? '';
       }
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _customCompanyAllowed = allowed && name.trim().isNotEmpty;
         _customCompanyName = name.trim();
       });
+      }
     } catch (_) {}
   }
 
@@ -1415,14 +1417,18 @@ class _ErpQuotationScreenState extends ConsumerState<ErpQuotationScreen> {
               ],
             ],
             onSelected: (v) {
-              if (v == 'company') setState(() {
+              if (v == 'company') {
+                setState(() {
                 _printCompany = !_printCompany;
                 if (_printCompany) _printCustomCompany = false; // mutually exclusive
               });
-              if (v == 'customCompany') setState(() {
+              }
+              if (v == 'customCompany') {
+                setState(() {
                 _printCustomCompany = !_printCustomCompany;
                 if (_printCustomCompany) _printCompany = false; // mutually exclusive
               });
+              }
               if (v == 'branch') setState(() => _printBranch = !_printBranch);
               if (v == 'preparedBy') setState(() => _printPreparedBy = !_printPreparedBy);
               if (v == 'mark_draft') _setStatus('draft');

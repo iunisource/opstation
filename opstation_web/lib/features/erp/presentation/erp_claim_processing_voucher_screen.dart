@@ -77,7 +77,9 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
   @override
   void dispose() {
     _notesCtrl.dispose();
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -104,11 +106,13 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         'id': p['id'],
         'label': "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} \u2014 ' : ''}${p['name'] ?? ''}",
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _products = items;
         _prodLabel = {for (final p in items) p['id'] as String: p['label'] as String};
         _loadingProducts = false;
       });
+      }
     } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
@@ -126,10 +130,12 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         from += page; if (from > 100000) break;
       }
       final items = all.map((c) => {'id': c['id'], 'label': (c['shop_name'] ?? c['id']) as String}).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _customers = items;
         _custLabel = {for (final c in items) c['id'] as String: c['label'] as String};
       });
+      }
     } catch (_) {}
   }
 
@@ -138,10 +144,12 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
     try {
       final rows = await Supabase.instance.client.from('claim_reasons')
           .select('id, name, is_active').eq('org_id', orgId).order('name');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _reasons = List<Map<String, dynamic>>.from(rows);
         _reasonName = {for (final r in _reasons) r['id'] as String: r['name'] as String};
       });
+      }
     } catch (_) {}
   }
 
@@ -169,7 +177,9 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
 
   // ---------- form state ----------
   void _newVoucher() {
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _status = 'draft';
       _date = DateTime.now();
@@ -183,7 +193,9 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
     try {
       final rows = await Supabase.instance.client.from('claim_voucher_lines')
           .select().eq('voucher_id', v['id'] as String).order('line_order');
-      for (final l in _lines) l.dispose();
+      for (final l in _lines) {
+        l.dispose();
+      }
       final newLines = (rows as List).map((r) {
         final l = _CLine();
         l.productId = r['product_id'] as String?;
@@ -194,7 +206,8 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         l.remarksCtrl.text = r['remarks'] as String? ?? '';
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
         _customerId = v['customer_id'] as String?;
@@ -204,6 +217,7 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _lines = newLines.isEmpty ? [_CLine()] : newLines;
       });
+      }
     } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 
@@ -446,10 +460,12 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
       final byProduct = rank(pQty, pCl, (k) => k == '__none__' ? '(no product)' : (_prodLabel[k] ?? k));
       final byCustomer = rank(cQty, cCl, (k) => k == '__none__' ? '(no customer)' : (_custLabel[k] ?? k));
 
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _insClaims = vSet.length; _insQty = totalQty; _insProducts = prods.length; _insCustomers = custs.length;
         _insByReason = byReason; _insByProduct = byProduct; _insByCustomer = byCustomer; _insLoading = false;
       });
+      }
     } catch (e) { if (mounted) { _snack(friendlyError('Insights load error', e)); setState(() => _insLoading = false); } }
   }
 
@@ -620,7 +636,9 @@ class _State extends ConsumerState<ErpClaimProcessingVoucherScreen> {
       ],
       onChanged: (v) async {
         if (v == '__add__') { final id = await _showAddReasonDialog(); if (id != null) setState(() => _lines[i].reasonId = id); }
-        else setState(() => _lines[i].reasonId = v);
+        else {
+          setState(() => _lines[i].reasonId = v);
+        }
       });
   }
 

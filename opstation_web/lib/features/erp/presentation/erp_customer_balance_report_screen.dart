@@ -289,7 +289,7 @@ class _ErpCustomerBalanceReportScreenState
               .inFilter('route_id', routeIds);
       final byRoute = <String, List<Map<String, dynamic>>>{};
       final assigned = <String>{};
-      for (final s in stops as List) {
+      for (final s in stops) {
         final rid = s['route_id'] as String;
         final cid = s['customer_id'] as String?;
         if (cid == null) continue;

@@ -687,7 +687,7 @@ class _ErpRetailerOrdersScreenState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${_custNames[o['customer_id']] ?? '—'}',
+                    Text(_custNames[o['customer_id']] ?? '—',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -787,7 +787,7 @@ class _ErpRetailerOrdersScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('${_custNames[o['customer_id']] ?? '—'}',
+                  Text(_custNames[o['customer_id']] ?? '—',
                       style: const TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 2),

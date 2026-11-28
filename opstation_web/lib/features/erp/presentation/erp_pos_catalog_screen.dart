@@ -42,10 +42,12 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     try {
       final s = await Supabase.instance.client.from('pos_settings')
           .select('allow_sell_without_stock, allow_price_edit').eq('org_id', orgId).maybeSingle();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _allowNoStock = s != null && s['allow_sell_without_stock'] == true;
         _allowPriceEdit = s != null && s['allow_price_edit'] == true;
       });
+      }
     } catch (_) {}
   }
 
@@ -286,8 +288,11 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
               title: Text(b['name'] as String),
               value: selected.contains(b['id'] as String),
               onChanged: (v) => setS(() {
-                if (v == true) selected.add(b['id'] as String);
-                else selected.remove(b['id'] as String);
+                if (v == true) {
+                  selected.add(b['id'] as String);
+                } else {
+                  selected.remove(b['id'] as String);
+                }
               }),
             )),
           ])),
@@ -336,8 +341,8 @@ class _ErpPosCatalogScreenState extends ConsumerState<ErpPosCatalogScreen> {
     // several refreshes — the branch wasn't ready on first load; and (b) a stale
     // branch from a previous org showing after an org switch.
     ref.listen(selectedBranchProvider, (prev, next) {
-      final prevId = (prev as Map<String, dynamic>?)?['id'];
-      final nextId = (next as Map<String, dynamic>?)?['id'];
+      final prevId = (prev)?['id'];
+      final nextId = (next)?['id'];
       if (prevId != nextId) {
         _selected.clear();
         _load();

@@ -1,7 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import '../../../core/widgets/journal_modal.dart';
 import '../../../core/utils/void_filter.dart';
-import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
@@ -16,7 +15,6 @@ import '../../../core/widgets/saving_overlay.dart';
 import '../services/ledger_particulars.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../../core/layout/main_layout.dart';
@@ -164,10 +162,12 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
           .eq('org_id', orgId).inFilter('key', ['org.ledger_msg_customer_enabled', 'org.ledger_msg_customer_text', 'org.ledger_show_name_customer']);
       final cfg = <String, String>{}; for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
       final on = (cfg['org.ledger_msg_customer_enabled'] ?? 'false') == 'true';
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _footerMsg = on ? (cfg['org.ledger_msg_customer_text'] ?? '') : '';
         _showOrgName = (cfg['org.ledger_show_name_customer'] ?? 'true') != 'false';
       });
+      }
     } catch (_) {}
   }
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -227,12 +227,21 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
   void _persist() {
     try {
       final s = html.window.localStorage;
-      if (_selectedCustomer != null) s['ledger_customer_id'] = _selectedCustomer!['id'] as String;
-      else s.remove('ledger_customer_id');
-      if (_dateFrom != null) s['ledger_date_from'] = _dateFrom!.toIso8601String();
-      else s.remove('ledger_date_from');
-      if (_dateTo != null) s['ledger_date_to'] = _dateTo!.toIso8601String();
-      else s.remove('ledger_date_to');
+      if (_selectedCustomer != null) {
+        s['ledger_customer_id'] = _selectedCustomer!['id'] as String;
+      } else {
+        s.remove('ledger_customer_id');
+      }
+      if (_dateFrom != null) {
+        s['ledger_date_from'] = _dateFrom!.toIso8601String();
+      } else {
+        s.remove('ledger_date_from');
+      }
+      if (_dateTo != null) {
+        s['ledger_date_to'] = _dateTo!.toIso8601String();
+      } else {
+        s.remove('ledger_date_to');
+      }
       s['ledger_type_filter'] = _typeFilter;
     } catch (_) {}
   }
@@ -259,8 +268,9 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
         final val = v[f];
         if (val == null) continue;
         String? s;
-        if (val is String && val.isNotEmpty) s = val;
-        else if (val is DateTime) s = val.toIso8601String();
+        if (val is String && val.isNotEmpty) {
+          s = val;
+        } else if (val is DateTime) s = val.toIso8601String();
         else { final t = val.toString(); if (t.isNotEmpty && t != 'null') s = t; }
         if (s != null && DateTime.tryParse(s) != null) return s;
       }
@@ -306,7 +316,7 @@ class _ErpCustomerLedgerScreenState extends ConsumerState<ErpCustomerLedgerScree
       final List posTxns = await client.from('pos_transactions').select('*')
           .eq('org_id', orgId).eq('customer_id', customerId);
       final posMap = <String, Map<String, dynamic>>{};
-      for (final t in posTxns as List) {
+      for (final t in posTxns) {
         final tid = t['id'];
         if (tid is String) posMap[tid] = Map<String, dynamic>.from(t as Map);
       }

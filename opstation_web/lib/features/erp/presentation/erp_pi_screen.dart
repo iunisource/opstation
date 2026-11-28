@@ -8,7 +8,6 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/audit_label.dart';
 import '../../../core/layout/main_layout.dart';
 import '../../../core/layout/collapsible_list_pane.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../services/voucher_pdf.dart';
 import '../services/voucher_meta.dart';
@@ -77,7 +76,11 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
   @override
   void initState() { super.initState(); _loadList(); if (widget.focusId != null) _loadDetail(widget.focusId!); }
   @override
-  void dispose() { for (final c in _costCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); _vendorNoCtrl.dispose(); _descCtrl.dispose(); _remarksCtrl.dispose(); super.dispose(); }
+  void dispose() { for (final c in _costCtrl.values) {
+    c.dispose();
+  } for (final c in _discCtrl.values) {
+    c.dispose();
+  } _vendorNoCtrl.dispose(); _descCtrl.dispose(); _remarksCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   String? get _branchId => ref.read(selectedBranchProvider)?['id'] as String?;
@@ -123,8 +126,12 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
 
 
   void _initCtrls() {
-    for (final c in _costCtrl.values) c.dispose();
-    for (final c in _discCtrl.values) c.dispose();
+    for (final c in _costCtrl.values) {
+      c.dispose();
+    }
+    for (final c in _discCtrl.values) {
+      c.dispose();
+    }
     _costCtrl = {}; _discCtrl = {};
     for (final it in _items) {
       final id = it['id'] as String;
@@ -664,12 +671,14 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         'supervised_signature_url': sigUrl, 'supervised_stamp_url': stampUrl,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = userId; _detail['supervised_at'] = now; _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl; _detail['supervised_stamp_url'] = stampUrl;
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
+      }
       ref.invalidate(piSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -691,12 +700,14 @@ class _ErpPurchaseInvoicesScreenState extends ConsumerState<ErpPurchaseInvoicesS
         'supervised_signature_url': null, 'supervised_stamp_url': null,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'unsupervised', null);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null; _detail['supervised_by_name'] = null;
         _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
+      }
       ref.invalidate(piSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -1229,9 +1240,13 @@ class _PiAuditTrailState extends State<_PiAuditTrail> {
     final names = <String, String>{};
     if (ids.isNotEmpty) {
       try { final us = await sb.from('users').select('id, name').inFilter('id', ids);
-        for (final u in us as List) names[u['id'] as String] = (u['name'] as String?) ?? '—'; } catch (_) {}
+        for (final u in us as List) {
+          names[u['id'] as String] = (u['name'] as String?) ?? '—';
+        } } catch (_) {}
     }
-    for (final e in rows) e['_by'] = names[e['performed_by'] as String?] ?? '—';
+    for (final e in rows) {
+      e['_by'] = names[e['performed_by'] as String?] ?? '—';
+    }
     return rows;
   }
 

@@ -67,7 +67,13 @@ class _Book {
   };
   /// Slips cleared with a reason: used, but could not be recorded under their number
   /// (kind 'unrecorded' in receipt_slip_checks). Accounted for — not missing, not cancelled.
-  Set<int> get manual => {for (final c in checks) if (c['kind'] == 'unrecorded') (c['serial'] as num).toInt()};
+  Set<int> get manual => {
+        for (final c in checks) if (c['kind'] == 'unrecorded') (c['serial'] as num).toInt(),
+        ...skipClears.keys,
+      };
+  /// Slips cleared in the Skipped Receipts report (skipped_receipt_clearances) for this
+  /// book's holder: book number → {comment, cleared_by_name, cleared_at}.
+  Map<int, Map<String, dynamic>> skipClears = const {};
   int get manualCount => manual.where((n) => !usedSet.contains(n) && !cancelMap.containsKey(n)).length;
   int get unused => size - usedSet.length - cancelMap.keys.where((n) => !usedSet.contains(n)).length - manualCount;
   int? get highestUsed => usedSet.isEmpty ? null : usedSet.reduce((a, b) => a > b ? a : b);
@@ -233,6 +239,22 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
           b.checks = [for (final r in rows) if (r['book_id'] == b.id) r];
         }
       } catch (_) {}
+      // Serials cleared in the Skipped Receipts report count as accounted for here too.
+      try {
+        final clr = List<Map<String, dynamic>>.from(await _db.from('skipped_receipt_clearances')
+            .select('user_id, serial_number, comment, cleared_by, cleared_at').eq('org_id', orgId) as List);
+        final names = {for (final u in team) '${u['id']}': '${u['name'] ?? ''}'};
+        for (final b in books) {
+          final m = <int, Map<String, dynamic>>{};
+          for (final r in clr) {
+            if ('${r['user_id']}' != b.holderId) continue;
+            final k = (r['serial_number'] as num?)?.toInt();
+            if (k == null || !b.holds(k)) continue;
+            m[slipNumber(k)] = {...r, 'by_name': names['${r['cleared_by']}'] ?? ''};
+          }
+          b.skipClears = m;
+        }
+      } catch (_) {/* table missing = none */}
       final released = await loadSlipReleases(orgId);
       if (!mounted) return;
       setState(() {
@@ -669,6 +691,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
   Future<void> _slipTap(_Book b, int n) async {
     final c = b.cancelMap[n];
     final manualRow = b.checkOf('unrecorded', n);
+    final skipRow = manualRow == null ? b.skipClears[n] : null;
     final uses = b.used.where((u) => (u['serial'] as num).toInt() == n).toList();
     await _ensureCustNames(uses.map((u) => u['customer_id']));
     if (!mounted) return;
@@ -694,6 +717,13 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               Text('${manualRow['note'] ?? ''}'),
               Text('By ${manualRow['checked_by_name'] ?? '—'} · ${_fmt(manualRow['checked_at'])}',
                   style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ] else if (skipRow != null && uses.isEmpty) ...[
+              const Text('Cleared in the Skipped Receipts report', style: TextStyle(fontWeight: FontWeight.w800)),
+              if ('${skipRow['comment'] ?? ''}'.isNotEmpty) Text('${skipRow['comment']}'),
+              Text('By ${'${skipRow['by_name']}'.isEmpty ? '—' : skipRow['by_name']} · ${_fmt(skipRow['cleared_at'])}',
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const Text('To re-open it, use the Skipped Receipts report.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ] else if (uses.isEmpty && !_released.values.any((r) => '${r['serial']}' == '$n'))
               const Text('Not used yet.')
             else
@@ -742,7 +772,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               },
               child: const Text('Correct / release CR#'),
             ),
-          if (c == null && uses.isEmpty && manualRow == null && _canIssue)
+          if (c == null && uses.isEmpty && manualRow == null && skipRow == null && _canIssue)
             TextButton(
               onPressed: () {
                 Navigator.pop(ctx);
@@ -750,7 +780,7 @@ class _State extends ConsumerState<ErpReceiptBooksScreen> {
               },
               child: const Text('Clear with a reason…'),
             ),
-          if (c == null && uses.isEmpty && manualRow == null && _canIssue)
+          if (c == null && uses.isEmpty && manualRow == null && skipRow == null && _canIssue)
             TextButton(
               onPressed: () {
                 Navigator.pop(ctx);

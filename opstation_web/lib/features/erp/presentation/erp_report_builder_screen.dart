@@ -124,8 +124,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       // into Values (a measure) clears a dimension filter, since a field can't be
       // both a grouped dimension and an aggregated measure.
       _rows.remove(field); _cols.remove(field); _values.remove(field);
-      if (zone == 'rows') _rows.add(field);
-      else if (zone == 'cols') _cols.add(field);
+      if (zone == 'rows') {
+        _rows.add(field);
+      } else if (zone == 'cols') _cols.add(field);
       else if (zone == 'values') { _filters.remove(field); _values.add(field); }
     });
   }
@@ -356,7 +357,13 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
 
   Future<void> _pickDate(bool from) async {
     final picked = await showDatePicker(context: context, initialDate: (from ? _dateFrom : _dateTo) ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime(2100));
-    if (picked != null) setState(() { if (from) _dateFrom = picked; else _dateTo = picked; });
+    if (picked != null) {
+      setState(() { if (from) {
+      _dateFrom = picked;
+    } else {
+      _dateTo = picked;
+    } });
+    }
   }
 
   // ---------- templates ----------
@@ -401,7 +408,11 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
                       CheckboxListTile(
                         dense: true, contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                         value: picked.contains(u['id'] as String),
-                        onChanged: (v) => setS(() { final id = u['id'] as String; if (v == true) picked.add(id); else picked.remove(id); }),
+                        onChanged: (v) => setS(() { final id = u['id'] as String; if (v == true) {
+                          picked.add(id);
+                        } else {
+                          picked.remove(id);
+                        } }),
                         title: Text((u['name'] as String?) ?? (u['id'] as String), style: const TextStyle(fontSize: 13)),
                       ),
                   ]),
@@ -858,11 +869,15 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       final showSub = order.length > 1; // one group == subtotal duplicates grand
       for (final k in order) {
         final g = groups[k]!;
-        for (final r in g) rows.add(dataRow(r));
+        for (final r in g) {
+          rows.add(dataRow(r));
+        }
         if (showSub) rows.add(totalRow('$k  ·  subtotal', g, grand: false));
       }
     } else {
-      for (final r in data) rows.add(dataRow(r));
+      for (final r in data) {
+        rows.add(dataRow(r));
+      }
     }
     // Only add a grand-total row when there are dimension columns to align the
     // label under. With no dimensions the query returns a single aggregated row
@@ -1068,11 +1083,13 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     if (_rows.isNotEmpty) parts.add('Rows: ${_rows.map(_label).join(', ')}');
     if (_cols.isNotEmpty) parts.add('Columns: ${_cols.map(_label).join(', ')}');
     if (_values.isNotEmpty) parts.add('Values: ${_values.map(_label).join(', ')}');
-    if (_filters.isNotEmpty) parts.add('Filters: ${_filters.entries.map((e) {
+    if (_filters.isNotEmpty) {
+      parts.add('Filters: ${_filters.entries.map((e) {
       final opl = _opLabels[e.value.op] ?? e.value.op;
       final vs = _opNoValue(e.value.op) ? '' : ' ${e.value.vals.join(', ')}';
       return '${_label(e.key)} $opl$vs';
     }).join('; ')}');
+    }
     if (_dateFrom != null || _dateTo != null) parts.add('Period: ${_dateFrom != null ? DateFormat('d MMM yyyy').format(_dateFrom!) : '…'} – ${_dateTo != null ? DateFormat('d MMM yyyy').format(_dateTo!) : '…'}');
     buf.write('<div class="meta">${_esc(parts.join('  •  '))}</div>');
 
@@ -1106,7 +1123,9 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       }
 
       buf.write('<table><thead><tr>');
-      for (final c in cols) buf.write('<th class="${_values.contains(c) ? 'num' : ''}">${_esc(_label(c))}</th>');
+      for (final c in cols) {
+        buf.write('<th class="${_values.contains(c) ? 'num' : ''}">${_esc(_label(c))}</th>');
+      }
       buf.write('</tr></thead><tbody>');
       final groupDim = _rows.isNotEmpty ? _rows.first : (dims.isNotEmpty ? dims.first : null);
       void writeRow(Map<String, dynamic> r) {
@@ -1127,11 +1146,15 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
         }
         final showSub = order.length > 1;
         for (final k in order) {
-          for (final r in groups[k]!) writeRow(r);
+          for (final r in groups[k]!) {
+            writeRow(r);
+          }
           if (showSub) totalTr('$k  ·  subtotal', groups[k]!);
         }
       } else {
-        for (final r in data) writeRow(r);
+        for (final r in data) {
+          writeRow(r);
+        }
       }
       // As on screen: only add a grand-total row when there are dimension
       // columns; with none, the single aggregated row already is the total.
@@ -1163,13 +1186,19 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
     rowKeys.sort(); colKeys.sort();
     String colLabel(String c) => _cols.isEmpty ? _label(measure) : c.split('\u0001').join(' / ');
     final b = StringBuffer('<table><thead><tr>');
-    for (final d in _rows) b.write('<th>${_esc(_label(d))}</th>');
-    for (final ck in colKeys) b.write('<th class="num">${_esc(colLabel(ck))}</th>');
+    for (final d in _rows) {
+      b.write('<th>${_esc(_label(d))}</th>');
+    }
+    for (final ck in colKeys) {
+      b.write('<th class="num">${_esc(colLabel(ck))}</th>');
+    }
     b.write('<th class="num">Total</th></tr></thead><tbody>');
     num grand = 0; final Map<String, num> colTot = {for (final ck in colKeys) ck: 0};
     for (final rKey in rowKeys) {
       num rt = 0; b.write('<tr>');
-      for (final p in rowParts[rKey]!) b.write('<td>${_esc(p)}</td>');
+      for (final p in rowParts[rKey]!) {
+        b.write('<td>${_esc(p)}</td>');
+      }
       for (final ck in colKeys) {
         final v = cell[rKey]?[ck];
         if (v != null) { rt += v; colTot[ck] = (colTot[ck] ?? 0) + v; }
@@ -1178,8 +1207,12 @@ class _State extends ConsumerState<ErpReportBuilderScreen> {
       b.write('<td class="num">${_esc(_fmt(rt))}</td></tr>'); grand += rt;
     }
     b.write('<tr class="total">');
-    for (var i = 0; i < _rows.length; i++) b.write('<td>${i == 0 ? 'Total' : ''}</td>');
-    for (final ck in colKeys) b.write('<td class="num">${_esc(_fmt(colTot[ck]))}</td>');
+    for (var i = 0; i < _rows.length; i++) {
+      b.write('<td>${i == 0 ? 'Total' : ''}</td>');
+    }
+    for (final ck in colKeys) {
+      b.write('<td class="num">${_esc(_fmt(colTot[ck]))}</td>');
+    }
     b.write('<td class="num">${_esc(_fmt(grand))}</td></tr></tbody></table>');
     return b.toString();
   }
@@ -1251,10 +1284,16 @@ class _LinePainter extends CustomPainter {
       return Offset(x, y);
     }
     final path = Path();
-    for (var i = 0; i < n; i++) { final p = pt(i); if (i == 0) path.moveTo(p.dx, p.dy); else path.lineTo(p.dx, p.dy); }
+    for (var i = 0; i < n; i++) { final p = pt(i); if (i == 0) {
+      path.moveTo(p.dx, p.dy);
+    } else {
+      path.lineTo(p.dx, p.dy);
+    } }
     canvas.drawPath(path, Paint()..color = const Color(0xFF4F46E5)..strokeWidth = 2..style = PaintingStyle.stroke);
     final dot = Paint()..color = const Color(0xFF4F46E5);
-    for (var i = 0; i < n; i++) canvas.drawCircle(pt(i), 3, dot);
+    for (var i = 0; i < n; i++) {
+      canvas.drawCircle(pt(i), 3, dot);
+    }
   }
   @override
   bool shouldRepaint(covariant _LinePainter o) => o.data != data;

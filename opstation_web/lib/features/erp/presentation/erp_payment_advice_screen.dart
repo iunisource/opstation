@@ -319,14 +319,14 @@ class _ErpPaymentAdviceScreenState
       // Build parties immediately with balance 0 so the page renders fast.
       // Balances come from heavy org-wide RPCs — fetch them in the background
       // (Amount Due is editable, so a missing/late balance never blocks use).
-      for (final c in custs as List) {
+      for (final c in custs) {
         final id = c['id'] as String;
         final p = _Party(id, (c['shop_name'] as String?) ?? '(customer)',
             'customer', (c['bank_details'] as String?) ?? '', 0);
         _parties.add(p);
         _partyById['customer:$id'] = p;
       }
-      for (final s in sups as List) {
+      for (final s in sups) {
         final id = s['id'] as String;
         final p = _Party(id, (s['name'] as String?) ?? '(supplier)', 'supplier',
             (s['bank_details'] as String?) ?? '', 0);
@@ -2196,8 +2196,8 @@ class _ErpPaymentAdviceScreenState
                   (isApproved ? _sigOnFile[a?['approved_by']] : null)),
         if (isApproved && a?['paid_at'] != null)
           foot('PAID', 'on ${_paidDate(a!)}',
-              'marked by ${a!['paid_by_name'] ?? '—'}'
-              '${((a!['paid_ref'] as String?) ?? '').isNotEmpty ? ' · Ref: ${a!['paid_ref']}' : ''}'),
+              'marked by ${a['paid_by_name'] ?? '—'}'
+              '${((a['paid_ref'] as String?) ?? '').isNotEmpty ? ' · Ref: ${a['paid_ref']}' : ''}'),
       ]),
     );
     if (_sigEnabled || !_isAdmin || a == null) return box;

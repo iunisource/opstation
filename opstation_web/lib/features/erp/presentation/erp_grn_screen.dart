@@ -110,8 +110,12 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
 
   @override
   void dispose() {
-    for (final t in _qtySaveDebounce.values) t.cancel();
-    for (final c in _receivedCtrl.values) c.dispose();
+    for (final t in _qtySaveDebounce.values) {
+      t.cancel();
+    }
+    for (final c in _receivedCtrl.values) {
+      c.dispose();
+    }
     _remarksCtrl.dispose();
     _drvNameCtrl.dispose(); _drvContactCtrl.dispose(); _vehicleNoCtrl.dispose();
     super.dispose();
@@ -167,7 +171,9 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
 
 
   void _initReceivedCtrls() {
-    for (final c in _receivedCtrl.values) c.dispose();
+    for (final c in _receivedCtrl.values) {
+      c.dispose();
+    }
     _receivedCtrl = {};
     for (final it in _items) {
       final id = it['id'] as String;
@@ -695,7 +701,8 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         'updated_at': now,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
         _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl;
@@ -705,6 +712,7 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         final idx = _grns.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _grns[idx]['supervised_at'] = now;
       });
+      }
       ref.invalidate(grnSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -727,12 +735,14 @@ class _ErpGrnScreenState extends ConsumerState<ErpGrnScreen> {
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'unsupervised', null);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null;
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
         final idx = _grns.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _grns[idx]['supervised_at'] = null;
       });
+      }
       ref.invalidate(grnSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }

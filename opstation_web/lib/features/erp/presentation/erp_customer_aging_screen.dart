@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../../core/format/money.dart';
@@ -86,7 +85,7 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
       final codes = <String, String?>{};
       final cidList = <String>[
         for (final a in agg)
-          if ((a as Map)['customer_id'] != null) (a as Map)['customer_id'] as String
+          if ((a as Map)['customer_id'] != null) (a)['customer_id'] as String
       ];
       if (cidList.isNotEmpty) {
         try {
@@ -250,8 +249,9 @@ class _ErpCustomerAgingScreenState extends ConsumerState<ErpCustomerAgingScreen>
 
   void _toggleSort(String col) {
     setState(() {
-      if (_sortBy == col) _sortDesc = !_sortDesc;
-      else { _sortBy = col; _sortDesc = true; }
+      if (_sortBy == col) {
+        _sortDesc = !_sortDesc;
+      } else { _sortBy = col; _sortDesc = true; }
     });
   }
 

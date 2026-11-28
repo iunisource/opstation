@@ -160,7 +160,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
       };
       _routeAssignee.clear();
       _routeOwnerId.clear();
-      for (final a in (assignments as List)) {
+      for (final a in assignments) {
         final m = a as Map;
         final rid = m['route_id'] as String?;
         final uid = m['user_id'] as String?;
@@ -179,7 +179,7 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
       }
       // Group stops by route
       final byRoute = <String, List<Map<String, dynamic>>>{};
-      for (final s in (stops as List)) {
+      for (final s in stops) {
         final m = Map<String, dynamic>.from(s as Map);
         final rid = m['route_id'] as String;
         byRoute.putIfAbsent(rid, () => []).add(m);
@@ -190,10 +190,10 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
       }
 
       _routes = [
-        for (final r in (routes as List))
+        for (final r in routes)
           _RouteRow(
             data: Map<String, dynamic>.from(r as Map),
-            stops: byRoute[(r as Map)['id'] as String] ?? const [],
+            stops: byRoute[(r)['id'] as String] ?? const [],
           )
       ];
       // The system "Unassigned customers" route always sits at the top.
@@ -1243,7 +1243,9 @@ class _RoutesScreenState extends ConsumerState<RoutesScreen> {
               const Text('There is no other route yet — create one first.', style: TextStyle(color: AppTheme.danger))
             else ...[
               if (orphans.length > 1)
-                _routePickField(options, null, 'Set all to…', (v) => setD(() { for (final c in orphans) picked[c] = v; })),
+                _routePickField(options, null, 'Set all to…', (v) => setD(() { for (final c in orphans) {
+                  picked[c] = v;
+                } })),
               const SizedBox(height: 8),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 340),

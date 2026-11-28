@@ -128,9 +128,9 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
           for (final d in (deliveries as List))
             _DeliveryRow(
               data: Map<String, dynamic>.from(d as Map),
-              stopCount: countByDelivery[(d as Map)['id'] as String] ?? 0,
-              deliveryCount: delByDelivery[(d as Map)['id'] as String] ?? 0,
-              pickupCount: pickByDelivery[(d as Map)['id'] as String] ?? 0,
+              stopCount: countByDelivery[(d)['id'] as String] ?? 0,
+              deliveryCount: delByDelivery[(d)['id'] as String] ?? 0,
+              pickupCount: pickByDelivery[(d)['id'] as String] ?? 0,
             )
         ];
         _drivers = List<Map<String, dynamic>>.from(drivers);
@@ -1203,12 +1203,12 @@ class _DeliveriesScreenState extends ConsumerState<DeliveriesScreen> {
       final wasNewlyAssigned = !isEdit
           ? (targetStatus == 'assigned' && driverId != null)
           : (driverId != null &&
-              (driverId != (existing!.data['driver_id'] as String?) ||
+              (driverId != (existing.data['driver_id'] as String?) ||
                   (existing.data['status'] as String? ?? 'draft') != 'assigned'));
       if (wasNewlyAssigned) {
         await _notifyDriver(
           deliveryId: deliveryId,
-          driverId: driverId!,
+          driverId: driverId,
           deliveryCount: stops.where((s) => !s.isPickup).length,
           pickupCount: stops.where((s) => s.isPickup).length,
         );

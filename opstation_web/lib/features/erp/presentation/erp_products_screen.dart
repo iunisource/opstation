@@ -142,7 +142,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         client.from('products').select('*, uoms(name, abbreviation)').eq('org_id', orgId).order('name'),
         client.from('product_taxonomies').select().eq('org_id', orgId).order('name'),
         client.from('uoms').select().eq('org_id', orgId).order('name'),
-        client.from('branches').select('id, name, is_virtual').eq('org_id', orgId!).eq('is_active', true).order('name'),
+        client.from('branches').select('id, name, is_virtual').eq('org_id', orgId).eq('is_active', true).order('name'),
         client.from('app_config').select('key, value').eq('org_id', orgId)
             .inFilter('key', ['org.consignment_enabled', 'org.product_supervise_flow', 'org.hide_main_groups_by_branch', 'org.batch_tracking']),
         client.from('branch_hidden_main_groups').select('branch_id, main_group').eq('org_id', orgId),
@@ -172,7 +172,7 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         }
       }
       final Map<String, List<Map<String, dynamic>>> grouped = {};
-      for (final t in taxonomies as List) {
+      for (final t in taxonomies) {
         final type = t['taxonomy_type'] as String;
         grouped.putIfAbsent(type, () => []).add(Map<String, dynamic>.from(t));
       }
@@ -479,12 +479,14 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         'uom_id': product['base_uom_id'],
         'is_active': true,
       }, onConflict: 'org_id,branch_id,product_id');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _posProductIds.add(productId);
         (_posByBranch[branchId] ??= <String>{}).add(productId);
         _filtered = _filterList(
             _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
       });
+      }
       _showSnack('"${product['name']}" pushed to POS catalog for ${picked['name']}');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
   }
@@ -707,13 +709,15 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
         success++;
       } catch (_) { failed++; }
     }
-    if (mounted) setState(() {
+    if (mounted) {
+      setState(() {
       _selected.clear();
       _posProductIds.addAll(pushedIds);
       (_posByBranch[branchId] ??= <String>{}).addAll(pushedIds);
       _filtered = _filterList(
           _products, _searchCtrl.text.toLowerCase(), _posFilter, _posProductIds);
     });
+    }
     _showSnack('Pushed $success product${success == 1 ? "" : "s"} to ${picked['name']} POS'
         '${dup > 0 ? " — $dup already there" : ""}'
         '${noCost > 0 ? " — $noCost skipped (no cost price)" : ""}'
@@ -1442,7 +1446,11 @@ class _ErpProductsScreenState extends ConsumerState<ErpProductsScreen> {
                     return FilterChip(
                       label: Text('${b['name'] ?? '-'}' + (allocated ? '  •  ${qty.toStringAsFixed(0)}' : '')),
                       selected: checked,
-                      onSelected: locked ? null : (v) => setS(() { if (v) selectedBranches.add(bid); else selectedBranches.remove(bid); }),
+                      onSelected: locked ? null : (v) => setS(() { if (v) {
+                        selectedBranches.add(bid);
+                      } else {
+                        selectedBranches.remove(bid);
+                      } }),
                     );
                   }).toList())),
                 ], subtitle: 'Tick the branches this product is stocked in. Newly ticked branches start at zero stock; existing stock is never changed here. Branches that already hold stock are locked.'),
@@ -2542,7 +2550,11 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
               return FilterChip(
                 label: Text(b['name'] as String? ?? '-'),
                 selected: checked,
-                onSelected: (v) => setState(() { if (v) _importBranches.add(bid); else _importBranches.remove(bid); }),
+                onSelected: (v) => setState(() { if (v) {
+                  _importBranches.add(bid);
+                } else {
+                  _importBranches.remove(bid);
+                } }),
               );
             }).toList()),
           const SizedBox(height: 4),

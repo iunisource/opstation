@@ -1174,7 +1174,7 @@ Future<_Msg> _stock(String q, _Ctx c) async {
     final total = byProd[pid] ?? 0;
     final name = (p['name'] ?? '') as String;
     final sku = (p['sku'] ?? '').toString();
-    buf.writeln('${name}${sku.isNotEmpty ? ' ($sku)' : ''}: ${_qty(total)} in stock');
+    buf.writeln('$name${sku.isNotEmpty ? ' ($sku)' : ''}: ${_qty(total)} in stock');
     final br = byProdBranch[pid];
     if (br != null && br.length > 1 && c.branchId == null) {
       final parts = br.entries.map((e) => '${e.key}: ${_qty(e.value)}').join(', ');

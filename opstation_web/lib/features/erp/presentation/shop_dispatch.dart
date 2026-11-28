@@ -261,7 +261,7 @@ class _ShopDispatchState extends State<ShopDispatch> {
       final mids = [for (final x in (d['missing_ids'] as List? ?? const [])) '$x'];
       final r = ids.isEmpty ? const [] : await Supabase.instance.client.from('shop_orders').select().inFilter('id', ids);
       final m = mids.isEmpty ? const [] : await Supabase.instance.client.from('shop_orders').select('id, order_no').inFilter('id', mids);
-      await _printManifest(List<Map<String, dynamic>>.from(r as List), List<Map<String, dynamic>>.from(m as List),
+      await _printManifest(List<Map<String, dynamic>>.from(r), List<Map<String, dynamic>>.from(m),
           d['courier'] as String?, DateTime.parse('${d['created_at']}').toLocal());
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not print: $e')));

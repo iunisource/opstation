@@ -10,7 +10,6 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/auth_controller.dart';
 import '../services/autopilot.dart';
 import '../../product_lines/product_lines_repo.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../../core/format/time_format.dart';
 
 /// Intelligence Dashboard — placement score by salesman and by market (route).

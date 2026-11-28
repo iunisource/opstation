@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/time_format.dart';
 

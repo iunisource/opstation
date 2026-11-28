@@ -61,7 +61,9 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
   @override
   void dispose() {
     _reasonCtrl.dispose(); _notesCtrl.dispose();
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -110,7 +112,9 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
   }
 
   void _newVoucher() {
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _status = 'draft';
       _date = DateTime.now();
@@ -123,7 +127,9 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
     try {
       final rows = await Supabase.instance.client.from('damage_voucher_lines')
           .select().eq('voucher_id', v['id'] as String).order('line_order');
-      for (final l in _lines) l.dispose();
+      for (final l in _lines) {
+        l.dispose();
+      }
       final newLines = (rows as List).map((r) {
         final l = _DLine();
         l.productId = r['product_id'] as String?;
@@ -134,7 +140,8 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
         l.lineCostSnap = (r['line_cost'] as num? ?? 0).toDouble();
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
         final ds = v['voucher_date'] as String?;
@@ -143,6 +150,7 @@ class _State extends ConsumerState<ErpDamageStockVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _lines = newLines.isEmpty ? [_DLine()] : newLines;
       });
+      }
     } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 

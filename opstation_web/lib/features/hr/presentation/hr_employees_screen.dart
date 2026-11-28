@@ -135,7 +135,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
 
   @override
   void dispose() {
-    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays, _reportsTo]) c.dispose();
+    for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays, _reportsTo]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -331,7 +333,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
   void _newEmployee() {
     setState(() {
       _current = null; _status = 'active';
-      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays, _reportsTo]) c.clear();
+      for (final c in [_code, _name, _father, _cnic, _phone, _email, _address, _emergency, _salary, _bankName, _bankAcct, _notes, _notifyEmail, _cardUid, _advInst, _plDays, _reportsTo]) {
+        c.clear();
+      }
       _accommodation = null; _att = null;
       _advAcctId = null; _advBal = null;
       _deptId = null; _desigId = null; _gender = null; _empType = null; _bloodGroup = null;
@@ -1164,7 +1168,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
       pageTheme: pageTheme,
       header: (ctx) => pw.Column(children: [
         pw.Row(crossAxisAlignment: pw.CrossAxisAlignment.center, children: [
-          if (logo != null) ...[pw.SizedBox(height: 28, width: 28, child: pw.Image(logo!, fit: pw.BoxFit.contain)), pw.SizedBox(width: 10)],
+          if (logo != null) ...[pw.SizedBox(height: 28, width: 28, child: pw.Image(logo, fit: pw.BoxFit.contain)), pw.SizedBox(width: 10)],
           pw.Expanded(
             child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
               pw.Text(org.toUpperCase(), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: brand, letterSpacing: 1.2)),
@@ -1205,7 +1209,7 @@ class _State extends ConsumerState<HrEmployeesScreen> {
                 color: PdfColors.white,
                 borderRadius: pw.BorderRadius.circular(4),
                 border: pw.Border.all(color: rule, width: 1),
-                image: photo != null ? pw.DecorationImage(image: photo!, fit: pw.BoxFit.cover) : null,
+                image: photo != null ? pw.DecorationImage(image: photo, fit: pw.BoxFit.cover) : null,
               ),
               child: photo == null
                   ? pw.Center(child: pw.Text(_initials(name), style: pw.TextStyle(fontSize: 21, color: PdfColors.grey400, fontWeight: pw.FontWeight.bold)))
@@ -1848,7 +1852,9 @@ class _State extends ConsumerState<HrEmployeesScreen> {
         ...items.map((i) => DropdownMenuItem(value: i['id'] as String, child: Text(i['name'] as String? ?? '', overflow: TextOverflow.ellipsis))),
         DropdownMenuItem(value: '__add__', child: Text('+ Add $addLabel\u2026', style: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600))),
       ],
-      onChanged: !_canWrite ? null : (v) async { if (v == '__add__') { final id = await _quickAddDialog(addTable, addLabel); if (id != null) onAdd(id); } else onChanged(v); });
+      onChanged: !_canWrite ? null : (v) async { if (v == '__add__') { final id = await _quickAddDialog(addTable, addLabel); if (id != null) onAdd(id); } else {
+        onChanged(v);
+      } });
   }
 
   Widget _simpleDropdown(String? value, List<Map<String, String>> opts, void Function(String?) onChanged) => DropdownButtonFormField<String>(

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
-import 'responsive.dart';
 
 /// One column of an [AdaptiveTable].
 ///

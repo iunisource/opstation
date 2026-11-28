@@ -240,7 +240,9 @@ class _ErpTasksScreenState extends ConsumerState<ErpTasksScreen> {
       if (_assignee != 'all' &&
           _assignee != 'me' &&
           _assignee != 'unassigned' &&
-          asg != _assignee) return false;
+          asg != _assignee) {
+        return false;
+      }
       return test(a);
     }).length;
   }

@@ -87,7 +87,7 @@ class _ErpMcpConnectorScreenState extends ConsumerState<ErpMcpConnectorScreen> {
       if (res is List && res.isNotEmpty && res.first is Map) {
         row = Map<String, dynamic>.from(res.first as Map);
       } else if (res is Map) {
-        row = Map<String, dynamic>.from(res as Map);
+        row = Map<String, dynamic>.from(res);
       }
       final raw = row?['raw_token']?.toString();
       await _load();

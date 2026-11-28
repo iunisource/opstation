@@ -1,7 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import '../../../core/widgets/journal_modal.dart';
 import '../../../core/utils/void_filter.dart';
-import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
 import 'package:flutter/material.dart';
@@ -15,10 +14,8 @@ import '../../../core/format/money.dart';
 import '../../../core/pdf/ledger_pdf.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import '../services/ledger_particulars.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_table.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
-import '../../../core/layout/main_layout.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/time_format.dart';
 import '../../../core/widgets/adaptive_header_row.dart';
@@ -151,10 +148,12 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
           .eq('org_id', orgId).inFilter('key', ['org.ledger_msg_supplier_enabled', 'org.ledger_msg_supplier_text', 'org.ledger_show_name_supplier']);
       final cfg = <String, String>{}; for (final r in rows as List) { cfg[r['key'] as String] = r['value'] as String? ?? ''; }
       final on = (cfg['org.ledger_msg_supplier_enabled'] ?? 'false') == 'true';
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _footerMsg = on ? (cfg['org.ledger_msg_supplier_text'] ?? '') : '';
         _showOrgName = (cfg['org.ledger_show_name_supplier'] ?? 'true') != 'false';
       });
+      }
     } catch (_) {}
   }
 
@@ -213,12 +212,21 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
   void _persist() {
     try {
       final s = html.window.localStorage;
-      if (_selectedSupplier != null) s['ledger_supplier_id'] = _selectedSupplier!['id'] as String;
-      else s.remove('ledger_supplier_id');
-      if (_dateFrom != null) s['ledger_date_from'] = _dateFrom!.toIso8601String();
-      else s.remove('ledger_date_from');
-      if (_dateTo != null) s['ledger_date_to'] = _dateTo!.toIso8601String();
-      else s.remove('ledger_date_to');
+      if (_selectedSupplier != null) {
+        s['ledger_supplier_id'] = _selectedSupplier!['id'] as String;
+      } else {
+        s.remove('ledger_supplier_id');
+      }
+      if (_dateFrom != null) {
+        s['ledger_date_from'] = _dateFrom!.toIso8601String();
+      } else {
+        s.remove('ledger_date_from');
+      }
+      if (_dateTo != null) {
+        s['ledger_date_to'] = _dateTo!.toIso8601String();
+      } else {
+        s.remove('ledger_date_to');
+      }
       s['ledger_type_filter'] = _typeFilter;
     } catch (_) {}
   }
@@ -249,8 +257,9 @@ class _ErpSupplierLedgerScreenState extends ConsumerState<ErpSupplierLedgerScree
         final val = v[f];
         if (val == null) continue;
         String? s;
-        if (val is String && val.isNotEmpty) s = val;
-        else if (val is DateTime) s = val.toIso8601String();
+        if (val is String && val.isNotEmpty) {
+          s = val;
+        } else if (val is DateTime) s = val.toIso8601String();
         else { final t = val.toString(); if (t.isNotEmpty && t != 'null') s = t; }
         if (s != null && DateTime.tryParse(s) != null) return s;
       }

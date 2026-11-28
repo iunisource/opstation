@@ -1,7 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import '../../../core/utils/app_link.dart';
 import 'dart:html' as html;
-import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:opstation_web/core/utils/friendly_error.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -67,7 +66,9 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
     _lines = [_JvLine(), _JvLine()];
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); _ensureAccessReady(); });
   }
-  @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
+  @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) {
+    l.dispose();
+  } super.dispose(); }
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
   // Cold-refresh access fix: currentUserProvider can populate without notifying
@@ -194,7 +195,9 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
   }
   void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); if (_lines.length < 2) _addLine(); }
   void _newVoucher() {
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     setState(() { _current = null; _status = 'draft'; _lines = [_JvLine(), _JvLine()];
       _auditTrail = []; _lineHistory = []; _curLines = []; _date = DateTime.now(); _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date); _narCtrl.clear(); });
   }
@@ -202,7 +205,9 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
   Future<void> _loadVoucher(Map<String,dynamic> v) async {
     try {
       final rows = await Supabase.instance.client.from('journal_lines').select().eq('entry_id', v['id'] as String).order('line_order');
-      for (final l in _lines) l.dispose();
+      for (final l in _lines) {
+        l.dispose();
+      }
       final newLines = (rows as List).map((r) {
         final l = _JvLine();
         l.accountType = r['account_type'] as String? ?? 'coa';
@@ -240,10 +245,12 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
         return l;
       }).toList();
       final d = DateTime.tryParse(v['entry_date'] as String? ?? '') ?? DateTime.now();
-      if (mounted) setState(() { _current = v; _status = v['status'] as String? ?? 'draft';
+      if (mounted) {
+        setState(() { _current = v; _status = v['status'] as String? ?? 'draft';
         _lines = newLines.isEmpty ? [_JvLine(), _JvLine()] : newLines;
         _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d);
         _narCtrl.text = v['description'] as String? ?? ''; });
+      }
       _loadAudit(v['id'] as String);
     } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
@@ -393,10 +400,12 @@ class _State extends ConsumerState<ErpOpeningJournalScreen> {
       final cur = await Supabase.instance.client.from('journal_lines')
           .select('account_id, account_name, party_id, description, debit, credit, line_order')
           .eq('entry_id', entryId).order('line_order');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _lineHistory = [for (final r in (h as List? ?? [])) Map<String,dynamic>.from(r as Map)];
         _curLines = List<Map<String,dynamic>>.from(cur as List);
       });
+      }
     } catch (_) {}
   }
 

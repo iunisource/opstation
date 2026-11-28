@@ -252,7 +252,7 @@ class PaymentAdvicePdf {
 
     final showApproval = approvalWatermark && status == 'approved' && approvedBy != null;
     final approvalLine = showApproval
-        ? 'APPROVED BY ${approvedBy!.toUpperCase()}'
+        ? 'APPROVED BY ${approvedBy.toUpperCase()}'
         : '';
     final approvalWhen =
         showApproval && approvedAt != null ? dtFmt.format(approvedAt.toLocal()) : '';
@@ -470,7 +470,7 @@ class PaymentAdvicePdf {
         if (isPaid) ...[
           pw.SizedBox(height: 12),
           pw.Text(
-              'PAID on ${DateFormat('d MMM yyyy').format(paidAt!.toLocal())}'
+              'PAID on ${DateFormat('d MMM yyyy').format(paidAt.toLocal())}'
               '${paidBy != null && paidBy.isNotEmpty ? ' - marked by $paidBy' : ''}'
               '${paidRef != null && paidRef.trim().isNotEmpty ? ' - Ref: ${paidRef.trim()}' : ''}',
               style: pw.TextStyle(

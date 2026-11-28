@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
-import 'responsive.dart';
 
 /// Master-detail that stops pretending a phone is a desktop.
 ///

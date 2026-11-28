@@ -614,10 +614,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await Supabase.instance.client.from('purchase_order_items')
           .update({'unit_cost': rate}).eq('id', itemId);
       _persistedRate[itemId] = rate;
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['unit_cost'] = rate;
       });
+      }
     } catch (e) {
       // Not saved: put the line (and the total) back to what is saved.
       final idx = _items.indexWhere((i) => i['id'] == itemId);
@@ -668,10 +670,12 @@ class _ErpPurchaseScreenState extends ConsumerState<ErpPurchaseScreen> {
       await Supabase.instance.client.from('purchase_order_items')
           .update({'quantity_ordered': qty}).eq('id', itemId);
       _persistedQty[itemId] = qty;
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         final idx = _items.indexWhere((i) => i['id'] == itemId);
         if (idx >= 0) _items[idx]['quantity_ordered'] = qty;
       });
+      }
       await _logAudit(_detail['id'] as String, 'line_edited', '$lineName: qty ${q0(cur)} → ${q0(qty)}');
       await _resetApprovalIfNeeded(why: 'qty of $lineName changed ${q0(cur)} → ${q0(qty)}');
     } catch (e) {
@@ -1963,11 +1967,13 @@ class _PoAuditTrail extends StatelessWidget {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _load(),
       builder: (ctx, snap) {
-        if (!snap.hasData || snap.data!.isEmpty) return Container(
+        if (!snap.hasData || snap.data!.isEmpty) {
+          return Container(
           margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),
           child: const Row(children: [Icon(Icons.history, size: 14, color: AppTheme.textSecondary), SizedBox(width: 8),
             Text('No activity logged yet', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))]));
+        }
         final entries = snap.data!;
         return Container(margin: const EdgeInsets.only(top: 4), padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.border)),

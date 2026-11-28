@@ -382,7 +382,9 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
       rowWidgets.add(_plRow(fmt, r, kids.isNotEmpty, code));
       if (_expanded.contains(code)) {
         if (kids.isNotEmpty) {
-          for (final k in kids) rowWidgets.add(_plChildRow(fmt, k));
+          for (final k in kids) {
+            rowWidgets.add(_plChildRow(fmt, k));
+          }
         } else {
           // Leaf account → show the transactions behind the total.
           final acctType = (r['account_type'] ?? '') as String;
@@ -393,7 +395,9 @@ class _ErpProfitLossScreenState extends ConsumerState<ErpProfitLossScreen> {
             if (tx.isEmpty) {
               rowWidgets.add(_plTxnInfo('No transactions in this period.'));
             } else {
-              for (final t in tx) rowWidgets.add(_plTxnRow(fmt, t, acctType));
+              for (final t in tx) {
+                rowWidgets.add(_plTxnRow(fmt, t, acctType));
+              }
             }
           }
         }

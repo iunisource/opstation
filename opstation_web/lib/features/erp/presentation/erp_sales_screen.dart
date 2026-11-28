@@ -407,7 +407,9 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
     _addQtyCtrl.dispose();
     _addQtyFocus.dispose();
     _focQtyCtrl.dispose();
-    for (final c in _qtyControllers.values) c.dispose();
+    for (final c in _qtyControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -999,10 +1001,12 @@ class _ErpSalesScreenState extends ConsumerState<ErpSalesScreen> {
               return InkWell(
                 onTap: () async {
                   final p = await pickProduct(ctx, _visibleProducts, title: 'Select free product');
-                  if (p != null && p.isNotEmpty) setState(() {
+                  if (p != null && p.isNotEmpty) {
+                    setState(() {
                     _focProductId = p['id'] as String?;
                     _focUomId = p['base_uom_id'] as String?;
                   });
+                  }
                 },
                 child: InputDecorator(
                   decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10), border: OutlineInputBorder()),
@@ -1926,8 +1930,12 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
   @override
   void dispose() {
     _searchDebounce?.cancel();
-    for (final c in _deliverQtyCtrl.values) c.dispose();
-    for (final f in _qtyFocus.values) f.dispose();
+    for (final c in _deliverQtyCtrl.values) {
+      c.dispose();
+    }
+    for (final f in _qtyFocus.values) {
+      f.dispose();
+    }
     _drvNameCtrl.dispose(); _drvContactCtrl.dispose(); _vehicleNoCtrl.dispose();
     super.dispose();
   }
@@ -2025,7 +2033,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       }
 
       // Build delivery qty controllers for available SO items
-      final existingSoItemIds = (items as List).map((i) => i['so_item_id'] as String).toSet();
+      final existingSoItemIds = (items).map((i) => i['so_item_id'] as String).toSet();
       _deliverQtyCtrl.clear();
       _scanMode = false;
       _lastScannedSoItem = null;
@@ -2638,7 +2646,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'updated_at': now,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
         _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl;
@@ -2648,6 +2657,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         final idx = _orders.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _orders[idx]['supervised_at'] = now;
       });
+      }
       ref.invalidate(doSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -2703,7 +2713,8 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           ]);
         } catch (_) { /* audit is best-effort */ }
       }
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         final idset = ids.toSet();
         for (final o in _orders) {
           if (idset.contains(o['id'])) {
@@ -2717,6 +2728,7 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
           _detail['supervised_stamp_url'] = stampUrl;
         }
       });
+      }
       ref.invalidate(doSupervisePendingProvider);
       _showSnack('Supervised ${ids.length} delivery order(s)');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -2739,12 +2751,14 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'DO', 'unsupervised', null);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null;
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
         final idx = _orders.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _orders[idx]['supervised_at'] = null;
       });
+      }
       ref.invalidate(doSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -2861,7 +2875,9 @@ class _ErpDeliveryOrdersScreenState extends ConsumerState<ErpDeliveryOrdersScree
       _lastScannedSoItem = null;
       // Scanning counts from zero; typing (scan off) starts from the full pending.
       if (_scanMode) {
-        for (final c in _deliverQtyCtrl.values) c.text = '0';
+        for (final c in _deliverQtyCtrl.values) {
+          c.text = '0';
+        }
       }
     });
     if (_scanMode) {
@@ -3792,8 +3808,12 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
   @override
   void dispose() {
     _searchDebounce?.cancel();
-    for (final c in _discountCtrl.values) c.dispose();
-    for (final c in _priceCtrl.values) c.dispose();
+    for (final c in _discountCtrl.values) {
+      c.dispose();
+    }
+    for (final c in _priceCtrl.values) {
+      c.dispose();
+    }
     _remarksCtrl.dispose();
     super.dispose();
   }
@@ -4097,7 +4117,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'supervised_stamp_url': stampUrl,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
         _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl;
@@ -4107,6 +4128,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
+      }
       ref.invalidate(siSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -4164,7 +4186,8 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
           ]);
         } catch (_) { /* audit is best-effort */ }
       }
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         final idset = ids.toSet();
         for (final inv in _invoices) {
           if (idset.contains(inv['id'])) {
@@ -4179,6 +4202,7 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         }
         _supSelected.clear();
       });
+      }
       ref.invalidate(siSupervisePendingProvider);
       _showSnack('Supervised ${ids.length} sales invoice(s)');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -4200,12 +4224,14 @@ class _ErpSalesInvoicesScreenState extends ConsumerState<ErpSalesInvoicesScreen>
         'supervised_by_name': null, 'supervised_signature_url': null, 'supervised_stamp_url': null,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'unsupervised', null);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null;
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
+      }
       ref.invalidate(siSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }

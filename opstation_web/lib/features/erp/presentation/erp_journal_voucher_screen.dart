@@ -1,7 +1,6 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import '../../../core/utils/app_link.dart';
 import 'dart:html' as html;
-import 'package:opstation_web/core/utils/unique_id.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import 'package:flutter/services.dart';
@@ -81,7 +80,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     _lines = [_JvLine(), _JvLine()];
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); _ensureAccessReady(); _loadJvFlag(); });
   }
-  @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
+  @override void dispose() { _ctxOverlay?.remove(); _dateCtrl.dispose(); _narCtrl.dispose(); for (final l in _lines) {
+    l.dispose();
+  } super.dispose(); }
   @override
   void didUpdateWidget(covariant ErpJournalVoucherScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -103,11 +104,13 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       final rows = await Supabase.instance.client.from('app_config').select('key,value')
           .eq('org_id', orgId).inFilter('key', ['org.jv_supervise_flow', 'org.jv_approve_flow', 'org.jv_void_flow']);
       final m = {for (final r in (rows as List)) r['key'] as String: r['value'] as String?};
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _jvSuperviseFlow = m['org.jv_supervise_flow'] == 'true';
         _jvApproveFlow = m['org.jv_approve_flow'] == 'true';
         _jvVoidFlow = m['org.jv_void_flow'] == 'true';
       });
+      }
     } catch (_) {}
   }
 
@@ -135,10 +138,12 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         'supervised_by': userId, 'supervised_at': now, 'supervised_by_name': userName,
         'supervised_signature_url': sigUrl, 'supervised_stamp_url': stampUrl,
       }).eq('id', id);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current!['supervised_by'] = userId; _current!['supervised_at'] = now;
         _current!['supervised_by_name'] = userName;
       });
+      }
       for (final v in _vouchers) {
         if (v['id'] == id) { v['supervised_at'] = now; v['supervised_by'] = userId; v['supervised_by_name'] = userName; }
       }
@@ -163,9 +168,11 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         'supervised_by': null, 'supervised_at': null, 'supervised_by_name': null,
         'supervised_signature_url': null, 'supervised_stamp_url': null,
       }).eq('id', id);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current!['supervised_by'] = null; _current!['supervised_at'] = null; _current!['supervised_by_name'] = null;
       });
+      }
       for (final v in _vouchers) {
         if (v['id'] == id) { v['supervised_at'] = null; v['supervised_by'] = null; v['supervised_by_name'] = null; }
       }
@@ -297,7 +304,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   }
   void _removeLine(int i) { setState(() { _lines[i].dispose(); _lines.removeAt(i); }); if (_lines.length < 2) _addLine(); }
   void _newVoucher() {
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     setState(() { _current = null; _status = 'draft'; _lines = [_JvLine(), _JvLine()];
       _auditTrail = []; _date = DateTime.now(); _dateCtrl.text = DateFormat('dd MMM yyyy').format(_date); _narCtrl.clear(); });
   }
@@ -305,7 +314,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
   Future<void> _loadVoucher(Map<String,dynamic> v) async {
     try {
       final rows = await Supabase.instance.client.from('journal_lines').select().eq('entry_id', v['id'] as String).order('line_order');
-      for (final l in _lines) l.dispose();
+      for (final l in _lines) {
+        l.dispose();
+      }
       final newLines = (rows as List).map((r) {
         final l = _JvLine();
         l.accountType = r['account_type'] as String? ?? 'coa';
@@ -342,10 +353,12 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         return l;
       }).toList();
       final d = DateTime.tryParse(v['entry_date'] as String? ?? '') ?? DateTime.now();
-      if (mounted) setState(() { _current = v; _status = v['status'] as String? ?? 'draft';
+      if (mounted) {
+        setState(() { _current = v; _status = v['status'] as String? ?? 'draft';
         _lines = newLines.isEmpty ? [_JvLine(), _JvLine()] : newLines;
         _date = d; _dateCtrl.text = DateFormat('dd MMM yyyy').format(d);
         _narCtrl.text = v['description'] as String? ?? ''; });
+      }
       _loadAudit(v['id'] as String);
       if (!_jvSuperviseFlow && !_jvApproveFlow) _loadJvFlag(); // ensure flags are set when a voucher opens
     } catch (e) { _snack(friendlyError('Could not load', e)); }
@@ -598,7 +611,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     if (ids.isEmpty) { _snack('Nothing pending approval'); return; }
     if (!await _confirmBulk(onlyIds == null ? 'Approve all pending?' : 'Approve selected?',
         'Approve and post ${ids.length} journal voucher(s) to the ledger? Any JV whose debits and credits do not match is skipped.',
-        'Approve & post ${ids.length}')) return;
+        'Approve & post ${ids.length}')) {
+      return;
+    }
     setState(() => _bulkBusy = true);
     final client = Supabase.instance.client;
     final userId = ref.read(currentUserProvider)?.id;
@@ -649,7 +664,9 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
     if (ids.isEmpty) { _snack('Nothing pending supervision'); return; }
     if (!await _confirmBulk(onlyIds == null ? 'Supervise all pending?' : 'Supervise selected?',
         'Mark ${ids.length} posted journal voucher(s) as supervised? This is a review mark only — it does not change the ledger.',
-        'Supervise ${ids.length}')) return;
+        'Supervise ${ids.length}')) {
+      return;
+    }
     setState(() => _bulkBusy = true);
     final client = Supabase.instance.client;
     final userId = ref.read(currentUserProvider)?.id;
@@ -668,7 +685,8 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
       }
       await _auditMany(ids, 'supervised', 'Bulk supervised by ${userName ?? 'admin'}');
       final idset = ids.toSet();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         for (final v in _vouchers) {
           if (idset.contains(v['id'])) { v['supervised_at'] = now; v['supervised_by'] = userId; v['supervised_by_name'] = userName; }
         }
@@ -677,6 +695,7 @@ class _State extends ConsumerState<ErpJournalVoucherScreen> {
         }
         _sel.removeAll(ids);
       });
+      }
       ref.invalidate(jvPendingCountProvider);
       _snack('Supervised ${ids.length} JV(s)');
     } catch (e) { _snack(friendlyError('Bulk supervise failed', e)); }

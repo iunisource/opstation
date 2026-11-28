@@ -1451,7 +1451,7 @@ class _ErpFulfillmentScreenState extends ConsumerState<ErpFulfillmentScreen> {
     Map<String, dynamic>? store = active.length == 1
         ? active.first
         : active.firstWhere((s) => s['id'] == _storeFilter, orElse: () => const {});
-    if (store == null || store.isEmpty) {
+    if (store.isEmpty) {
       store = await showDialog<Map<String, dynamic>>(context: context, builder: (d) => SimpleDialog(
         title: const Text('Which store?'),
         children: [for (final s in active)

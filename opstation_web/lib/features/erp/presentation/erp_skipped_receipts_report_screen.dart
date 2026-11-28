@@ -359,6 +359,33 @@ class _ErpSkippedReceiptsReportScreenState
         }
       } catch (_) {/* table may not exist yet — clearing is a no-op then */}
 
+      // Slips cleared with a reason in Receipt Books ("used manually") count as cleared here too.
+      try {
+        final bk = {
+          for (final b in await client.from('receipt_books').select('id, user_id, prefix').eq('org_id', orgId) as List)
+            '${b['id']}': b as Map,
+        };
+        final chk = await client.from('receipt_slip_checks')
+            .select('book_id, serial, note, checked_by_name, checked_at')
+            .eq('org_id', orgId).eq('kind', 'unrecorded');
+        for (final c in chk as List) {
+          final b = bk['${c['book_id']}'];
+          final n = (c['serial'] as num?)?.toInt();
+          final uid = b?['user_id'] as String?;
+          if (b == null || n == null || uid == null) continue;
+          final key = slipKey('${b['prefix'] ?? ''}'.trim().toUpperCase(), n);
+          (_cleared[uid] ??= {}).putIfAbsent(key, () => {
+                'comment': '${c['note'] ?? ''}'.trim().isEmpty
+                    ? 'Used manually (Receipt Books)'
+                    : '${c['note']} (Receipt Books)',
+                'cleared_by': null,
+                'cleared_by_name': c['checked_by_name'],
+                'cleared_at': c['checked_at'],
+                'from_book': true,
+              });
+        }
+      } catch (_) {/* books tables missing = none */}
+
       setState(() {
         _uses = uses;
         _names = names;
@@ -383,6 +410,12 @@ class _ErpSkippedReceiptsReportScreenState
   // Tap a serial pill → clear it (with a comment) or re-open a cleared one.
   Future<void> _openClearDialog(_PersonGaps r, int n) async {
     final existing = _clearanceOf(r.userId, n);
+    if (existing?['from_book'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${slipLabel(n)} was cleared in Receipt Books — re-open it there.'),
+          behavior: SnackBarBehavior.floating));
+      return;
+    }
     final wasCleared = existing != null;
     final ctrl = TextEditingController(text: existing?['comment'] as String? ?? '');
     final action = await showDialog<String>(
@@ -437,8 +470,10 @@ class _ErpSkippedReceiptsReportScreenState
         });
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
+      }
     }
   }
 
@@ -493,8 +528,10 @@ class _ErpSkippedReceiptsReportScreenState
         }
       });
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
+      }
     }
   }
 
@@ -504,10 +541,16 @@ class _ErpSkippedReceiptsReportScreenState
     try {
       await Supabase.instance.client.from('skipped_receipt_clearances').delete()
           .eq('org_id', orgId).eq('user_id', r.userId).inFilter('serial_number', all);
-      setState(() { for (final n in all) { _cleared[r.userId]?.remove(n); } });
+      setState(() {
+        for (final n in all) {
+          if (_cleared[r.userId]?[n]?['from_book'] != true) _cleared[r.userId]?.remove(n);
+        }
+      });
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed: ${e.toString().split('\n').first}'), behavior: SnackBarBehavior.floating));
+      }
     }
   }
 

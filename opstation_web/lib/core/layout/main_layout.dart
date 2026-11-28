@@ -924,7 +924,9 @@ final transferPendingCountProvider = FutureProvider<int>((ref) async {
     var n = 0;
     for (final t in res as List) {
       if (branchIds.contains(t['from_branch_id']) ||
-          branchIds.contains(t['to_branch_id'])) n++;
+          branchIds.contains(t['to_branch_id'])) {
+        n++;
+      }
     }
     return n;
   } catch (_) {
@@ -3014,7 +3016,7 @@ void _openInNewTab(BuildContext context, String path, Offset pos) {
   final href = html.window.location.href;
   final hashIdx = href.indexOf('#');
   final origin = hashIdx != -1 ? href.substring(0, hashIdx) : href;
-  final url = '${origin}#${path}';
+  final url = '$origin#$path';
   showMenu(
     context: context,
     position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx + 1, pos.dy + 1),

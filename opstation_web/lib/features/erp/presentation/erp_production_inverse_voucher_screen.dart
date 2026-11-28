@@ -87,7 +87,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
   @override
   void dispose() {
     _inputQtyCtrl.dispose(); _notesCtrl.dispose(); _serialCtrl.dispose();
-    for (final l in _components) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -177,7 +179,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
       final comps = await Supabase.instance.client.from('production_voucher_components')
           .select().eq('voucher_id', vId).order('line_order');
       final list = List<Map<String, dynamic>>.from(comps as List);
-      for (final l in _components) l.dispose();
+      for (final l in _components) {
+        l.dispose();
+      }
       final outQty = (v['output_qty'] as num? ?? 1).toDouble();
       final base = list.map((b) => {
         'product_id': b['product_id'],
@@ -205,7 +209,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
 
   void _setSourceMode(String m) {
     if (m == _sourceMode) return;
-    for (final l in _components) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
     setState(() {
       _sourceMode = m;
       _srcVoucherId = null; _srcVoucherLabel = ''; _srcOutputQty = 0;
@@ -227,7 +233,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
 
   // ---------- form state ----------
   void _newVoucher() {
-    for (final l in _components) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _status = 'draft';
       _date = DateTime.now();
@@ -243,7 +251,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
     try {
       final client = Supabase.instance.client;
       final comps = await client.from('production_inverse_components').select().eq('voucher_id', v['id'] as String).order('line_order');
-      for (final l in _components) l.dispose();
+      for (final l in _components) {
+        l.dispose();
+      }
       final newComps = (comps as List).map((r) {
         final l = _RComp();
         l.productId = r['product_id'] as String?;
@@ -254,7 +264,8 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
         l.lineCostSnap = (r['line_cost'] as num? ?? 0).toDouble();
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
         _srcVoucherId = v['source_voucher_id'] as String?;
@@ -275,6 +286,7 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
           for (final x in ((v['bt_serials'] as List?) ?? const [])) '$x',
         ];
       });
+      }
       _fetchBase();
       _loadFgLayers();
       _refreshFgTrack();
@@ -310,7 +322,9 @@ class _State extends ConsumerState<ErpProductionInverseVoucherScreen> {
 
   void _rescale() {
     final scale = _bomBaseQty > 0 ? (_inQty / _bomBaseQty) : 1;
-    for (final l in _components) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
     final nc = _baseComps.map((b) {
       final l = _RComp();
       l.productId = b['product_id'] as String?;

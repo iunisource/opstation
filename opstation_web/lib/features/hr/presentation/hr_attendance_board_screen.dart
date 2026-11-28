@@ -7,7 +7,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/format/time_format.dart';
@@ -88,10 +87,12 @@ class _HrAttendanceBoardScreenState extends ConsumerState<HrAttendanceBoardScree
       final client = Supabase.instance.client;
       final br = await client.from('branches').select('id, name').eq('org_id', orgId).eq('is_active', true).order('name');
       final dp = await client.from('hr_departments').select('id, name').eq('org_id', orgId);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _branches = List<Map<String, dynamic>>.from(br);
         _deptName = {for (final d in dp as List) d['id'] as String: d['name'] as String};
       });
+      }
     } catch (_) { }
   }
 

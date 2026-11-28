@@ -745,7 +745,7 @@ class _RouteRosterScreenState extends ConsumerState<RouteRosterScreen> {
           ),
         ]);
         final list = err != null
-            ? Center(child: Text(err!, style: const TextStyle(color: AppTheme.danger)))
+            ? Center(child: Text(err, style: const TextStyle(color: AppTheme.danger)))
             : shown.isEmpty
                 ? const Center(child: Text('No changes recorded yet.', style: TextStyle(color: AppTheme.textSecondary)))
                 : ListView.separated(

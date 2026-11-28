@@ -124,10 +124,12 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         if (list.length < page) break;
         from += page; if (from > 50000) break;
       }
-      if (mounted) setState(() => _customers = all.map((c) => {
+      if (mounted) {
+        setState(() => _customers = all.map((c) => {
         'id': c['id'],
         'label': "${c['shop_name'] ?? ''}${(c['code'] != null && (c['code'] as String).isNotEmpty) ? ' (${c['code']})' : ''}",
       }).toList());
+      }
     } catch (_) {}
   }
 
@@ -144,10 +146,12 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         if (list.length < page) break;
         from += page; if (from > 100000) break;
       }
-      if (mounted) setState(() => _products = all.map((p) => {
+      if (mounted) {
+        setState(() => _products = all.map((p) => {
         'id': p['id'],
         'label': "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} — ' : ''}${p['name'] ?? ''}",
       }).toList());
+      }
     } catch (_) {}
   }
 
@@ -167,7 +171,8 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
         if (list.length < page) break;
         from += page; if (from > 50000) break;
       }
-      if (mounted) setState(() => _invoices = [
+      if (mounted) {
+        setState(() => _invoices = [
         for (final r in all)
           if ((r['voucher_number'] as String? ?? '').isNotEmpty)
             {
@@ -180,6 +185,7 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
               ].join('  ·  '),
             },
       ]);
+      }
     } catch (_) {}
   }
 
@@ -191,7 +197,13 @@ class _State extends ConsumerState<ErpMarginReportScreen> {
   Future<void> _pickDate(bool isFrom) async {
     final init = isFrom ? _from : _to;
     final picked = await showDatePicker(context: context, initialDate: init, firstDate: DateTime(2020), lastDate: DateTime(2100));
-    if (picked != null) setState(() { if (isFrom) _from = picked; else _to = picked; });
+    if (picked != null) {
+      setState(() { if (isFrom) {
+      _from = picked;
+    } else {
+      _to = picked;
+    } });
+    }
   }
 
   void _reset() {

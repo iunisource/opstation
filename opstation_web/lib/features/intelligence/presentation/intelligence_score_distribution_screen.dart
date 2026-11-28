@@ -6,7 +6,6 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:excel/excel.dart' as xls;
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../../product_lines/product_line_rules.dart';
 import '../../product_lines/product_lines_repo.dart';

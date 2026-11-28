@@ -300,10 +300,12 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
           .eq('key', 'org.customer_targets_enabled').maybeSingle();
       final on = (tgl?['value'] as String?) == 'true';
       if (!on) {
-        if (mounted) setState(() {
+        if (mounted) {
+          setState(() {
           _targetsEnabled = false;
           _loadingTarget = false;
         });
+        }
         return;
       }
       final rows = await client.rpc('rpc_customer_target_achievement',
@@ -1156,11 +1158,13 @@ class _Customer360ScreenState extends ConsumerState<Customer360Screen>
       for (final r in mergeAutopilot(List<Map<String, dynamic>>.from(pa), apRows)) {
         final pid = r['product_id'] as String?;
         if (pid == null) continue;
-        if (r['source'] != 'invoice') history.add({
+        if (r['source'] != 'invoice') {
+          history.add({
           'pid': pid,
           'present': r['is_present'] == true,
           'at': r['surveyed_at'] as String?,
         });
+        }
         if (!seenP.add(pid)) continue;
         placement.add({
           'product_id': pid,

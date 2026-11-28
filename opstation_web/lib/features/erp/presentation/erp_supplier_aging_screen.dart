@@ -2,11 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../../core/theme/app_theme.dart';
-import '../../../core/layout/main_layout.dart';
 import '../../../core/format/money.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/widgets/responsive.dart';
@@ -119,10 +117,12 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
     } catch (e) {
       // ignore: avoid_print
       print('[SupplierAging] suppliers error: $e');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _err = 'Could not load suppliers: ${e.toString().split('\n').first}';
         _loading = false;
       });
+      }
       return;
     }
 
@@ -226,8 +226,9 @@ class _ErpSupplierAgingScreenState extends ConsumerState<ErpSupplierAgingScreen>
 
   void _toggleSort(String col) {
     setState(() {
-      if (_sortBy == col) _sortDesc = !_sortDesc;
-      else { _sortBy = col; _sortDesc = true; }
+      if (_sortBy == col) {
+        _sortDesc = !_sortDesc;
+      } else { _sortBy = col; _sortDesc = true; }
     });
   }
 

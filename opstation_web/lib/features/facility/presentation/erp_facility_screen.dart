@@ -9,7 +9,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../erp/services/asset_pdf.dart';

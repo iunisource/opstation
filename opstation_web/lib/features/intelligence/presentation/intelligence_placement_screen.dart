@@ -4,11 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/search/text_search.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
-import 'package:printing/printing.dart';
 import '../../product_lines/product_line_rules.dart';
 import '../../product_lines/product_lines_repo.dart';
 import '../../../core/share/share_file.dart';
@@ -950,7 +948,9 @@ class _PlacementTrendChartState extends State<_PlacementTrendChart> {
       final spots = List<FlSpot>.generate(_days, (i) =>
           FlSpot(i.toDouble(), (perDay[i]?.length ?? 0).toDouble()));
       double maxY = 4;
-      for (final s in spots) if (s.y > maxY) maxY = s.y;
+      for (final s in spots) {
+        if (s.y > maxY) maxY = s.y;
+      }
       if (!mounted) return;
       setState(() { _spots = spots; _maxY = (maxY * 1.25).ceilToDouble(); _loading = false; });
     } catch (e) {

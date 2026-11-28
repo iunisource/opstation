@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../../../core/theme/app_theme.dart';
@@ -125,7 +124,9 @@ class _ErpTrialBalanceScreenState extends ConsumerState<ErpTrialBalanceScreen> {
       final kids = _children[code] ?? const [];
       out.add(_Line(r, hasChildren: kids.isNotEmpty, code: code));
       if (kids.isNotEmpty && _expanded.contains(code)) {
-        for (final k in kids) out.add(_Line(k, isChild: true));
+        for (final k in kids) {
+          out.add(_Line(k, isChild: true));
+        }
       }
     }
     return out;

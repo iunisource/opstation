@@ -549,8 +549,9 @@ class _ErpAutomationScreenState extends ConsumerState<ErpAutomationScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(onPressed: () async {
             String? problem;
-            if (name.text.trim().isEmpty) problem = 'Give the automation a name';
-            else if (count == 0) problem = 'Pick at least one category or product';
+            if (name.text.trim().isEmpty) {
+              problem = 'Give the automation a name';
+            } else if (count == 0) problem = 'Pick at least one category or product';
             else if (scope == 'company' && target == null) problem = 'Choose the branch where drafts are created';
             else if (trig == 'rule_min' && d(minQty) <= 0) problem = 'Set the level to act at';
             else if (qtyMode == 'max_level' && d(maxLevel) <= 0) problem = 'Set the level to fill up to';

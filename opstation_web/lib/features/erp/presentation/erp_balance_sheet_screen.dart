@@ -70,8 +70,10 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
         });
         bsRows = List<Map<String, dynamic>>.from(bsRes as List);
       } catch (e) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Balance sheet error: $e'), duration: const Duration(seconds: 6)));
+        }
       }
 
       // level-4 detail for drill-down (same all-branch scope as the summary)
@@ -274,7 +276,9 @@ class _ErpBalanceSheetScreenState extends ConsumerState<ErpBalanceSheetScreen> {
       final kids = _children[code] ?? const [];
       rowWidgets.add(_bsRow(fmt, r, kids.isNotEmpty, code, negate));
       if (kids.isNotEmpty && _expanded.contains(code)) {
-        for (final k in kids) rowWidgets.add(_bsChildRow(fmt, k, negate));
+        for (final k in kids) {
+          rowWidgets.add(_bsChildRow(fmt, k, negate));
+        }
       }
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

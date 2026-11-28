@@ -738,7 +738,7 @@ class ReportPdfBuilder {
           if (showSalesperson) '',
           '',
           if (showLast) '',
-          '${(grandTotalKm - reimb!.paidKm).clamp(0, double.infinity).toStringAsFixed(2)} km',
+          '${(grandTotalKm - reimb.paidKm).clamp(0, double.infinity).toStringAsFixed(2)} km',
         ],
       ],
     ];

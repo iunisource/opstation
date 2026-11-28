@@ -1401,11 +1401,21 @@ class _ErpAdminSettingsScreenState
       adminSettingsChangeTick.value++;
     } catch (e) {
       if (!mounted) return;
-      setState(() { if (neg) _blockNegStock = !v; else _blockZeroCostReceipt = !v; });
+      setState(() { if (neg) {
+        _blockNegStock = !v;
+      } else {
+        _blockZeroCostReceipt = !v;
+      } });
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Could not save: $e')));
     } finally {
-      if (mounted) setState(() { if (neg) _savingSerious = false; else _savingSerious2 = false; });
+      if (mounted) {
+        setState(() { if (neg) {
+        _savingSerious = false;
+      } else {
+        _savingSerious2 = false;
+      } });
+      }
     }
   }
 
@@ -4268,9 +4278,11 @@ class _DashboardPasswordPanelState extends State<_DashboardPasswordPanel> {
             behavior: SnackBarBehavior.floating));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Could not save: ' + e.toString().split('\n').first),
           behavior: SnackBarBehavior.floating));
+      }
     }
   }
 

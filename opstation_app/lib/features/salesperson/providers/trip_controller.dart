@@ -551,8 +551,20 @@ class TripController extends AsyncNotifier<TripState> {
   /// this salesperson's own open book.
   Future<void> _checkReceiptBook(int amount, String? receiptNumber) async {
     if (amount <= 0 || receiptNumber == null) return;
-    await ReceiptBooks.ensureLoaded(ref.read(appDatabaseProvider));
-    final p = ReceiptBooks.problem(receiptNumber, localReceiptSlips());
+    final db = ref.read(appDatabaseProvider);
+    await ReceiptBooks.ensureLoaded(db);
+    var p = ReceiptBooks.problem(receiptNumber, localReceiptSlips());
+    if (p != null) {
+      // The list on the phone can be behind: the office may have freed or
+      // corrected a number since it was last fetched. Ask the server once
+      // before turning the salesperson away.
+      final org = ref.read(orgIdProvider);
+      if (org != null) {
+        await ReceiptBooks.refresh(db, org)
+            .timeout(const Duration(seconds: 6), onTimeout: () {});
+        p = ReceiptBooks.problem(receiptNumber, localReceiptSlips());
+      }
+    }
     if (p != null) throw ArgumentError(p);
   }
 

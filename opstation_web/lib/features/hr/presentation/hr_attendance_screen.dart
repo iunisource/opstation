@@ -56,7 +56,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
   void initState() { super.initState(); WidgetsBinding.instance.addPostFrameCallback((_) => _init()); }
 
   @override
-  void dispose() { for (final r in _rows) r.remarks.dispose(); super.dispose(); }
+  void dispose() { for (final r in _rows) {
+    r.remarks.dispose();
+  } super.dispose(); }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
   String _fmt(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
@@ -85,7 +87,7 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final worked = wh != null && wh > 0;
     if (_isRestWeekday(d) && !worked) return 'rest_day';
     if (raw == null) return _isRestWeekday(d) ? 'rest_day' : '';
-    if (raw == 'present' && worked && wh! <= _halfDayHrs(shift)) return 'half_day';
+    if (raw == 'present' && worked && wh <= _halfDayHrs(shift)) return 'half_day';
     return raw;
   }
   Map<String, dynamic>? _shiftFor(String? shiftId) => shiftId != null ? _shiftById[shiftId] : null;
@@ -124,16 +126,22 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     Map<String, Map<String, dynamic>> existing = {};
     try {
       final rows = await Supabase.instance.client.from('hr_attendance').select().eq('org_id', orgId).eq('att_date', dateStr);
-      for (final r in (rows as List)) existing[r['employee_id'] as String] = Map<String, dynamic>.from(r);
+      for (final r in (rows as List)) {
+        existing[r['employee_id'] as String] = Map<String, dynamic>.from(r);
+      }
     } catch (_) {}
     // Unapproved absences on this date whose extra day was already placed later.
     final penaltyPlaced = <String>{};
     try {
       final pr = await Supabase.instance.client.from('hr_attendance').select('employee_id')
           .eq('org_id', orgId).eq('is_penalty', true).eq('penalty_source_date', dateStr);
-      for (final r in (pr as List)) penaltyPlaced.add('${r['employee_id']}');
+      for (final r in (pr as List)) {
+        penaltyPlaced.add('${r['employee_id']}');
+      }
     } catch (_) {}
-    for (final r in _rows) r.remarks.dispose();
+    for (final r in _rows) {
+      r.remarks.dispose();
+    }
     _rows.clear();
     for (final e in _employees) {
       final rec = existing[e['id']];
@@ -187,7 +195,11 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final t = await showTimePicker(context: context, initialTime: initial);
     if (t == null) return;
     final s = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-    setState(() { if (isIn) r.checkIn = s; else r.checkOut = s; });
+    setState(() { if (isIn) {
+      r.checkIn = s;
+    } else {
+      r.checkOut = s;
+    } });
   }
 
   void _stampNow(_Row r, bool isIn) {
@@ -258,7 +270,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     _snack(n == 0 ? 'Nothing to save' : 'Saved $n row(s)');
   }
 
-  void _markAll(String status) { if (!_canWrite) return; setState(() { for (final r in _visible) r.status = status; }); }
+  void _markAll(String status) { if (!_canWrite) return; setState(() { for (final r in _visible) {
+    r.status = status;
+  } }); }
 
   Color _statusColor(String s) {
     switch (s) {
@@ -381,7 +395,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
     final narrow = isNarrow(context);
     final vis = _visible;
     final counts = <String, int>{};
-    for (final r in vis) counts[r.status] = (counts[r.status] ?? 0) + 1;
+    for (final r in vis) {
+      counts[r.status] = (counts[r.status] ?? 0) + 1;
+    }
 
     final toolbarChildren = <Widget>[
           const Text('Attendance', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
@@ -648,7 +664,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
       }).toList();
 
       final days = <DateTime>[];
-      for (var d = _d0(from); !d.isAfter(_d0(to)); d = d.add(const Duration(days: 1))) days.add(d);
+      for (var d = _d0(from); !d.isAfter(_d0(to)); d = d.add(const Duration(days: 1))) {
+        days.add(d);
+      }
       final single = days.length <= 1;
 
       String esc(String? s) => (s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -680,7 +698,9 @@ class _State extends ConsumerState<HrAttendanceScreen> {
             '${rows.isEmpty ? '<tr><td colspan="9">No employees.</td></tr>' : rows}</tbody></table>';
       } else {
         String head = '<th class="emp">Employee</th>';
-        for (final d in days) head += '<th class="day">${d.day}</th>';
+        for (final d in days) {
+          head += '<th class="day">${d.day}</th>';
+        }
         head += '<th class="r">Hrs var</th><th class="r">Days</th><th class="r">Deducted</th>';
         String rows = '';
         for (final e in emps) {

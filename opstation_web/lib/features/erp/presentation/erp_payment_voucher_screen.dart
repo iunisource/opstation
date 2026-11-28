@@ -66,7 +66,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
     WidgetsBinding.instance.addPostFrameCallback((_) { _loadMaster(); _loadVouchersAndAutoSelect(); });
     _addLine();
   }
-  @override void dispose() { _ctxOverlay?.remove(); _voucherDateCtrl.dispose(); _totalVN.dispose(); for (final l in _lines) l.dispose(); super.dispose(); }
+  @override void dispose() { _ctxOverlay?.remove(); _voucherDateCtrl.dispose(); _totalVN.dispose(); for (final l in _lines) {
+    l.dispose();
+  } super.dispose(); }
 
   void _snack(String m) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), behavior: SnackBarBehavior.floating)); }
 
@@ -181,7 +183,7 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
               final href = html.window.location.href;
               final hashIdx = href.indexOf('#');
               final origin = hashIdx != -1 ? href.substring(0, hashIdx) : href;
-              openAppLink(context, '/erp/payment-vouchers?id=${vNum}');
+              openAppLink(context, '/erp/payment-vouchers?id=$vNum');
               _ctxOverlay?.remove(); _ctxOverlay = null;
             },
             child: Padding(
@@ -200,7 +202,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   }
 
   void _newVoucher() {
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     setState(() { _currentVoucher = null; _cashAccountId = null; _cashAccountName = ''; _status = 'draft'; _lines = [_VLine()]; _voucherDate = DateTime.now(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); });
     _refreshTotal();
   }
@@ -208,7 +212,9 @@ class _ErpPaymentVoucherScreenState extends ConsumerState<ErpPaymentVoucherScree
   Future<void> _loadVoucher(Map<String, dynamic> v) async {
     try {
       final rows = await Supabase.instance.client.from('cpv_voucher_lines').select().eq('voucher_id', v['id'] as String).order('line_order');
-      for (final l in _lines) l.dispose();
+      for (final l in _lines) {
+        l.dispose();
+      }
       final newLines = (rows as List).map((r) { final l = _VLine(); l.accountId = r['account_id'] as String?; l.accountName = r['account_name'] as String? ?? ''; l.accountType = r['account_type'] as String? ?? 'coa'; l.descCtrl.text = r['description'] as String? ?? ''; l.amtCtrl.text = (r['amount'] as num?)?.toStringAsFixed(2) ?? ''; return l; }).toList();
       if (mounted) { setState(() { _currentVoucher = v; _cashAccountId = v['cash_account_id'] as String?; _cashAccountName = v['cash_account_name'] as String? ?? ''; _status = v['status'] as String? ?? 'draft'; _lines = newLines.isEmpty ? [_VLine()] : newLines; _voucherDate = (() { final s = (v['voucher_date'] as String?) ?? ''; final iso = DateTime.tryParse(s); if (iso != null) return iso; try { return DateFormat('dd MMM yyyy').parse(s); } catch (_) {} return DateTime.now(); })(); _voucherDateCtrl.text = DateFormat('dd MMM yyyy').format(_voucherDate); }); _refreshTotal(); _loadAudit(v['id'] as String); }
     } catch (e) { _snack(friendlyError('Could not load', e)); }

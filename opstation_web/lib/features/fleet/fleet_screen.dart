@@ -143,7 +143,7 @@ class _FleetScreenState extends ConsumerState<FleetScreen> {
       search: _search,
       filters: _filters,
       states: states,
-      openTasks: {for (final e in _openTasks.entries) '${e.key}': e.value},
+      openTasks: {for (final e in _openTasks.entries) e.key: e.value},
       searchText: (v) => '${v['reg_no']} ${vehicleTitle(v)} ${_driversOf(v)}',
     );
     final narrowed = describeFleetFilter(_filters, _search);

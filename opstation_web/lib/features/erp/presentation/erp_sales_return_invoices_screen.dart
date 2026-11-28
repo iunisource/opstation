@@ -61,7 +61,11 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     await _loadDetail(id);
   }
 
-  @override void dispose() { for (final c in _priceCtrl.values) c.dispose(); for (final c in _discCtrl.values) c.dispose(); _remarksCtrl.dispose(); super.dispose(); }
+  @override void dispose() { for (final c in _priceCtrl.values) {
+    c.dispose();
+  } for (final c in _discCtrl.values) {
+    c.dispose();
+  } _remarksCtrl.dispose(); super.dispose(); }
 
   // Remarks: editable on a draft; admins can still correct them after issue
   // (they don't change any amount). Shown on the print and in the ledger.
@@ -165,11 +169,13 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
       await Supabase.instance.client.from('sales_return_invoices')
           .update({'voucher_date': iso, 'updated_at': DateTime.now().toUtc().toIso8601String()}).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'date_changed', 'Voucher date set to $iso');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['voucher_date'] = iso;
         final i = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (i >= 0) _invoices[i]['voucher_date'] = iso;
       });
+      }
       _showSnack('Date changed');
     } catch (e) { _showSnack(friendlyError('The date could not be changed', e)); }
   }
@@ -184,8 +190,12 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
   }
 
   void _initCtrls() {
-    for (final c in _priceCtrl.values) c.dispose();
-    for (final c in _discCtrl.values) c.dispose();
+    for (final c in _priceCtrl.values) {
+      c.dispose();
+    }
+    for (final c in _discCtrl.values) {
+      c.dispose();
+    }
     _priceCtrl = {}; _discCtrl = {};
     for (final it in _items) {
       final id = it['id'] as String;
@@ -251,7 +261,8 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         'updated_at': now,
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'supervised', 'Supervised by ${userName ?? userId ?? 'admin'}');
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = userId; _detail['supervised_at'] = now;
         _detail['supervised_by_name'] = userName;
         _detail['supervised_signature_url'] = sigUrl;
@@ -259,6 +270,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = now;
       });
+      }
       ref.invalidate(sriSupervisePendingProvider);
       _showSnack('Marked as supervised');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -317,7 +329,8 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
           ]);
         } catch (_) { /* audit is best-effort */ }
       }
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         final idset = ids.toSet();
         for (final inv in _invoices) {
           if (idset.contains(inv['id'])) {
@@ -332,6 +345,7 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         }
         _supSelected.clear();
       });
+      }
       ref.invalidate(sriSupervisePendingProvider);
       _showSnack('Supervised ${ids.length} sales return invoice(s)');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -354,12 +368,14 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', _detail['id']);
       await _logAudit(_detail['id'] as String, 'unsupervised', null);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _detail['supervised_by'] = null; _detail['supervised_at'] = null;
         _detail['supervised_by_name'] = null; _detail['supervised_signature_url'] = null; _detail['supervised_stamp_url'] = null;
         final idx = _invoices.indexWhere((r) => r['id'] == _detail['id']);
         if (idx >= 0) _invoices[idx]['supervised_at'] = null;
       });
+      }
       ref.invalidate(sriSupervisePendingProvider);
       _showSnack('Supervision cleared');
     } catch (e) { _showSnack(friendlyError('That did not save', e)); }
@@ -475,7 +491,9 @@ class _ErpSalesReturnInvoicesScreenState extends ConsumerState<ErpSalesReturnInv
     // Only flush edited prices when this user is allowed to edit them —
     // otherwise the guard inside _saveItemPrice would snack once per line.
     if (_canEditPrices) {
-      for (final it in _items) await _saveItemPrice(it['id'] as String);
+      for (final it in _items) {
+        await _saveItemPrice(it['id'] as String);
+      }
     }
     for (final it in _items) {
       final price = (it['unit_price'] as num?)?.toDouble() ?? 0;

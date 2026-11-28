@@ -40,7 +40,7 @@ class CustomerReviews {
         try {
           final r = await db.storage.from('opstation-photos').createSignedUrls(paths, 3600);
           for (final s in r) {
-            if (s.signedUrl != null) urls[s.path!] = s.signedUrl!;
+            if (s.signedUrl != null) urls[s.path] = s.signedUrl;
           }
         } catch (_) {}
       }
@@ -110,7 +110,7 @@ Future<void> showLocationLifecycle(BuildContext context, {
       try {
         final r = await db.storage.from('opstation-photos').createSignedUrls(paths, 3600);
         for (final s in r) {
-          if (s.signedUrl != null) urls[s.path!] = s.signedUrl!;
+          if (s.signedUrl != null) urls[s.path] = s.signedUrl;
         }
       } catch (_) {}
     }

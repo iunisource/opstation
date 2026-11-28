@@ -165,7 +165,9 @@ class _ErpPaymentVouchersScreenState extends ConsumerState<ErpPaymentVouchersScr
   Widget build(BuildContext context) {
     final branch = ref.watch(selectedBranchProvider);
     double totalPaid = 0;
-    for (final v in _vouchers) totalPaid += (v['amount'] as num?)?.toDouble() ?? 0;
+    for (final v in _vouchers) {
+      totalPaid += (v['amount'] as num?)?.toDouble() ?? 0;
+    }
 
     return Container(
       color: AppTheme.background,

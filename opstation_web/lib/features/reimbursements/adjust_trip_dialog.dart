@@ -559,7 +559,7 @@ Future<void> _printClaimTripSummaryRun(
         approvedAt: approvedAt,
         verifyUrl: verifyUrl,
       ),
-      adjustNote: adjusted ? reimbAdjustNote(existing!, reasons: false, defaultAllowance: allowanceDefault) : null,
+      adjustNote: adjusted ? reimbAdjustNote(existing, reasons: false, defaultAllowance: allowanceDefault) : null,
     );
     await outputPdf(bytes, adjusted ? 'Trip Summary (adjusted)' : 'Trip Summary',
         date: DateTime.tryParse('${t['started_at'] ?? ''}')?.toLocal());

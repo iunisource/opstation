@@ -6,7 +6,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/search/text_search.dart';
@@ -226,7 +225,9 @@ class _ErpSalesReturnReportScreenState extends ConsumerState<ErpSalesReturnRepor
   List<String> get _prodGroupChoices {
     if (_fMainGroups.isEmpty) return _prodGroupOpts;
     final allowed = <String>{};
-    for (final mg in _fMainGroups) allowed.addAll(_mainToGroups[mg] ?? const {});
+    for (final mg in _fMainGroups) {
+      allowed.addAll(_mainToGroups[mg] ?? const {});
+    }
     return _prodGroupOpts.where(allowed.contains).toList();
   }
 
@@ -234,11 +235,15 @@ class _ErpSalesReturnReportScreenState extends ConsumerState<ErpSalesReturnRepor
     Set<String>? allowed;
     if (_fMainGroups.isNotEmpty) {
       allowed = <String>{};
-      for (final mg in _fMainGroups) allowed.addAll(_mainToSubs[mg] ?? const {});
+      for (final mg in _fMainGroups) {
+        allowed.addAll(_mainToSubs[mg] ?? const {});
+      }
     }
     if (_fProdGroups.isNotEmpty) {
       final byGroup = <String>{};
-      for (final g in _fProdGroups) byGroup.addAll(_groupToSubs[g] ?? const {});
+      for (final g in _fProdGroups) {
+        byGroup.addAll(_groupToSubs[g] ?? const {});
+      }
       allowed = allowed == null ? byGroup : allowed.intersection(byGroup);
     }
     if (allowed == null) return _subGroupOpts;

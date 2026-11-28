@@ -99,20 +99,24 @@ class _State extends ConsumerState<HrLeaveScreen> {
     final rows = await Supabase.instance.client.from('hr_employees')
         .select('id, full_name, employee_code, branch_id')
         .eq('org_id', orgId).eq('status', 'active').eq('approval_status', 'approved').eq('is_voided', false).order('full_name');
-    if (mounted) setState(() {
+    if (mounted) {
+      setState(() {
       _employees = List<Map<String, dynamic>>.from(rows);
       _empName = {for (final e in _employees) e['id'] as String: e['full_name'] as String? ?? ''};
       _empById = {for (final e in _employees) e['id'] as String: e};
     });
+    }
   }
 
   Future<void> _loadTypes() async {
     final orgId = _orgId; if (orgId == null) return;
     final rows = await Supabase.instance.client.from('hr_leave_types').select().eq('org_id', orgId).order('name');
-    if (mounted) setState(() {
+    if (mounted) {
+      setState(() {
       _types = List<Map<String, dynamic>>.from(rows);
       _typeById = {for (final t in _types) t['id'] as String: t};
     });
+    }
   }
 
   Future<void> _loadRequests() async {
@@ -181,8 +185,9 @@ class _State extends ConsumerState<HrLeaveScreen> {
       if (fd == null || fd.year != year) continue;
       if (_current != null && r['id'] == _current!['id']) continue; // exclude the one being edited
       final d = (r['days'] as num?)?.toDouble() ?? 0;
-      if (r['status'] == 'approved') used += d;
-      else if (r['status'] == 'pending') pending += d;
+      if (r['status'] == 'approved') {
+        used += d;
+      } else if (r['status'] == 'pending') pending += d;
     }
     return {'quota': quota, 'used': used, 'pending': pending, 'remaining': quota - used};
   }

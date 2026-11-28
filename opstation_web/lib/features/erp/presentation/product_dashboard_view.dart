@@ -603,7 +603,7 @@ class _ProductDashboardViewState extends State<ProductDashboardView> {
                   color: _n(r['quantity']) < 0 ? AppTheme.danger : AppTheme.primary,
                 ),
               )),
-              SizedBox(width: 110, child: Text('${_q(r['quantity'])} ${uom}'.trim(), textAlign: TextAlign.right,
+              SizedBox(width: 110, child: Text('${_q(r['quantity'])} $uom'.trim(), textAlign: TextAlign.right,
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _n(r['quantity']) < 0 ? AppTheme.danger : AppTheme.textPrimary))),
             ]),
           ),

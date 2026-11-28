@@ -93,7 +93,7 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
     final worked = wh != null && wh > 0;
     if (_isRestWeekday(d) && !worked) return 'rest_day';
     if (raw == null) return _isRestWeekday(d) ? 'rest_day' : 'absent';
-    if (raw == 'present' && worked && wh! <= _halfDayHrs(_shift)) return 'half_day';
+    if (raw == 'present' && worked && wh <= _halfDayHrs(_shift)) return 'half_day';
     return raw;
   }
 
@@ -202,7 +202,11 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
       lastDate: DateTime(2100),
     );
     if (picked == null) return;
-    setState(() { if (isFrom) _from = picked; else _to = DateTime(picked.year, picked.month, picked.day); });
+    setState(() { if (isFrom) {
+      _from = picked;
+    } else {
+      _to = DateTime(picked.year, picked.month, picked.day);
+    } });
     await _reload();
   }
 
@@ -251,13 +255,17 @@ class _State extends ConsumerState<HrEmployeeAttendanceScreen> {
 
   Map<String, int> _counts(List<_Rec> recs) {
     final c = <String, int>{};
-    for (final r in recs) c[r.status] = (c[r.status] ?? 0) + 1;
+    for (final r in recs) {
+      c[r.status] = (c[r.status] ?? 0) + 1;
+    }
     return c;
   }
 
   double _totalHours(List<_Rec> recs) {
     double t = 0;
-    for (final r in recs) t += r.hours ?? 0;
+    for (final r in recs) {
+      t += r.hours ?? 0;
+    }
     return (t * 100).roundToDouble() / 100;
   }
 

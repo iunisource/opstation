@@ -316,7 +316,9 @@ class TeamReportPdf {
       if (prevFull == null || t.length >= prevLen) {
         out.add(n); prevFull = n;
       } else {
-        var p10 = 1; for (var i = 0; i < t.length; i++) p10 *= 10;
+        var p10 = 1; for (var i = 0; i < t.length; i++) {
+          p10 *= 10;
+        }
         final e = (prevFull - (prevFull % p10)) + n;
         out.add(e); prevFull = e;
       }
@@ -334,7 +336,9 @@ class TeamReportPdf {
     for (var i = 1; i < nums.length; i++) {
       final gap = nums[i] - nums[i - 1];
       if (gap > 1 && gap <= 20) {
-        for (var n = nums[i - 1] + 1; n < nums[i]; n++) missing.add(n);
+        for (var n = nums[i - 1] + 1; n < nums[i]; n++) {
+          missing.add(n);
+        }
       }
     }
     if (missing.isEmpty) return [];

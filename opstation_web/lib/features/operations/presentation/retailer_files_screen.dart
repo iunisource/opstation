@@ -337,7 +337,7 @@ class _RetailerFilesScreenState extends ConsumerState<RetailerFilesScreen> {
                               style: const TextStyle(fontSize: 12),
                               overflow: TextOverflow.ellipsis),
                         ),
-                        Text('(${fileType})',
+                        Text('($fileType)',
                             style: const TextStyle(
                                 fontSize: 11, color: AppTheme.textSecondary)),
                       ]),

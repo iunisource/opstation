@@ -5,7 +5,6 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import '../../../core/share/share_file.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../../../core/pdf/rtl_text_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -315,7 +314,7 @@ class VoucherPdf {
         margin: const pw.EdgeInsets.all(28),
         buildForeground: (watermark == null || watermark.isEmpty)
             ? null
-            : (ctx) => _watermarkLayer(watermark!),
+            : (ctx) => _watermarkLayer(watermark),
       ),
       build: (ctx) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
         pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
@@ -603,7 +602,7 @@ class VoucherPdf {
         margin: const pw.EdgeInsets.fromLTRB(24, 18, 24, 18),
         buildForeground: (watermark == null || watermark.isEmpty)
             ? null
-            : (ctx) => _watermarkLayer(watermark!),
+            : (ctx) => _watermarkLayer(watermark),
       ),
       header: (ctx) => ctx.pageNumber == 1
           ? pw.SizedBox.shrink()

@@ -6,8 +6,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/responsive.dart';
-import '../../../core/widgets/adaptive_master_detail.dart';
 import '../../auth/auth_controller.dart';
 import '../../../core/layout/main_layout.dart';
 import 'running_dot.dart';
@@ -126,11 +124,13 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       if (_histStatus != 'all') q = q.eq('status', _histStatus);
       if (_histWorker != null) q = q.eq('assigned_to', _histWorker as Object);
       final rows = await q.order('voucher_date', ascending: false).limit(2000);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _histJobs = List<Map<String, dynamic>>.from(rows as List);
         _histLoading = false;
         _histInit = true;
       });
+      }
     } catch (e) {
       if (mounted) setState(() { _histLoading = false; _histInit = true; });
     }
@@ -323,7 +323,11 @@ class _State extends ConsumerState<ErpProductionFloorScreen> {
       firstDate: DateTime(2020), lastDate: DateTime(2100),
     );
     if (d != null) {
-      setState(() { if (isFrom) _histFrom = d; else _histTo = d; });
+      setState(() { if (isFrom) {
+        _histFrom = d;
+      } else {
+        _histTo = d;
+      } });
       _loadHistory();
     }
   }
@@ -623,13 +627,15 @@ class _JobTimelineDialogState extends State<_JobTimelineDialog> {
           for (final u in (us as List)) { names[u['id'] as String] = (u['name'] as String?) ?? ''; }
         } catch (_) {}
       }
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _runs = List<Map<String, dynamic>>.from(runs);
         _audit = List<Map<String, dynamic>>.from(auditRows);
         _qc = List<Map<String, dynamic>>.from(qcRows);
         _userNames = names;
         _loading = false;
       });
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }

@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/saving_overlay.dart';
 import '../../auth/auth_controller.dart';

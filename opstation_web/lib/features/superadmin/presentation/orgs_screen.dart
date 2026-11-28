@@ -341,6 +341,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
         }
       }
     }
+    return null;
   }
 
   void _showDialog(BuildContext context, Map<String, dynamic>? org) {
@@ -455,7 +456,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                     const SizedBox(height: 24),
                     const Divider(height: 1),
                     const SizedBox(height: 12),
-                    OrgStoragePanel(orgId: org!['id'] as String),
+                    OrgStoragePanel(orgId: org['id'] as String),
                     const SizedBox(height: 12),
                     const Divider(height: 1),
                   ],
@@ -544,7 +545,7 @@ class _OrgsScreenState extends ConsumerState<OrgsScreen> {
                   );
                   // Apply the chosen costing method to inventory_settings (the engine's source of truth).
                   if (!methodLocked) {
-                    final targetOrg = isEdit ? (org!['id'] as String) : newOrgId;
+                    final targetOrg = isEdit ? (org['id'] as String) : newOrgId;
                     if (targetOrg != null) {
                       try {
                         await Supabase.instance.client.rpc('set_org_costing_method',

@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'package:excel/excel.dart' as xls;
 
 import '../../../core/theme/app_theme.dart';
@@ -478,7 +477,11 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                       dense: true, controlAffinity: ListTileControlAffinity.leading,
                       title: Text(o, style: const TextStyle(fontSize: 13.5)),
                       value: temp.contains(o),
-                      onChanged: (v) => setD(() { if (v == true) temp.add(o); else temp.remove(o); }),
+                      onChanged: (v) => setD(() { if (v == true) {
+                        temp.add(o);
+                      } else {
+                        temp.remove(o);
+                      } }),
                     ),
                   if (list.isEmpty) const Padding(padding: EdgeInsets.all(20), child: Text('No options', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
                 ]),
@@ -553,7 +556,11 @@ class _ErpPriceListScreenState extends ConsumerState<ErpPriceListScreen> {
                             subtitle: Text([p.sku, p.main, p.group].where((s) => s.isNotEmpty).join('  ·  '),
                                 style: const TextStyle(fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
                             value: temp.contains(p.id),
-                            onChanged: (v) => setD(() { if (v == true) temp.add(p.id); else temp.remove(p.id); }),
+                            onChanged: (v) => setD(() { if (v == true) {
+                              temp.add(p.id);
+                            } else {
+                              temp.remove(p.id);
+                            } }),
                           );
                         }),
               )),

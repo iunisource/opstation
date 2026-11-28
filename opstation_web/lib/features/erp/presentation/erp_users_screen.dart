@@ -160,20 +160,30 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
     notes.add((Icons.receipt_long, AppTheme.primary,
         '$total voucher${total == 1 ? '' : 's'} created in 30 days${topMod != null ? ' — mostly $topMod ($topN)' : ''}.'));
     if (approvals > 0) notes.add((Icons.verified, AppTheme.primary, '$approvals purchase order${approvals == 1 ? '' : 's'} approved.'));
-    if (modules.isNotEmpty) notes.add((Icons.dashboard_customize_outlined, AppTheme.textSecondary,
+    if (modules.isNotEmpty) {
+      notes.add((Icons.dashboard_customize_outlined, AppTheme.textSecondary,
         'Works across: ${[for (final k in modules) '$k (${(byModule[k] as num).toInt()})'].join(', ')}.'));
+    }
     if (voided > 0) {
       notes.add((voidPct >= 8 ? Icons.error_outline : Icons.undo, voidPct >= 8 ? AppTheme.danger : amber,
           '$voided (${voidPct.toStringAsFixed(0)}%) of their vouchers were later voided${voidPct >= 8 ? ' — high rework, worth reviewing' : ''}.'));
     }
-    if (backdated > 0) notes.add((Icons.event_repeat, amber,
+    if (backdated > 0) {
+      notes.add((Icons.event_repeat, amber,
         '$backdated entr${backdated == 1 ? 'y was' : 'ies were'} back-dated (voucher date well before entry) — check timing controls.'));
-    if (afterHours > 0 && total > 0 && afterHours / total >= 0.25) notes.add((Icons.nightlight_round, amber,
+    }
+    if (afterHours > 0 && total > 0 && afterHours / total >= 0.25) {
+      notes.add((Icons.nightlight_round, amber,
         '$afterHours of $total entered after hours (after 8 PM / before 6 AM).'));
-    if (daysSince != null && daysSince >= 5) notes.add((Icons.event_busy, Colors.orange,
+    }
+    if (daysSince != null && daysSince >= 5) {
+      notes.add((Icons.event_busy, Colors.orange,
         'No vouchers entered in the last $daysSince days.'));
-    if (notes.length <= (modules.isNotEmpty ? 2 : 1)) notes.add((Icons.thumb_up, AppTheme.success,
+    }
+    if (notes.length <= (modules.isNotEmpty ? 2 : 1)) {
+      notes.add((Icons.thumb_up, AppTheme.success,
         'Steady, clean usage — low rework and consistent entry.'));
+    }
 
     final concerns = notes.where((n) => n.$2 == AppTheme.danger).length;
     final warns = notes.where((n) => n.$2 == amber || n.$2 == Colors.orange).length;
@@ -556,7 +566,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                       border: Border.all(color: AppTheme.border),
                       borderRadius: BorderRadius.circular(8)),
                   child: Column(
-                    children: (branches as List).map((b) {
+                    children: (branches).map((b) {
                       final bid = b['id'] as String;
                       return CheckboxListTile(
                         dense: true,
@@ -595,7 +605,7 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                       selected: currentScope == '*',
                       onSelected: (_) => setS(() => currentScope = '*'),
                     ),
-                    for (final b in (branches as List).where((b) => selectedBranches.contains(b['id'] as String)))
+                    for (final b in (branches).where((b) => selectedBranches.contains(b['id'] as String)))
                       ChoiceChip(
                         label: Text(b['name'] as String),
                         selected: currentScope == b['id'],
@@ -744,7 +754,9 @@ class _ErpUsersScreenState extends ConsumerState<ErpUsersScreen> {
                   final desiredPairs = <String>{};
                   permsByScope.forEach((scope, keys) {
                     if (scope != '*' && !selectedBranches.contains(scope)) return;
-                    for (final k in keys) desiredPairs.add('$scope|$k');
+                    for (final k in keys) {
+                      desiredPairs.add('$scope|$k');
+                    }
                   });
                   final grantedBy = ref.read(currentUserProvider)?.id;
                   // One request for all new grants, one per scope for removals

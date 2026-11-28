@@ -72,12 +72,16 @@ String _defaultStatusColorKey(String? s) {
   final v = (s ?? '').toLowerCase();
   if (v.isEmpty) return 'grey';
   if (v.contains('non') || v.contains('not_') || v.contains('lost') || v.contains('dispos') ||
-      v.contains('broken') || v.contains('scrap') || v.contains('dead') || v.contains('faulty')) return 'red';
+      v.contains('broken') || v.contains('scrap') || v.contains('dead') || v.contains('faulty')) {
+    return 'red';
+  }
   if (v.contains('repair') || v.contains('service') || v.contains('maint') || v.contains('pending')) return 'orange';
   if (v.contains('storage') || v.contains('store') || v.contains('spare')) return 'blue';
   if (v.contains('retired') || v.contains('idle')) return 'grey';
   if (v.contains('operative') || v.contains('in_use') || v.contains('working') || v.contains('active') ||
-      v.contains('ok') || v.contains('running') || v.contains('good')) return 'green';
+      v.contains('ok') || v.contains('running') || v.contains('good')) {
+    return 'green';
+  }
   return 'grey';
 }
 

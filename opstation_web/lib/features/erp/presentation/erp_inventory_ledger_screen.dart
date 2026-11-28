@@ -679,7 +679,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
           if (voucher != null) lines = await client.from('purchase_grn_items').select('*, products(name, sku)').eq('grn_id', refId);
           // A GRN carries quantities only. Once it is invoiced, show each line at
           // the invoice's (net) price so Price / Total are filled in.
-          if (voucher != null && (lines as List).isNotEmpty) {
+          if (voucher != null && (lines).isNotEmpty) {
             try {
               final invs = List<Map<String, dynamic>>.from(await client.from('purchase_invoices')
                   .select('id, voucher_number, is_voided').eq('grn_id', refId) as List)
@@ -698,7 +698,7 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
                   amtBy[pid] = (amtBy[pid] ?? 0) + lt;
                 }
                 lines = [
-                  for (final l in lines as List)
+                  for (final l in lines)
                     () {
                       final m = Map<String, dynamic>.from(l as Map);
                       final pid = '${m['product_id']}';
@@ -941,7 +941,11 @@ class _ErpInventoryLedgerScreenState extends ConsumerState<ErpInventoryLedgerScr
       double totalIn = 0, totalOut = 0;
       for (final m in _filteredMovements) {
         final qty = (m['quantity'] as num?)?.toDouble() ?? 0;
-        if (qty > 0) totalIn += qty; else totalOut += -qty;
+        if (qty > 0) {
+          totalIn += qty;
+        } else {
+          totalOut += -qty;
+        }
         final runQty = m['running_qty'] as double;
         final entryUom = m['uoms']?['abbreviation'] as String? ?? uomAbbr;
         final date = m['moved_at'] != null ? DateFormat(orgTime('d MMM yyyy HH:mm')).format(DateTime.parse(m['moved_at'] as String).toLocal()) : '-';

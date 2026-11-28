@@ -331,8 +331,9 @@ class _ErpSupplier360ScreenState extends ConsumerState<ErpSupplier360Screen>
         if (outstanding <= 0.005) continue;
         final invDate = DateTime.tryParse('${inv['voucher_date']}') ?? asOf;
         final age = asOf.difference(invDate).inDays;
-        if (age <= 30) cur += outstanding;
-        else if (age <= 60) b1 += outstanding;
+        if (age <= 30) {
+          cur += outstanding;
+        } else if (age <= 60) b1 += outstanding;
         else if (age <= 90) b2 += outstanding;
         else if (age <= 120) b3 += outstanding;
         else b4 += outstanding;

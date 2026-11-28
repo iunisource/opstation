@@ -481,7 +481,11 @@ class _LinkDialogState extends State<_LinkDialog> {
                         controlAffinity: ListTileControlAffinity.leading,
                         value: _selected.contains(r.email),
                         onChanged: (v) => setState(() {
-                          if (v == true) _selected.add(r.email); else _selected.remove(r.email);
+                          if (v == true) {
+                            _selected.add(r.email);
+                          } else {
+                            _selected.remove(r.email);
+                          }
                         }),
                         title: Text('${r.name} — ${r.orgName}', style: const TextStyle(fontSize: 13)),
                         subtitle: Text('${r.email} · ${r.role}',

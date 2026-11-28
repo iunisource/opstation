@@ -12,7 +12,6 @@ import '../../auth/auth_controller.dart';
 import '../pdf/report_pdf_builder.dart';
 import '../../../core/widgets/responsive.dart';
 import '../../../core/widgets/salesperson_picker.dart';
-import 'package:printing/printing.dart';
 import 'package:opstation_web/core/pdf/pdf_output.dart';
 import 'package:opstation_web/core/widgets/generating_overlay.dart';
 

@@ -83,7 +83,7 @@ class _CustomerHistoryScreenState
               .from('opstation-photos')
               .createSignedUrls(paths.toList(), 3600);
           for (final s in r) {
-            if (s.signedUrl != null) urls[s.path!] = s.signedUrl!;
+            if (s.signedUrl != null) urls[s.path] = s.signedUrl;
           }
         } catch (_) {}
       }

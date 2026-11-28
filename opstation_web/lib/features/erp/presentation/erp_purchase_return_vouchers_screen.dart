@@ -75,8 +75,12 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
 
   @override
   void dispose() {
-    for (final c in _priceCtrl.values) c.dispose();
-    for (final c in _discCtrl.values) c.dispose();
+    for (final c in _priceCtrl.values) {
+      c.dispose();
+    }
+    for (final c in _discCtrl.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -97,8 +101,12 @@ class _ErpPurchaseReturnVouchersScreenState extends ConsumerState<ErpPurchaseRet
 
   // ── Controllers for editable prices ────────────────────────────────────────
   void _initControllers() {
-    for (final c in _priceCtrl.values) c.dispose();
-    for (final c in _discCtrl.values) c.dispose();
+    for (final c in _priceCtrl.values) {
+      c.dispose();
+    }
+    for (final c in _discCtrl.values) {
+      c.dispose();
+    }
     _priceCtrl = {};
     _discCtrl = {};
     for (final it in _items) {

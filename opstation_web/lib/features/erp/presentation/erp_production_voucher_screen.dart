@@ -107,8 +107,12 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
   @override
   void dispose() {
     _outputQtyCtrl.dispose(); _notesCtrl.dispose();
-    for (final l in _components) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -179,8 +183,12 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   // ---------- form state ----------
   void _newVoucher() {
-    for (final l in _components) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _status = 'draft';
       _date = DateTime.now();
@@ -196,8 +204,12 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
       final client = Supabase.instance.client;
       final comps = await client.from('production_voucher_components').select().eq('voucher_id', v['id'] as String).order('line_order');
       final ohs = await client.from('production_voucher_overheads').select().eq('voucher_id', v['id'] as String).order('line_order');
-      for (final l in _components) l.dispose();
-      for (final l in _overheads) l.dispose();
+      for (final l in _components) {
+        l.dispose();
+      }
+      for (final l in _overheads) {
+        l.dispose();
+      }
       final newComps = (comps as List).map((r) {
         final l = _PComp();
         l.productId = r['product_id'] as String?;
@@ -215,7 +227,8 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
         if (a != 0) l.amountCtrl.text = _trim(a);
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
         final ds = v['voucher_date'] as String?;
@@ -228,6 +241,7 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
         _notesCtrl.text = v['notes'] as String? ?? '';
         _components = newComps; _overheads = newOh;
       });
+      }
       _fetchBase();
       _loadCompStock();
       _loadSpecs();
@@ -306,8 +320,12 @@ class _State extends ConsumerState<ErpProductionVoucherScreen> {
 
   void _rescale() {
     final scale = _bomBaseQty > 0 ? (_outQty / _bomBaseQty) : 1;
-    for (final l in _components) l.dispose();
-    for (final l in _overheads) l.dispose();
+    for (final l in _components) {
+      l.dispose();
+    }
+    for (final l in _overheads) {
+      l.dispose();
+    }
     final nc = _baseComps.map((b) {
       final l = _PComp();
       l.productId = b['product_id'] as String?;

@@ -431,7 +431,7 @@ Future<LabelPrinterSettings?> showLabelPrinterSetup(BuildContext context) async 
       return AlertDialog(
         title: const Text('Label printer setup'),
         content: SizedBox(width: 440, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (err != null) Text(err!, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5)),
+          if (err != null) Text(err, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5)),
           DropdownButtonFormField<String>(
             value: sel, isExpanded: true,
             decoration: const InputDecoration(labelText: 'Printer', isDense: true),

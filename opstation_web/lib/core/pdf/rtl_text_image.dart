@@ -2,7 +2,6 @@
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:js_util' as js_util;
-import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 /// True when the text contains any Arabic-script codepoint (covers Urdu, which
@@ -52,7 +51,7 @@ Future<pw.Widget?> rtlNoteImage(
       final fonts = js_util.getProperty(html.document, 'fonts');
       if (fonts != null) {
         await js_util.promiseToFuture(
-            js_util.callMethod(fonts, 'load', ['${weight}${fontPx}px "Noto Naskh Arabic"']));
+            js_util.callMethod(fonts, 'load', ['$weight${fontPx}px "Noto Naskh Arabic"']));
         await js_util.promiseToFuture(js_util.getProperty(fonts, 'ready'));
       }
     } catch (_) {/* system font fallback still shapes correctly */}

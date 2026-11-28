@@ -19,7 +19,7 @@ class AttDeduction {
 }
 
 String _d(String? iso) {
-  final d = DateTime.tryParse('${iso ?? ''}');
+  final d = DateTime.tryParse(iso ?? '');
   return d == null ? '' : DateFormat('d MMM').format(d);
 }
 

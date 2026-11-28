@@ -45,7 +45,9 @@ List<int> receiptSlipNumbers(String raw) {
     } else {
       // Shorthand: replace the trailing digits of the previous full number.
       var p10 = 1;
-      for (var i = 0; i < t.length; i++) p10 *= 10;
+      for (var i = 0; i < t.length; i++) {
+        p10 *= 10;
+      }
       final expanded = (prevFull - (prevFull % p10)) + n;
       out.add(expanded);
       prevFull = expanded;
@@ -1068,7 +1070,7 @@ class _TeamMember360ScreenState extends ConsumerState<TeamMember360Screen> {
                           color: Colors.amber.shade50,
                           border: Border.all(color: Colors.amber.shade300),
                           borderRadius: BorderRadius.circular(4)),
-                      child: Text('$n', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      child: Text(n, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                     ),
                 ]),
               ),

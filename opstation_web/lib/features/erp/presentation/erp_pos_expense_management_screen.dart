@@ -78,8 +78,11 @@ class _ErpPosExpenseManagementScreenState extends ConsumerState<ErpPosExpenseMan
   void _toggleAll(bool? v) {
     setState(() {
       _selectAll = v ?? false;
-      if (_selectAll) _selected.addAll(_filtered.map((e) => e['id'] as String));
-      else _selected.clear();
+      if (_selectAll) {
+        _selected.addAll(_filtered.map((e) => e['id'] as String));
+      } else {
+        _selected.clear();
+      }
     });
   }
 
@@ -244,11 +247,19 @@ ${print ? '<script>window.print()</script>' : ''}
               final sess = e['pos_sessions']?['session_number'] as String? ?? '-';
               final cashier = e['users']?['name'] as String? ?? '-';
               final ts = e['created_at'] != null ? DateFormat(orgTime('d MMM yyyy  HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '-';
-              return InkWell(onTap: () => setState(() { if (sel) _selected.remove(id); else _selected.add(id); }),
+              return InkWell(onTap: () => setState(() { if (sel) {
+                _selected.remove(id);
+              } else {
+                _selected.add(id);
+              } }),
                 child: Container(color: sel ? AppTheme.primary.withOpacity(0.04) : Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
                   child: Row(children: [
-                    SizedBox(width: 40, child: Checkbox(value: sel, onChanged: (v) => setState(() { if (v == true) _selected.add(id); else _selected.remove(id); }))),
+                    SizedBox(width: 40, child: Checkbox(value: sel, onChanged: (v) => setState(() { if (v == true) {
+                      _selected.add(id);
+                    } else {
+                      _selected.remove(id);
+                    } }))),
                     Expanded(flex: 2, child: Text(ts, style: const TextStyle(fontSize: 12))),
                     Expanded(flex: 1, child: Text(sess, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary))),
                     Expanded(flex: 2, child: Text(branch, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),

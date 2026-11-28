@@ -6,7 +6,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/pdf/pdf_output.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error.dart';
-import '../../../core/widgets/responsive.dart';
 import '../../auth/auth_controller.dart';
 import '../services/survey_reports_pdf.dart';
 import '../widgets/searchable_dropdown.dart';

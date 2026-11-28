@@ -503,8 +503,11 @@ class _ErpSuppliersScreenState extends ConsumerState<ErpSuppliersScreen> {
                       title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
                       value: selectedBranches.contains(b['id'] as String),
                       onChanged: (v) => setSB(() {
-                        if (v == true) selectedBranches.add(b['id'] as String);
-                        else selectedBranches.remove(b['id'] as String);
+                        if (v == true) {
+                          selectedBranches.add(b['id'] as String);
+                        } else {
+                          selectedBranches.remove(b['id'] as String);
+                        }
                       }),
                     )).toList()),
                   ),

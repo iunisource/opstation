@@ -271,9 +271,13 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
         if (!matchesSearch) return false;
         // Route assignment filter (independent of the missing-info filter).
         if (_routeFilter == 'assigned' &&
-            !_assignedCustomerIds.contains(c['id'])) return false;
+            !_assignedCustomerIds.contains(c['id'])) {
+          return false;
+        }
         if (_routeFilter == 'unassigned' &&
-            _assignedCustomerIds.contains(c['id'])) return false;
+            _assignedCustomerIds.contains(c['id'])) {
+          return false;
+        }
         // More filters — each narrows further (AND with everything else).
         if (_fRoute != null && !(_routesByCustomer[c['id']]?.contains(_fRoute) ?? false)) return false;
         if (_fCategory != null && (c['category'] as String?)?.trim() != _fCategory) return false;
@@ -1248,7 +1252,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     // Processor / off-site (virtual) locations don't sell to customers — keep
     // them out of the list. One already ticked on an old customer still shows,
     // so it can be unticked.
-    final allBranches = (branchRows as List)
+    final allBranches = (branchRows)
         .where((b) => b['is_virtual'] != true || selectedBranches.contains(b['id']))
         .toList();
     // New customers get an auto-generated code (highest + 1) up front; the
@@ -1403,7 +1407,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                 TextField(controller: addressCtrl, decoration: const InputDecoration(labelText: 'Street Address'), maxLines: 2),
                 const SizedBox(height: 16),
                 // Branch assignment
-                if ((allBranches as List).isNotEmpty)
+                if ((allBranches).isNotEmpty)
                   StatefulBuilder(builder: (ctx2, setSB) => Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1412,13 +1416,16 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                       const SizedBox(height: 6),
                       Container(
                         decoration: BoxDecoration(border: Border.all(color: AppTheme.border), borderRadius: BorderRadius.circular(8)),
-                        child: Column(children: (allBranches as List).map((b) => CheckboxListTile(
+                        child: Column(children: (allBranches).map((b) => CheckboxListTile(
                           dense: true,
                           title: Text(b['name'] as String, style: const TextStyle(fontSize: 13)),
                           value: selectedBranches.contains(b['id'] as String),
                           onChanged: (v) => setSB(() {
-                            if (v == true) selectedBranches.add(b['id'] as String);
-                            else selectedBranches.remove(b['id'] as String);
+                            if (v == true) {
+                              selectedBranches.add(b['id'] as String);
+                            } else {
+                              selectedBranches.remove(b['id'] as String);
+                            }
                           }),
                         )).toList()),
                       ),

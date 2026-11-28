@@ -5,7 +5,6 @@ import '../../team/services/trip_sessions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/responsive.dart';

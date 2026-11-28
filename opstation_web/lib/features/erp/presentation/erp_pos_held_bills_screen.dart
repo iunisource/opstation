@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/format/money.dart';
@@ -73,7 +72,7 @@ class _ErpPosHeldBillsScreenState extends ConsumerState<ErpPosHeldBillsScreen> {
         _snack('No active session for branch "${bill['pos_sessions']?['branches']?['name'] ?? ''}" — open a session first');
         return;
       }
-      final session = sessions.first as Map<String, dynamic>;
+      final session = sessions.first;
       // Navigate to POS session and pass the bill to restore
       if (mounted) {
         Navigator.pop(context, bill);

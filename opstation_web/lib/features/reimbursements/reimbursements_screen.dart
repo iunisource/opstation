@@ -711,7 +711,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
     final (String st, Color stc) = excluded
         ? ('Already approved', const Color(0xFF64748B))
         : own
-            ? ('Paid ${_fd(p!['paid_on'], 'd MMM')}', const Color(0xFF047857))
+            ? ('Paid ${_fd(p['paid_on'], 'd MMM')}', const Color(0xFF047857))
             : c['status'] == 'pending'
                 ? ('To approve', const Color(0xFFB45309))
                 : c['status'] == 'rejected' ? ('', AppTheme.textSecondary) : ('Approved', const Color(0xFF1D4ED8));
@@ -1026,7 +1026,7 @@ class _ReimbursementsScreenState extends ConsumerState<ReimbursementsScreen> {
                   decoration: InputDecoration(
                     labelText: 'Reason for changing the amount *',
                     hintText: 'e.g. 2 visits not justified',
-                    helperText: 'Worked out: ${_rs(calc)} · changing by ${_rs((typed!.round() - calc!).abs())}',
+                    helperText: 'Worked out: ${_rs(calc)} · changing by ${_rs((typed.round() - calc).abs())}',
                     isDense: true,
                     border: const OutlineInputBorder(),
                   ),

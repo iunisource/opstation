@@ -136,8 +136,10 @@ class _ErpProductClassificationsScreenState
                 _showSnack(item == null ? '$label added' : '$label updated');
                 _load();
               } catch (e) {
-                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text(friendlyError('That did not save', e))));
+                }
               }
             },
             child: Text(item == null ? 'Add' : 'Save'),

@@ -176,10 +176,10 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
         final openedDay = DateTime(openedLocal.year, openedLocal.month, openedLocal.day);
         final today = DateTime(now.year, now.month, now.day);
         if (openedDay.isBefore(today)) {
-          await _autoCloseSession(active!);
+          await _autoCloseSession(active);
           autoClosed = true;
           for (final s in sessions) {
-            if (s['id'] == active!['id']) {
+            if (s['id'] == active['id']) {
               s['status'] = 'closed';
               s['closed_at'] = DateTime.now().toUtc().toIso8601String();
             }
@@ -262,8 +262,9 @@ class _ErpPosScreenState extends ConsumerState<ErpPosScreen> {
       final last = await Supabase.instance.client.from('pos_sessions')
           .select('closing_cash').eq('org_id', orgId ?? '').eq('status', 'closed')
           .order('closed_at', ascending: false).limit(1);
-      if ((last as List).isNotEmpty && last[0]['closing_cash'] != null)
+      if ((last as List).isNotEmpty && last[0]['closing_cash'] != null) {
         lastClosing = (last[0]['closing_cash'] as num).toStringAsFixed(2);
+      }
     } catch (_) {}
     final cashCtrl = TextEditingController(text: lastClosing);
     showDialog(
@@ -643,7 +644,11 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
   Map<String, String> _posConfig = {};
 
   @override void initState() { super.initState(); _session = Map.from(widget.session); WidgetsBinding.instance.addPostFrameCallback((_) => _syncSelectorToSession()); _loadData(); }
-  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) f.dispose(); _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedPriceCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); _stagedPriceFocus.dispose(); for (final f in _discFocusNodes) f.dispose(); _amountPaidCtrl.dispose(); super.dispose(); }
+  @override void dispose() { _searchCtrl.dispose(); _searchFocus.dispose(); _customerSearchCtrl.dispose(); _customPaymentCtrl.dispose(); _checkoutFocusNode.dispose(); for (final f in _qtyFocusNodes) {
+    f.dispose();
+  } _stagedQtyCtrl.dispose(); _stagedDiscCtrl.dispose(); _stagedPriceCtrl.dispose(); _stagedQtyFocus.dispose(); _stagedDiscFocus.dispose(); _stagedPriceFocus.dispose(); for (final f in _discFocusNodes) {
+    f.dispose();
+  } _amountPaidCtrl.dispose(); super.dispose(); }
 
   String? get _orgId => ref.read(currentUserProvider)?.orgId;
   bool get _isOpen => _session['status'] == 'open';
@@ -2051,8 +2056,12 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
     final sales = _transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'sale').toList();
     final returns = _transactions.where((t) => (t['transaction_type'] ?? 'sale') == 'return').toList();
     double totalSales = 0, totalReturns = 0;
-    for (final t in sales) totalSales += (t['total'] as num?)?.toDouble() ?? 0;
-    for (final t in returns) totalReturns += ((t['total'] as num?)?.toDouble() ?? 0).abs();
+    for (final t in sales) {
+      totalSales += (t['total'] as num?)?.toDouble() ?? 0;
+    }
+    for (final t in returns) {
+      totalReturns += ((t['total'] as num?)?.toDouble() ?? 0).abs();
+    }
     double customerAccountSale = 0;  // amount put on customer accounts (unpaid/credit portion) this session
     for (final t in sales) {
       final tot = (t['total'] as num?)?.toDouble() ?? 0;
@@ -2079,7 +2088,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final ea = (e['amount'] as num?)?.toDouble() ?? 0; totalExpenses += ea;
       final ec = e['category'] as String? ?? '-'; final en = e['note'] as String? ?? '';
       final et = e['created_at'] != null ? DateFormat(orgTime('HH:mm')).format(DateTime.parse(e['created_at'] as String).toLocal()) : '';
-      expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>${en}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(ea)}</td></tr>';
+      expRows += '<tr style="background:#fff5f5"><td>$et</td><td>$ec</td><td>$en</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(ea)}</td></tr>';
     }
     double cashSales = 0;
     for (final t in sales) { cashSales += _posCashCollected(t); }
@@ -2093,7 +2102,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final plines = (p['cpv_voucher_lines'] as List?) ?? const [];
       if (plines.isEmpty) {
         final pn = p['notes'] as String? ?? '';
-        payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(pa)}</td></tr>';
+        payRows += '<tr style="background:#fff5f5"><td>$pt</td><td>$pv</td><td>$pn</td><td style="text-align:right;color:#c0392b;font-weight:bold">-${money(pa)}</td></tr>';
       } else {
         for (final l in plines) {
           final la = (l['amount'] as num?)?.toDouble() ?? 0;
@@ -2118,7 +2127,7 @@ class _PosSessionScreenState extends ConsumerState<_PosSessionScreen> {
       final plines = (p['crv_voucher_lines'] as List?) ?? const [];
       if (plines.isEmpty) {
         final pn = p['notes'] as String? ?? '';
-        rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>${pn}</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${money(pa)}</td></tr>';
+        rcvRows += '<tr style="background:#f0fff4"><td>$pt</td><td>$pv</td><td>$pn</td><td style="text-align:right;color:#1e7e34;font-weight:bold">+${money(pa)}</td></tr>';
       } else {
         for (final l in plines) {
           final la = (l['amount'] as num?)?.toDouble() ?? 0;
@@ -3679,7 +3688,9 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   final Map<String, TextEditingController> _qtyCtrls = {};
 
   @override void initState() { super.initState(); _loadTransactions(); }
-  @override void dispose() { for (final c in _qtyCtrls.values) c.dispose(); super.dispose(); }
+  @override void dispose() { for (final c in _qtyCtrls.values) {
+    c.dispose();
+  } super.dispose(); }
 
   Future<void> _loadTransactions() async {
     setState(() => _loadingTxns = true);
@@ -3959,7 +3970,11 @@ class _CartItemTileState extends State<_CartItemTile> {
         Row(children: [
           if (widget.isOpen) GestureDetector(onTap: () { if (qty > 1) widget.onQtyChanged(qty - 1); }, child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.border, borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.remove, size: 14))),
           const SizedBox(width: 6),
-          SizedBox(width: 48, child: TextField(controller: _qtyCtrl, focusNode: widget.qtyFocusNode, textAlign: TextAlign.center, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700), decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 4)), enabled: widget.isOpen, onSubmitted: (v) { final n = double.tryParse(v); if (n != null && n > 0) widget.onQtyChanged(n); else _qtyCtrl.text = qty.toStringAsFixed(0); widget.discFocusNode?.requestFocus(); })),
+          SizedBox(width: 48, child: TextField(controller: _qtyCtrl, focusNode: widget.qtyFocusNode, textAlign: TextAlign.center, keyboardType: const TextInputType.numberWithOptions(decimal: true), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700), decoration: const InputDecoration(isDense: true, contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 4)), enabled: widget.isOpen, onSubmitted: (v) { final n = double.tryParse(v); if (n != null && n > 0) {
+            widget.onQtyChanged(n);
+          } else {
+            _qtyCtrl.text = qty.toStringAsFixed(0);
+          } widget.discFocusNode?.requestFocus(); })),
           const SizedBox(width: 6),
           if (widget.isOpen) GestureDetector(onTap: () => widget.onQtyChanged(qty + 1), child: Container(width: 24, height: 24, decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)), child: Icon(Icons.add, size: 14, color: AppTheme.primary))),
           const Spacer(),

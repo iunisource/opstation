@@ -24,7 +24,9 @@ List<int> _receiptSlipNumbers(String raw) {
       prevFull = n;
     } else {
       var p10 = 1;
-      for (var i = 0; i < t.length; i++) p10 *= 10;
+      for (var i = 0; i < t.length; i++) {
+        p10 *= 10;
+      }
       final expanded = (prevFull - (prevFull % p10)) + n;
       out.add(expanded);
       prevFull = expanded;
@@ -221,7 +223,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
           times.add(t);
           if (t.hour >= 20 || t.hour < 6) afterHours++;
         }
-        if (last == null || t.isAfter(last!)) last = t;
+        if (last == null || t.isAfter(last)) last = t;
         days.add('${t.year}-${t.month}-${t.day}');
       }
       nums.addAll(_receiptSlipNumbers((e['receipt_number'] as String?) ?? ''));
@@ -240,7 +242,7 @@ class _State extends ConsumerState<ErpSuperSummaryScreen> {
       final gap = nums[i] - nums[i - 1];
       if (gap > 1 && gap <= 20) skipped += gap - 1;
     }
-    final daysSince = last == null ? null : DateTime.now().difference(last!).inDays;
+    final daysSince = last == null ? null : DateTime.now().difference(last).inDays;
 
     final notes = <_Note>[];
     if (verifiedPct != null) {

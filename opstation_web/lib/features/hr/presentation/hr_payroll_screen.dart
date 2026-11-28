@@ -330,7 +330,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
           double w = 0;
           for (var k = 1; k <= 6; k++) {
             final st = att[empId]?[_fmt(d.subtract(Duration(days: k)))]?['status'];
-            if (st == 'present') w += 1; else if (st == 'half_day') w += 0.5;
+            if (st == 'present') {
+              w += 1;
+            } else if (st == 'half_day') w += 0.5;
           }
           return w;
         }
@@ -1097,7 +1099,9 @@ class _State extends ConsumerState<HrPayrollScreen> {
     ]);
   }
 
-  double _sum(String key) { double t = 0; for (final it in _items) t += (it[key] as num?)?.toDouble() ?? 0; return t; }
+  double _sum(String key) { double t = 0; for (final it in _items) {
+    t += (it[key] as num?)?.toDouble() ?? 0;
+  } return t; }
 
   Widget _itemTile(Map<String, dynamic> item) {
     final emp = _empById[item['employee_id']];

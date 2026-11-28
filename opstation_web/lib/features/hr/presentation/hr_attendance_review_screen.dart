@@ -614,7 +614,11 @@ class _State extends ConsumerState<HrAttendanceReviewScreen> {
       lastDate: _yesterday,
     );
     if (picked == null) return;
-    setState(() { if (isFrom) _from = picked; else _to = picked; });
+    setState(() { if (isFrom) {
+      _from = picked;
+    } else {
+      _to = picked;
+    } });
     setState(() => _loading = true);
     try { await _loadAtt(); _rebuildPending(); } catch (_) {}
     if (mounted) setState(() => _loading = false);

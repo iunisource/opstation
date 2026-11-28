@@ -117,12 +117,16 @@ class _ErpStockScreenState extends ConsumerState<ErpStockScreen> {
     final gen = '${two(now.day)}/${two(now.month)}/${now.year} ${two(now.hour)}:${two(now.minute)}';
     String esc(Object? v) => (v ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     final head = StringBuffer('<tr><th>Product</th><th>SKU</th>');
-    for (final b in cols) head.write('<th class="r">${esc(b['name'])}</th>');
+    for (final b in cols) {
+      head.write('<th class="r">${esc(b['name'])}</th>');
+    }
     head.write('<th class="r">Total</th></tr>');
     final body = StringBuffer();
     for (final r in rows) {
       body.write('<tr><td>${esc(r.name)}</td><td>${esc(r.sku)}</td>');
-      for (final b in cols) body.write('<td class="r">${esc(_fmtQty(r.byBranch[b['id']], r.uom))}</td>');
+      for (final b in cols) {
+        body.write('<td class="r">${esc(_fmtQty(r.byBranch[b['id']], r.uom))}</td>');
+      }
       body.write('<td class="r b">${esc(_fmtQty(r.total, r.uom))}</td></tr>');
     }
     final htmlStr = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Levels</title>'

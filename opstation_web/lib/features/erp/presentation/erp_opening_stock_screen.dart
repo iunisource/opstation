@@ -71,7 +71,9 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
   @override
   void dispose() {
     _notesCtrl.dispose();
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     super.dispose();
   }
 
@@ -99,12 +101,14 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
         'id': p['id'],
         'label': "${p['sku'] != null && (p['sku'] as String).isNotEmpty ? '${p['sku']} \u2014 ' : ''}${p['name'] ?? ''}",
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _products = items;
         _prodLabel = {for (final p in items) p['id'] as String: p['label'] as String};
         _prodBaseUom = {for (final p in all) p['id'] as String: p['base_uom_id'] as String?};
         _loadingProducts = false;
       });
+      }
     } catch (e) { if (mounted) { _snack(friendlyError('Products load error', e)); setState(() => _loadingProducts = false); } }
   }
 
@@ -126,10 +130,12 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
     try {
       final rows = await Supabase.instance.client.from('branches').select().eq('org_id', orgId).eq('is_active', true).order('name');
       final list = List<Map<String, dynamic>>.from(rows);
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _branches = list;
         _branchId ??= (ref.read(selectedBranchProvider)?['id'] as String?) ?? (list.isNotEmpty ? list.first['id'] as String? : null);
       });
+      }
     } catch (_) {}
   }
 
@@ -145,7 +151,9 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
 
   // ---------- form state ----------
   void _newVoucher() {
-    for (final l in _lines) l.dispose();
+    for (final l in _lines) {
+      l.dispose();
+    }
     setState(() {
       _current = null; _status = 'draft'; _isVoided = false;
       _date = DateTime.now();
@@ -160,7 +168,9 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
     try {
       final rows = await Supabase.instance.client.from('opening_stock')
           .select().eq('voucher_id', v['id'] as String).order('created_at');
-      for (final l in _lines) l.dispose();
+      for (final l in _lines) {
+        l.dispose();
+      }
       final newLines = (rows as List).map((r) {
         final l = _OsLine();
         l.productId = r['product_id'] as String?;
@@ -173,7 +183,8 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
         if (c != 0) l.costCtrl.text = _trim(c);
         return l;
       }).toList();
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _current = v;
         _status = v['status'] as String? ?? 'draft';
         _isVoided = v['is_voided'] == true;
@@ -184,6 +195,7 @@ class _ErpOpeningStockScreenState extends ConsumerState<ErpOpeningStockScreen> {
         _lines = newLines.isEmpty ? [_OsLine()] : newLines;
         _lineSearch = '';
       });
+      }
     } catch (e) { _snack(friendlyError('Could not load', e)); }
   }
 

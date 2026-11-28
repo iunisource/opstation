@@ -378,9 +378,9 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
         TextEditingController(text: existing?['prospect_name'] ?? '');
     final pPhoneCtrl =
         TextEditingController(text: existing?['prospect_phone'] ?? '');
-    bool prospect = isEdit ? (existing!['customer_id'] == null && (existing['prospect_name'] != null)) : false;
+    bool prospect = isEdit ? (existing['customer_id'] == null && (existing['prospect_name'] != null)) : false;
     Map<String, dynamic>? selectedCustomer;
-    if (isEdit && existing!['customer_id'] != null) {
+    if (isEdit && existing['customer_id'] != null) {
       final c = _custById[existing['customer_id']];
       if (c != null) selectedCustomer = c;
     }
@@ -536,7 +536,7 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
                     decoration: const InputDecoration(labelText: 'Notes'),
                   ),
                   if (isEdit &&
-                      existing!['customer_id'] == null &&
+                      existing['customer_id'] == null &&
                       (existing['prospect_name'] as String?)?.trim().isNotEmpty ==
                           true) ...[
                     const SizedBox(height: 8),
@@ -561,7 +561,7 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
               TextButton(
                 onPressed: () async {
                   Navigator.of(ctx, rootNavigator: true).pop();
-                  await _deleteOpp(existing!['id'] as String);
+                  await _deleteOpp(existing['id'] as String);
                 },
                 child: const Text('Delete',
                     style: TextStyle(color: AppTheme.danger)),
@@ -624,7 +624,7 @@ class _CrmPipelineScreenState extends ConsumerState<CrmPipelineScreen> {
                     await client
                         .from('crm_opportunities')
                         .update(data)
-                        .eq('id', existing!['id']);
+                        .eq('id', existing['id']);
                   } else {
                     data['id'] =
                         'opp_${DateTime.now().millisecondsSinceEpoch}';
